@@ -1,0 +1,700 @@
+# Generation Pipeline Design — 单人精简版
+
+> 路径：`docs/architecture/generation-pipeline.md`
+>
+> 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
+
+## 1. 目标
+
+将 Chapter Plan 稳定转换为通过 Review 和 Canonical Commit 的正式章节。流水线必须可追踪、可重试、可恢复、可暂停，且 Draft 永不修改 Canonical State。
+
+Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、Event Extraction、Summary。不同 Novel 可并行；同一 Novel 的章节 MVP 串行。
+
+## 2. 权威流水线
+
+```text
+GenerateNextChapterAction
+→ PlanChapterJob
+→ ContextBuilder
+→ GenerateSceneJob × N（顺序）
+→ AssembleChapterJob
+→ ExtractStoryEventsJob
+→ StatePatchBuilder
+→ StateValidator
+→ ReviewChapterJob
+→ ReviewGate
+   ├ PASS → CommitChapterJob → CanonicalCommitService
+   │        → UpdateMemoryJob → GenerateEmbeddingJob → RollupSummaryJob
+   │        → CheckNextAction
+   ├ REWRITE → RewriteChapterJob → Extract/Validate/Review
+   └ NEEDS_ATTENTION/BLOCK → Stop
+```
+
+## 3. Queue
+
+MVP 只使用两个 Queue。
+
+```text
+generation:
+  PlanChapterJob
+  GenerateSceneJob
+  AssembleChapterJob
+  ExtractStoryEventsJob
+  ReviewChapterJob
+  RewriteChapterJob
+  CommitChapterJob
+
+default:
+  UpdateMemoryJob
+  GenerateEmbeddingJob
+  RollupSummaryJob
+  EndingAuditJob
+```
+
+`ContextBuilder` 作为 Service，不单独 Queue。只有出现真实拥堵后才拆更多 Queue。
+
+## 4. GenerateNextChapterAction
+
+Filament、Artisan、Scheduler 共用统一入口。
+
+Preflight：
+
+```text
+Novel.status ∈ generating/completing
+Novel 未暂停
+Current Story State 存在
+Current Volume 存在
+无 Blocking Review
+无同 Novel 的另一个活跃 Chapter Workflow
+Budget 未达到 Hard Limit
+```
+
+下一章 `sequence = current_chapter_sequence + 1`。已有同 sequence 非 Canonical Chapter 时恢复，不重复创建。
+
+## 5. GenerationRun / Artifact
+
+独立 Run Stage：
+
+```text
+chapter_planning
+scene_generation
+chapter_assembly
+event_extraction
+review
+rewrite
+commit
+memory_summary
+embedding
+```
+
+Run 状态：
+
+```text
+queued / running / succeeded / failed / cancelled
+```
+
+每个 Run 固定记录：
+
+```text
+novel_id
+chapter_id
+scene_id?
+stage
+attempt
+idempotency_key
+input_hash
+state_version
+bible_version
+prompt_version
+model_policy
+context_snapshot
+```
+
+Artifact 不可变，类型：
+
+```text
+chapter_plan
+scene_draft
+chapter_draft
+rewrite_draft
+event_candidate
+state_patch
+review_result
+summary
+context
+```
+
+`input_hash` 只包含真正影响输出的 Prompt、Model、State、Plan、Context、Source Artifact checksum。
+
+通用幂等：
+
+```text
+计算 idempotency_key + input_hash
+→ 查 succeeded Run/Artifact
+→ hash 相同：reuse
+→ hash 不同：new attempt
+```
+
+技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。
+
+## 6. PlanChapterJob
+
+输入：
+
+```text
+Novel
+Current Bible
+Current Volume
+Active Arcs
+Current Story State
+Due Foreshadowings
+Recent Summaries
+Ending Contract
+Closure Debt（completing 时）
+```
+
+输出：`chapter_plans` + `chapter_plan` Artifact。
+
+幂等键：
+
+```text
+plan:{chapter_id}:{state_version}:{bible_version}:{prompt_version}:{model_policy_hash}
+```
+
+Plan 至少包含：
+
+```text
+chapter_function
+arc_contribution
+reader_promise
+target_words
+pov_character
+tone
+time_anchor
+hook_type
+must_reveal / may_hint / must_not_reveal
+required_facts / forbidden_conflicts
+due_foreshadowings
+scene_plans
+```
+
+Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
+
+`completing` 时禁止无批准新增核心主线、核心人物、硬规则、高重要度伏笔，并要求推进 Ending Plan 或降低 Closure Debt。
+
+技术失败 Retry；业务计划错误定向 Replan。成功后 `chapter.status = generating`。
+
+## 7. ContextBuilder
+
+每个 Scene 调用前按优先级组装：
+
+```text
+1 System / Output Schema
+2 Bible Hard Constraints
+3 Ending Contract
+4 Volume / Arc / Chapter Plan
+5 Current Canonical Story State
+6 Relevant Characters
+7 Relevant World Entities
+8 Due Foreshadowings
+9 Required / Forbidden Facts
+10 Recent Chapter Summaries
+11 Previous Accepted Scene Tail
+12 Long-term Memory
+13 Scene Task
+```
+
+Token 不足时先缩减 Long-term Memory、较旧 Summary、Style Example；不得删除 Hard Constraints、Current State、Required/Forbidden Facts、Ending Constraints。
+
+Snapshot 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Chapters、Previous Artifact、Prompt/Model 和 Token Budget。
+
+## 8. Temporary Chapter State
+
+Scene 之间允许 Temporary State，但绝不是 Canonical State。
+
+MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_state_delta`，下一 Scene 构建 Context 时按顺序应用。
+
+## 9. GenerateSceneJob
+
+每个 Scene 一个 Run，严格顺序执行。
+
+输入 Scene Plan、Chapter Plan、Canonical State、Temporary State、Context Snapshot、Previous Scene Tail；输出 `scene_draft`。
+
+建议 Envelope：
+
+```json
+{"content":"...","declared_events":[],"uncertainties":[],"self_check":{}}
+```
+
+`declared_events` 仅辅助，不是正式 Story Event。
+
+幂等键：
+
+```text
+scene:{scene_id}:{input_hash}:{prompt_version}:{model}
+```
+
+轻量校验正文非空、长度合理、Envelope 合法、参与角色有效、无明显 must_not_reveal 违规。
+
+Provider Retry 默认 2~3 次，指数退避 + jitter，并尊重 Retry-After。耗尽后 Run failed、Chapter blocked、Auto Generation stop。成功 Scene Artifact 保留，Resume 从失败 Scene 继续。
+
+MVP 不做 Scene Parallel。
+
+## 10. AssembleChapterJob
+
+输入 Ordered Scene Artifacts + Chapter Plan + Style Constraints；输出 `chapter_draft`。
+
+只负责衔接、过渡、语气统一、重复清理、局部语言修正，不得主动改变 Scene Outcome、增加重大事实/能力/世界规则/人物知识。
+
+幂等键：
+
+```text
+assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
+```
+
+技术失败只 Retry Assembly。
+
+## 11. Event Extraction / State Validation
+
+`ExtractStoryEventsJob` 输入 Chapter Draft、Plan、Current State、Locked Facts；输出 `event_candidate`。
+
+幂等键：
+
+```text
+events:{draft_checksum}:{state_version}:{prompt_version}
+```
+
+之后 Laravel `StatePatchBuilder` 确定性生成 `state_patch` Artifact；`StateValidator` 校验 Current State、Candidates、Patch、Locked Facts、Plan Overrides。Hard Conflict 必须阻止 PASS。
+
+## 12. ReviewChapterJob
+
+Review 汇总：
+
+```text
+Narrative Review
+State Findings
+Plan Adherence
+Character Consistency
+Plot Progress
+Repetition
+Pacing
+Style
+```
+
+输出 `reviews` + `review_result`。
+
+幂等键：
+
+```text
+review:{draft_checksum}:{state_version}:{review_policy_version}
+```
+
+Decision：
+
+```text
+PASS             无 Hard Conflict 且评分达标
+REWRITE          问题可定位、次数和预算允许
+NEEDS_ATTENTION  Rewrite 耗尽、重大歧义、Ending 冲突或需人工决策
+BLOCK            Locked Fact 或其他不可接受硬冲突
+```
+
+## 13. RewriteChapterJob
+
+输入 Source Artifact、Review Findings、Plan、Current State、Locked Facts；输出 `rewrite_draft`。
+
+Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
+
+优先 Scene Rewrite，再 Whole Chapter Rewrite。默认 `max_rewrite_attempts = 2`。
+
+Rewrite 后必须重新：
+
+```text
+Extract Events → Build State Patch → State Validation → Review
+```
+
+不得沿用旧 Candidate/Patch。
+
+幂等键：
+
+```text
+rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
+```
+
+## 14. CommitChapterJob
+
+只加载冻结 Commit Inputs 并调用 `CanonicalCommitService`，不调用 Writer、Reviewer、Extractor。
+
+前置：
+
+```text
+Novel 未暂停且 status ∈ generating/completing
+Chapter 未 canonical
+Review PASS
+无 Hard Finding
+Artifact checksum 未变化
+Expected State Version 匹配
+```
+
+幂等键：
+
+```text
+commit:{chapter_id}:{artifact_checksum}:{expected_state_version}
+```
+
+事务：
+
+```text
+BEGIN
+SELECT novel FOR UPDATE
+Validate state version
+SELECT chapter FOR UPDATE
+Validate review/artifact
+Persist Story Events
+Apply Fact Changes
+Create State Version N+1
+Update Chapter
+Update Novel pointers
+COMMIT
+```
+
+相同 Commit 重复执行返回已有结果；不同 Artifact 覆盖已 Canonical Chapter必须 BLOCK。Commit 阶段禁止外部 LLM 调用。
+
+## 15. Post-Commit
+
+事务内：
+
+```text
+Canonical Artifact Pointer
+Story Events
+Fact Changes
+Story State Version
+Chapter Canonical State
+Novel Canonical Pointers
+```
+
+事务后：
+
+```text
+Memory
+Embedding
+Chapter Summary
+Projection Refresh
+Cache Refresh
+Metrics
+```
+
+Derived Work 失败不得回滚正式章。
+
+## 16. Memory / Embedding / Summary
+
+`UpdateMemoryJob` 只从 Canonical Chapter + Active Story Events + New State 创建正式 Memory。
+
+幂等键：
+
+```text
+memory:{canonical_artifact_checksum}:{memory_policy_version}
+```
+
+`GenerateEmbeddingJob` 幂等键：
+
+```text
+embedding:{memory_id}:{embedding_model}
+```
+
+Embedding 失败只 Retry。
+
+`RollupSummaryJob` 更新 `chapters.summary`；幂等键：
+
+```text
+summary:{canonical_artifact_checksum}:{summary_prompt_version}
+```
+
+摘要失败不回滚正文。
+
+## 17. Auto Generate
+
+Auto Generate 不能预先 Queue 100 章。
+
+```text
+Chapter N Commit
+→ Post-Commit
+→ Check Stop Conditions
+→ GenerateNextChapterAction
+→ Chapter N+1
+```
+
+下一章必须基于上一章最新 Canonical State。
+
+停止条件：
+
+```text
+User Pause
+Emergency Stop
+Hard Conflict
+NEEDS_ATTENTION
+BLOCK
+Provider Retry Exhausted
+Repeated Rewrite Failure
+Budget Hard Limit
+State Version Conflict
+Volume Gate Failure
+Ending Audit Block / Critical Closure Debt
+Novel completed/failed/archived
+```
+
+## 18. Pause / Resume
+
+Pause 停止派发新 Stage；已发出的 Provider 调用可结束并保存 Artifact，但不得继续 Canonical Commit。Commit 前必须再次检查 Pause。
+
+Resume 通过数据库状态和 Artifact 判断恢复点：
+
+```text
+Chapter canonical → Post-Commit / Next Action
+Review PASS、Commit 未完成 → Commit
+Review = REWRITE → Rewrite
+Draft 存在、无有效 Review → Extract/Validate/Review
+Scenes 全部完成、无 Chapter Draft → Assemble
+部分 Scene 完成 → 下一个未完成 Scene
+Plan 已完成 → Scene 1
+无 Plan → Plan
+```
+
+不要根据 Redis Queue 中是否还有 Job 判断业务进度。
+
+## 19. Crash Recovery
+
+Worker Crash 可能留下 `generation_runs.status=running`。维护任务识别超时 Run，并标记 failed，例如 `error_code=worker_lost`。
+
+恢复时根据成功 Artifact + input_hash 决定 reuse 或 retry。
+
+错误分类：
+
+```text
+Retryable: timeout / 429 / 5xx / network
+Rebuild: state_version_conflict / stale_context / stale_plan
+Rewrite: continuity / plan / style / repetition
+Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_conflict
+```
+
+## 20. Timeout / Retry Budget
+
+统一配置 planning、scene_generation、assembly、event_extraction、review、rewrite、embedding timeout。
+
+同时限制：
+
+```text
+max_provider_retries
+max_rewrite_attempts
+chapter_max_cost
+```
+
+避免 Retry × Rewrite 导致调用失控。
+
+## 21. Cost Tracking
+
+每个真实 Provider Request 必须写 `usage_records`，可追踪：
+
+```text
+Novel → Chapter → Scene → Run → Stage → Provider/Model → Tokens/Cost
+```
+
+Artifact Reuse 不产生新的 Provider Usage。
+
+Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、自动进入下一章前检查。
+
+## 22. Prompt / Model Policy
+
+每个 AI Stage 记录 Prompt Version，例如：
+
+```text
+chapter-planner-v1
+scene-writer-v1
+assembler-v1
+event-extractor-v1
+reviewer-v1
+rewrite-v1
+summary-v1
+```
+
+模型按 Stage 从 config / Novel Settings 解析，不在 Job 中写死。MVP 只实现当前实际使用的 Provider。
+
+## 23. Observability
+
+从任意 Chapter 必须能追踪：
+
+```text
+Plan
+→ Runs
+→ Context Snapshots
+→ Scene Artifacts
+→ Chapter Draft
+→ Event Candidate
+→ State Patch
+→ Review
+→ Commit
+→ State Version
+→ Usage
+```
+
+Horizon Tags：
+
+```text
+novel:{id}
+chapter:{id}
+scene:{id}
+run:{id}
+stage:{stage}
+```
+
+## 24. 测试
+
+Workflow：
+
+```text
+normal full chapter
+multiple scenes sequential
+review pass
+rewrite then pass
+rewrite exhausted
+needs attention
+block
+```
+
+Idempotency：
+
+```text
+duplicate Plan
+duplicate Scene
+duplicate Review
+duplicate Commit
+duplicate Memory
+duplicate Embedding
+```
+
+Recovery：
+
+```text
+Scene 3 timeout after Scene 1/2 success
+worker crash after artifact persisted
+pause during provider call
+resume from assembled draft
+resume from PASS before commit
+state version conflict before commit
+```
+
+Canonical Safety：
+
+```text
+Draft never changes state
+Pause blocks commit
+Hard Conflict blocks commit
+Duplicate Commit exactly-once
+Embedding failure does not rollback chapter
+```
+
+Cost：
+
+```text
+reuse adds no Provider Usage
+hard budget blocks new request
+rewrite respects limit
+```
+
+## 25. Implementation Batches
+
+```text
+G1 GenerateNextChapterAction + Preflight + Run helpers
+G2 PlanChapterJob + Plan validation
+G3 ContextBuilder + Snapshot + Token Budget
+G4 GenerateSceneJob + Temporary State + Resume
+G5 AssembleChapterJob
+G6 Event Extraction + StatePatch integration
+G7 Review + Rewrite loop
+G8 CommitChapterJob integration
+G9 Memory / Embedding / Summary
+G10 Auto Generate + Pause/Resume + Recovery
+```
+
+每个 Batch 完成测试后再进入下一批。
+
+## 26. 暂不实现
+
+```text
+Scene Parallel Generation
+Multi-Agent Workflow
+Distributed Workflow Engine
+Kafka / RabbitMQ
+Complex Provider Router
+预先批量 Queue 大量未来章节
+跨 Novel 共享 Story State
+```
+
+## 27. Codex 第一任务
+
+```text
+阅读：
+
+AGENTS.md
+docs/PRD.md
+docs/architecture/data-model.md
+docs/architecture/story-engine.md
+docs/architecture/generation-pipeline.md
+
+当前只实现 Generation Pipeline Batch G1：
+
+- GenerateNextChapterAction
+- Preflight
+- GenerationRun 基础 helper
+- Chapter 创建/恢复逻辑
+
+要求：
+
+1. 先检查现有项目。
+2. 先输出实现计划，不修改代码。
+3. 不实现 LLM Provider。
+4. 不实现 PlanChapterJob。
+5. 不实现 ContextBuilder。
+6. 不实现 Queue 后续阶段。
+7. 确保同 Novel 不会创建两个活跃 Chapter Workflow。
+8. 已存在同 sequence 非 Canonical Chapter 时恢复。
+9. 添加 Preflight / duplicate / resume 基础测试。
+10. 遵守 AGENTS.md 的单人精简原则。
+```
+
+## 28. Definition of Done
+
+完整 Generation Pipeline 完成时必须满足：
+
+```text
+一章可从 Plan 自动运行到 Canonical Commit
+Scene 可从中断点恢复
+成功 Artifact 可复用
+Provider Retry 与 Rewrite 分离
+Review Gate 可阻断错误
+Duplicate Commit exactly-once
+Pause 后无新 Commit
+Resume 能识别正确恢复点
+Post-Commit 失败不回滚正文
+Auto Generate 每次只推进一章
+Hard Stop 条件可靠
+所有 Provider Cost 可追踪
+```
+
+## 29. Final Invariants
+
+```text
+1. Laravel controls workflow.
+2. Draft never mutates canonical state.
+3. Same Novel chapters are sequential in MVP.
+4. Successful expensive work is reusable.
+5. Every important stage is traceable by Run/Artifact.
+6. Technical Retry is different from content Rewrite.
+7. Rewrite always re-runs extraction/validation/review.
+8. Commit performs no creative LLM calls.
+9. Canonical Commit is atomic and idempotent.
+10. Post-commit derived failures never rollback canonical text.
+11. Resume is determined from persisted state, not queue presence.
+12. Auto generation stops on hard errors and advances only after commit.
+```
+
+# END OF generation-pipeline.md
