@@ -13,13 +13,15 @@ class Memory extends Page
 
     protected static ?int $navigationSort = 4;
 
-    protected static ?string $title = 'Memory';
+    protected static ?string $navigationLabel = '记忆';
+
+    protected static ?string $title = '记忆';
 
     public function content(Schema $schema): Schema
     {
         return $schema->components([
-            EmptyState::make('No memories indexed')
-                ->description('Canonical memories and retrieval diagnostics will appear here after memory processing is implemented.')
+            EmptyState::make('暂无已索引记忆')
+                ->description('记忆处理实现后，正式记忆与检索诊断会显示在这里。')
                 ->icon('heroicon-o-circle-stack'),
         ]);
     }

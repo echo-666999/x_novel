@@ -11,9 +11,9 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
 
 class Dashboard extends BaseDashboard
 {
-    protected static ?string $navigationLabel = 'Dashboard';
+    protected static ?string $navigationLabel = '仪表盘';
 
-    protected static ?string $title = 'Dashboard';
+    protected static ?string $title = '仪表盘';
 
     public function content(Schema $schema): Schema
     {
@@ -23,20 +23,20 @@ class Dashboard extends BaseDashboard
                 'md' => 2,
                 'xl' => 4,
             ])->schema([
-                Stat::make('Active Novels', 0)
-                    ->description('No active novel')
+                Stat::make('活跃小说', 0)
+                    ->description('暂无活跃小说')
                     ->descriptionIcon('heroicon-o-book-open')
                     ->color('gray'),
-                Stat::make('Current Chapter', '—')
-                    ->description('No chapter selected')
+                Stat::make('当前章节', '—')
+                    ->description('尚未选择章节')
                     ->descriptionIcon('heroicon-o-document-text')
                     ->color('gray'),
-                Stat::make("Today's Cost", '¥0.00')
-                    ->description('No usage recorded')
+                Stat::make('今日成本', '¥0.00')
+                    ->description('暂无用量记录')
                     ->descriptionIcon('heroicon-o-banknotes')
                     ->color('gray'),
-                Stat::make('Needs Attention', 0)
-                    ->description('Nothing requires action')
+                Stat::make('需要处理', 0)
+                    ->description('暂无待处理事项')
                     ->descriptionIcon('heroicon-o-check-circle')
                     ->color('success'),
             ]),
@@ -44,19 +44,19 @@ class Dashboard extends BaseDashboard
                 'default' => 1,
                 'xl' => 2,
             ])->schema([
-                Section::make('Recent Generation')
-                    ->description('Latest chapter generation activity')
+                Section::make('最近生成')
+                    ->description('最近的章节生成活动')
                     ->schema([
-                        EmptyState::make('No generation activity')
-                            ->description('Recent generation runs will appear here after a chapter workflow starts.')
+                        EmptyState::make('暂无生成活动')
+                            ->description('章节生成流程启动后，最近的生成记录会显示在这里。')
                             ->icon('heroicon-o-bolt')
                             ->contained(false),
                     ]),
-                Section::make('Due Foreshadowing')
-                    ->description('Foreshadowing that needs attention soon')
+                Section::make('待处理伏笔')
+                    ->description('即将到期或需要关注的伏笔')
                     ->schema([
-                        EmptyState::make('No foreshadowing due')
-                            ->description('Due and overdue foreshadowing will appear here when novel data is available.')
+                        EmptyState::make('暂无待处理伏笔')
+                            ->description('小说数据建立后，到期和逾期伏笔会显示在这里。')
                             ->icon('heroicon-o-flag')
                             ->contained(false),
                     ]),

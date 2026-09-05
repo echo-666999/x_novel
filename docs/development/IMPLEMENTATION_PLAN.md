@@ -29,6 +29,7 @@
 3. 说明要修改的文件、数据库、状态、测试。
 4. 实施完成后实际运行测试。
 5. 按 Summary / Files Changed / Tests / Follow-ups 汇报。
+6. 涉及 Filament UI 时，所有用户可见文案使用简体中文，并验证与 `config('app.locale')` 一致。
 ```
 
 状态建议：
@@ -85,6 +86,25 @@ Filament UI
 ```
 
 除纯基础设施 Task 外，原则上都要有一个用户可见结果。
+
+## Filament UI 语言规范
+
+本节适用于所有包含 Filament UI 的当前及后续 Task。
+
+- 应用语言以 `config('app.locale')` 为准；当前 `.env` 配置为 `APP_LOCALE=zh_CN`。
+- 所有用户可见文案必须使用简体中文，包括：
+  - 一级与上下文导航标签；
+  - 页面标题、副标题与说明；
+  - 表单字段、分区、标签页和帮助文本；
+  - 表格列名、筛选器、批量操作和行操作；
+  - 按钮、确认弹窗、通知、校验错误和状态说明；
+  - Widget、统计卡片、Empty State、Error State 和 SlideOver 文案。
+- 不得因为 Task 定义使用英文领域名称，就直接把英文文案展示给用户；应提供准确、统一的中文界面名称。
+- PHP 类名、Enum case、数据库字段、路由 slug、配置 key、日志字段及第三方 API 标识继续使用英文。
+- `AI`、模型名称、Prompt Version 等通用技术标识可以保留英文，但其解释性文案必须使用中文。
+- 优先使用 Filament / Laravel 已有的中文语言包；项目自定义文案直接提供中文或使用翻译键，不依赖 `APP_LOCALE` 自动翻译硬编码英文。
+- 每个 Filament UI Task 的测试至少断言关键中文导航、标题或操作文案，防止后续回退为英文。
+- 验收 Filament UI 时必须同时检查 Light / Dark Mode 下中文文本的可读性、截断与紧凑布局。
 
 ---
 

@@ -15,12 +15,14 @@ class Settings extends Page
 
     protected static ?int $navigationSort = 5;
 
-    protected static ?string $title = 'Settings';
+    protected static ?string $navigationLabel = '设置';
+
+    protected static ?string $title = '设置';
 
     public function content(Schema $schema): Schema
     {
         return $schema->components([
-            Text::make('Configuration sources are shown for reference. Editing will be enabled by the tasks that own each setting.')
+            Text::make('此处仅展示配置来源。各设置项将由对应任务开放编辑。')
                 ->color('gray'),
             Grid::make([
                 'default' => 1,
@@ -28,32 +30,32 @@ class Settings extends Page
             ])->schema([
                 $this->placeholderSection(
                     heading: 'AI',
-                    description: 'Provider credentials, model selection, and connection health.',
-                    source: 'Source: .env and config/services.php',
+                    description: '模型提供商凭据、模型选择与连接状态。',
+                    source: '来源：.env 与 config/services.php',
                     icon: 'heroicon-o-cpu-chip',
                 ),
                 $this->placeholderSection(
-                    heading: 'Generation',
-                    description: 'Generation defaults, retry behavior, and chapter workflow policy.',
-                    source: 'Source: config and Novel settings',
+                    heading: '生成',
+                    description: '生成默认值、重试行为与章节工作流策略。',
+                    source: '来源：config 与小说设置',
                     icon: 'heroicon-o-bolt',
                 ),
                 $this->placeholderSection(
-                    heading: 'Review',
-                    description: 'Review thresholds, decisions, and rewrite attempt limits.',
-                    source: 'Source: config and Novel settings',
+                    heading: '审校',
+                    description: '审校阈值、决策与重写次数限制。',
+                    source: '来源：config 与小说设置',
                     icon: 'heroicon-o-clipboard-document-check',
                 ),
                 $this->placeholderSection(
-                    heading: 'Memory',
-                    description: 'Retrieval limits, context budget, and embedding policy.',
-                    source: 'Source: config and Novel settings',
+                    heading: '记忆',
+                    description: '检索数量、上下文预算与嵌入策略。',
+                    source: '来源：config 与小说设置',
                     icon: 'heroicon-o-circle-stack',
                 ),
                 $this->placeholderSection(
-                    heading: 'Budget',
-                    description: 'Daily, novel, chapter, and rewrite cost limits.',
-                    source: 'Source: config and Novel settings',
+                    heading: '预算',
+                    description: '每日、单本小说、单章与重写成本限制。',
+                    source: '来源：config 与小说设置',
                     icon: 'heroicon-o-banknotes',
                 )->columnSpanFull(),
             ]),
@@ -70,7 +72,7 @@ class Settings extends Page
             ->description($description)
             ->icon($icon)
             ->afterHeader([
-                Text::make('Read only')
+                Text::make('只读')
                     ->badge()
                     ->color('gray'),
             ])

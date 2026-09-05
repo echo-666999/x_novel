@@ -16,28 +16,29 @@ uses(RefreshDatabase::class);
 test('the x panel exposes the six top level workbench pages', function () {
     $panel = Filament::getPanel('x');
 
-    expect([
-        Dashboard::getNavigationLabel(),
-        Novels::getNavigationLabel(),
-        Generation::getNavigationLabel(),
-        Review::getNavigationLabel(),
-        Memory::getNavigationLabel(),
-        Settings::getNavigationLabel(),
-    ])->toBe([
-        'Dashboard',
-        'Novels',
-        'Generation',
-        'Review',
-        'Memory',
-        'Settings',
-    ])->and([
-        Dashboard::getNavigationSort(),
-        Novels::getNavigationSort(),
-        Generation::getNavigationSort(),
-        Review::getNavigationSort(),
-        Memory::getNavigationSort(),
-        Settings::getNavigationSort(),
-    ])->toBe([-2, 1, 2, 3, 4, 5])
+    expect($panel->getBrandName())->toBe(config('app.name'))
+        ->and([
+            Dashboard::getNavigationLabel(),
+            Novels::getNavigationLabel(),
+            Generation::getNavigationLabel(),
+            Review::getNavigationLabel(),
+            Memory::getNavigationLabel(),
+            Settings::getNavigationLabel(),
+        ])->toBe([
+            '仪表盘',
+            '小说',
+            '生成',
+            '审校',
+            '记忆',
+            '设置',
+        ])->and([
+            Dashboard::getNavigationSort(),
+            Novels::getNavigationSort(),
+            Generation::getNavigationSort(),
+            Review::getNavigationSort(),
+            Memory::getNavigationSort(),
+            Settings::getNavigationSort(),
+        ])->toBe([-2, 1, 2, 3, 4, 5])
         ->and($panel->getPages())->toContain(
             Dashboard::class,
             Novels::class,
@@ -65,11 +66,11 @@ test('the owner can access every workbench page', function (string $path, string
         ->assertOk()
         ->assertSee($emptyState);
 })->with([
-    ['/x/novels', 'No novels yet'],
-    ['/x/generation', 'No generation runs yet'],
-    ['/x/review', 'Review inbox is empty'],
-    ['/x/memory', 'No memories indexed'],
-    ['/x/settings', 'Configuration sources are shown for reference.'],
+    ['/x/novels', '暂无小说'],
+    ['/x/generation', '暂无生成记录'],
+    ['/x/review', '审校收件箱为空'],
+    ['/x/memory', '暂无已索引记忆'],
+    ['/x/settings', '此处仅展示配置来源。'],
 ]);
 
 test('the owner account is restricted to the x panel', function () {
@@ -84,19 +85,19 @@ test('the dashboard provides the initial operational shell', function () {
         ->get('/x')
         ->assertOk()
         ->assertSeeTextInOrder([
-            'Active Novels',
-            'Current Chapter',
-            "Today's Cost",
-            'Needs Attention',
-            'Recent Generation',
-            'Due Foreshadowing',
+            '活跃小说',
+            '当前章节',
+            '今日成本',
+            '需要处理',
+            '最近生成',
+            '待处理伏笔',
         ])
-        ->assertSee('No active novel')
-        ->assertSee('No chapter selected')
-        ->assertSee('No usage recorded')
-        ->assertSee('Nothing requires action')
-        ->assertSee('No generation activity')
-        ->assertSee('No foreshadowing due');
+        ->assertSee('暂无活跃小说')
+        ->assertSee('尚未选择章节')
+        ->assertSee('暂无用量记录')
+        ->assertSee('暂无待处理事项')
+        ->assertSee('暂无生成活动')
+        ->assertSee('暂无待处理伏笔');
 });
 
 test('the settings page provides the five read only configuration sections', function () {
@@ -105,12 +106,12 @@ test('the settings page provides the five read only configuration sections', fun
         ->assertOk()
         ->assertSeeTextInOrder([
             'AI',
-            'Generation',
-            'Review',
-            'Memory',
-            'Budget',
+            '生成',
+            '审校',
+            '记忆',
+            '预算',
         ])
-        ->assertSee('Source: .env and config/services.php')
-        ->assertSee('Source: config and Novel settings')
-        ->assertSee('Read only');
+        ->assertSee('来源：.env 与 config/services.php')
+        ->assertSee('来源：config 与小说设置')
+        ->assertSee('只读');
 });

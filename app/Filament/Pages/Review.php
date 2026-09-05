@@ -13,13 +13,15 @@ class Review extends Page
 
     protected static ?int $navigationSort = 3;
 
-    protected static ?string $title = 'Review';
+    protected static ?string $navigationLabel = '审校';
+
+    protected static ?string $title = '审校';
 
     public function content(Schema $schema): Schema
     {
         return $schema->components([
-            EmptyState::make('Review inbox is empty')
-                ->description('Chapters that need attention or are blocked will appear here.')
+            EmptyState::make('审校收件箱为空')
+                ->description('需要处理或已阻塞的章节会显示在这里。')
                 ->icon('heroicon-o-inbox'),
         ]);
     }

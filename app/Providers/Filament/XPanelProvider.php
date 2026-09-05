@@ -28,7 +28,7 @@ class XPanelProvider extends PanelProvider
             ->path('x')
             ->viteTheme('resources/css/filament/x/theme.css')
             ->login()
-            ->brandName('XNovel')
+            ->brandName((string) config('app.name'))
             ->darkMode()
             ->sidebarCollapsibleOnDesktop()
             ->sidebarWidth('15.5rem')
