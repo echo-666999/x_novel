@@ -2591,118 +2591,34 @@ TASK-072 StateValidator
 每次复制：
 
 ```text
-实施：
-TASK-XXX — <任务名称>
+实施 TASK-002 — Filament 导航与视觉基线
 
 使用 Skill：
-- <主要 skill>
-- <需要时添加 filament-ui>
+- filament-ui
 
-开始前阅读：
-
+阅读：
 - AGENTS.md
+- DESIGN.md
 - docs/PRD.md
 - docs/development/IMPLEMENTATION_PLAN.md
-- <TASK 对应的 architecture 文档>
-- DESIGN.md（仅当本任务涉及 Filament / UI）
-
-从 IMPLEMENTATION_PLAN.md 中读取 TASK-XXX 的完整定义，
-包括：
-- 目标
-- 依赖
-- 后端实现
-- Filament UI
-- 验收标准
-- 测试
-- 完成定义
-
-当前只实施 TASK-XXX。
+- 相关 architecture 文档
 
 要求：
 
-1. 检查当前项目已有实现。
-2. 检查 TASK-XXX 的依赖任务是否已经完成。
-3. 如果依赖未满足，停止实施并报告缺失依赖。
-4. 先输出实施计划，不立即修改代码。
-5. 明确预计修改：
-   - Migrations
-   - Models
-   - Enums
-   - DTOs
-   - Actions / Services
-   - Jobs
-   - Filament
-   - Tests
-   - Config
-   中哪些内容。
-6. 复用已有实现，不创建重复能力。
-7. 严格限制在 TASK-XXX 范围内。
-8. 不实施后续 TASK。
-9. 不为了未来需求增加额外抽象。
-10. 如果当前代码与 AGENTS.md / PRD / architecture 文档冲突，
-    先报告冲突，不静默修改。
-11. 涉及 Filament 时：
-    - 遵循 DESIGN.md
-    - 优先使用 Filament 原生组件和 styling API
-    - Light / Dark 均保持可读
-    - 不重写 Filament 核心组件
-    - 尽量让本 Task 有明确 UI 可见结果
-12. 涉及数据库时：
-    - 检查 FK / UNIQUE / CHECK / INDEX
-    - 检查 migration rollback
-13. 涉及 Queue / Workflow 时：
-    - 明确 idempotency_key
-    - 明确 input_hash
-    - 明确 Retry
-    - 明确 duplicate execution
-    - 明确 failure recovery
-14. 涉及 Canonical Story 数据时：
-    - Draft 不得修改 Canonical State
-    - 必须遵循 Story State Version
-    - 必须考虑重复执行和事务一致性
-15. 完成后实际运行相关测试。
-16. 如果涉及前端资源，运行：
-    npm run build
-17. 不得用“应该通过”代替实际测试结果。
+1. 读取 TASK-002 的完整定义并检查依赖。
+2. 先检查现有实现并给出实施计划。
+3. 只实施 TASK-002，不扩大范围。
+4. 复用已有能力，UI 遵循 DESIGN.md。
+5. 完成后运行相关测试和 `npm run build`（如适用）。
+6. 未实际执行的测试不得声称通过。
 
-完成后汇报：
-
-## Summary
-实施了什么。
-
-## Files Changed
-修改/新增哪些文件及用途。
-
-## UI Changes
-涉及哪些 Filament 页面、Widget、Action、SlideOver。
-如果本任务无 UI，明确写：
-No UI changes.
-
-## Design Tokens Applied
-仅 UI Task 输出：
-- colors
-- typography
-- spacing
-- surface
-- borders
-- radius
-- status semantics
-
-## Tests / Build
-实际运行：
-- 哪些 PHPUnit / Pest 测试
-- php artisan 相关命令
-- npm run build（如适用）
-- 结果
-
-## Acceptance Criteria
-逐条核对 TASK-XXX 的验收条件：
-- [x] ...
-- [x] ...
-
-## Follow-ups
-只列出真正属于后续 TASK 的内容。
-不要提前实现。
+汇报：
+- Summary
+- Files Changed
+- UI Changes
+- Tests / Build
+- Acceptance Criteria
+- Follow-ups
 ```
 
 ---

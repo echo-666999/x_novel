@@ -2,3 +2,104 @@
 
 @source '../../../../app/Filament/**/*';
 @source '../../../../resources/views/filament/**/*';
+
+@theme {
+    --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+:root {
+    --xn-canvas: #f6f7f9;
+    --xn-sidebar: #f1f2f5;
+    --xn-surface-1: #ffffff;
+    --xn-surface-2: #f8f9fb;
+    --xn-surface-3: #eef0f4;
+    --xn-border: #e1e3e8;
+    --xn-border-strong: #c9cdd6;
+    --xn-text: #17191f;
+    --xn-text-muted: #4f5561;
+    --xn-floating-shadow: 0 12px 32px rgb(20 23 31 / 14%);
+}
+
+.dark {
+    --xn-canvas: #0b0c0f;
+    --xn-sidebar: #0e0f13;
+    --xn-surface-1: #111318;
+    --xn-surface-2: #171920;
+    --xn-surface-3: #1d2028;
+    --xn-border: #282b34;
+    --xn-border-strong: #383c48;
+    --xn-text: #f2f3f5;
+    --xn-text-muted: #b7bbc5;
+    --xn-floating-shadow: 0 16px 40px rgb(0 0 0 / 32%);
+}
+
+.fi-body {
+    background-color: var(--xn-canvas);
+    color: var(--xn-text);
+    font-size: 0.875rem;
+    line-height: 1.55;
+}
+
+.fi-sidebar {
+    background-color: var(--xn-sidebar);
+    border-inline-end: 1px solid var(--xn-border);
+}
+
+.fi-topbar nav,
+.fi-section,
+.fi-ta,
+.fi-fo-field-wrp,
+.fi-sc-empty-state .fi-empty-state {
+    border-color: var(--xn-border);
+}
+
+.fi-section,
+.fi-ta,
+.fi-sc-empty-state .fi-empty-state {
+    border-radius: 0.625rem;
+    box-shadow: none;
+}
+
+.fi-btn,
+.fi-input-wrp,
+.fi-dropdown-list-item,
+.fi-tabs-item {
+    border-radius: 0.5rem;
+}
+
+.fi-btn {
+    min-height: 2.25rem;
+}
+
+.fi-badge {
+    min-height: 1.25rem;
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 9999px;
+    font-size: 0.75rem;
+}
+
+.fi-modal-window,
+.fi-dropdown-panel {
+    border: 1px solid var(--xn-border-strong);
+    border-radius: 0.625rem;
+    box-shadow: var(--xn-floating-shadow);
+}
+
+.fi-sc-empty-state .fi-empty-state {
+    background-color: var(--xn-surface-1);
+}
+
+.fi-sc-empty-state .fi-empty-state-description {
+    color: var(--xn-text-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fi-body *,
+    .fi-body *::before,
+    .fi-body *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
+}
