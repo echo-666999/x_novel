@@ -254,6 +254,16 @@ Budget
 
 ---
 
+## M0 预留 Task 编号
+
+`TASK-005`～`TASK-009` 当前没有任务定义，作为 M0 后续基线工作的预留编号。
+
+- 这些编号不是遗漏的可执行任务，不得仅根据编号直接实施。
+- 如后续确有新的 M0 基线需求，必须先补充完整的目标、依赖、实现范围、验收、测试和完成定义，再加入实施顺序。
+- 在任务正式定义前，完成 `TASK-004` 后直接进入 `TASK-010`。
+
+---
+
 # M1 — Novel / Bible / Volume / Arc
 
 ## TASK-010 — Novel 数据模型与列表
@@ -2448,6 +2458,8 @@ System Health
 ```text
 001
 → 002
+→ 003
+→ 004
 → 010
 → 011
 → 012
@@ -2511,8 +2523,6 @@ System Health
 P1 UI / Debug Task 可以穿插，例如：
 
 ```text
-003
-004
 015
 023
 024
@@ -2534,7 +2544,7 @@ P1 UI / Debug Task 可以穿插，例如：
 
 ---
 
-# 5. 第一阶段最推荐的 10 个 Task
+# 5. 第一阶段最推荐的 12 个 Task
 
 如果现在正式开始开发，不要先冲 AI。
 
@@ -2543,6 +2553,8 @@ P1 UI / Debug Task 可以穿插，例如：
 ```text
 TASK-001 当前项目环境审计
 TASK-002 Filament 导航基线
+TASK-003 Dashboard 基础壳
+TASK-004 Settings 页面骨架
 TASK-010 Novel
 TASK-011 Novel Workspace
 TASK-012 Bible
