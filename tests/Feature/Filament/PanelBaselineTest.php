@@ -3,9 +3,9 @@
 use App\Filament\Pages\Dashboard;
 use App\Filament\Pages\Generation;
 use App\Filament\Pages\Memory;
-use App\Filament\Pages\Novels;
 use App\Filament\Pages\Review;
 use App\Filament\Pages\Settings;
+use App\Filament\Resources\Novels\NovelResource;
 use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Panel;
@@ -19,7 +19,7 @@ test('the x panel exposes the six top level workbench pages', function () {
     expect($panel->getBrandName())->toBe(config('app.name'))
         ->and([
             Dashboard::getNavigationLabel(),
-            Novels::getNavigationLabel(),
+            NovelResource::getNavigationLabel(),
             Generation::getNavigationLabel(),
             Review::getNavigationLabel(),
             Memory::getNavigationLabel(),
@@ -33,7 +33,7 @@ test('the x panel exposes the six top level workbench pages', function () {
             '设置',
         ])->and([
             Dashboard::getNavigationSort(),
-            Novels::getNavigationSort(),
+            NovelResource::getNavigationSort(),
             Generation::getNavigationSort(),
             Review::getNavigationSort(),
             Memory::getNavigationSort(),
@@ -41,12 +41,20 @@ test('the x panel exposes the six top level workbench pages', function () {
         ])->toBe([-2, 1, 2, 3, 4, 5])
         ->and($panel->getPages())->toContain(
             Dashboard::class,
-            Novels::class,
             Generation::class,
             Review::class,
             Memory::class,
             Settings::class,
-        );
+        )->and($panel->getResources())->toContain(NovelResource::class);
+});
+
+test('filament interface strings added after the bundled chinese translation remain localized', function () {
+    expect(trans_choice('filament-tables::table.result_count', 0, ['count' => 0]))->toBe('暂无结果')
+        ->and(__('filament-panels::layout.skip_to_content.label'))->toBe('跳转到内容')
+        ->and(__('filament-panels::layout.navigation.label'))->toBe('侧边导航')
+        ->and(__('filament-panels::layout.topbar.label'))->toBe('顶部栏')
+        ->and(__('filament::components/breadcrumbs.label'))->toBe('面包屑导航')
+        ->and(__('filament-forms::components.select.actions.clear.label'))->toBe('清除选择');
 });
 
 test('guests are redirected to the panel login page', function (string $path) {
@@ -66,7 +74,7 @@ test('the owner can access every workbench page', function (string $path, string
         ->assertOk()
         ->assertSee($emptyState);
 })->with([
-    ['/x/novels', '暂无小说'],
+    ['/x/novels', '创建第一部小说'],
     ['/x/generation', '暂无生成记录'],
     ['/x/review', '审校收件箱为空'],
     ['/x/memory', '暂无已索引记忆'],
