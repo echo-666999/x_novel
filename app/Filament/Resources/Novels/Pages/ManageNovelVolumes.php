@@ -25,7 +25,7 @@ class ManageNovelVolumes extends ManageRelatedRecords
 
     protected static string $relationship = 'volumes';
 
-    protected static ?string $navigationLabel = '规划';
+    protected static ?string $navigationLabel = '分卷';
 
     protected static ?string $relationshipTitle = '分卷';
 

@@ -9,6 +9,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelBible;
 use App\Filament\Resources\Novels\Pages\ManageNovelStoryArcs;
 use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Filament\Resources\Novels\Pages\ViewNovelPlanning;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
 use App\Filament\Resources\Novels\Schemas\NovelOverview;
 use App\Filament\Resources\Novels\Tables\NovelsTable;
@@ -67,6 +68,7 @@ class NovelResource extends Resource
         return $page->generateNavigationItems([
             ViewNovel::class,
             ManageNovelBible::class,
+            ViewNovelPlanning::class,
             ManageNovelVolumes::class,
             ManageNovelStoryArcs::class,
         ]);
@@ -79,7 +81,8 @@ class NovelResource extends Resource
             'create' => CreateNovel::route('/create'),
             'view' => ViewNovel::route('/{record}'),
             'bible' => ManageNovelBible::route('/{record}/bible'),
-            'planning' => ManageNovelVolumes::route('/{record}/planning'),
+            'planning' => ViewNovelPlanning::route('/{record}/planning'),
+            'volumes' => ManageNovelVolumes::route('/{record}/planning/volumes'),
             'story-arcs' => ManageNovelStoryArcs::route('/{record}/planning/story-arcs'),
             'edit' => EditNovel::route('/{record}/edit'),
         ];
