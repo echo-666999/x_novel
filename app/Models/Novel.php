@@ -54,6 +54,12 @@ class Novel extends Model
         return $this->hasMany(Character::class)->orderBy('name');
     }
 
+    /** @return HasMany<WorldEntity, $this> */
+    public function worldEntities(): HasMany
+    {
+        return $this->hasMany(WorldEntity::class)->orderBy('name');
+    }
+
     /**
      * @return array<string, string>
      */
