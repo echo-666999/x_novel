@@ -2,8 +2,12 @@
 
 namespace App\Filament\Resources\Novels\Schemas;
 
+use App\AI\AiSettingsResolver;
+use App\Enums\AiStage;
+use App\Models\Novel;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 
@@ -40,6 +44,41 @@ class NovelForm
                             ->maxLength(10_000)
                             ->columnSpanFull(),
                     ]),
+                Section::make('AI Model Overrides')
+                    ->description('留空时继承 Global Default。这里只覆盖各 Stage 的模型，不保存 Provider 凭据。')
+                    ->icon('heroicon-o-cpu-chip')
+                    ->visible(fn (string $operation): bool => $operation === 'edit')
+                    ->columns(['default' => 1, 'lg' => 2])
+                    ->schema(self::aiModelOverrideFields()),
             ]);
+    }
+
+    /** @return array<int, TextInput|TextEntry> */
+    private static function aiModelOverrideFields(): array
+    {
+        return collect(AiStage::cases())
+            ->flatMap(function (AiStage $stage): array {
+                return [
+                    TextInput::make("ai_model_overrides.{$stage->value}")
+                        ->label($stage->getLabel().' Override')
+                        ->placeholder(fn (): string => app(AiSettingsResolver::class)->modelFor($stage))
+                        ->helperText('留空继承全局设置。')
+                        ->maxLength(255),
+                    TextEntry::make("resolved_ai_models.{$stage->value}")
+                        ->label($stage->getLabel().' Resolved Model')
+                        ->state(function (?Novel $record) use ($stage): string {
+                            if ($record === null) {
+                                return app(AiSettingsResolver::class)->modelFor($stage);
+                            }
+
+                            $resolved = app(AiSettingsResolver::class)->resolve($stage, $record);
+                            $source = $resolved->source === 'novel' ? 'Novel Override' : 'Global Default';
+
+                            return $resolved->model.' · '.$source;
+                        })
+                        ->badge(),
+                ];
+            })
+            ->all();
     }
 }

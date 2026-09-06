@@ -15,6 +15,8 @@ beforeEach(function () {
     $this->actingAs(User::factory()->create());
     config()->set('ai.provider', 'openai');
     config()->set('ai.model', 'test-model');
+    config()->set('ai.models.planner', 'planner-model');
+    config()->set('ai.models.writer', 'writer-model');
 });
 
 test('ai settings shows provider model status and connection action without exposing credentials', function () {
@@ -28,6 +30,12 @@ test('ai settings shows provider model status and connection action without expo
         ->assertSee('test-model')
         ->assertSee('Connection Status')
         ->assertSee('未配置')
+        ->assertSee('Stage Models')
+        ->assertSee('Planner')
+        ->assertSee('planner-model')
+        ->assertSee('Writer')
+        ->assertSee('writer-model')
+        ->assertSee('Global Default')
         ->assertSee('Test Connection')
         ->assertDontSee('AI_API_KEY');
 });
@@ -54,6 +62,7 @@ test('ai settings can run a successful connection test', function () {
         ->assertSee('37 ms');
 
     expect($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->model)->toBe('planner-model')
         ->and($fake->requests()[0]->metadata)->toBe(['purpose' => 'connection_test']);
 });
 

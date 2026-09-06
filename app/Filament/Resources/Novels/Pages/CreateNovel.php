@@ -14,6 +14,14 @@ class CreateNovel extends CreateRecord
         return '创建小说';
     }
 
+    /** @param  array<string, mixed>  $data */
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        unset($data['ai_model_overrides']);
+
+        return $data;
+    }
+
     protected function getRedirectUrl(): string
     {
         return NovelResource::getUrl('view', ['record' => $this->getRecord()]);

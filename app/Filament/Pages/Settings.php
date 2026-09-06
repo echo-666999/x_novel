@@ -2,11 +2,14 @@
 
 namespace App\Filament\Pages;
 
+use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\AiStage;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -99,6 +102,26 @@ class Settings extends Page
                     ->state(fn (): string => filled(config('ai.providers.openai.api_key')) ? '已配置' : '未配置')
                     ->badge()
                     ->color(fn (): string => filled(config('ai.providers.openai.api_key')) ? 'success' : 'gray'),
+                RepeatableEntry::make('ai_stage_models')
+                    ->label('Stage Models')
+                    ->state(fn (): array => collect(AiStage::cases())
+                        ->map(function (AiStage $stage): array {
+                            $resolved = app(AiSettingsResolver::class)->resolve($stage);
+
+                            return [
+                                'stage' => $stage->getLabel(),
+                                'model' => $resolved->model,
+                                'source' => 'Global Default',
+                            ];
+                        })
+                        ->all())
+                    ->columns(['default' => 1, 'md' => 3])
+                    ->schema([
+                        TextEntry::make('stage')->label('Stage')->badge(),
+                        TextEntry::make('model')->label('Resolved Model'),
+                        TextEntry::make('source')->label('Source')->color('gray'),
+                    ])
+                    ->columnSpanFull(),
                 TextEntry::make('ai_test_success')
                     ->label('Test Result')
                     ->state(fn (): ?string => $this->aiConnectionResult === null
@@ -128,9 +151,11 @@ class Settings extends Page
 
     private function testAiConnection(AiProvider $provider): void
     {
+        $model = app(AiSettingsResolver::class)->modelFor(AiStage::Planner);
+
         try {
             $response = $provider->generate(new AiRequest(
-                model: (string) config('ai.model'),
+                model: $model,
                 systemPrompt: 'You are a connection test. Reply briefly.',
                 prompt: 'Reply with OK.',
                 temperature: 0,
@@ -152,7 +177,7 @@ class Settings extends Page
         } catch (AiProviderException $exception) {
             $this->aiConnectionResult = [
                 'success' => false,
-                'model' => (string) config('ai.model'),
+                'model' => $model,
                 'latency_ms' => null,
                 'message' => $exception->errorCode.' · '.$exception->getMessage(),
             ];
