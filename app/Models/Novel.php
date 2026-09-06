@@ -48,6 +48,12 @@ class Novel extends Model
         return $this->hasMany(StoryArc::class);
     }
 
+    /** @return HasMany<Character, $this> */
+    public function characters(): HasMany
+    {
+        return $this->hasMany(Character::class)->orderBy('name');
+    }
+
     /**
      * @return array<string, string>
      */
