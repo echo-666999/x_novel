@@ -12,6 +12,8 @@ class ViewNovel extends ViewRecord
 {
     protected static string $resource = NovelResource::class;
 
+    protected static ?string $navigationLabel = '概览';
+
     public function getTitle(): string
     {
         return $this->getRecord()->title;
