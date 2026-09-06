@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use App\AI\Contracts\AiProvider;
+use App\AI\Providers\OpenAiProvider;
 use Illuminate\Support\ServiceProvider;
+use InvalidArgumentException;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -11,7 +14,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(AiProvider::class, function (): AiProvider {
+            return match (config('ai.provider')) {
+                'openai' => app(OpenAiProvider::class),
+                default => throw new InvalidArgumentException('Unsupported AI provider: '.config('ai.provider')),
+            };
+        });
     }
 
     /**
