@@ -50,6 +50,18 @@ class Chapter extends Model
         return $this->hasOne(StoryStateVersion::class)->ofMany('version', 'max');
     }
 
+    /** @return HasMany<ChapterPlan, $this> */
+    public function plans(): HasMany
+    {
+        return $this->hasMany(ChapterPlan::class)->orderBy('version');
+    }
+
+    /** @return HasOne<ChapterPlan, $this> */
+    public function latestPlan(): HasOne
+    {
+        return $this->hasOne(ChapterPlan::class)->ofMany('version', 'max');
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

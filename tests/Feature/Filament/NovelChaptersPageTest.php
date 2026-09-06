@@ -1,9 +1,14 @@
 <?php
 
 use App\Enums\ChapterStatus;
+use App\Enums\PlanStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
+use App\Models\Character;
+use App\Models\Fact;
+use App\Models\Foreshadowing;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Models\User;
@@ -120,4 +125,112 @@ test('the chapter page stays inside the novel workspace', function () {
         ->assertOk()
         ->assertSee('章节')
         ->assertSee('创建计划章节');
+});
+
+test('the owner can create a complete executable chapter plan without ai', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 4]);
+    $pov = Character::factory()->for($novel)->create(['name' => '林舟']);
+    $fact = Fact::factory()->for($novel)->create();
+    $foreshadowing = Foreshadowing::factory()->for($novel)->create(['title' => '旧信之谜']);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionExists('managePlan', fn ($action): bool => $action->isModalSlideOver())
+        ->callTableAction('managePlan', $chapter, data: [
+            'chapter_function' => '迫使主角离开安全区',
+            'arc_contribution' => '推进失踪案主线',
+            'reader_promise' => '揭示旧信的第一层来源',
+            'target_words' => 3_200,
+            'pov_character_id' => $pov->getKey(),
+            'tone' => '压抑而紧张',
+            'time_anchor' => '第三日黄昏',
+            'hook_type' => '身份反转',
+            'must_reveal' => ['旧信来自城内'],
+            'may_hint' => ['守门人知情'],
+            'must_not_reveal' => ['幕后主使身份'],
+            'required_facts' => [$fact->getKey()],
+            'forbidden_conflicts' => ['林舟不得知晓密道出口'],
+            'due_foreshadowings' => [$foreshadowing->getKey()],
+            'scene_plans' => [[
+                'goal' => '取得旧信原件',
+                'conflict' => '守门人拒绝交付',
+                'turn' => '守门人认出信封印记',
+                'outcome' => '林舟带走残缺旧信',
+            ]],
+            'status' => PlanStatus::Ready->value,
+        ])
+        ->assertHasNoTableActionErrors();
+
+    $plan = $chapter->plans()->sole();
+
+    expect($plan->version)->toBe(1)
+        ->and($plan->chapter_function)->toBe('迫使主角离开安全区')
+        ->and($plan->povCharacter->is($pov))->toBeTrue()
+        ->and($plan->required_facts)->toBe([$fact->getKey()])
+        ->and($plan->due_foreshadowings)->toBe([$foreshadowing->getKey()])
+        ->and($plan->scene_plans[0]['outcome'])->toBe('林舟带走残缺旧信')
+        ->and($plan->status)->toBe(PlanStatus::Ready);
+});
+
+test('the chapter plan form requires all executable fields and at least one scene', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->callTableAction('managePlan', $chapter, data: [
+            'chapter_function' => '',
+            'arc_contribution' => '',
+            'reader_promise' => '',
+            'target_words' => 0,
+            'pov_character_id' => null,
+            'tone' => '',
+            'time_anchor' => '',
+            'hook_type' => '',
+            'scene_plans' => [],
+            'status' => PlanStatus::Draft->value,
+        ])
+        ->assertHasTableActionErrors([
+            'chapter_function' => 'required',
+            'arc_contribution' => 'required',
+            'reader_promise' => 'required',
+            'target_words' => 'min',
+            'pov_character_id' => 'required',
+            'tone' => 'required',
+            'time_anchor' => 'required',
+            'hook_type' => 'required',
+            'scene_plans' => 'required',
+        ]);
+});
+
+test('the owner can edit the current plan without creating a duplicate version', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $pov = Character::factory()->for($novel)->create();
+    $plan = ChapterPlan::factory()->for($chapter)->create([
+        'pov_character_id' => $pov->getKey(),
+        'status' => PlanStatus::Draft,
+    ]);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->mountTableAction('managePlan', $chapter)
+        ->assertTableActionDataSet(fn (array $data): bool => $data['chapter_function'] === $plan->chapter_function);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->callTableAction('managePlan', $chapter, data: [
+            ...$plan->only([
+                'chapter_function', 'arc_contribution', 'reader_promise', 'target_words',
+                'pov_character_id', 'tone', 'time_anchor', 'hook_type', 'must_reveal',
+                'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
+                'due_foreshadowings', 'scene_plans',
+            ]),
+            'reader_promise' => '更新后的读者承诺',
+            'status' => PlanStatus::Ready->value,
+        ])
+        ->assertHasNoTableActionErrors();
+
+    $plan = $plan->fresh();
+
+    expect($chapter->plans()->count())->toBe(1)
+        ->and($plan->reader_promise)->toBe('更新后的读者承诺')
+        ->and($plan->status)->toBe(PlanStatus::Ready);
 });
