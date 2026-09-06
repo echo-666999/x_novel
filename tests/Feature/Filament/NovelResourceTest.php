@@ -1,9 +1,11 @@
 <?php
 
 use App\Enums\NovelStatus;
+use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
+use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Models\Novel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -56,9 +58,9 @@ test('the owner can create a novel and enters its workbench', function () {
     expect($novel->title)->toBe('长夜将明')
         ->and($novel->status)->toBe(NovelStatus::Draft);
 
-    $this->get(route('filament.x.resources.novels.edit', $novel))
+    $this->get(NovelResource::getUrl('view', ['record' => $novel]))
         ->assertOk()
-        ->assertSee('小说工作台');
+        ->assertSee('小说概览');
 });
 
 test('the owner can edit a novels basic information', function () {
@@ -95,4 +97,61 @@ test('novel form validates required fields and positive target words', function 
             'genre' => 'required',
             'target_words' => 'min',
         ]);
+});
+
+test('the novel workspace overview shows real values and explicit unavailable metrics', function () {
+    $novel = Novel::factory()->create([
+        'title' => '雾海长明',
+        'genre' => '玄幻',
+        'premise' => '迷雾中的孤城等待黎明。',
+        'target_words' => 900_000,
+        'current_chapter_sequence' => 12,
+        'status' => NovelStatus::Generating,
+    ]);
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertOk()
+        ->assertSeeTextInOrder([
+            '小说概览',
+            '标题',
+            '雾海长明',
+            '题材',
+            '玄幻',
+            '状态',
+            '生成中',
+            '进度与状态',
+            '目标字数',
+            '900,000',
+            '当前字数',
+            '0',
+            '当前卷',
+            '尚未接入',
+            '当前章节',
+            '第 12 章',
+            '当前 State Version',
+            '生成状态',
+            '质量与运营',
+            '今日成本',
+            '¥0.00',
+            'Review 通过率',
+            'Rewrite 比例',
+            '待处理伏笔',
+            '需要处理',
+        ]);
+});
+
+test('future generation actions are visible but disabled in the workspace', function () {
+    $novel = Novel::factory()->create();
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('尚无正式章节')
+        ->assertActionExists('generateNextChapter')
+        ->assertActionDisabled('generateNextChapter')
+        ->assertActionExists('autoGenerate')
+        ->assertActionDisabled('autoGenerate')
+        ->assertActionExists('pause')
+        ->assertActionDisabled('pause')
+        ->assertActionExists('resume')
+        ->assertActionDisabled('resume')
+        ->assertActionExists('edit');
 });

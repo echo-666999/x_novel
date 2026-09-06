@@ -5,7 +5,9 @@ namespace App\Filament\Resources\Novels;
 use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
+use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
+use App\Filament\Resources\Novels\Schemas\NovelOverview;
 use App\Filament\Resources\Novels\Tables\NovelsTable;
 use App\Models\Novel;
 use BackedEnum;
@@ -42,6 +44,11 @@ class NovelResource extends Resource
         return NovelsTable::configure($table);
     }
 
+    public static function infolist(Schema $schema): Schema
+    {
+        return NovelOverview::configure($schema);
+    }
+
     public static function getRelations(): array
     {
         return [
@@ -54,6 +61,7 @@ class NovelResource extends Resource
         return [
             'index' => ListNovels::route('/'),
             'create' => CreateNovel::route('/create'),
+            'view' => ViewNovel::route('/{record}'),
             'edit' => EditNovel::route('/{record}/edit'),
         ];
     }

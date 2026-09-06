@@ -16,6 +16,6 @@ class CreateNovel extends CreateRecord
 
     protected function getRedirectUrl(): string
     {
-        return NovelResource::getUrl('edit', ['record' => $this->getRecord()]);
+        return NovelResource::getUrl('view', ['record' => $this->getRecord()]);
     }
 }

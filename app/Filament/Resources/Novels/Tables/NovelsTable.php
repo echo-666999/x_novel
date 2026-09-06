@@ -3,7 +3,10 @@
 namespace App\Filament\Resources\Novels\Tables;
 
 use App\Enums\NovelStatus;
+use App\Filament\Resources\Novels\NovelResource;
+use App\Models\Novel;
 use Filament\Actions\EditAction;
+use Filament\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
@@ -51,7 +54,9 @@ class NovelsTable
             ->emptyStateHeading('暂无小说')
             ->emptyStateDescription('创建第一部小说，开始建立长篇故事工作台。')
             ->emptyStateIcon('heroicon-o-book-open')
+            ->recordUrl(fn (Novel $record): string => NovelResource::getUrl('view', ['record' => $record]))
             ->recordActions([
+                ViewAction::make()->label('进入工作台'),
                 EditAction::make()->label('编辑'),
             ]);
     }

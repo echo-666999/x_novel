@@ -53,6 +53,7 @@ test('filament interface strings added after the bundled chinese translation rem
         ->and(__('filament-panels::layout.skip_to_content.label'))->toBe('跳转到内容')
         ->and(__('filament-panels::layout.navigation.label'))->toBe('侧边导航')
         ->and(__('filament-panels::layout.topbar.label'))->toBe('顶部栏')
+        ->and(__('filament-panels::layout.actions.theme_switcher.label'))->toBe('主题')
         ->and(__('filament::components/breadcrumbs.label'))->toBe('面包屑导航')
         ->and(__('filament-forms::components.select.actions.clear.label'))->toBe('清除选择');
 });
