@@ -40,6 +40,12 @@ class StoryStateVersion extends Model
         return $this->belongsTo(Novel::class);
     }
 
+    /** @return BelongsTo<Chapter, $this> */
+    public function chapter(): BelongsTo
+    {
+        return $this->belongsTo(Chapter::class);
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

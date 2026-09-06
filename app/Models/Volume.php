@@ -37,6 +37,12 @@ class Volume extends Model
         return $this->hasMany(StoryArc::class);
     }
 
+    /** @return HasMany<Chapter, $this> */
+    public function chapters(): HasMany
+    {
+        return $this->hasMany(Chapter::class)->orderBy('sequence');
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
