@@ -96,9 +96,11 @@
 
         <x-filament::section
             :heading="$domains[$activeDomain]"
-            :description="'State path: '.$activeDomain"
+            :description="$activeDomain === 'facts' ? '当前规范事实 · 只读' : 'State path: '.$activeDomain"
         >
-            @if (blank($domainState))
+            @if ($activeDomain === 'facts')
+                {{ $this->table }}
+            @elseif (blank($domainState))
                 <p class="py-4 text-sm text-gray-500 dark:text-gray-400">
                     当前版本在此领域没有状态数据。
                 </p>

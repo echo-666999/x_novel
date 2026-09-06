@@ -98,6 +98,7 @@ test('the inspector shows every fixed story state domain and remains read only',
             '开放线索',
             '伏笔',
             '读者承诺',
+            '事实',
         ])
         ->assertDontSee('保存')
         ->assertDontSee('编辑')

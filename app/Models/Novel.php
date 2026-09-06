@@ -68,6 +68,12 @@ class Novel extends Model
         return $this->hasMany(Foreshadowing::class);
     }
 
+    /** @return HasMany<Fact, $this> */
+    public function facts(): HasMany
+    {
+        return $this->hasMany(Fact::class);
+    }
+
     /** @return HasMany<StoryStateVersion, $this> */
     public function storyStateVersions(): HasMany
     {
