@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Widgets\DueForeshadowingsWidget;
 use Filament\Pages\Dashboard as BaseDashboard;
 use Filament\Schemas\Components\EmptyState;
 use Filament\Schemas\Components\Grid;
@@ -52,14 +53,9 @@ class Dashboard extends BaseDashboard
                             ->icon('heroicon-o-bolt')
                             ->contained(false),
                     ]),
-                Section::make('待处理伏笔')
-                    ->description('即将到期或需要关注的伏笔')
-                    ->schema([
-                        EmptyState::make('暂无待处理伏笔')
-                            ->description('小说数据建立后，到期和逾期伏笔会显示在这里。')
-                            ->icon('heroicon-o-flag')
-                            ->contained(false),
-                    ]),
+                ...$this->getWidgetsSchemaComponents([
+                    DueForeshadowingsWidget::class,
+                ]),
             ]),
         ]);
     }
