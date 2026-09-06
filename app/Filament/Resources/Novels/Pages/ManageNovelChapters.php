@@ -156,6 +156,13 @@ class ManageNovelChapters extends ManageRelatedRecords
             ->defaultSort('sequence')
             ->recordAction(null)
             ->recordActions([
+                Action::make('viewChapter')
+                    ->label('工作台')
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->url(fn (Chapter $record): string => NovelResource::getUrl('chapter', [
+                        'record' => $this->getRecord(),
+                        'chapter' => $record,
+                    ])),
                 Action::make('managePlan')
                     ->label(fn (Chapter $record): string => $record->latestPlan === null ? '建立 Plan' : '编辑 Plan')
                     ->icon('heroicon-o-clipboard-document-list')
