@@ -62,6 +62,12 @@ class Chapter extends Model
         return $this->hasOne(ChapterPlan::class)->ofMany('version', 'max');
     }
 
+    /** @return HasMany<Scene, $this> */
+    public function scenes(): HasMany
+    {
+        return $this->hasMany(Scene::class)->orderBy('sequence');
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

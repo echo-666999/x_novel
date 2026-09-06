@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\ForeshadowingStatus;
@@ -178,6 +179,68 @@ class ManageNovelChapters extends ManageRelatedRecords
                             ->success()
                             ->send();
                     }),
+                Action::make('syncScenes')
+                    ->label('同步 Scenes')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('gray')
+                    ->visible(fn (Chapter $record): bool => $record->latestPlan !== null)
+                    ->requiresConfirmation()
+                    ->modalHeading('从当前 Plan 同步 Scenes？')
+                    ->modalDescription('将按 Scene Plan 顺序初始化或更新尚未生成的 Scenes。已进入生成流程的 Scene 不会被覆盖。')
+                    ->action(function (Chapter $record, SyncScenesFromChapterPlanAction $syncScenes): void {
+                        $count = $syncScenes->execute($record);
+
+                        Notification::make()
+                            ->title("已同步 {$count} 个 Scenes")
+                            ->success()
+                            ->send();
+                    }),
+                Action::make('viewScenes')
+                    ->label('查看 Scenes')
+                    ->icon('heroicon-o-list-bullet')
+                    ->visible(fn (Chapter $record): bool => $record->scenes()->exists())
+                    ->modalHeading(fn (Chapter $record): string => "第 {$record->sequence} 章 · Scenes")
+                    ->modalDescription('这里展示从当前 Chapter Plan 同步出的有序场景。')
+                    ->modalWidth('7xl')
+                    ->slideOver()
+                    ->modalSubmitAction(false)
+                    ->fillForm(fn (Chapter $record): array => [
+                        'scenes' => $record->scenes()
+                            ->with('povCharacter:id,name')
+                            ->get()
+                            ->map(fn ($scene): array => [
+                                'sequence' => $scene->sequence,
+                                'goal' => $scene->goal,
+                                'conflict' => $scene->conflict,
+                                'turn' => $scene->turn,
+                                'outcome' => $scene->outcome,
+                                'pov' => $scene->povCharacter?->name,
+                                'location' => $scene->location,
+                                'time_anchor' => $scene->time_anchor,
+                                'status' => $scene->status->getLabel(),
+                            ])
+                            ->all(),
+                    ])
+                    ->schema([
+                        Repeater::make('scenes')
+                            ->label('Scenes')
+                            ->schema([
+                                TextInput::make('sequence')->label('序号'),
+                                TextInput::make('status')->label('状态'),
+                                TextInput::make('pov')->label('POV'),
+                                TextInput::make('location')->label('地点'),
+                                TextInput::make('time_anchor')->label('时间锚点'),
+                                Textarea::make('goal')->label('目标')->rows(2),
+                                Textarea::make('conflict')->label('冲突')->rows(2),
+                                Textarea::make('turn')->label('转折')->rows(2),
+                                Textarea::make('outcome')->label('结果')->rows(2),
+                            ])
+                            ->columns(['default' => 1, 'lg' => 3])
+                            ->disabled()
+                            ->deletable(false)
+                            ->addable(false)
+                            ->reorderable(false),
+                    ]),
             ])
             ->emptyStateHeading('尚未建立章节')
             ->emptyStateDescription('创建 planned Chapter 后，再为它补充完整章节计划。')
@@ -288,6 +351,19 @@ class ManageNovelChapters extends ManageRelatedRecords
                     Repeater::make('scene_plans')
                         ->label('Scenes')
                         ->schema([
+                            Select::make('pov_character_id')
+                                ->label('POV 角色')
+                                ->options(fn (): array => $this->getRecord()->characters()->orderBy('name')->pluck('name', 'id')->all())
+                                ->searchable()
+                                ->preload()
+                                ->placeholder('继承 Chapter Plan POV'),
+                            TextInput::make('location')
+                                ->label('地点')
+                                ->maxLength(255),
+                            TextInput::make('time_anchor')
+                                ->label('时间锚点')
+                                ->maxLength(255)
+                                ->placeholder('继承 Chapter Plan 时间锚点'),
                             Textarea::make('goal')->label('目标')->rows(2)->required(),
                             Textarea::make('conflict')->label('冲突')->rows(2)->required(),
                             Textarea::make('turn')->label('转折')->rows(2)->required(),

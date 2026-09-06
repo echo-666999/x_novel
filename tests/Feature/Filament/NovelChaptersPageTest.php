@@ -2,6 +2,7 @@
 
 use App\Enums\ChapterStatus;
 use App\Enums\PlanStatus;
+use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Models\Chapter;
@@ -233,4 +234,45 @@ test('the owner can edit the current plan without creating a duplicate version',
     expect($chapter->plans()->count())->toBe(1)
         ->and($plan->reader_promise)->toBe('更新后的读者承诺')
         ->and($plan->status)->toBe(PlanStatus::Ready);
+});
+
+test('the owner can sync and inspect scenes from a chapter plan', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 7]);
+    $pov = Character::factory()->for($novel)->create(['name' => '沈砚']);
+    ChapterPlan::factory()->for($chapter)->create([
+        'pov_character_id' => $pov->getKey(),
+        'time_anchor' => '午夜',
+        'scene_plans' => [[
+            'goal' => '潜入档案室',
+            'conflict' => '巡逻提前抵达',
+            'turn' => '档案已被调包',
+            'outcome' => '取得伪造者名单',
+            'location' => '旧议事厅',
+        ]],
+    ]);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionVisible('syncScenes', $chapter)
+        ->callTableAction('syncScenes', $chapter)
+        ->assertHasNoTableActionErrors();
+
+    $scene = $chapter->scenes()->sole();
+
+    expect($scene->sequence)->toBe(1)
+        ->and($scene->goal)->toBe('潜入档案室')
+        ->and($scene->povCharacter->is($pov))->toBeTrue()
+        ->and($scene->location)->toBe('旧议事厅')
+        ->and($scene->status)->toBe(SceneStatus::Planned);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionVisible('viewScenes', $chapter)
+        ->mountTableAction('viewScenes', $chapter)
+        ->assertTableActionDataSet(function (array $data): bool {
+            $scene = array_values($data['scenes'])[0];
+
+            return $scene['goal'] === '潜入档案室'
+                && $scene['pov'] === '沈砚'
+                && $scene['status'] === '已规划';
+        });
 });
