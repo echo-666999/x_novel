@@ -6,6 +6,7 @@ use App\Enums\WorldEntityType;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Models\WorldEntity;
+use App\Services\StoryStateService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
@@ -13,6 +14,8 @@ use Illuminate\Support\Facades\DB;
 class InitializeNovelStateAction
 {
     private const SCHEMA_VERSION = 1;
+
+    public function __construct(private readonly StoryStateService $storyState) {}
 
     public function handle(Novel $novel): StoryStateVersion
     {
@@ -46,7 +49,7 @@ class InitializeNovelStateAction
                 'version' => 0,
                 'chapter_id' => null,
                 'state' => $state,
-                'checksum' => $this->checksum($state),
+                'checksum' => $this->storyState->checksum($state),
             ]);
 
             $lockedNovel->canonical_state_version_id = $stateVersion->getKey();
@@ -123,29 +126,5 @@ class InitializeNovelStateAction
                 ],
             ])
             ->all();
-    }
-
-    /** @param array<string, mixed> $state */
-    private function checksum(array $state): string
-    {
-        $state = $this->sortAssociativeKeys($state);
-
-        return hash('sha256', json_encode($state, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-    }
-
-    /** @return array<mixed> */
-    private function sortAssociativeKeys(array $value): array
-    {
-        foreach ($value as $key => $item) {
-            if (is_array($item)) {
-                $value[$key] = $this->sortAssociativeKeys($item);
-            }
-        }
-
-        if (! array_is_list($value)) {
-            ksort($value, SORT_STRING);
-        }
-
-        return $value;
     }
 }
