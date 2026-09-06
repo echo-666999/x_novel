@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'novel_id',
@@ -37,6 +38,12 @@ class StoryArc extends Model
     public function volume(): BelongsTo
     {
         return $this->belongsTo(Volume::class);
+    }
+
+    /** @return HasMany<Foreshadowing, $this> */
+    public function foreshadowings(): HasMany
+    {
+        return $this->hasMany(Foreshadowing::class, 'owner_arc_id');
     }
 
     /** @return array<string, string> */

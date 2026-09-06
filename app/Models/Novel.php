@@ -60,6 +60,12 @@ class Novel extends Model
         return $this->hasMany(WorldEntity::class)->orderBy('name');
     }
 
+    /** @return HasMany<Foreshadowing, $this> */
+    public function foreshadowings(): HasMany
+    {
+        return $this->hasMany(Foreshadowing::class);
+    }
+
     /**
      * @return array<string, string>
      */
