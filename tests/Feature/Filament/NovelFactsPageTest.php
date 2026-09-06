@@ -5,6 +5,7 @@ use App\Enums\FactHardness;
 use App\Enums\FactSourceType;
 use App\Enums\FactStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelStoryState;
+use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Novel;
 use App\Models\User;
@@ -33,7 +34,7 @@ test('facts are listed read only inside the story state inspector', function () 
     Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
         ->call('selectDomain', 'facts')
         ->assertSet('activeDomain', 'facts')
-        ->assertSee('当前规范事实 · 只读')
+        ->assertSee('当前规范事实 · 操作受控')
         ->assertCanSeeTableRecords([$fact])
         ->assertCanNotSeeTableRecords([$otherFact])
         ->assertSee('can_swim')
@@ -102,4 +103,68 @@ test('facts can be filtered by locked active and source', function () {
         ->filterTable('source_type', FactSourceType::Bible->value)
         ->assertCanSeeTableRecords([$activeBibleUnlocked])
         ->assertCanNotSeeTableRecords([$activeManualLocked, $supersededManualLocked]);
+});
+
+test('the owner can create a locked manual character fact', function () {
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $character = Character::factory()->for($novel)->create(['name' => '角色甲']);
+
+    Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
+        ->call('selectDomain', 'facts')
+        ->assertTableActionExists('createManualFact')
+        ->callTableAction('createManualFact', data: [
+            'subject_type' => 'character',
+            'character_id' => $character->getKey(),
+            'predicate' => 'can_swim',
+            'value_type' => 'boolean',
+            'boolean_value' => false,
+            'hardness' => FactHardness::Hard->value,
+            'confidence' => 1,
+            'locked' => true,
+        ])
+        ->assertHasNoTableActionErrors();
+
+    $fact = $novel->facts()->sole();
+
+    expect($fact->subject_type)->toBe('character')
+        ->and($fact->subject_id)->toBe($character->getKey())
+        ->and($fact->predicate)->toBe('can_swim')
+        ->and($fact->value)->toBeFalse()
+        ->and($fact->source_type)->toBe(FactSourceType::Manual)
+        ->and($fact->status)->toBe(FactStatus::Active)
+        ->and($fact->locked)->toBeTrue();
+});
+
+test('fact lock unlock and supersede actions follow the fact lifecycle', function () {
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $fact = Fact::factory()->for($novel)->create(['locked' => false]);
+    $component = Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
+        ->call('selectDomain', 'facts')
+        ->assertTableActionVisible('lock', $fact)
+        ->assertTableActionHidden('unlock', $fact)
+        ->callTableAction('lock', $fact)
+        ->assertHasNoTableActionErrors();
+
+    expect($fact->refresh()->locked)->toBeTrue();
+
+    $component
+        ->assertTableActionHidden('lock', $fact)
+        ->assertTableActionVisible('unlock', $fact)
+        ->callTableAction('unlock', $fact)
+        ->assertHasNoTableActionErrors();
+
+    expect($fact->refresh()->locked)->toBeFalse();
+
+    $component
+        ->callTableAction('supersede', $fact)
+        ->assertHasNoTableActionErrors();
+
+    expect($fact->refresh()->status)->toBe(FactStatus::Superseded);
+
+    $component
+        ->assertTableActionHidden('lock', $fact)
+        ->assertTableActionHidden('unlock', $fact)
+        ->assertTableActionHidden('supersede', $fact);
 });

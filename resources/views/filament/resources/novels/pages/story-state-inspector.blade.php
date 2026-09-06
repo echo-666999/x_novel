@@ -96,7 +96,7 @@
 
         <x-filament::section
             :heading="$domains[$activeDomain]"
-            :description="$activeDomain === 'facts' ? '当前规范事实 · 只读' : 'State path: '.$activeDomain"
+            :description="$activeDomain === 'facts' ? '当前规范事实 · 操作受控' : 'State path: '.$activeDomain"
         >
             @if ($activeDomain === 'facts')
                 {{ $this->table }}

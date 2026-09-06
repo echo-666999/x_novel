@@ -35,6 +35,28 @@ class Fact extends Model
         return $this->belongsTo(Novel::class);
     }
 
+    /** @return BelongsTo<Character, $this> */
+    public function characterSubject(): BelongsTo
+    {
+        return $this->belongsTo(Character::class, 'subject_id');
+    }
+
+    /** @return BelongsTo<WorldEntity, $this> */
+    public function worldEntitySubject(): BelongsTo
+    {
+        return $this->belongsTo(WorldEntity::class, 'subject_id');
+    }
+
+    public function subjectLabel(): string
+    {
+        return match ($this->subject_type) {
+            'character' => $this->characterSubject?->name ?? '人物 #'.$this->subject_id,
+            'world_entity' => $this->worldEntitySubject?->name ?? '世界实体 #'.$this->subject_id,
+            'novel' => $this->novel?->title ?? '小说 #'.$this->subject_id,
+            default => $this->subject_type.' #'.$this->subject_id,
+        };
+    }
+
     public function valueSummary(): string
     {
         return json_encode(
