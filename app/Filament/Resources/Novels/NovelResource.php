@@ -6,6 +6,7 @@ use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
 use App\Filament\Resources\Novels\Pages\ManageNovelBible;
+use App\Filament\Resources\Novels\Pages\ManageNovelStoryArcs;
 use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
@@ -67,6 +68,7 @@ class NovelResource extends Resource
             ViewNovel::class,
             ManageNovelBible::class,
             ManageNovelVolumes::class,
+            ManageNovelStoryArcs::class,
         ]);
     }
 
@@ -78,6 +80,7 @@ class NovelResource extends Resource
             'view' => ViewNovel::route('/{record}'),
             'bible' => ManageNovelBible::route('/{record}/bible'),
             'planning' => ManageNovelVolumes::route('/{record}/planning'),
+            'story-arcs' => ManageNovelStoryArcs::route('/{record}/planning/story-arcs'),
             'edit' => EditNovel::route('/{record}/edit'),
         ];
     }
