@@ -1,0 +1,42 @@
+<?php
+
+namespace App\Models;
+
+use App\Enums\VolumeStatus;
+use Database\Factories\VolumeFactory;
+use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+#[Fillable([
+    'novel_id',
+    'sequence',
+    'title',
+    'goal',
+    'climax',
+    'target_words',
+    'status',
+    'summary',
+])]
+class Volume extends Model
+{
+    /** @use HasFactory<VolumeFactory> */
+    use HasFactory;
+
+    /** @return BelongsTo<Novel, $this> */
+    public function novel(): BelongsTo
+    {
+        return $this->belongsTo(Novel::class);
+    }
+
+    /** @return array<string, string> */
+    protected function casts(): array
+    {
+        return [
+            'sequence' => 'integer',
+            'target_words' => 'integer',
+            'status' => VolumeStatus::class,
+        ];
+    }
+}

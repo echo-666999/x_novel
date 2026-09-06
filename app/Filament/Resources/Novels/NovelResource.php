@@ -6,6 +6,7 @@ use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
 use App\Filament\Resources\Novels\Pages\ManageNovelBible;
+use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
 use App\Filament\Resources\Novels\Schemas\NovelOverview;
@@ -65,6 +66,7 @@ class NovelResource extends Resource
         return $page->generateNavigationItems([
             ViewNovel::class,
             ManageNovelBible::class,
+            ManageNovelVolumes::class,
         ]);
     }
 
@@ -75,6 +77,7 @@ class NovelResource extends Resource
             'create' => CreateNovel::route('/create'),
             'view' => ViewNovel::route('/{record}'),
             'bible' => ManageNovelBible::route('/{record}/bible'),
+            'planning' => ManageNovelVolumes::route('/{record}/planning'),
             'edit' => EditNovel::route('/{record}/edit'),
         ];
     }

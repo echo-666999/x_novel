@@ -36,6 +36,12 @@ class Novel extends Model
         return $this->hasOne(NovelBible::class)->ofMany('version', 'max');
     }
 
+    /** @return HasMany<Volume, $this> */
+    public function volumes(): HasMany
+    {
+        return $this->hasMany(Volume::class)->orderBy('sequence');
+    }
+
     /**
      * @return array<string, string>
      */
