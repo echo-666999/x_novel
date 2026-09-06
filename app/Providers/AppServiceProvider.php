@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\AI\BudgetService;
 use App\AI\Contracts\AiProvider;
+use App\AI\Providers\BudgetGuardAiProvider;
 use App\AI\Providers\OpenAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
@@ -22,7 +24,9 @@ class AppServiceProvider extends ServiceProvider
                 default => throw new InvalidArgumentException('Unsupported AI provider: '.config('ai.provider')),
             };
 
-            return new TrackingAiProvider($provider, app(UsageRecorder::class));
+            $trackedProvider = new TrackingAiProvider($provider, app(UsageRecorder::class));
+
+            return new BudgetGuardAiProvider($trackedProvider, app(BudgetService::class));
         });
     }
 

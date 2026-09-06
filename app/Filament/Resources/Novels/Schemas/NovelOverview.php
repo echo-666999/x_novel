@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\Novels\Schemas;
 
+use App\AI\BudgetService;
+use App\AI\Data\BudgetUsage;
 use App\Models\Novel;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
@@ -81,6 +83,32 @@ class NovelOverview
                             default => 'gray',
                         }),
                 ]),
+            Section::make('预算')
+                ->description('当前小说和当前章节的实际成本；达到 Hard Limit 后不再发送新模型请求。')
+                ->columns(['default' => 1, 'md' => 2])
+                ->schema([
+                    TextEntry::make('novel_budget')
+                        ->label('Novel Used / Limit')
+                        ->state(fn (Novel $record): string => self::formatBudget(
+                            app(BudgetService::class)->novelUsage($record),
+                        ))
+                        ->badge()
+                        ->color(fn (Novel $record): string => app(BudgetService::class)->novelUsage($record)->reached() ? 'danger' : 'gray'),
+                    TextEntry::make('chapter_budget')
+                        ->label('Current Chapter Used / Limit')
+                        ->state(function (Novel $record): string {
+                            $chapter = $record->chapters()
+                                ->where('sequence', $record->current_chapter_sequence)
+                                ->first();
+
+                            if ($chapter === null) {
+                                return '无当前章节';
+                            }
+
+                            return self::formatBudget(app(BudgetService::class)->chapterUsage($chapter, $record));
+                        })
+                        ->badge(),
+                ]),
             Section::make('质量与运营')
                 ->description('后续任务接入 Review、Generation、Usage 与 Foreshadowing 数据后自动填充。')
                 ->columns([
@@ -108,5 +136,12 @@ class NovelOverview
                         ->state(0),
                 ]),
         ]);
+    }
+
+    private static function formatBudget(BudgetUsage $usage): string
+    {
+        $limit = $usage->limit === null ? '无限制' : number_format($usage->limit, 6);
+
+        return config('ai.cost.currency').' '.number_format($usage->used, 6).' / '.$limit;
     }
 }

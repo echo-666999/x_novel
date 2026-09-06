@@ -4,9 +4,9 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\Providers\BudgetGuardAiProvider;
 use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\OpenAiProvider;
-use App\AI\Providers\TrackingAiProvider;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
@@ -119,7 +119,7 @@ test('openai provider maps connection timeouts to a retryable timeout error', fu
 test('the configured provider is bound through the interface', function () {
     config()->set('ai.provider', 'openai');
 
-    expect(app(AiProvider::class))->toBeInstanceOf(TrackingAiProvider::class);
+    expect(app(AiProvider::class))->toBeInstanceOf(BudgetGuardAiProvider::class);
 });
 
 function aiResponse(): AiResponse

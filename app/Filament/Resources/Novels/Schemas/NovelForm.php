@@ -50,6 +50,25 @@ class NovelForm
                     ->visible(fn (string $operation): bool => $operation === 'edit')
                     ->columns(['default' => 1, 'lg' => 2])
                     ->schema(self::aiModelOverrideFields()),
+                Section::make('Budget Limits')
+                    ->description('留空时继承全局限制；0 表示立即阻止该范围的新 Provider Request。')
+                    ->icon('heroicon-o-banknotes')
+                    ->visible(fn (string $operation): bool => $operation === 'edit')
+                    ->columns(['default' => 1, 'md' => 2])
+                    ->schema([
+                        TextInput::make('budget_limits.novel_total_limit')
+                            ->label('Novel Total Limit')
+                            ->numeric()
+                            ->minValue(0)
+                            ->step(0.000001)
+                            ->placeholder(fn (): string => self::globalBudgetPlaceholder('novel_total_limit')),
+                        TextInput::make('budget_limits.chapter_max_cost')
+                            ->label('Chapter Max Cost')
+                            ->numeric()
+                            ->minValue(0)
+                            ->step(0.000001)
+                            ->placeholder(fn (): string => self::globalBudgetPlaceholder('chapter_max_cost')),
+                    ]),
             ]);
     }
 
@@ -80,5 +99,14 @@ class NovelForm
                 ];
             })
             ->all();
+    }
+
+    private static function globalBudgetPlaceholder(string $key): string
+    {
+        $limit = config("ai.budget.{$key}");
+
+        return is_numeric($limit)
+            ? config('ai.cost.currency').' '.number_format((float) $limit, 6)
+            : '无限制';
     }
 }

@@ -18,6 +18,7 @@ class EditNovel extends EditRecord
     protected function mutateFormDataBeforeFill(array $data): array
     {
         $data['ai_model_overrides'] = data_get($data, 'settings.ai.models', []);
+        $data['budget_limits'] = data_get($data, 'settings.budget', []);
 
         return $data;
     }
@@ -32,9 +33,17 @@ class EditNovel extends EditRecord
         $settings = $this->getRecord()->settings ?? [];
         $settings['ai'] ??= [];
         $settings['ai']['models'] = $overrides;
+        $budgetLimits = collect($data['budget_limits'] ?? [])
+            ->filter(fn (mixed $limit): bool => filled($limit))
+            ->map(fn (mixed $limit): float => (float) $limit)
+            ->all();
+
+        if ($budgetLimits !== [] || array_key_exists('budget', $settings)) {
+            $settings['budget'] = $budgetLimits;
+        }
 
         $data['settings'] = $settings;
-        unset($data['ai_model_overrides']);
+        unset($data['ai_model_overrides'], $data['budget_limits']);
 
         return $data;
     }

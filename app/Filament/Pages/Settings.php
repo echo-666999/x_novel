@@ -3,8 +3,10 @@
 namespace App\Filament\Pages;
 
 use App\AI\AiSettingsResolver;
+use App\AI\BudgetService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
+use App\AI\Data\BudgetUsage;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\AiStage;
 use BackedEnum;
@@ -69,12 +71,7 @@ class Settings extends Page
                     source: '来源：config 与小说设置',
                     icon: 'heroicon-o-circle-stack',
                 ),
-                $this->placeholderSection(
-                    heading: '预算',
-                    description: '每日、单本小说、单章与重写成本限制。',
-                    source: '来源：config 与小说设置',
-                    icon: 'heroicon-o-banknotes',
-                )->columnSpanFull(),
+                $this->budgetSection()->columnSpanFull(),
             ]),
         ]);
     }
@@ -188,6 +185,52 @@ class Settings extends Page
                 ->danger()
                 ->send();
         }
+    }
+
+    private function budgetSection(): Section
+    {
+        return Section::make('预算')
+            ->description('Hard Limit 达到后，新的 Provider Request 会在发送前被阻止。')
+            ->icon('heroicon-o-banknotes')
+            ->afterHeader([
+                Text::make('只读')
+                    ->badge()
+                    ->color('gray'),
+            ])
+            ->columns(['default' => 1, 'md' => 3])
+            ->schema([
+                TextEntry::make('daily_budget')
+                    ->label('Daily Used / Limit')
+                    ->state(fn (): string => $this->formatBudget(app(BudgetService::class)->dailyUsage()))
+                    ->badge()
+                    ->color(fn (): string => app(BudgetService::class)->dailyUsage()->reached() ? 'danger' : 'gray'),
+                TextEntry::make('novel_budget_default')
+                    ->label('Novel Total Default')
+                    ->state(fn (): string => $this->formatLimit(config('ai.budget.novel_total_limit'))),
+                TextEntry::make('chapter_budget_default')
+                    ->label('Chapter Max Default')
+                    ->state(fn (): string => $this->formatLimit(config('ai.budget.chapter_max_cost'))),
+                Text::make('来源：config/ai.php 与 Novel settings。空值表示无限制。')
+                    ->icon('heroicon-o-information-circle')
+                    ->color('gray')
+                    ->columnSpanFull(),
+            ]);
+    }
+
+    private function formatBudget(BudgetUsage $usage): string
+    {
+        return config('ai.cost.currency').' '.number_format($usage->used, 6).' / '.$this->formatLimit($usage->limit, false);
+    }
+
+    private function formatLimit(mixed $limit, bool $withCurrency = true): string
+    {
+        if (! is_numeric($limit)) {
+            return '无限制';
+        }
+
+        $value = number_format((float) $limit, 6);
+
+        return $withCurrency ? config('ai.cost.currency').' '.$value : $value;
     }
 
     private function placeholderSection(

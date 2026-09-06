@@ -17,7 +17,7 @@ class CreateNovel extends CreateRecord
     /** @param  array<string, mixed>  $data */
     protected function mutateFormDataBeforeCreate(array $data): array
     {
-        unset($data['ai_model_overrides']);
+        unset($data['ai_model_overrides'], $data['budget_limits']);
 
         return $data;
     }

@@ -22,6 +22,12 @@ return [
         'output_per_million' => (float) env('AI_OUTPUT_COST_PER_MILLION', 0),
     ],
 
+    'budget' => [
+        'daily_hard_limit' => env('AI_DAILY_HARD_LIMIT'),
+        'novel_total_limit' => env('AI_NOVEL_TOTAL_LIMIT'),
+        'chapter_max_cost' => env('AI_CHAPTER_MAX_COST'),
+    ],
+
     'providers' => [
         'openai' => [
             'base_url' => env('AI_BASE_URL', 'https://api.openai.com/v1'),
