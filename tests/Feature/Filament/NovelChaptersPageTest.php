@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\ChapterStatus;
+use App\Enums\CharacterStatus;
 use App\Enums\PlanStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
@@ -14,6 +15,7 @@ use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Models\User;
 use App\Models\Volume;
+use App\Services\PlanValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -275,4 +277,24 @@ test('the owner can sync and inspect scenes from a chapter plan', function () {
                 && $scene['pov'] === '沈砚'
                 && $scene['status'] === '已规划';
         });
+});
+
+test('the chapter plan exposes a live findings panel', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $deceased = Character::factory()->for($novel)->create([
+        'name' => '故去之人',
+        'status' => CharacterStatus::Deceased,
+    ]);
+    ChapterPlan::factory()->for($chapter)->create([
+        'pov_character_id' => $deceased->getKey(),
+    ]);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionExists('managePlan', fn ($action): bool => $action->isModalSlideOver());
+
+    $result = app(PlanValidator::class)->validate($chapter->latestPlan);
+
+    expect($result->status()->value)->toBe('blocked')
+        ->and(collect($result->findings)->pluck('code'))->toContain('DECEASED_POV');
 });

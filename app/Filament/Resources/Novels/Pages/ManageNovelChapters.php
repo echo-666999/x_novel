@@ -9,8 +9,10 @@ use App\Enums\ForeshadowingStatus;
 use App\Enums\PlanStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Chapter;
+use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
@@ -24,6 +26,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\HtmlString;
 use Illuminate\Validation\Rules\Unique;
 
 class ManageNovelChapters extends ManageRelatedRecords
@@ -261,6 +264,7 @@ class ManageNovelChapters extends ManageRelatedRecords
     private function chapterPlanSchema(): array
     {
         return [
+            ...$this->planFindingsSchema(),
             Section::make('章节目标')
                 ->description('说明本章为什么存在、推进哪条故事线，以及向读者兑现什么。')
                 ->columns(['default' => 1, 'md' => 2])
@@ -375,6 +379,39 @@ class ManageNovelChapters extends ManageRelatedRecords
                         ->reorderable()
                         ->addActionLabel('添加场景')
                         ->required(),
+                ]),
+        ];
+    }
+
+    /** @return array<int, mixed> */
+    private function planFindingsSchema(): array
+    {
+        return [
+            Section::make('Plan Findings')
+                ->description('Blocked 必须修复后才能进入生成；Warning 需要人工确认。')
+                ->schema([
+                    Placeholder::make('validation_status')
+                        ->label('校验状态')
+                        ->content(fn (?Chapter $record): string => $record?->latestPlan === null
+                            ? '尚未保存 Plan'
+                            : app(PlanValidator::class)->validate($record->latestPlan)->status()->getLabel()),
+                    Placeholder::make('validation_findings')
+                        ->label('Findings')
+                        ->content(function (?Chapter $record): HtmlString|string {
+                            if ($record?->latestPlan === null) {
+                                return '保存 Plan 后显示检查结果。';
+                            }
+
+                            $result = app(PlanValidator::class)->validate($record->latestPlan);
+
+                            if ($result->findings === []) {
+                                return '未发现阻塞或警告。';
+                            }
+
+                            return new HtmlString(collect($result->findings)
+                                ->map(fn ($finding): string => '<strong>'.e($finding->severity->getLabel()).'</strong> · <code>'.e($finding->code).'</code><br>'.e($finding->message))
+                                ->implode('<br><br>'));
+                        }),
                 ]),
         ];
     }
