@@ -198,6 +198,14 @@ class ManageNovelChapters extends ManageRelatedRecords
                             ->success()
                             ->send();
                     }),
+                Action::make('previewPlan')
+                    ->label('预览')
+                    ->icon('heroicon-o-eye')
+                    ->visible(fn (Chapter $record): bool => $record->latestPlan !== null)
+                    ->url(fn (Chapter $record): string => NovelResource::getUrl('planning-preview', [
+                        'record' => $this->getRecord(),
+                        'chapter' => $record,
+                    ])),
                 Action::make('viewScenes')
                     ->label('查看 Scenes')
                     ->icon('heroicon-o-list-bullet')

@@ -14,6 +14,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ManageNovelWorld;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelPlanning;
+use App\Filament\Resources\Novels\Pages\ViewNovelPlanningPreview;
 use App\Filament\Resources\Novels\Pages\ViewNovelStoryState;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
 use App\Filament\Resources\Novels\Schemas\NovelOverview;
@@ -96,6 +97,7 @@ class NovelResource extends Resource
             'foreshadowings' => ManageNovelForeshadowings::route('/{record}/foreshadowings'),
             'story-state' => ViewNovelStoryState::route('/{record}/story-state'),
             'planning' => ViewNovelPlanning::route('/{record}/planning'),
+            'planning-preview' => ViewNovelPlanningPreview::route('/{record}/planning-preview/{chapter}'),
             'chapters' => ManageNovelChapters::route('/{record}/chapters'),
             'volumes' => ManageNovelVolumes::route('/{record}/planning/volumes'),
             'story-arcs' => ManageNovelStoryArcs::route('/{record}/planning/story-arcs'),
