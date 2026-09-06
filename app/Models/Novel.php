@@ -7,6 +7,7 @@ use Database\Factories\NovelFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -17,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'target_words',
     'status',
     'current_chapter_sequence',
+    'canonical_state_version_id',
     'settings',
 ])]
 class Novel extends Model
@@ -66,6 +68,18 @@ class Novel extends Model
         return $this->hasMany(Foreshadowing::class);
     }
 
+    /** @return HasMany<StoryStateVersion, $this> */
+    public function storyStateVersions(): HasMany
+    {
+        return $this->hasMany(StoryStateVersion::class);
+    }
+
+    /** @return BelongsTo<StoryStateVersion, $this> */
+    public function canonicalStateVersion(): BelongsTo
+    {
+        return $this->belongsTo(StoryStateVersion::class, 'canonical_state_version_id');
+    }
+
     /**
      * @return array<string, string>
      */
@@ -75,6 +89,7 @@ class Novel extends Model
             'target_words' => 'integer',
             'status' => NovelStatus::class,
             'current_chapter_sequence' => 'integer',
+            'canonical_state_version_id' => 'integer',
             'settings' => 'array',
         ];
     }

@@ -274,6 +274,8 @@ facts
 
 实现。
 
+`story_state_versions.version` 必须满足 `version >= 0`，其中版本 `0` 是小说进入生成前建立的初始完整状态快照。每部小说的版本号唯一：`unique(novel_id, version)`。
+
 不要引入完整 Event Sourcing Framework。
 
 ---

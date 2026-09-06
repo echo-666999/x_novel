@@ -60,9 +60,12 @@ class NovelOverview
                         ->placeholder('尚无正式章节')
                         ->formatStateUsing(fn (?int $state): string => $state === null ? '尚无正式章节' : "第 {$state} 章"),
                     TextEntry::make('current_state_version')
-                        ->label('当前 State Version')
-                        ->state('尚未接入')
-                        ->color('gray'),
+                        ->label('当前故事版本')
+                        ->state(fn (Novel $record): string => $record->canonicalStateVersion
+                            ? '当前版本: '.$record->canonicalStateVersion->version
+                            : '故事状态: 未初始化')
+                        ->badge()
+                        ->color(fn (Novel $record): string => $record->canonical_state_version_id ? 'success' : 'warning'),
                     TextEntry::make('generation_status')
                         ->label('生成状态')
                         ->state(fn (Novel $record): string => match ($record->status->value) {

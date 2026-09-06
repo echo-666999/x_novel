@@ -2,10 +2,12 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Story\InitializeNovelStateAction;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 
 class ViewNovel extends ViewRecord
@@ -30,6 +32,22 @@ class ViewNovel extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('initializeStoryState')
+                ->label('初始化故事状态')
+                ->icon('heroicon-o-circle-stack')
+                ->visible(fn (): bool => $this->getRecord()->canonical_state_version_id === null)
+                ->action(function (InitializeNovelStateAction $initializeNovelState): void {
+                    $stateVersion = $initializeNovelState->handle($this->getRecord());
+
+                    $this->getRecord()->refresh();
+                    $this->refreshFormData(['canonical_state_version_id']);
+
+                    Notification::make()
+                        ->title('故事状态已初始化')
+                        ->body('当前版本: '.$stateVersion->version)
+                        ->success()
+                        ->send();
+                }),
             Action::make('generateNextChapter')
                 ->label('生成下一章')
                 ->icon('heroicon-o-play')
