@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Filament\Widgets\DueForeshadowingsWidget;
+use App\Models\UsageRecord;
 use Filament\Pages\Dashboard as BaseDashboard;
 use Filament\Schemas\Components\EmptyState;
 use Filament\Schemas\Components\Grid;
@@ -22,7 +23,7 @@ class Dashboard extends BaseDashboard
             Grid::make([
                 'default' => 1,
                 'md' => 2,
-                'xl' => 4,
+                'xl' => 5,
             ])->schema([
                 Stat::make('活跃小说', 0)
                     ->description('暂无活跃小说')
@@ -32,10 +33,14 @@ class Dashboard extends BaseDashboard
                     ->description('尚未选择章节')
                     ->descriptionIcon('heroicon-o-document-text')
                     ->color('gray'),
-                Stat::make('今日成本', '¥0.00')
-                    ->description('暂无用量记录')
+                Stat::make('今日成本', fn (): string => $this->todayCost())
+                    ->description(fn (): string => $this->hasUsageToday() ? '成功 Provider 请求' : '暂无用量记录')
                     ->descriptionIcon('heroicon-o-banknotes')
-                    ->color('gray'),
+                    ->color(fn (): string => $this->hasUsageToday() ? 'info' : 'gray'),
+                Stat::make('今日 Tokens', fn (): string => number_format($this->todayTokens()))
+                    ->description(fn (): string => $this->hasUsageToday() ? 'Input + Output' : '暂无用量记录')
+                    ->descriptionIcon('heroicon-o-calculator')
+                    ->color(fn (): string => $this->hasUsageToday() ? 'info' : 'gray'),
                 Stat::make('需要处理', 0)
                     ->description('暂无待处理事项')
                     ->descriptionIcon('heroicon-o-check-circle')
@@ -58,5 +63,27 @@ class Dashboard extends BaseDashboard
                 ]),
             ]),
         ]);
+    }
+
+    private function hasUsageToday(): bool
+    {
+        return UsageRecord::query()->whereDate('created_at', today())->exists();
+    }
+
+    private function todayCost(): string
+    {
+        $cost = (float) UsageRecord::query()
+            ->whereDate('created_at', today())
+            ->sum('estimated_cost');
+
+        return config('ai.cost.currency').' '.number_format($cost, 6);
+    }
+
+    private function todayTokens(): int
+    {
+        return (int) UsageRecord::query()
+            ->whereDate('created_at', today())
+            ->selectRaw('COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens')
+            ->value('total_tokens');
     }
 }

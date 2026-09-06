@@ -15,6 +15,13 @@ return [
         'embedding' => env('AI_MODEL_EMBEDDING', env('AI_MODEL', 'gpt-4.1-mini')),
     ],
 
+    'cost' => [
+        'currency' => env('AI_COST_CURRENCY', 'USD'),
+        'input_per_million' => (float) env('AI_INPUT_COST_PER_MILLION', 0),
+        'cached_input_per_million' => (float) env('AI_CACHED_INPUT_COST_PER_MILLION', 0),
+        'output_per_million' => (float) env('AI_OUTPUT_COST_PER_MILLION', 0),
+    ],
+
     'providers' => [
         'openai' => [
             'base_url' => env('AI_BASE_URL', 'https://api.openai.com/v1'),
