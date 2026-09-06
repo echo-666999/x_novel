@@ -52,10 +52,17 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         'foreshadowings' => '伏笔',
         'reader_promises' => '读者承诺',
         'facts' => '事实',
+        'state_diff' => '版本差异',
     ];
 
     #[Url(as: 'version')]
     public ?int $selectedVersion = null;
+
+    #[Url(as: 'from')]
+    public ?int $diffFromVersion = null;
+
+    #[Url(as: 'to')]
+    public ?int $diffToVersion = null;
 
     public string $activeDomain = 'characters';
 
@@ -64,6 +71,8 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         parent::mount($record);
 
         $this->selectedVersion = $this->resolveSelectedVersion($this->selectedVersion);
+        $this->diffToVersion = $this->resolveSelectedVersion($this->diffToVersion ?? $this->selectedVersion);
+        $this->diffFromVersion = $this->resolveDiffFromVersion($this->diffFromVersion, $this->diffToVersion);
     }
 
     public function getTitle(): string
@@ -330,6 +339,19 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         }
     }
 
+    public function selectDiffVersion(string $side, int $version): void
+    {
+        $resolvedVersion = $this->resolveSelectedVersion($version);
+
+        if ($side === 'from') {
+            $this->diffFromVersion = $resolvedVersion;
+        }
+
+        if ($side === 'to') {
+            $this->diffToVersion = $resolvedVersion;
+        }
+    }
+
     /** @return array<string, mixed> */
     private function inspectorData(): array
     {
@@ -342,6 +364,8 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         $activeDomain = array_key_exists($this->activeDomain, self::DOMAINS)
             ? $this->activeDomain
             : 'characters';
+        $diffFrom = $versions->firstWhere('version', $this->diffFromVersion);
+        $diffTo = $versions->firstWhere('version', $this->diffToVersion);
 
         return [
             'novel' => $novel,
@@ -349,10 +373,15 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
             'stateVersion' => $stateVersion,
             'domains' => self::DOMAINS,
             'activeDomain' => $activeDomain,
-            'domainState' => $activeDomain === 'facts'
+            'domainState' => in_array($activeDomain, ['facts', 'state_diff'], true)
                 ? []
                 : ($stateVersion?->state[$activeDomain] ?? []),
             'isCurrent' => $stateVersion?->is($novel->canonicalStateVersion) ?? false,
+            'diffFrom' => $diffFrom,
+            'diffTo' => $diffTo,
+            'stateChanges' => $diffFrom !== null && $diffTo !== null
+                ? $this->diffState($diffFrom->state, $diffTo->state)
+                : [],
         ];
     }
 
@@ -366,5 +395,84 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         }
 
         return $novel->canonicalStateVersion?->version;
+    }
+
+    private function resolveDiffFromVersion(?int $requestedVersion, ?int $toVersion): ?int
+    {
+        /** @var Novel $novel */
+        $novel = $this->getRecord();
+
+        if ($requestedVersion !== null && $novel->storyStateVersions()->where('version', $requestedVersion)->exists()) {
+            return $requestedVersion;
+        }
+
+        if ($toVersion === null) {
+            return null;
+        }
+
+        return $novel->storyStateVersions()
+            ->where('version', '<', $toVersion)
+            ->max('version') ?? $toVersion;
+    }
+
+    /**
+     * @param  array<string|int, mixed>  $before
+     * @param  array<string|int, mixed>  $after
+     * @return array<int, array{path: string, before: mixed, after: mixed, before_missing: bool, after_missing: bool, type: string}>
+     */
+    private function diffState(array $before, array $after): array
+    {
+        $changes = [];
+        $this->collectStateChanges($before, $after, '', false, false, $changes);
+
+        usort($changes, fn (array $left, array $right): int => $left['path'] <=> $right['path']);
+
+        return $changes;
+    }
+
+    /**
+     * @param  array<int, array{path: string, before: mixed, after: mixed, before_missing: bool, after_missing: bool, type: string}>  $changes
+     */
+    private function collectStateChanges(
+        mixed $before,
+        mixed $after,
+        string $path,
+        bool $beforeMissing,
+        bool $afterMissing,
+        array &$changes,
+    ): void {
+        if (! $beforeMissing && ! $afterMissing && is_array($before) && is_array($after)) {
+            $keys = array_unique([...array_keys($before), ...array_keys($after)]);
+
+            foreach ($keys as $key) {
+                $childPath = $path === '' ? (string) $key : $path.'.'.$key;
+                $hasBefore = array_key_exists($key, $before);
+                $hasAfter = array_key_exists($key, $after);
+
+                $this->collectStateChanges(
+                    $hasBefore ? $before[$key] : null,
+                    $hasAfter ? $after[$key] : null,
+                    $childPath,
+                    ! $hasBefore,
+                    ! $hasAfter,
+                    $changes,
+                );
+            }
+
+            return;
+        }
+
+        if (! $beforeMissing && ! $afterMissing && $before === $after) {
+            return;
+        }
+
+        $changes[] = [
+            'path' => $path,
+            'before' => $before,
+            'after' => $after,
+            'before_missing' => $beforeMissing,
+            'after_missing' => $afterMissing,
+            'type' => $beforeMissing ? 'added' : ($afterMissing ? 'removed' : 'changed'),
+        ];
     }
 }

@@ -96,10 +96,22 @@
 
         <x-filament::section
             :heading="$domains[$activeDomain]"
-            :description="$activeDomain === 'facts' ? '当前规范事实 · 操作受控' : 'State path: '.$activeDomain"
+            :description="match ($activeDomain) {
+                'facts' => '当前规范事实 · 操作受控',
+                'state_diff' => '比较两个不可变 Story State Version',
+                default => 'State path: '.$activeDomain,
+            }"
         >
             @if ($activeDomain === 'facts')
                 {{ $this->table }}
+            @elseif ($activeDomain === 'state_diff')
+                @include('filament.components.state-diff', [
+                    'versions' => $versions,
+                    'fromVersion' => $diffFrom,
+                    'toVersion' => $diffTo,
+                    'changes' => $stateChanges,
+                    'currentVersionId' => $novel->canonical_state_version_id,
+                ])
             @elseif (blank($domainState))
                 <p class="py-4 text-sm text-gray-500 dark:text-gray-400">
                     当前版本在此领域没有状态数据。
