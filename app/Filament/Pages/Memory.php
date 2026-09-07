@@ -10,6 +10,7 @@ use App\Enums\RunStatus;
 use App\Jobs\GenerateEmbeddingJob;
 use App\Models\Memory as MemoryModel;
 use App\Models\Novel;
+use App\Services\MemoryRetrievalEvaluator;
 use App\Services\MemoryRetriever;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -53,6 +54,12 @@ class Memory extends Page implements HasTable
     /** @var array<int, array<string, mixed>> */
     public array $retrievalResults = [];
 
+    /** @var array<string, mixed> */
+    public array $evaluation = [];
+
+    /** @var array<int, array<string, mixed>> */
+    public array $evaluationResults = [];
+
     public function mount(): void
     {
         $this->retrieval = [
@@ -65,6 +72,21 @@ class Memory extends Page implements HasTable
             'final_k' => (int) config('context.memory_final_k', 10),
             'token_budget' => (int) config('context.long_term_memory_token_budget', 1_500),
         ];
+        $this->evaluation = ['novel_id' => null];
+    }
+
+    public function evaluationForm(Schema $schema): Schema
+    {
+        return $schema
+            ->statePath('evaluation')
+            ->components([
+                Select::make('novel_id')
+                    ->label('小说')
+                    ->options(fn (): array => Novel::query()->orderBy('title')->pluck('title', 'id')->all())
+                    ->searchable()
+                    ->preload()
+                    ->required(),
+            ]);
     }
 
     public function retrievalForm(Schema $schema): Schema
@@ -168,6 +190,47 @@ class Memory extends Page implements HasTable
                         ->visible(fn (): bool => $this->retrievalResults === []),
                 ])
                 ->collapsible(),
+            Section::make('检索评估')
+                ->description('使用固定案例检查关键记忆命中率，以及失效记忆和其他小说记忆是否泄漏。')
+                ->schema([
+                    Form::make([EmbeddedSchema::make('evaluationForm')])
+                        ->id('memory-evaluation-form')
+                        ->livewireSubmitHandler('runEvaluation')
+                        ->footer([
+                            Actions::make([
+                                Action::make('runEvaluation')
+                                    ->label('运行固定评估集')
+                                    ->icon('heroicon-o-beaker')
+                                    ->submit('runEvaluation'),
+                            ]),
+                        ]),
+                    RepeatableEntry::make('evaluation_results')
+                        ->label('评估结果')
+                        ->state(fn (): array => $this->evaluationResults)
+                        ->columns(['default' => 1, 'md' => 6])
+                        ->schema([
+                            TextEntry::make('case')->label('案例')->weight('medium'),
+                            TextEntry::make('expected')->label('期望')->columnSpan(2)->wrap(),
+                            TextEntry::make('hit')->label('命中')->badge()->color(fn (string $state): string => $state === '是' ? 'success' : ($state === '否' ? 'danger' : 'gray')),
+                            TextEntry::make('leakage')->label('泄漏')->badge()->color(fn (string $state): string => $state === '是' ? 'danger' : 'success'),
+                            TextEntry::make('status')->label('结果')->badge()->color(fn (string $state): string => match ($state) {
+                                '通过' => 'success',
+                                '未配置' => 'gray',
+                                default => 'danger',
+                            }),
+                            TextEntry::make('query')->label('查询')->columnSpan(3)->wrap(),
+                            TextEntry::make('actual')->label('实际选中')->columnSpan(2),
+                            TextEntry::make('message')->label('说明')->placeholder('—')->columnSpanFull()->color('danger'),
+                        ])
+                        ->visible(fn (): bool => $this->evaluationResults !== []),
+                    TextEntry::make('evaluation_empty')
+                        ->hiddenLabel()
+                        ->state('选择小说并运行固定评估集后，将在这里显示命中与泄漏结果。')
+                        ->color('gray')
+                        ->visible(fn (): bool => $this->evaluationResults === []),
+                ])
+                ->collapsible()
+                ->collapsed(),
             EmbeddedTable::make(),
         ]);
     }
@@ -197,6 +260,18 @@ class Memory extends Page implements HasTable
             $this->retrievalResults = [];
             Notification::make()->title('记忆检索失败')->body($exception->getMessage())->danger()->send();
         }
+    }
+
+    public function runEvaluation(MemoryRetrievalEvaluator $evaluator): void
+    {
+        $data = $this->evaluationForm->getState();
+        $this->evaluationResults = $evaluator->evaluate((int) $data['novel_id']);
+
+        Notification::make()
+            ->title('检索评估完成')
+            ->body('已运行 '.count($this->evaluationResults).' 个固定案例。')
+            ->success()
+            ->send();
     }
 
     public function table(Table $table): Table

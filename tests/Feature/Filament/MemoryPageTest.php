@@ -119,3 +119,21 @@ test('memory inspector shows query filters and top vector results in chinese', f
         ->assertSee('综合评分入选')
         ->assertNotified('记忆检索完成');
 });
+
+test('memory page runs the fixed retrieval evaluation and shows hit and leakage columns', function () {
+    $novel = Novel::factory()->create();
+
+    Livewire::test(Memory::class)
+        ->assertSee('检索评估')
+        ->assertSee('运行固定评估集')
+        ->set('evaluation.novel_id', $novel->getKey())
+        ->call('runEvaluation')
+        ->assertSet('evaluationResults.0.case', '早期关键事实')
+        ->assertSet('evaluationResults.4.case', '失效记忆')
+        ->assertSet('evaluationResults.5.case', '其他小说记忆')
+        ->assertSee('评估结果')
+        ->assertSee('命中')
+        ->assertSee('泄漏')
+        ->assertSee('未配置')
+        ->assertNotified('检索评估完成');
+});
