@@ -1,5 +1,8 @@
 <?php
 
+use App\AI\Contracts\EmbeddingProvider;
+use App\AI\Data\EmbeddingResponse;
+use App\AI\Providers\FakeEmbeddingProvider;
 use App\Enums\GenerationStage;
 use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
@@ -80,4 +83,36 @@ test('memory page can explicitly inspect invalid memories', function () {
         ->assertCanSeeTableRecords([$invalid])
         ->assertCanNotSeeTableRecords([$active])
         ->assertSee('回滚后失效的记忆。');
+});
+
+test('memory inspector shows query filters and top vector results in chinese', function () {
+    config()->set('ai.embedding.model', 'embedding-fixed-v1');
+    config()->set('ai.embedding.dimensions', 3);
+    $novel = Novel::factory()->create(['title' => '雾海长明']);
+    MemoryModel::factory()->for($novel)->create([
+        'summary' => '潮汐门曾在月落时开启。',
+        'embedding' => '[1,0,0]',
+        'embedding_model' => 'embedding-fixed-v1',
+    ]);
+    app()->instance(EmbeddingProvider::class, (new FakeEmbeddingProvider)->enqueue(new EmbeddingResponse(
+        embedding: [1.0, 0.0, 0.0],
+        inputTokens: 4,
+        latencyMs: 5,
+        providerRequestId: null,
+        model: 'embedding-fixed-v1',
+    )));
+
+    Livewire::test(Memory::class)
+        ->assertSee('记忆检索检查器')
+        ->assertSee('查询内容')
+        ->set('retrieval.novel_id', $novel->getKey())
+        ->set('retrieval.query', '潮汐门何时开启')
+        ->set('retrieval.candidate_k', 5)
+        ->set('retrieval.final_k', 2)
+        ->call('runRetrieval')
+        ->assertSet('retrievalResults.0.summary', '潮汐门曾在月落时开启。')
+        ->assertSee('最相似结果')
+        ->assertSee('相似度')
+        ->assertSee('显著度')
+        ->assertNotified('记忆检索完成');
 });
