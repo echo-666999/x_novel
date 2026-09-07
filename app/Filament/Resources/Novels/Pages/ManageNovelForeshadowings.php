@@ -25,6 +25,8 @@ class ManageNovelForeshadowings extends ManageRelatedRecords
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-light-bulb';
+
     protected static string $relationship = 'foreshadowings';
 
     protected static ?string $navigationLabel = '伏笔';

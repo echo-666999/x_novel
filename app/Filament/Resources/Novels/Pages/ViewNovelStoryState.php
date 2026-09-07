@@ -40,6 +40,8 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
 
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-circle-stack';
+
     protected static ?string $navigationLabel = '故事状态';
 
     /** @var array<string, string> */

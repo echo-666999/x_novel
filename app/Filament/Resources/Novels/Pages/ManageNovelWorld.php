@@ -28,6 +28,8 @@ class ManageNovelWorld extends ManageRelatedRecords
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-globe-alt';
+
     protected static string $relationship = 'worldEntities';
 
     protected static ?string $navigationLabel = '世界';

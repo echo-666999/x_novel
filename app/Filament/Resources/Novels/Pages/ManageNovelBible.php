@@ -20,6 +20,8 @@ class ManageNovelBible extends ViewRecord
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-book-open';
+
     protected static ?string $navigationLabel = '小说圣经';
 
     public function getTitle(): string

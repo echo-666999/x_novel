@@ -33,6 +33,8 @@ class ManageNovelChapters extends ManageRelatedRecords
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-document-text';
+
     protected static string $relationship = 'chapters';
 
     protected static ?string $navigationLabel = '章节';

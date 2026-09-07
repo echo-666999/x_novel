@@ -25,6 +25,8 @@ class ManageNovelCharacters extends ManageRelatedRecords
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-users';
+
     protected static string $relationship = 'characters';
 
     protected static ?string $navigationLabel = '角色';

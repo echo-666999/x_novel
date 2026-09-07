@@ -15,6 +15,8 @@ class ViewNovelPlanning extends ViewRecord
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-map';
+
     protected static ?string $navigationLabel = '规划';
 
     #[Url(as: 'scope')]

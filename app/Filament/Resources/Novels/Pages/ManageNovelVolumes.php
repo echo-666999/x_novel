@@ -23,6 +23,8 @@ class ManageNovelVolumes extends ManageRelatedRecords
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-rectangle-stack';
+
     protected static string $relationship = 'volumes';
 
     protected static ?string $navigationLabel = '分卷';

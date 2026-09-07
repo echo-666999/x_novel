@@ -25,6 +25,8 @@ class ManageNovelStoryArcs extends ManageRelatedRecords
 {
     protected static string $resource = NovelResource::class;
 
+    protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-arrow-trending-up';
+
     protected static string $relationship = 'storyArcs';
 
     protected static ?string $navigationLabel = '故事线';
