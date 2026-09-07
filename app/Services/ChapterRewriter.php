@@ -47,8 +47,7 @@ class ChapterRewriter
         $source = $sceneId === null ? $this->latestChapterDraft($chapter) : $this->sceneSource($chapter, $sceneId);
         $attempt = $this->attemptCount($chapter) + 1;
         if ($attempt > (int) config('generation.max_rewrite_attempts', 2)) {
-            $review->update(['decision' => ReviewDecision::NeedsAttention]);
-            $chapter->update(['status' => ChapterStatus::Review]);
+            $this->markExhausted($chapter, $review);
             throw new AiProviderException('rewrite_exhausted', 'Rewrite 已达到最大 2 次，已转为需要人工处理。', false);
         }
 
@@ -62,6 +61,10 @@ class ChapterRewriter
             'must_preserve' => $chapter->latestPlan->only(['chapter_function', 'arc_contribution', 'reader_promise', 'must_reveal']),
             'expected_fixes' => collect($review->findings)->pluck('message')->filter()->values()->all(),
             'must_not_change' => $chapter->latestPlan->only(['must_not_reveal', 'forbidden_conflicts']),
+            'state_version' => $chapter->novel->canonicalStateVersion->version,
+            'current_state' => $chapter->novel->canonicalStateVersion->state,
+            'locked_facts' => $chapter->novel->facts()->where('locked', true)->where('status', 'active')
+                ->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value'])->all(),
             'content' => $source->content,
         ];
         $inputHash = hash('sha256', json_encode([$brief, $settings->model, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -85,7 +88,7 @@ class ChapterRewriter
                 throw new AiProviderException('rewrite_empty_draft', 'Rewrite 返回了空正文。', false);
             }
 
-            return $this->complete($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt);
+            return $this->complete($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt, $brief['state_version']);
         } catch (Throwable $exception) {
             $run->update(['status' => RunStatus::Failed, 'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'rewrite_failed', 'error_message' => $exception->getMessage(), 'finished_at' => now()]);
             throw $exception;
@@ -124,7 +127,7 @@ class ChapterRewriter
     private function sceneSource(Chapter $chapter, int $sceneId): GenerationArtifact
     {
         $scene = Scene::query()->where('chapter_id', $chapter->getKey())->findOrFail($sceneId);
-        if ($scene->currentArtifact === null) {
+        if ($scene->currentArtifact === null || ! in_array($scene->currentArtifact->type, [ArtifactType::SceneDraft, ArtifactType::RewriteDraft], true)) {
             throw new AiProviderException('rewrite_input_incomplete', 'Rewrite 缺少 Scene Draft。', false);
         }
 
@@ -170,10 +173,13 @@ class ChapterRewriter
         });
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, ?int $sceneId, GenerationArtifact $source, Review $review, string $content, string $findingHash, int $attempt): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, ?int $sceneId, GenerationArtifact $source, Review $review, string $content, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt) {
-            $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
+        return DB::transaction(function () use ($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt, $expectedStateVersion) {
+            $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
+            if ($chapter->novel->canonicalStateVersion?->version !== $expectedStateVersion) {
+                throw new AiProviderException('state_version_conflict', 'Rewrite 期间 Canonical Story State 已变化。', false);
+            }
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::RewriteDraft, 'version' => $attempt, 'content' => $content,
                 'data' => ['scope' => $sceneId === null ? 'chapter' : 'scene', 'source_artifact_id' => $source->getKey(), 'source_review_id' => $review->getKey(), 'finding_hash' => $findingHash, 'attempt' => $attempt],
@@ -186,6 +192,46 @@ class ChapterRewriter
             $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
 
             return $artifact;
+        });
+    }
+
+    private function markExhausted(Chapter $chapter, Review $source): Review
+    {
+        return DB::transaction(function () use ($chapter, $source): Review {
+            $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
+            $key = 'review:rewrite-exhausted:'.$chapter->getKey().':'.$source->getKey();
+            $existing = GenerationRun::query()->where('idempotency_key', $key)->with('review')->first();
+            if ($existing?->review !== null) {
+                return $existing->review;
+            }
+            $run = GenerationRun::query()->create([
+                'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter',
+                'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded,
+                'attempt' => $source->generationRun->attempt + 1, 'idempotency_key' => $key,
+                'input_hash' => hash('sha256', $key), 'state_version' => $source->generationRun->state_version,
+                'prompt_version' => $source->generationRun->prompt_version, 'model_policy' => 'deterministic',
+                'context_snapshot' => ['reason' => 'rewrite_exhausted', 'source_review_id' => $source->getKey()],
+                'started_at' => now(), 'finished_at' => now(),
+            ]);
+            $findings = [...$source->findings, ['code' => 'REWRITE_EXHAUSTED', 'severity' => 'ambiguous', 'message' => '自动 Rewrite 已达到最大 2 次，需要人工处理。', 'source' => 'rewrite_loop']];
+            $data = ['decision' => ReviewDecision::NeedsAttention->value, 'score' => (float) $source->score, 'findings' => $findings, 'source_review_id' => $source->getKey()];
+            $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)
+                ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))->max('version');
+            $artifact = $run->artifacts()->create([
+                'type' => ArtifactType::ReviewResult, 'version' => (int) $version + 1,
+                'content' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                'data' => $data, 'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+            ]);
+            $review = $run->review()->create([
+                'artifact_id' => $artifact->getKey(), 'decision' => ReviewDecision::NeedsAttention,
+                'score' => $source->score, 'continuity_score' => $source->continuity_score,
+                'plan_score' => $source->plan_score, 'character_score' => $source->character_score,
+                'progress_score' => $source->progress_score, 'repetition_score' => $source->repetition_score,
+                'pacing_score' => $source->pacing_score, 'style_score' => $source->style_score, 'findings' => $findings,
+            ]);
+            $chapter->update(['status' => ChapterStatus::Review]);
+
+            return $review;
         });
     }
 }

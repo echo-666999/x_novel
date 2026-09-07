@@ -2,6 +2,7 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
+use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
@@ -19,6 +20,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Review;
+use App\Models\StoryStateVersion;
 use App\Services\ChapterRewriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -91,7 +93,14 @@ test('rewrite exhaustion becomes needs attention', function () {
 
     expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
         ->toThrow(AiProviderException::class, '最大 2 次');
-    expect($fixture['review']->fresh()->decision)->toBe(ReviewDecision::NeedsAttention)
+    expect($fixture['review']->fresh()->decision)->toBe(ReviewDecision::Rewrite)
+        ->and(Review::query()->latest('id')->first()->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(Review::query()->latest('id')->first()->findings)->toContainEqual([
+            'code' => 'REWRITE_EXHAUSTED',
+            'severity' => 'ambiguous',
+            'message' => '自动 Rewrite 已达到最大 2 次，需要人工处理。',
+            'source' => 'rewrite_loop',
+        ])
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
@@ -133,4 +142,24 @@ test('stale rewrite run is marked interrupted before recovery', function () {
 
     expect($stale->fresh()->status)->toBe(RunStatus::Failed)
         ->and($stale->fresh()->error_code)->toBe('worker_interrupted');
+});
+
+test('state version change during rewrite prevents artifact persistence', function () {
+    $fixture = rewriteFixture();
+    app()->instance(AiProvider::class, new class($fixture['novel']) implements AiProvider
+    {
+        public function __construct(private Novel $novel) {}
+
+        public function generate(AiRequest $request): AiResponse
+        {
+            $version = StoryStateVersion::factory()->for($this->novel)->create(['version' => 1]);
+            $this->novel->update(['canonical_state_version_id' => $version->getKey()]);
+
+            return rewriteResponse();
+        }
+    });
+
+    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, 'Story State 已变化');
+    expect(GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)->count())->toBe(0);
 });
