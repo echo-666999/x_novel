@@ -7,6 +7,7 @@ use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
@@ -18,6 +19,7 @@ use App\Models\UsageRecord;
 use App\Models\User;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -71,7 +73,8 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
         ->assertSee('取得出港许可')
         ->assertSee('v3')
         ->assertSee('尚无 Chapter Draft')
-        ->assertSee('Story Events 尚未接入')
+        ->assertSee('Story Event Candidates')
+        ->assertSee('尚无候选事件')
         ->assertSee('Review 尚未接入')
         ->assertSee('尚无 Generation Run');
 });
@@ -259,4 +262,61 @@ test('pipeline timeline identifies the blocked stage and exposes its run details
         ->assertSee('150')
         ->assertSee('USD 0.001500')
         ->assertSee('provider_timeout · 模型请求超时');
+});
+
+test('events workspace shows candidates and can dispatch extraction', function () {
+    Queue::fake();
+
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $assemblyRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($assemblyRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '林舟抵达洛阳。',
+    ]);
+    $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+    ]);
+    GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => [
+            'status' => 'candidate',
+            'source_artifact_id' => $draft->getKey(),
+            'events' => [[
+                'event_type' => 'character_moved',
+                'subject_type' => 'character',
+                'subject_id' => '12',
+                'payload' => ['to' => '洛阳'],
+                'evidence' => [[
+                    'artifact_id' => $draft->getKey(),
+                    'scene_id' => null,
+                    'quote' => '林舟抵达洛阳。',
+                    'start_offset' => 0,
+                    'end_offset' => 7,
+                ]],
+                'story_time' => '第三日',
+                'confidence' => 0.95,
+            ]],
+        ],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('Story Event Candidates')
+        ->assertSee('Candidate')
+        ->assertSee('Character Moved')
+        ->assertSee('character · 12')
+        ->assertSee('95.0%')
+        ->assertSee('林舟抵达洛阳。')
+        ->assertActionExists(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'))
+        ->callAction(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'));
+
+    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $chapter->getKey() && $job->regenerate);
 });

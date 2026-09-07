@@ -8,6 +8,7 @@ use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\AssembleChapterJob;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
@@ -138,7 +139,10 @@ class ViewNovelChapter extends ViewRecord
                         ->schema($this->draftSchema()),
                     Tab::make('Events')
                         ->icon('heroicon-o-bolt')
-                        ->schema([$this->futureSection('Story Events 尚未接入', '正式 Story Events 必须由通过 Review 的 Canonical Chapter 产生。')]),
+                        ->badge(fn (): int => $this->latestEventCandidateArtifact() === null
+                            ? 0
+                            : count(data_get($this->latestEventCandidateArtifact()?->data, 'events', [])))
+                        ->schema($this->eventsSchema()),
                     Tab::make('Review')
                         ->icon('heroicon-o-shield-check')
                         ->schema([$this->futureSection('Review 尚未接入', 'Review 结果和人工处理动作将在后续 Review 工作流任务中接入。')]),
@@ -468,6 +472,114 @@ class ViewNovelChapter extends ViewRecord
             ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
             ->orderByDesc('version')
             ->get();
+    }
+
+    /** @return array<int, mixed> */
+    private function eventsSchema(): array
+    {
+        $artifact = $this->latestEventCandidateArtifact();
+        $events = collect(data_get($artifact?->data, 'events', []))
+            ->map(fn (array $event): array => [
+                'status' => 'Candidate',
+                'type' => str((string) data_get($event, 'event_type'))->headline()->toString(),
+                'subject' => filled(data_get($event, 'subject_type'))
+                    ? data_get($event, 'subject_type').' · '.(data_get($event, 'subject_id') ?? '—')
+                    : '—',
+                'confidence' => number_format((float) data_get($event, 'confidence', 0) * 100, 1).'%',
+                'story_time' => data_get($event, 'story_time'),
+                'payload' => $this->formatTimelineJson(data_get($event, 'payload', [])),
+                'evidence' => collect(data_get($event, 'evidence', []))
+                    ->map(fn (array $evidence): string => 'Artifact #'.data_get($evidence, 'artifact_id').' · '.
+                        (data_get($evidence, 'scene_id') === null ? 'Chapter Draft' : 'Scene #'.data_get($evidence, 'scene_id')).
+                        "\n“".data_get($evidence, 'quote').'”')
+                    ->implode("\n\n"),
+            ])
+            ->all();
+
+        return [
+            Section::make('Story Event Candidates')
+                ->key('story-event-candidates')
+                ->description('候选事件来自 Chapter Draft；只有后续验证、Review 与 Canonical Commit 才能写入正式 Story Events。')
+                ->icon('heroicon-o-bolt')
+                ->headerActions([
+                    Action::make('extractStoryEvents')
+                        ->label($artifact === null ? 'Extract Events' : 'Re-extract Events')
+                        ->icon('heroicon-o-sparkles')
+                        ->disabled($this->chapterDraftArtifacts()->isEmpty() || $this->hasActiveEventExtractionRun())
+                        ->tooltip(match (true) {
+                            $this->chapterDraftArtifacts()->isEmpty() => '需要先完成 Chapter Assembly。',
+                            $this->hasActiveEventExtractionRun() => 'Story Event Extraction 已在运行。',
+                            default => null,
+                        })
+                        ->requiresConfirmation($artifact !== null)
+                        ->modalDescription($artifact === null ? null : '将创建新的不可变 Candidate Artifact 版本，现有候选不会被覆盖。')
+                        ->action(function () use ($artifact): void {
+                            ExtractStoryEventsJob::dispatch($this->chapterId, $artifact !== null);
+
+                            Notification::make()
+                                ->title('Story Event Extraction 已加入队列')
+                                ->body('候选事件不会修改正式 Story State。')
+                                ->success()
+                                ->send();
+                        }),
+                ])
+                ->columns(['default' => 1, 'md' => 3])
+                ->schema([
+                    TextEntry::make('event_candidate_status')
+                        ->label('数据级别')
+                        ->state($artifact === null ? null : 'Candidate')
+                        ->badge()
+                        ->color('warning')
+                        ->placeholder('尚未提取'),
+                    TextEntry::make('event_candidate_version')
+                        ->label('Artifact Version')
+                        ->state($artifact === null ? null : 'v'.$artifact->version.' · #'.$artifact->getKey())
+                        ->placeholder('—'),
+                    TextEntry::make('event_candidate_source')
+                        ->label('Source Artifact')
+                        ->state($artifact === null ? null : '#'.data_get($artifact->data, 'source_artifact_id'))
+                        ->placeholder('—'),
+                ]),
+            Section::make('尚无候选事件')
+                ->description($artifact === null ? '完成 Chapter Assembly 后运行 Extract Events。' : 'Extractor 已完成，本章没有识别到会改变后续 Story State 的事件。')
+                ->icon('heroicon-o-information-circle')
+                ->visible($events === []),
+            Section::make('候选事件')
+                ->visible($events !== [])
+                ->schema([
+                    RepeatableEntry::make('event_candidates')
+                        ->hiddenLabel()
+                        ->state($events)
+                        ->columns(['default' => 1, 'md' => 3])
+                        ->schema([
+                            TextEntry::make('status')->label('级别')->badge()->color('warning'),
+                            TextEntry::make('type')->label('Type')->badge()->color('gray'),
+                            TextEntry::make('subject')->label('Subject'),
+                            TextEntry::make('confidence')->label('Confidence'),
+                            TextEntry::make('story_time')->label('Story Time')->placeholder('—'),
+                            TextEntry::make('payload')->label('Payload')->fontFamily('mono')->copyable()->columnSpanFull(),
+                            TextEntry::make('evidence')->label('Evidence')->prose()->copyable()->columnSpanFull(),
+                        ]),
+                ]),
+        ];
+    }
+
+    private function latestEventCandidateArtifact(): ?GenerationArtifact
+    {
+        return $this->latestTimelineArtifact(ArtifactType::EventCandidate);
+    }
+
+    private function hasActiveEventExtractionRun(): bool
+    {
+        return $this->chapter()->generationRuns
+            ->where('stage', GenerationStage::EventExtraction)
+            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
+            ->isNotEmpty();
+    }
+
+    private function formatTimelineJson(mixed $value): string
+    {
+        return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }
 
     /** @return array<int, mixed> */

@@ -7,6 +7,7 @@ use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\AssembleChapterJob;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\GenerationArtifact;
@@ -312,6 +313,7 @@ class Generation extends Page implements HasTable
     {
         return match ($run->stage) {
             GenerationStage::ChapterPlanning, GenerationStage::ChapterAssembly => $run->chapter_id !== null,
+            GenerationStage::EventExtraction => $run->chapter_id !== null,
             GenerationStage::SceneGeneration => $run->scene_id !== null,
             default => false,
         };
@@ -386,6 +388,7 @@ class Generation extends Page implements HasTable
             GenerationStage::ChapterPlanning => PlanChapterJob::dispatch($run->chapter_id, $regenerate),
             GenerationStage::SceneGeneration => GenerateSceneJob::dispatch($run->scene_id, $regenerate),
             GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, $regenerate),
+            GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
             default => null,
         };
 

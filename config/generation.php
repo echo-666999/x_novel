@@ -5,4 +5,5 @@ return [
     'scene_max_output_tokens' => (int) env('SCENE_MAX_OUTPUT_TOKENS', 4_000),
     'previous_scene_tail_characters' => (int) env('PREVIOUS_SCENE_TAIL_CHARACTERS', 1_000),
     'assembly_max_output_tokens' => (int) env('ASSEMBLY_MAX_OUTPUT_TOKENS', 12_000),
+    'event_extraction_max_output_tokens' => (int) env('EVENT_EXTRACTION_MAX_OUTPUT_TOKENS', 4_000),
 ];
