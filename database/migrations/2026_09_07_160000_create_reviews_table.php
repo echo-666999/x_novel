@@ -30,10 +30,11 @@ return new class extends Migration
         });
 
         if (DB::getDriverName() === 'pgsql') {
+            $reviews = DB::connection()->getSchemaGrammar()->wrapTable('reviews');
             $values = collect(ReviewDecision::cases())->map(fn ($case) => DB::connection()->getPdo()->quote($case->value))->implode(', ');
-            DB::statement("ALTER TABLE reviews ADD CONSTRAINT reviews_decision_check CHECK (decision IN ({$values}))");
+            DB::statement("ALTER TABLE {$reviews} ADD CONSTRAINT reviews_decision_check CHECK (decision IN ({$values}))");
             foreach (['score', 'continuity_score', 'plan_score', 'character_score', 'progress_score', 'repetition_score', 'pacing_score', 'style_score'] as $column) {
-                DB::statement("ALTER TABLE reviews ADD CONSTRAINT reviews_{$column}_check CHECK ({$column} >= 0 AND {$column} <= 100)");
+                DB::statement("ALTER TABLE {$reviews} ADD CONSTRAINT reviews_{$column}_check CHECK ({$column} >= 0 AND {$column} <= 100)");
             }
         }
     }

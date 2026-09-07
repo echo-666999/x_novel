@@ -48,7 +48,7 @@ test('the chapter workspace lists only the current novels chapters', function ()
 
     Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
         ->assertOk()
-        ->assertSeeTextInOrder(['章节', '雾海长明', '标题', '分卷', '状态', '字数', 'Review', '成本', 'State Version'])
+        ->assertSeeTextInOrder(['章节', '雾海长明', '标题', '分卷', '状态', '章节计划', '字数', '审校', '成本', '故事版本'])
         ->assertCanSeeTableRecords([$planned, $canonical])
         ->assertCanNotSeeTableRecords([$otherChapter])
         ->assertSee('雾港来信')

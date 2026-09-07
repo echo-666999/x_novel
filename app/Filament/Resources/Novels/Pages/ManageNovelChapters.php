@@ -119,7 +119,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->badge()
                     ->sortable(),
                 TextColumn::make('latestPlan.status')
-                    ->label('Plan')
+                    ->label('章节计划')
                     ->badge()
                     ->placeholder('未建立'),
                 TextColumn::make('word_count')
@@ -128,7 +128,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->alignEnd()
                     ->sortable(),
                 TextColumn::make('review_decision')
-                    ->label('Review')
+                    ->label('审校')
                     ->state('尚未接入')
                     ->color('gray'),
                 TextColumn::make('cost')
@@ -137,7 +137,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->color('gray')
                     ->alignEnd(),
                 TextColumn::make('latestStateVersion.version')
-                    ->label('State Version')
+                    ->label('故事版本')
                     ->formatStateUsing(fn (int $state): string => 'v'.$state)
                     ->placeholder('—')
                     ->alignEnd(),
