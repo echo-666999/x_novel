@@ -3,7 +3,7 @@
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
-use App\AI\Providers\BudgetGuardAiProvider;
+use App\AI\Providers\EmergencyStopAiProvider;
 use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
@@ -74,7 +74,7 @@ test('failed and fake only provider calls do not create usage records', function
 });
 
 test('the application provider binding includes usage tracking', function () {
-    expect(app(AiProvider::class))->toBeInstanceOf(BudgetGuardAiProvider::class);
+    expect(app(AiProvider::class))->toBeInstanceOf(EmergencyStopAiProvider::class);
 });
 
 function usageResponse(): AiResponse

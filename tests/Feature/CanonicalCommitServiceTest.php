@@ -25,6 +25,7 @@ use App\Models\StoryStateVersion;
 use App\Models\User;
 use App\Models\Volume;
 use App\Services\CanonicalCommitService;
+use App\Services\EmergencyStopService;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -180,6 +181,20 @@ test('a paused novel cannot create a new canonical commit', function () {
 
     expect($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
         ->and(StoryEvent::query()->count())->toBe(0);
+});
+
+test('emergency stop blocks canonical commit without leaving partial state', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    app(EmergencyStopService::class)->setActive(true);
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
+        ->toThrow(ValidationException::class, 'Canonical Commit 已被阻止');
+
+    expect($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and(StoryEvent::query()->count())->toBe(0)
+        ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1);
+    Queue::assertNothingPushed();
 });
 
 test('a transaction exception after event writes leaves no partial canonical state', function () {

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Filament\Actions\EmergencyStopAction;
 use App\Filament\Widgets\DueForeshadowingsWidget;
 use App\Models\UsageRecord;
 use Filament\Pages\Dashboard as BaseDashboard;
@@ -16,6 +17,11 @@ class Dashboard extends BaseDashboard
     protected static ?string $navigationLabel = '仪表盘';
 
     protected static ?string $title = '仪表盘';
+
+    protected function getHeaderActions(): array
+    {
+        return [EmergencyStopAction::make()];
+    }
 
     public function content(Schema $schema): Schema
     {

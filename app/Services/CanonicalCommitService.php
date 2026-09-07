@@ -32,6 +32,7 @@ class CanonicalCommitService
         private readonly StateValidator $stateValidator,
         private readonly StoryStateService $storyState,
         private readonly CheckNextAction $checkNextAction,
+        private readonly EmergencyStopService $emergencyStop,
     ) {}
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
@@ -45,6 +46,7 @@ class CanonicalCommitService
                 return [$this->resolveDuplicate($chapter, $data), false];
             }
 
+            $this->emergencyStop->assertCanonicalCommitAllowed();
             $this->validateNovel($novel);
             $currentState = $novel->canonicalStateVersion()->first();
 

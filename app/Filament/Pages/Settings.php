@@ -10,6 +10,7 @@ use App\AI\Data\BudgetUsage;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
+use App\Filament\Actions\EmergencyStopAction;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -42,6 +43,7 @@ class Settings extends Page
     protected function getHeaderActions(): array
     {
         return [
+            EmergencyStopAction::make(),
             Action::make('testAiConnection')
                 ->label('Test Connection')
                 ->icon('heroicon-o-signal')
