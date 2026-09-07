@@ -65,6 +65,15 @@ class Memory extends Page implements HasTable
                     ->searchable()
                     ->preload(),
                 SelectFilter::make('type')->label('类型')->options(MemoryType::class),
+                SelectFilter::make('valid_from_chapter')
+                    ->label('来源章节')
+                    ->options(fn (): array => MemoryModel::query()
+                        ->select('valid_from_chapter')
+                        ->distinct()
+                        ->orderBy('valid_from_chapter')
+                        ->pluck('valid_from_chapter', 'valid_from_chapter')
+                        ->mapWithKeys(fn (mixed $sequence): array => [(int) $sequence => '第 '.(int) $sequence.' 章'])
+                        ->all()),
                 SelectFilter::make('status')
                     ->label('状态')
                     ->options(MemoryStatus::class)

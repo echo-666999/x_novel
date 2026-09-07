@@ -11,6 +11,7 @@ use App\Enums\FactSourceType;
 use App\Enums\FactStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
+use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
@@ -33,7 +34,7 @@ class CanonicalCommitService
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
     {
-        return DB::transaction(function () use ($data): StoryStateVersion {
+        $stateVersion = DB::transaction(function () use ($data): StoryStateVersion {
             $chapter = Chapter::query()->findOrFail($data->chapterId);
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($data->chapterId);
@@ -81,6 +82,10 @@ class CanonicalCommitService
 
             return $stateVersion;
         }, 3);
+
+        UpdateMemoryJob::dispatch($data->chapterId)->afterCommit();
+
+        return $stateVersion;
     }
 
     private function validateNovel(Novel $novel): void

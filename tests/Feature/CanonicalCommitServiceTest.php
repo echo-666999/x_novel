@@ -11,6 +11,7 @@ use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\CommitChapterJob;
+use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
@@ -23,6 +24,7 @@ use App\Models\User;
 use App\Services\CanonicalCommitService;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
@@ -221,4 +223,14 @@ test('commit chapter job uses the canonical service and duplicate delivery has e
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
         ->and(StoryEvent::query()->count())->toBe(1)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
+});
+
+test('canonical commit dispatches memory update after the formal transaction', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+
+    Queue::assertPushed(UpdateMemoryJob::class, fn (UpdateMemoryJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
+        && $job->queue === 'default');
 });

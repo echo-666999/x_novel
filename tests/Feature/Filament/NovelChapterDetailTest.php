@@ -18,6 +18,7 @@ use App\Models\Character;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\Review;
 use App\Models\Scene;
@@ -126,6 +127,11 @@ test('canonical chapter viewer separates the formal text from drafts and shows i
         'canonical_artifact_id' => $canonicalArtifact->getKey(),
         'word_count' => 14,
     ]);
+    Memory::factory()->for($novel)->create([
+        'source_type' => 'story_event',
+        'source_id' => 42,
+        'valid_from_chapter' => $chapter->sequence,
+    ]);
 
     Livewire::test(ViewNovelChapter::class, [
         'record' => $novel->getRouteKey(),
@@ -139,6 +145,8 @@ test('canonical chapter viewer separates the formal text from drafts and shows i
         ->assertSee('v4')
         ->assertSee('通过')
         ->assertSee('USD 0.012345')
+        ->assertSee('Memory Created: 1')
+        ->assertSee('/x/memory')
         ->assertSee('这是已经提交的正式章节正文。');
 });
 

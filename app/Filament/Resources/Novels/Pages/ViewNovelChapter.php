@@ -8,6 +8,7 @@ use App\Enums\GenerationStage;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
+use App\Filament\Pages\Memory as MemoryPage;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
@@ -706,6 +707,16 @@ class ViewNovelChapter extends ViewRecord
                     TextEntry::make('canonical_cost')
                         ->label('章节累计成本')
                         ->state(config('ai.cost.currency').' '.number_format($this->canonicalCost(), 6)),
+                    TextEntry::make('canonical_memory_count')
+                        ->hiddenLabel()
+                        ->state('Memory Created: '.$this->chapterMemoryCount())
+                        ->icon('heroicon-o-circle-stack')
+                        ->url(MemoryPage::getUrl([
+                            'tableFilters' => [
+                                'novel_id' => ['value' => $this->chapter()->novel_id],
+                                'valid_from_chapter' => ['value' => $this->chapter()->sequence],
+                            ],
+                        ])),
                 ]),
             Section::make('Canonical 正文')
                 ->schema([
@@ -739,6 +750,13 @@ class ViewNovelChapter extends ViewRecord
         return (float) UsageRecord::query()
             ->where('chapter_id', $this->chapterId)
             ->sum('estimated_cost');
+    }
+
+    private function chapterMemoryCount(): int
+    {
+        return $this->getRecord()->memories()
+            ->where('valid_from_chapter', $this->chapter()->sequence)
+            ->count();
     }
 
     private function canUseForAssembly(Scene $scene): bool
