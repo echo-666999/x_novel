@@ -4,9 +4,11 @@ namespace App\Providers;
 
 use App\AI\BudgetService;
 use App\AI\Contracts\AiProvider;
+use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Providers\BudgetGuardAiProvider;
 use App\AI\Providers\OpenAiProvider;
 use App\AI\Providers\TrackingAiProvider;
+use App\AI\Providers\TrackingEmbeddingProvider;
 use App\AI\UsageRecorder;
 use App\Contracts\StoryEventApplier;
 use App\Services\DeterministicStoryEventApplier;
@@ -31,6 +33,10 @@ class AppServiceProvider extends ServiceProvider
 
             return new BudgetGuardAiProvider($trackedProvider, app(BudgetService::class));
         });
+        $this->app->bind(EmbeddingProvider::class, fn (): EmbeddingProvider => new TrackingEmbeddingProvider(
+            app(OpenAiProvider::class),
+            app(UsageRecorder::class),
+        ));
     }
 
     /**

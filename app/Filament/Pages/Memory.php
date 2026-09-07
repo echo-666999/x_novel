@@ -4,9 +4,13 @@ namespace App\Filament\Pages;
 
 use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
+use App\Enums\RunStatus;
+use App\Jobs\GenerateEmbeddingJob;
 use App\Models\Memory as MemoryModel;
 use App\Models\Novel;
 use BackedEnum;
+use Filament\Actions\Action;
+use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Components\EmbeddedTable;
 use Filament\Schemas\Schema;
@@ -40,7 +44,7 @@ class Memory extends Page implements HasTable
     {
         return $table
             ->query(MemoryModel::query())
-            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with('novel:id,title'))
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with(['novel:id,title', 'embeddingRun']))
             ->columns([
                 TextColumn::make('novel.title')->label('小说')->searchable()->weight('medium'),
                 TextColumn::make('type')->label('类型')->badge(),
@@ -52,11 +56,25 @@ class Memory extends Page implements HasTable
                     ->description(fn (MemoryModel $record): string => $record->source_type),
                 TextColumn::make('status')->label('状态')->badge(),
                 TextColumn::make('embedding_status')
-                    ->label('Embedding')
-                    ->state(fn (MemoryModel $record): string => $record->hasEmbedding() ? '已就绪' : '待生成')
+                    ->label('向量状态')
+                    ->state(fn (MemoryModel $record): string => $this->embeddingStatus($record))
                     ->badge()
-                    ->color(fn (string $state): string => $state === '已就绪' ? 'success' : 'gray')
+                    ->color(fn (string $state): string => match ($state) {
+                        '向量已就绪' => 'success',
+                        '生成失败' => 'danger',
+                        default => 'gray',
+                    })
                     ->description(fn (MemoryModel $record): ?string => $record->embedding_model),
+            ])
+            ->recordActions([
+                Action::make('retryEmbedding')
+                    ->label('重试向量化')
+                    ->icon('heroicon-o-arrow-path')
+                    ->visible(fn (MemoryModel $record): bool => $record->embeddingRun?->status === RunStatus::Failed)
+                    ->action(function (MemoryModel $record): void {
+                        GenerateEmbeddingJob::dispatch($record->getKey());
+                        Notification::make()->title('向量化任务已重新排队')->success()->send();
+                    }),
             ])
             ->filters([
                 SelectFilter::make('novel_id')
@@ -83,5 +101,14 @@ class Memory extends Page implements HasTable
             ->emptyStateHeading('暂无已索引记忆')
             ->emptyStateDescription('Canonical Chapter 生成的长期记忆会显示在这里。')
             ->emptyStateIcon('heroicon-o-circle-stack');
+    }
+
+    private function embeddingStatus(MemoryModel $memory): string
+    {
+        if ($memory->hasEmbedding()) {
+            return '向量已就绪';
+        }
+
+        return $memory->embeddingRun?->status === RunStatus::Failed ? '生成失败' : '待生成';
     }
 }

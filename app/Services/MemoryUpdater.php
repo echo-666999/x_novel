@@ -9,6 +9,7 @@ use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
 use App\Enums\RunStatus;
 use App\Enums\StoryEventStatus;
+use App\Jobs\GenerateEmbeddingJob;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Memory;
@@ -38,11 +39,14 @@ class MemoryUpdater
         $run = $this->startRun($chapter, $stateVersion, $events, $key, $inputHash);
 
         if ($run->status === RunStatus::Succeeded) {
-            return $this->memoriesFor($chapter, $events);
+            $memories = $this->memoriesFor($chapter, $events);
+            $this->dispatchPendingEmbeddings($memories);
+
+            return $memories;
         }
 
         try {
-            return DB::transaction(function () use ($chapter, $stateVersion, $events, $run): Collection {
+            $memories = DB::transaction(function () use ($chapter, $stateVersion, $events, $run): Collection {
                 $lockedChapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
                 $this->assertCanonicalSources($lockedChapter, $stateVersion, $events);
 
@@ -74,6 +78,9 @@ class MemoryUpdater
 
                 return $memories;
             });
+            $this->dispatchPendingEmbeddings($memories);
+
+            return $memories;
         } catch (Throwable $exception) {
             $run->update([
                 'status' => RunStatus::Failed,
@@ -84,6 +91,15 @@ class MemoryUpdater
 
             throw $exception;
         }
+    }
+
+    /** @param Collection<int, Memory> $memories */
+    private function dispatchPendingEmbeddings(Collection $memories): void
+    {
+        $memories
+            ->reject(fn (Memory $memory): bool => $memory->hasEmbedding()
+                && $memory->embedding_model === (string) config('ai.embedding.model'))
+            ->each(fn (Memory $memory) => GenerateEmbeddingJob::dispatch($memory->getKey())->afterCommit());
     }
 
     /** @return array{Chapter, StoryStateVersion, Collection<int, StoryEvent>} */

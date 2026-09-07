@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\GenerationStage;
 use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
 use Database\Factories\MemoryFactory;
@@ -10,6 +11,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 #[Fillable([
     'novel_id',
@@ -39,6 +41,15 @@ class Memory extends Model
     public function novel(): BelongsTo
     {
         return $this->belongsTo(Novel::class);
+    }
+
+    /** @return HasOne<GenerationRun, $this> */
+    public function embeddingRun(): HasOne
+    {
+        return $this->hasOne(GenerationRun::class, 'scope_id')
+            ->where('scope_type', 'memory')
+            ->where('stage', GenerationStage::Embedding)
+            ->latestOfMany();
     }
 
     public function sourceLabel(): string

@@ -3,6 +3,7 @@
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
+use App\AI\Data\EmbeddingRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\BudgetGuardAiProvider;
 use App\AI\Providers\FakeAiProvider;
@@ -75,6 +76,33 @@ test('openai provider maps a successful response to the provider dto', function 
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://llm.example/v1/chat/completions'
         && $request->hasHeader('Authorization', 'Bearer test-key')
         && $request['response_format']['type'] === 'json_schema');
+});
+
+test('openai provider maps a fixed dimension embedding response', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+    Http::fake(['llm.example/*' => Http::response([
+        'id' => 'embedding-request-1',
+        'model' => 'text-embedding-test',
+        'data' => [['embedding' => [0.1, -0.2, 0.3]]],
+        'usage' => ['prompt_tokens' => 7, 'total_tokens' => 7],
+    ])]);
+
+    $response = app(OpenAiProvider::class)->embed(new EmbeddingRequest(
+        model: 'text-embedding-test',
+        input: '需要向量化的记忆',
+        dimensions: 3,
+    ));
+
+    expect($response->embedding)->toBe([0.1, -0.2, 0.3])
+        ->and($response->inputTokens)->toBe(7)
+        ->and($response->providerRequestId)->toBe('embedding-request-1')
+        ->and($response->model)->toBe('text-embedding-test');
+
+    Http::assertSent(fn (Request $request): bool => $request->url() === 'https://llm.example/v1/embeddings'
+        && $request['model'] === 'text-embedding-test'
+        && $request['input'] === '需要向量化的记忆'
+        && $request['dimensions'] === 3);
 });
 
 test('openai provider maps retryable and non retryable errors', function (int $status, string $code, bool $retryable) {

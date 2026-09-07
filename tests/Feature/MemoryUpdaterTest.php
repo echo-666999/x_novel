@@ -7,6 +7,7 @@ use App\Enums\GenerationStage;
 use App\Enums\MemoryType;
 use App\Enums\RunStatus;
 use App\Enums\StoryEventStatus;
+use App\Jobs\GenerateEmbeddingJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
@@ -18,6 +19,7 @@ use App\Models\StoryStateVersion;
 use App\Services\MemoryUpdater;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
@@ -62,6 +64,7 @@ function memoryUpdaterFixture(): array
 }
 
 test('memory updater creates traceable memories only from active canonical events', function () {
+    Queue::fake();
     $fixture = memoryUpdaterFixture();
     StoryEvent::factory()->create([
         'novel_id' => $fixture['novel']->getKey(),
@@ -83,6 +86,8 @@ test('memory updater creates traceable memories only from active canonical event
         ->and($memory->valid_from_chapter)->toBe(12)
         ->and($memory->embedding)->toBeNull()
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
+
+    Queue::assertPushed(GenerateEmbeddingJob::class, fn (GenerateEmbeddingJob $job): bool => $job->memoryId === $memory->getKey());
 });
 
 test('duplicate memory job delivery reuses memories and the successful run', function () {

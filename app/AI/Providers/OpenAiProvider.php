@@ -3,8 +3,11 @@
 namespace App\AI\Providers;
 
 use App\AI\Contracts\AiProvider;
+use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
+use App\AI\Data\EmbeddingRequest;
+use App\AI\Data\EmbeddingResponse;
 use App\AI\Exceptions\AiProviderException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
@@ -12,7 +15,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use JsonException;
 
-class OpenAiProvider implements AiProvider
+class OpenAiProvider implements AiProvider, EmbeddingProvider
 {
     public function generate(AiRequest $request): AiResponse
     {
@@ -39,6 +42,47 @@ class OpenAiProvider implements AiProvider
         }
 
         return $this->mapResponse($response, $latencyMs);
+    }
+
+    public function embed(EmbeddingRequest $request): EmbeddingResponse
+    {
+        $startedAt = hrtime(true);
+
+        try {
+            $response = $this->client()->post('/embeddings', [
+                'model' => $request->model,
+                'input' => $request->input,
+                'dimensions' => $request->dimensions,
+            ]);
+        } catch (ConnectionException $exception) {
+            throw new AiProviderException(
+                errorCode: 'provider_connection_failed',
+                message: '无法连接 Embedding Provider，请稍后重试。',
+                retryable: true,
+                previous: $exception,
+            );
+        }
+
+        $latencyMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
+
+        if ($response->failed()) {
+            throw $this->mapFailedResponse($response);
+        }
+
+        $embedding = $response->json('data.0.embedding');
+        $model = $response->json('model');
+
+        if (! is_array($embedding) || ! is_string($model)) {
+            throw new AiProviderException('provider_invalid_response', 'Embedding Provider 返回了无效响应。', false);
+        }
+
+        return new EmbeddingResponse(
+            embedding: array_map(static fn (mixed $value): float => (float) $value, $embedding),
+            inputTokens: (int) $response->json('usage.prompt_tokens', 0),
+            latencyMs: $latencyMs,
+            providerRequestId: $response->json('id'),
+            model: $model,
+        );
     }
 
     private function client(): PendingRequest
