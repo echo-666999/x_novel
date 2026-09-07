@@ -103,6 +103,12 @@ class StatePatchBuilder
             foreshadowingChanges: data_get($artifact->data, 'foreshadowing_changes', []),
         );
 
+        return $this->applyPatch($state, $patch);
+    }
+
+    /** @param array<string, mixed> $state @return array<string, mixed> */
+    public function applyPatch(array $state, StatePatch $patch): array
+    {
         foreach ($patch->operations as $operation) {
             $state = $this->applyOperation($state, $operation);
         }

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Story\CreateManualFactAction;
+use App\Actions\Story\ManualCanonicalCorrectionAction;
 use App\Actions\Story\SetFactLockAction;
 use App\Actions\Story\SupersedeFactAction;
 use App\Enums\FactHardness;
@@ -16,6 +17,7 @@ use App\Models\Fact;
 use App\Models\Novel;
 use App\Services\StoryStateService;
 use Filament\Actions\Action;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -91,6 +93,64 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
     public function getSubheading(): ?string
     {
         return $this->getRecord()->title;
+    }
+
+    protected function getHeaderActions(): array
+    {
+        $current = app(StoryStateService::class)->current($this->getRecord());
+
+        return [
+            Action::make('manualCorrection')
+                ->label('人工修正')
+                ->icon('heroicon-o-wrench-screwdriver')
+                ->color('warning')
+                ->visible($current !== null)
+                ->modalHeading('人工修正 Canonical Story State')
+                ->modalDescription('该操作会追加 Correction Event 并创建新的 State Version，不会修改历史快照。')
+                ->modalSubmitActionLabel('创建修正版本')
+                ->schema([
+                    Hidden::make('expected_state_version')->default($current?->version),
+                    TextInput::make('path')
+                        ->label('状态路径')
+                        ->placeholder('例如 characters.42.location')
+                        ->helperText('必须位于已有 Story State Domain，使用点号分隔。')
+                        ->maxLength(500)
+                        ->required(),
+                    Textarea::make('value')
+                        ->label('新值（JSON）')
+                        ->placeholder('例如 "洛阳"、true 或 {"status":"open"}')
+                        ->helperText('输入合法 JSON；字符串需要包含双引号。')
+                        ->rules(['json'])
+                        ->rows(5)
+                        ->required(),
+                    Textarea::make('reason')
+                        ->label('修正原因')
+                        ->helperText('原因会写入 Correction Event，供后续追踪。')
+                        ->rows(3)
+                        ->maxLength(2000)
+                        ->required(),
+                ])
+                ->action(function (array $data, ManualCanonicalCorrectionAction $manualCorrection): void {
+                    $version = $manualCorrection->execute(
+                        $this->getRecord(),
+                        (int) $data['expected_state_version'],
+                        $data['path'],
+                        json_decode($data['value'], true, flags: JSON_THROW_ON_ERROR),
+                        $data['reason'],
+                    );
+
+                    $this->getRecord()->refresh();
+                    $this->selectedVersion = $version->version;
+                    $this->diffToVersion = $version->version;
+                    $this->diffFromVersion = $version->version - 1;
+
+                    Notification::make()
+                        ->title('Canonical Story State 已修正')
+                        ->body('已创建 State Version v'.$version->version.'，历史版本保持不变。')
+                        ->success()
+                        ->send();
+                }),
+        ];
     }
 
     public function content(Schema $schema): Schema
