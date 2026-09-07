@@ -7,6 +7,7 @@ use App\Enums\AiStage;
 use App\Models\Novel;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -68,6 +69,16 @@ class NovelForm
                             ->minValue(0)
                             ->step(0.000001)
                             ->placeholder(fn (): string => self::globalBudgetPlaceholder('chapter_max_cost')),
+                    ]),
+                Section::make('生成自动化')
+                    ->description('控制 Review 通过后的下一步。关闭时仍可在章节工作台手工提交。')
+                    ->icon('heroicon-o-bolt')
+                    ->visible(fn (string $operation): bool => $operation === 'edit')
+                    ->schema([
+                        Toggle::make('auto_commit')
+                            ->label('Review 通过后自动提交')
+                            ->helperText('开启后，PASS Review 会通过 CommitChapterJob 提交正式章节。')
+                            ->default(false),
                     ]),
             ]);
     }

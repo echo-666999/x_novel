@@ -63,3 +63,16 @@ test('saving novel model overrides preserves unrelated settings and removes blan
         ],
     ]);
 });
+
+test('the owner can enable automatic canonical commit after a pass review', function () {
+    $novel = Novel::factory()->create();
+
+    Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('Review 通过后自动提交')
+        ->assertFormSet(['auto_commit' => false])
+        ->fillForm(['auto_commit' => true])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect(data_get($novel->refresh()->settings, 'auto_commit'))->toBeTrue();
+});

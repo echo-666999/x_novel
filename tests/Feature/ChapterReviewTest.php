@@ -13,6 +13,8 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\StateFindingSeverity;
+use App\Jobs\CommitChapterJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
@@ -21,6 +23,7 @@ use App\Models\Novel;
 use App\Services\ChapterReviewer;
 use App\Services\StateValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
 
@@ -100,4 +103,39 @@ test('duplicate review delivery reuses the successful review', function () {
     $second = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
 
     expect($second?->is($first))->toBeTrue()->and($fake->requests())->toHaveCount(1);
+});
+
+test('review job dispatches canonical commit only for pass reviews with auto commit enabled', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse()));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    Queue::assertPushed(CommitChapterJob::class, fn (CommitChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey());
+});
+
+test('review job keeps manual mode when auto commit is disabled', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse()));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    Queue::assertNotPushed(CommitChapterJob::class);
+});
+
+test('review job does not auto commit a non pass review', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse('REWRITE', 60)));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    Queue::assertNotPushed(CommitChapterJob::class);
 });

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\ReviewDecision;
 use App\Services\ChapterReviewer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -30,7 +31,12 @@ class ReviewChapterJob implements ShouldQueue
     public function handle(ChapterReviewer $reviewer): void
     {
         try {
-            $reviewer->review($this->chapterId, $this->regenerate);
+            $review = $reviewer->review($this->chapterId, $this->regenerate);
+
+            if ($review?->decision === ReviewDecision::Pass
+                && (bool) data_get($review->generationRun->novel->settings, 'auto_commit', false)) {
+                CommitChapterJob::dispatch($this->chapterId, $review->getKey());
+            }
         } catch (AiProviderException $e) {
             if (! $e->retryable) {
                 if ($e->errorCode !== 'novel_paused') {

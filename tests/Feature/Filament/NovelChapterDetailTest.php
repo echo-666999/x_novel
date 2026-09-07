@@ -2,8 +2,10 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
+use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\GenerationStage;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
@@ -17,6 +19,7 @@ use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\Review;
 use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
@@ -68,6 +71,7 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
             'Plan',
             'Scenes',
             'Draft',
+            'Canonical',
             'Events',
             'Review',
             'State Changes',
@@ -81,6 +85,61 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
         ->assertSee('尚无候选事件')
         ->assertSee('Narrative Review')
         ->assertSee('尚无 Generation Run');
+});
+
+test('canonical chapter viewer separates the formal text from drafts and shows its provenance', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $canonicalArtifact = GenerationArtifact::factory()->for($draftRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 2,
+        'content' => '这是已经提交的正式章节正文。',
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => ['source_artifact_id' => $canonicalArtifact->getKey()],
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::Pass,
+    ]);
+    StoryStateVersion::factory()->for($novel)->for($chapter)->create([
+        'version' => 4,
+        'created_at' => '2026-09-07 16:30:00',
+    ]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $draftRun->getKey(),
+        'novel_id' => $novel->getKey(),
+        'chapter_id' => $chapter->getKey(),
+        'estimated_cost' => 0.012345,
+    ]);
+    $chapter->update([
+        'status' => ChapterStatus::Canonical,
+        'canonical_artifact_id' => $canonicalArtifact->getKey(),
+        'word_count' => 14,
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('Canonical')
+        ->assertSee('正式')
+        ->assertSee('章节草稿 v2')
+        ->assertSee('2026-09-07 16:30:00')
+        ->assertSee('v4')
+        ->assertSee('通过')
+        ->assertSee('USD 0.012345')
+        ->assertSee('这是已经提交的正式章节正文。');
 });
 
 test('chapter detail shows useful empty states before planning starts', function () {

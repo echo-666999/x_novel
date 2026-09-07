@@ -20,6 +20,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Models\UsageRecord;
 use App\Services\CanonicalCommitService;
 use App\Services\DraftRewriteDiff;
 use App\Services\PlanValidator;
@@ -183,6 +184,10 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-document-text')
                         ->badge(fn (): int => $this->chapterDraftArtifacts()->count())
                         ->schema($this->draftSchema()),
+                    Tab::make('Canonical')
+                        ->icon('heroicon-o-check-badge')
+                        ->badge(fn (): string => $this->chapter()->canonicalArtifact === null ? '未提交' : '正式')
+                        ->schema($this->canonicalSchema()),
                     Tab::make('Events')
                         ->icon('heroicon-o-bolt')
                         ->badge(fn (): int => $this->latestEventCandidateArtifact() === null
@@ -650,6 +655,90 @@ class ViewNovelChapter extends ViewRecord
         return $this->chapter()->latestPlan !== null
             && $this->chapter()->scenes->isNotEmpty()
             && $this->chapter()->scenes->every(fn (Scene $scene): bool => $this->canUseForAssembly($scene));
+    }
+
+    /** @return array<int, mixed> */
+    private function canonicalSchema(): array
+    {
+        $artifact = $this->chapter()->canonicalArtifact;
+        $review = $this->canonicalReview();
+        $stateVersion = $this->chapter()->latestStateVersion;
+
+        if ($artifact === null) {
+            return [
+                Section::make('尚无正式章节')
+                    ->description('当前内容仍是 Draft；只有通过 Review 和 Canonical Commit 后才会在这里显示正式正文。')
+                    ->icon('heroicon-o-check-badge'),
+            ];
+        }
+
+        $artifactLabel = match ($artifact->type) {
+            ArtifactType::RewriteDraft => '重写稿',
+            default => '章节草稿',
+        };
+
+        return [
+            Section::make('正式章节')
+                ->description('Canonical 内容只读，作为后续章节与正式故事状态的依据。')
+                ->icon('heroicon-o-check-badge')
+                ->columns(['default' => 1, 'md' => 3, 'xl' => 6])
+                ->schema([
+                    TextEntry::make('canonical_artifact')
+                        ->label('Canonical Artifact')
+                        ->state("{$artifactLabel} v{$artifact->version} · #{$artifact->getKey()}"),
+                    TextEntry::make('canonical_at')
+                        ->label('正式提交时间')
+                        ->state($stateVersion?->created_at?->format('Y-m-d H:i:s'))
+                        ->placeholder('—'),
+                    TextEntry::make('canonical_word_count')
+                        ->label('字数')
+                        ->state($this->chapter()->word_count)
+                        ->numeric(),
+                    TextEntry::make('canonical_state_version')
+                        ->label('故事状态版本')
+                        ->state($stateVersion === null ? null : 'v'.$stateVersion->version)
+                        ->placeholder('—'),
+                    TextEntry::make('canonical_review')
+                        ->label('Review 结果')
+                        ->state($review?->decision)
+                        ->badge()
+                        ->placeholder('—'),
+                    TextEntry::make('canonical_cost')
+                        ->label('章节累计成本')
+                        ->state(config('ai.cost.currency').' '.number_format($this->canonicalCost(), 6)),
+                ]),
+            Section::make('Canonical 正文')
+                ->schema([
+                    TextEntry::make('canonical_content')
+                        ->hiddenLabel()
+                        ->state($artifact->content)
+                        ->prose()
+                        ->copyable(),
+                ]),
+        ];
+    }
+
+    private function canonicalReview(): ?Review
+    {
+        $artifactId = $this->chapter()->canonical_artifact_id;
+
+        if ($artifactId === null) {
+            return null;
+        }
+
+        return Review::query()
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->with('artifact')
+            ->latest('id')
+            ->get()
+            ->first(fn (Review $review): bool => (int) data_get($review->artifact?->data, 'source_artifact_id') === $artifactId);
+    }
+
+    private function canonicalCost(): float
+    {
+        return (float) UsageRecord::query()
+            ->where('chapter_id', $this->chapterId)
+            ->sum('estimated_cost');
     }
 
     private function canUseForAssembly(Scene $scene): bool
@@ -1205,6 +1294,7 @@ class ViewNovelChapter extends ViewRecord
                 'scenes.generationRuns.artifacts',
                 'generationRuns.usageRecords',
                 'generationRuns.artifacts',
+                'canonicalArtifact',
                 'latestStateVersion',
             ])
             ->firstOrFail();

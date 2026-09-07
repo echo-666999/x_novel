@@ -10,6 +10,7 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
+use App\Jobs\CommitChapterJob;
 use App\Models\Chapter;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
@@ -208,4 +209,16 @@ test('a pass review exposes a canonical commit preview and action', function () 
         ->assertNotified('章节已提交为正式版本');
 
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
+});
+
+test('commit chapter job uses the canonical service and duplicate delivery has exactly once effects', function () {
+    $fixture = canonicalCommitFixture();
+    $job = new CommitChapterJob($fixture['chapter']->getKey(), $fixture['review']->getKey());
+
+    $job->handle(app(CanonicalCommitService::class));
+    $job->handle(app(CanonicalCommitService::class));
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
+        ->and(StoryEvent::query()->count())->toBe(1)
+        ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
 });
