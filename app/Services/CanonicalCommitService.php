@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Actions\Generation\CheckNextAction;
 use App\Data\CanonicalCommitData;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
@@ -30,17 +31,18 @@ class CanonicalCommitService
         private readonly StatePatchBuilder $statePatchBuilder,
         private readonly StateValidator $stateValidator,
         private readonly StoryStateService $storyState,
+        private readonly CheckNextAction $checkNextAction,
     ) {}
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
     {
-        $stateVersion = DB::transaction(function () use ($data): StoryStateVersion {
+        [$stateVersion, $committed] = DB::transaction(function () use ($data): array {
             $chapter = Chapter::query()->findOrFail($data->chapterId);
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($data->chapterId);
 
             if ($chapter->canonical_artifact_id !== null) {
-                return $this->resolveDuplicate($chapter, $data);
+                return [$this->resolveDuplicate($chapter, $data), false];
             }
 
             $this->validateNovel($novel);
@@ -80,10 +82,14 @@ class CanonicalCommitService
                 'current_chapter_sequence' => max($novel->current_chapter_sequence, $chapter->sequence),
             ]);
 
-            return $stateVersion;
+            return [$stateVersion, true];
         }, 3);
 
         UpdateMemoryJob::dispatch($data->chapterId)->afterCommit();
+
+        if ($committed) {
+            $this->checkNextAction->handle($stateVersion->novel, $data->chapterId);
+        }
 
         return $stateVersion;
     }

@@ -82,6 +82,11 @@ class NovelOverview
                             'failed' => 'danger',
                             default => 'gray',
                         }),
+                    TextEntry::make('auto_generation_status')
+                        ->label('自动生成')
+                        ->state(fn (Novel $record): string => (bool) data_get($record->settings, 'auto_generate', false) ? 'Auto: ON' : 'Auto: OFF')
+                        ->badge()
+                        ->color(fn (Novel $record): string => (bool) data_get($record->settings, 'auto_generate', false) ? 'success' : 'gray'),
                 ]),
             Section::make('预算')
                 ->description('当前小说和当前章节的实际成本；达到 Hard Limit 后不再发送新模型请求。')

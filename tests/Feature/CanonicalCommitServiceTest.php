@@ -9,8 +9,10 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
+use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\CommitChapterJob;
+use App\Jobs\PlanChapterJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Fact;
@@ -21,6 +23,7 @@ use App\Models\Review;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\User;
+use App\Models\Volume;
 use App\Services\CanonicalCommitService;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -233,4 +236,23 @@ test('canonical commit dispatches memory update after the formal transaction', f
 
     Queue::assertPushed(UpdateMemoryJob::class, fn (UpdateMemoryJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
         && $job->queue === 'default');
+});
+
+test('canonical commit starts only the immediate next chapter when auto generation is enabled', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    $fixture['novel']->update(['settings' => ['auto_generate' => true]]);
+    Volume::factory()->for($fixture['novel'])->create(['status' => VolumeStatus::Active]);
+
+    $service = app(CanonicalCommitService::class);
+    $service->commit($fixture['data']);
+    $service->commit($fixture['data']);
+
+    $nextChapter = $fixture['novel']->chapters()->where('sequence', 2)->sole();
+
+    expect($nextChapter->status)->toBe(ChapterStatus::Planned)
+        ->and($fixture['novel']->chapters()->where('sequence', '>', 2)->doesntExist())->toBeTrue();
+
+    Queue::assertPushed(PlanChapterJob::class, 1);
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $nextChapter->getKey());
 });

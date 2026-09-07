@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Generation\GenerateNextChapterAction;
+use App\Actions\Generation\SetAutoGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Exceptions\GenerationPreflightException;
@@ -80,12 +81,25 @@ class ViewNovel extends ViewRecord
                         'chapter' => $chapter,
                     ]));
                 }),
-            Action::make('autoGenerate')
-                ->label('自动生成')
+            Action::make('startAutoGenerate')
+                ->label('开始自动生成')
                 ->icon('heroicon-o-bolt')
-                ->color('gray')
-                ->disabled()
-                ->tooltip('将在 TASK-100 中启用'),
+                ->visible(fn (): bool => ! (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
+                ->action(function (SetAutoGenerationAction $setAutoGeneration): void {
+                    $setAutoGeneration->handle($this->getRecord(), true);
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('自动生成已开启')->success()->send();
+                }),
+            Action::make('stopAutoGenerate')
+                ->label('停止自动生成')
+                ->icon('heroicon-o-stop')
+                ->color('danger')
+                ->visible(fn (): bool => (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
+                ->action(function (SetAutoGenerationAction $setAutoGeneration): void {
+                    $setAutoGeneration->handle($this->getRecord(), false);
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('自动生成已停止')->success()->send();
+                }),
             Action::make('pause')
                 ->label('暂停')
                 ->icon('heroicon-o-pause')
