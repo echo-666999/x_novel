@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'chapter_id',
@@ -37,6 +38,12 @@ class Scene extends Model
     public function povCharacter(): BelongsTo
     {
         return $this->belongsTo(Character::class, 'pov_character_id');
+    }
+
+    /** @return HasMany<GenerationRun, $this> */
+    public function generationRuns(): HasMany
+    {
+        return $this->hasMany(GenerationRun::class);
     }
 
     /** @return array<string, string> */

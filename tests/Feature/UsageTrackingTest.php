@@ -8,6 +8,7 @@ use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
 use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\UsageRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,13 +25,18 @@ test('tracking provider records tokens latency cost request id and run context',
     $response = usageResponse();
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
+    $run = GenerationRun::factory()->for($novel)->create([
+        'chapter_id' => $chapter->getKey(),
+        'scope_type' => 'chapter',
+        'scope_id' => $chapter->getKey(),
+    ]);
     $fake = (new FakeAiProvider)->enqueue($response);
     $provider = new TrackingAiProvider($fake, app(UsageRecorder::class));
     $request = new AiRequest(
         model: 'requested-model',
         prompt: 'Write',
         metadata: [
-            'generation_run_id' => 42,
+            'generation_run_id' => $run->getKey(),
             'novel_id' => $novel->getKey(),
             'chapter_id' => $chapter->getKey(),
         ],
@@ -41,7 +47,7 @@ test('tracking provider records tokens latency cost request id and run context',
     $usage = UsageRecord::query()->sole();
 
     expect($usage)
-        ->generation_run_id->toBe(42)
+        ->generation_run_id->toBe($run->getKey())
         ->novel_id->toBe($novel->getKey())
         ->chapter_id->toBe($chapter->getKey())
         ->provider->toBe('openai')

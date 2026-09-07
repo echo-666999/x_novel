@@ -40,6 +40,12 @@ class UsageRecord extends Model
         return $this->belongsTo(Chapter::class);
     }
 
+    /** @return BelongsTo<GenerationRun, $this> */
+    public function generationRun(): BelongsTo
+    {
+        return $this->belongsTo(GenerationRun::class);
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

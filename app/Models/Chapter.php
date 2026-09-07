@@ -68,6 +68,12 @@ class Chapter extends Model
         return $this->hasMany(Scene::class)->orderBy('sequence');
     }
 
+    /** @return HasMany<GenerationRun, $this> */
+    public function generationRuns(): HasMany
+    {
+        return $this->hasMany(GenerationRun::class);
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
