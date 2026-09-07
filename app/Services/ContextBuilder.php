@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\AI\Exceptions\AiProviderException;
 use App\Data\ContextRequest;
 use App\Data\ContextSnapshot;
+use App\Data\MemoryQuery;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\WorldEntityStatus;
@@ -13,25 +15,25 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 class ContextBuilder
 {
-    public function __construct(private readonly TokenBudget $tokenBudget) {}
+    public function __construct(
+        private readonly TokenBudget $tokenBudget,
+        private readonly MemoryRetriever $memoryRetriever,
+    ) {}
 
     public function buildForRun(GenerationRun $run, ContextRequest $request): ContextSnapshot
     {
-        return DB::transaction(function () use ($run, $request): ContextSnapshot {
+        $this->assertRunMatches($run, $request);
+        $snapshot = $this->build($request);
+
+        return DB::transaction(function () use ($run, $request, $snapshot): ContextSnapshot {
             $lockedRun = GenerationRun::query()->lockForUpdate()->findOrFail($run->getKey());
-
-            if ($lockedRun->novel_id !== $request->novelId
-                || $lockedRun->chapter_id !== $request->chapterId
-                || $lockedRun->scene_id !== $request->sceneId) {
-                throw new InvalidArgumentException('ContextRequest 与 GenerationRun 的 Novel、Chapter 或 Scene 不一致。');
-            }
-
-            $snapshot = $this->build($request);
+            $this->assertRunMatches($lockedRun, $request);
             $lockedRun->update([
                 'state_version' => $snapshot->stateVersion,
                 'bible_version' => $snapshot->bibleVersion,
@@ -97,6 +99,13 @@ class ContextBuilder
             ],
         ];
         $l1 = ['canonical_story_state' => $state->state];
+        $characterIds = collect([$plan->pov_character_id])
+            ->merge(collect($plan->scene_plans ?? [])->pluck('pov_character_id'))
+            ->merge($facts->where('subject_type', 'character')->pluck('subject_id'))
+            ->filter()->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();
+        $worldEntityIds = $worldRules->pluck('id')
+            ->merge($facts->where('subject_type', 'world_entity')->pluck('subject_id'))
+            ->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();
         $mandatoryAllocation = $this->tokenBudget->allocate($request->tokenBudget, ['l0' => $l0, 'l1' => $l1]);
         [$l2, $recentChapterIds, $l2Truncated] = $this->recentStory(
             $novel,
@@ -111,19 +120,40 @@ class ContextBuilder
             $l2Truncated = true;
         }
 
-        $allocation = $this->tokenBudget->allocate(
+        $preL3Allocation = $this->tokenBudget->allocate(
             $request->tokenBudget,
             $sections,
             $l2Truncated ? ['l2.recent_story'] : [],
         );
+        [$l3, $memoryIds, $l3Truncated] = $this->longTermMemory(
+            $request,
+            $chapter,
+            $plan,
+            $characterIds,
+            $worldEntityIds,
+            $preL3Allocation->remaining,
+        );
 
-        $characterIds = collect([$plan->pov_character_id])
-            ->merge(collect($plan->scene_plans ?? [])->pluck('pov_character_id'))
-            ->merge($facts->where('subject_type', 'character')->pluck('subject_id'))
-            ->filter()->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();
-        $worldEntityIds = $worldRules->pluck('id')
-            ->merge($facts->where('subject_type', 'world_entity')->pluck('subject_id'))
-            ->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();
+        if ($l3['memories'] !== []) {
+            while ($l3['memories'] !== [] && $this->tokenBudget->estimate($l3) > $preL3Allocation->remaining) {
+                array_pop($l3['memories']);
+                array_pop($memoryIds);
+                $l3Truncated = true;
+            }
+
+            if ($l3['memories'] !== []) {
+                $sections['l3'] = $l3;
+            }
+        }
+
+        $allocation = $this->tokenBudget->allocate(
+            $request->tokenBudget,
+            $sections,
+            array_values(array_filter([
+                $l2Truncated ? 'l2.recent_story' : null,
+                $l3Truncated ? 'l3.long_term_memory' : null,
+            ])),
+        );
 
         return new ContextSnapshot(
             novelId: $novel->getKey(),
@@ -137,7 +167,7 @@ class ContextBuilder
             worldEntityIds: $worldEntityIds,
             foreshadowingIds: array_values(array_unique(array_map('intval', $plan->due_foreshadowings ?? []))),
             factIds: $facts->pluck('id')->map(fn ($id): int => (int) $id)->all(),
-            memoryIds: [],
+            memoryIds: $memoryIds,
             recentChapterIds: $recentChapterIds,
             previousArtifactId: $request->previousArtifactId,
             promptVersion: $request->promptVersion,
@@ -146,7 +176,76 @@ class ContextBuilder
             l0: $l0,
             l1: $l1,
             l2: $l2,
+            l3: $l3,
         );
+    }
+
+    /**
+     * @param  array<int, int>  $characterIds
+     * @param  array<int, int>  $worldEntityIds
+     * @return array{0: array<string, mixed>, 1: array<int, int>, 2: bool}
+     */
+    private function longTermMemory(
+        ContextRequest $request,
+        Chapter $chapter,
+        ChapterPlan $plan,
+        array $characterIds,
+        array $worldEntityIds,
+        int $availableTokens,
+    ): array {
+        $queryText = json_encode([
+            'chapter_function' => $plan->chapter_function,
+            'arc_contribution' => $plan->arc_contribution,
+            'reader_promise' => $plan->reader_promise,
+            'must_reveal' => $plan->must_reveal ?? [],
+            'scene_plans' => $plan->scene_plans ?? [],
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $query = new MemoryQuery(
+            novelId: $request->novelId,
+            queryText: $queryText,
+            entityIds: [
+                'characters' => array_map('strval', $characterIds),
+                'world_entities' => array_map('strval', $worldEntityIds),
+            ],
+            chapterFrom: $chapter->sequence,
+            chapterTo: $chapter->sequence,
+            tokenBudget: min($availableTokens, (int) config('context.long_term_memory_token_budget', 1_500)),
+        );
+
+        if ($availableTokens < 1) {
+            return [['query_text' => $queryText, 'memories' => [], 'status' => 'budget_exhausted'], [], false];
+        }
+
+        try {
+            $ranked = $this->memoryRetriever->retrieve($query);
+        } catch (AiProviderException|QueryException) {
+            return [['query_text' => $queryText, 'memories' => [], 'status' => 'unavailable'], [], true];
+        }
+
+        $selected = $ranked->where('selected', true);
+
+        return [[
+            'query_text' => $queryText,
+            'memories' => $selected->map(fn ($result): array => [
+                'id' => $result->memory->getKey(),
+                'type' => $result->memory->type->value,
+                'summary' => $result->memory->summary,
+                'source' => $result->memory->sourceLabel(),
+                'final_score' => $result->finalScore,
+            ])->values()->all(),
+            'status' => 'ready',
+        ], $selected->pluck('memory.id')->map(fn ($id): int => (int) $id)->all(), $ranked->contains(
+            fn ($result): bool => ! $result->selected && str_contains($result->reason, 'Token Budget'),
+        )];
+    }
+
+    private function assertRunMatches(GenerationRun $run, ContextRequest $request): void
+    {
+        if ($run->novel_id !== $request->novelId
+            || $run->chapter_id !== $request->chapterId
+            || $run->scene_id !== $request->sceneId) {
+            throw new InvalidArgumentException('ContextRequest 与 GenerationRun 的 Novel、Chapter 或 Scene 不一致。');
+        }
     }
 
     /** @return array{0: array<string, mixed>, 1: array<int, int>, 2: bool} */

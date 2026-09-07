@@ -14,6 +14,7 @@ final readonly class ContextSnapshot
      * @param  array<string, mixed>  $l0
      * @param  array<string, mixed>  $l1
      * @param  array<string, mixed>  $l2
+     * @param  array<string, mixed>  $l3
      */
     public function __construct(
         public int $novelId,
@@ -36,6 +37,7 @@ final readonly class ContextSnapshot
         public array $l0,
         public array $l1,
         public array $l2,
+        public array $l3,
     ) {}
 
     /** @return array<string, mixed> */
@@ -65,6 +67,7 @@ final readonly class ContextSnapshot
             'l0' => $this->l0,
             'l1' => $this->l1,
             'l2' => $this->l2,
+            'l3' => $this->l3,
         ];
     }
 }

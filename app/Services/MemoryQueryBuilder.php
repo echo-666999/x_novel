@@ -22,6 +22,19 @@ class MemoryQueryBuilder
     /** @return Collection<int, MemorySearchResult> */
     public function search(MemoryQuery $query): Collection
     {
+        $finalK = $query->finalK ?? (int) config('context.memory_final_k', 10);
+        $candidateK = $query->candidateK ?? (int) config('context.memory_candidate_k', 30);
+
+        if ($candidateK < 1 || $finalK < 1 || $finalK > $candidateK) {
+            throw new InvalidArgumentException('Memory candidate_k 必须大于等于 final_k，且两者必须为正整数。');
+        }
+
+        return $this->candidates($query)->take($finalK)->values();
+    }
+
+    /** @return Collection<int, MemorySearchResult> */
+    public function candidates(MemoryQuery $query): Collection
+    {
         $model = (string) config('ai.embedding.model');
         $dimensions = (int) config('ai.embedding.dimensions');
         $candidateK = $query->candidateK ?? (int) config('context.memory_candidate_k', 30);
@@ -29,6 +42,12 @@ class MemoryQueryBuilder
 
         if ($candidateK < 1 || $finalK < 1 || $finalK > $candidateK) {
             throw new InvalidArgumentException('Memory candidate_k 必须大于等于 final_k，且两者必须为正整数。');
+        }
+
+        $builder = $this->metadataQuery($query, $model);
+
+        if (! (clone $builder)->exists()) {
+            return collect();
         }
 
         $response = $this->provider->embed(new EmbeddingRequest(
@@ -46,11 +65,9 @@ class MemoryQueryBuilder
             );
         }
 
-        $builder = $this->metadataQuery($query, $model);
-
         return DB::getDriverName() === 'pgsql'
-            ? $this->searchPostgres($builder, $response->embedding, $candidateK, $finalK)
-            : $this->searchInMemory($builder, $response->embedding, $candidateK, $finalK);
+            ? $this->searchPostgres($builder, $response->embedding, $candidateK)
+            : $this->searchInMemory($builder, $response->embedding, $candidateK);
     }
 
     private function metadataQuery(MemoryQuery $query, string $model): Builder
@@ -98,7 +115,7 @@ class MemoryQueryBuilder
     }
 
     /** @param array<int, float> $embedding @return Collection<int, MemorySearchResult> */
-    private function searchPostgres(Builder $builder, array $embedding, int $candidateK, int $finalK): Collection
+    private function searchPostgres(Builder $builder, array $embedding, int $candidateK): Collection
     {
         $vector = $this->vectorLiteral($embedding);
 
@@ -108,7 +125,6 @@ class MemoryQueryBuilder
             ->orderByDesc('similarity')
             ->limit($candidateK)
             ->get()
-            ->take($finalK)
             ->map(fn (Memory $memory): MemorySearchResult => new MemorySearchResult(
                 $memory,
                 max(-1.0, min(1.0, (float) $memory->getAttribute('similarity'))),
@@ -117,7 +133,7 @@ class MemoryQueryBuilder
     }
 
     /** @param array<int, float> $embedding @return Collection<int, MemorySearchResult> */
-    private function searchInMemory(Builder $builder, array $embedding, int $candidateK, int $finalK): Collection
+    private function searchInMemory(Builder $builder, array $embedding, int $candidateK): Collection
     {
         return $builder->get()
             ->map(function (Memory $memory) use ($embedding): MemorySearchResult {
@@ -127,7 +143,6 @@ class MemoryQueryBuilder
             })
             ->sortByDesc(fn (MemorySearchResult $result): float => $result->similarity)
             ->take($candidateK)
-            ->take($finalK)
             ->values();
     }
 

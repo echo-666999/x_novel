@@ -111,8 +111,11 @@ test('memory inspector shows query filters and top vector results in chinese', f
         ->set('retrieval.final_k', 2)
         ->call('runRetrieval')
         ->assertSet('retrievalResults.0.summary', '潮汐门曾在月落时开启。')
-        ->assertSee('最相似结果')
+        ->assertSee('排序与装配结果')
         ->assertSee('相似度')
         ->assertSee('显著度')
+        ->assertSee('最终评分')
+        ->assertSee('装配状态')
+        ->assertSee('综合评分入选')
         ->assertNotified('记忆检索完成');
 });

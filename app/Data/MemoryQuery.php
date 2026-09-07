@@ -22,6 +22,7 @@ final readonly class MemoryQuery
         public array $excludeIds = [],
         public ?int $candidateK = null,
         public ?int $finalK = null,
+        public ?int $tokenBudget = null,
     ) {
         if ($novelId < 1 || blank($queryText)) {
             throw new InvalidArgumentException('记忆检索必须指定小说和查询文本。');
@@ -29,6 +30,10 @@ final readonly class MemoryQuery
 
         if ($chapterFrom !== null && $chapterTo !== null && $chapterFrom > $chapterTo) {
             throw new InvalidArgumentException('记忆检索的起始章节不能晚于结束章节。');
+        }
+
+        if ($tokenBudget !== null && $tokenBudget < 0) {
+            throw new InvalidArgumentException('长期记忆 Token Budget 不能小于零。');
         }
     }
 }

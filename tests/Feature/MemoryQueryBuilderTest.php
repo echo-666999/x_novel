@@ -111,6 +111,7 @@ test('retrieval rejects invalid top k and query embedding dimensions', function 
     )))->toThrow(QueryInvalidArgumentException::class, 'candidate_k');
 
     bindQueryEmbedding([1.0, 0.0]);
+    vectorMemory($novel, '用于验证查询维度', '[1,0,0]');
 
     expect(fn () => app(MemoryQueryBuilder::class)->search(new MemoryQuery(
         novelId: $novel->getKey(), queryText: '检索',

@@ -10,7 +10,7 @@ use App\Enums\RunStatus;
 use App\Jobs\GenerateEmbeddingJob;
 use App\Models\Memory as MemoryModel;
 use App\Models\Novel;
-use App\Services\MemoryQueryBuilder;
+use App\Services\MemoryRetriever;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -63,6 +63,7 @@ class Memory extends Page implements HasTable
             'chapter_to' => null,
             'candidate_k' => (int) config('context.memory_candidate_k', 30),
             'final_k' => (int) config('context.memory_final_k', 10),
+            'token_budget' => (int) config('context.long_term_memory_token_budget', 1_500),
         ];
     }
 
@@ -103,6 +104,11 @@ class Memory extends Page implements HasTable
                     ->minValue(1)
                     ->maxValue(30)
                     ->required(),
+                TextInput::make('token_budget')
+                    ->label('长期记忆 Token Budget')
+                    ->integer()
+                    ->minValue(0)
+                    ->required(),
             ]);
     }
 
@@ -124,7 +130,7 @@ class Memory extends Page implements HasTable
                             ]),
                         ]),
                     RepeatableEntry::make('retrieval_results')
-                        ->label('最相似结果')
+                        ->label('排序与装配结果')
                         ->state(fn (): array => $this->retrievalResults)
                         ->schema([
                             Grid::make(['default' => 1, 'md' => 4])->schema([
@@ -137,6 +143,16 @@ class Memory extends Page implements HasTable
                                 TextEntry::make('salience')
                                     ->label('显著度')
                                     ->formatStateUsing(fn (mixed $state): string => number_format((float) $state, 3)),
+                                TextEntry::make('final_score')
+                                    ->label('最终评分')
+                                    ->formatStateUsing(fn (mixed $state): string => number_format((float) $state, 4))
+                                    ->badge()
+                                    ->color('primary'),
+                                TextEntry::make('decision')
+                                    ->label('装配状态')
+                                    ->badge()
+                                    ->color(fn (string $state): string => $state === '已选择' ? 'success' : 'gray'),
+                                TextEntry::make('reason')->label('原因')->columnSpan(['md' => 2]),
                                 TextEntry::make('type')->label('类型')->badge(),
                                 TextEntry::make('source')->label('来源'),
                                 TextEntry::make('source_chapter')
@@ -156,12 +172,12 @@ class Memory extends Page implements HasTable
         ]);
     }
 
-    public function runRetrieval(MemoryQueryBuilder $queryBuilder): void
+    public function runRetrieval(MemoryRetriever $retriever): void
     {
         $data = $this->retrievalForm->getState();
 
         try {
-            $this->retrievalResults = $queryBuilder->search(new MemoryQuery(
+            $this->retrievalResults = $retriever->retrieve(new MemoryQuery(
                 novelId: (int) $data['novel_id'],
                 queryText: (string) $data['query'],
                 types: $data['types'] ?? [],
@@ -169,6 +185,7 @@ class Memory extends Page implements HasTable
                 chapterTo: filled($data['chapter_to'] ?? null) ? (int) $data['chapter_to'] : null,
                 candidateK: (int) $data['candidate_k'],
                 finalK: (int) $data['final_k'],
+                tokenBudget: (int) $data['token_budget'],
             ))->map(fn ($result): array => $result->toArray())->all();
 
             Notification::make()

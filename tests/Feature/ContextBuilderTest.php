@@ -1,6 +1,10 @@
 <?php
 
 use App\Actions\Story\InitializeNovelStateAction;
+use App\AI\Contracts\EmbeddingProvider;
+use App\AI\Data\EmbeddingResponse;
+use App\AI\Exceptions\AiProviderException;
+use App\AI\Providers\FakeEmbeddingProvider;
 use App\Data\ContextRequest;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -11,6 +15,7 @@ use App\Models\Character;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\StoryStateVersion;
@@ -156,6 +161,52 @@ test('l2 drops recent story before mandatory context when the budget is tight', 
         ->and($snapshot->recentChapterIds)->toBe([])
         ->and($snapshot->tokenAllocation->sections)->toHaveKeys(['l0', 'l1'])
         ->and($snapshot->tokenAllocation->truncatedSections)->toBe(['l2.recent_story']);
+});
+
+test('context builder assembles ranked long term memory into l3 and records selected ids', function () {
+    config()->set('ai.embedding.model', 'embedding-fixed-v1');
+    config()->set('ai.embedding.dimensions', 3);
+    $fixture = contextFixture();
+    $memory = Memory::factory()->for($fixture['novel'])->create([
+        'summary' => '主角曾在潮汐门获得旧王密钥。',
+        'entities' => ['characters' => [(string) $fixture['character']->getKey()]],
+        'embedding' => '[1,0,0]',
+        'embedding_model' => 'embedding-fixed-v1',
+        'valid_from_chapter' => 2,
+    ]);
+    app()->instance(EmbeddingProvider::class, (new FakeEmbeddingProvider)->enqueue(new EmbeddingResponse(
+        embedding: [1.0, 0.0, 0.0], inputTokens: 3, latencyMs: 4, providerRequestId: null, model: 'embedding-fixed-v1',
+    )));
+
+    $snapshot = app(ContextBuilder::class)->build(contextRequest($fixture));
+
+    expect($snapshot->memoryIds)->toBe([$memory->getKey()])
+        ->and($snapshot->l3['status'])->toBe('ready')
+        ->and($snapshot->l3['memories'][0]['summary'])->toBe('主角曾在潮汐门获得旧王密钥。')
+        ->and($snapshot->tokenAllocation->sections)->toHaveKey('l3');
+});
+
+test('l3 retrieval failure preserves mandatory context and records the fallback', function () {
+    config()->set('ai.embedding.model', 'embedding-fixed-v1');
+    config()->set('ai.embedding.dimensions', 3);
+    $fixture = contextFixture();
+    Memory::factory()->for($fixture['novel'])->create([
+        'entities' => ['characters' => [(string) $fixture['character']->getKey()]],
+        'embedding' => '[1,0,0]',
+        'embedding_model' => 'embedding-fixed-v1',
+        'valid_from_chapter' => 2,
+    ]);
+    app()->instance(EmbeddingProvider::class, (new FakeEmbeddingProvider)->enqueue(
+        new AiProviderException('provider_timeout', 'timeout', true),
+    ));
+
+    $snapshot = app(ContextBuilder::class)->build(contextRequest($fixture));
+
+    expect($snapshot->l0)->not->toBeEmpty()
+        ->and($snapshot->l1)->not->toBeEmpty()
+        ->and($snapshot->memoryIds)->toBe([])
+        ->and($snapshot->l3['status'])->toBe('unavailable')
+        ->and($snapshot->tokenAllocation->truncatedSections)->toContain('l3.long_term_memory');
 });
 
 function contextRequest(array $fixture, int $tokenBudget = 10_000): ContextRequest
