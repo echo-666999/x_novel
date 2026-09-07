@@ -79,7 +79,7 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
         ->assertSee('尚无 Chapter Draft')
         ->assertSee('Story Event Candidates')
         ->assertSee('尚无候选事件')
-        ->assertSee('Review 尚未接入')
+        ->assertSee('Narrative Review')
         ->assertSee('尚无 Generation Run');
 });
 

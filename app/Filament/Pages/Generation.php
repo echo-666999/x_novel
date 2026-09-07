@@ -10,6 +10,7 @@ use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use BackedEnum;
@@ -389,6 +390,7 @@ class Generation extends Page implements HasTable
             GenerationStage::SceneGeneration => GenerateSceneJob::dispatch($run->scene_id, $regenerate),
             GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, $regenerate),
             GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
+            GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, $regenerate),
             default => null,
         };
 

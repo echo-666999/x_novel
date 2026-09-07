@@ -11,9 +11,11 @@ use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Review;
 use App\Models\Scene;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
@@ -147,7 +149,8 @@ class ViewNovelChapter extends ViewRecord
                         ->schema($this->eventsSchema()),
                     Tab::make('Review')
                         ->icon('heroicon-o-shield-check')
-                        ->schema([$this->futureSection('Review 尚未接入', 'Review 结果和人工处理动作将在后续 Review 工作流任务中接入。')]),
+                        ->badge(fn (): string => $this->latestReview()?->decision->getLabel() ?? '未审校')
+                        ->schema($this->reviewSchema()),
                     Tab::make('State Changes')
                         ->icon('heroicon-o-arrows-right-left')
                         ->badge(fn (): int => count(data_get($this->latestStatePatchArtifact()?->data, 'changes', [])))
@@ -158,6 +161,54 @@ class ViewNovelChapter extends ViewRecord
                         ->schema($this->runsSchema()),
                 ]),
         ]);
+    }
+
+    /** @return array<int, mixed> */
+    private function reviewSchema(): array
+    {
+        return [
+            Section::make('Narrative Review')
+                ->description('七维评分结合确定性 State Findings 形成最终审校决策。')
+                ->headerActions([
+                    Action::make('runReview')
+                        ->label(fn (): string => $this->latestReview() ? '重新审校' : '开始审校')
+                        ->icon('heroicon-o-shield-check')
+                        ->disabled(fn (): bool => $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
+                        ->action(function (): void {
+                            ReviewChapterJob::dispatch($this->chapterId, $this->latestReview() !== null);
+                            Notification::make()->title('Narrative Review 已加入生成队列')->success()->send();
+                        }),
+                ])
+                ->columns(['default' => 1, 'md' => 4])
+                ->schema([
+                    TextEntry::make('review_decision')->label('Decision')->state(fn () => $this->latestReview()?->decision ?? '未审校')->badge(),
+                    TextEntry::make('review_total')->label('总分')->state(fn () => $this->latestReview()?->score ?? '—')->suffix(fn () => $this->latestReview() ? ' / 100' : null),
+                    TextEntry::make('review_version')->label('Review Version')->state(fn () => $this->latestReview()?->artifact?->version ? 'v'.$this->latestReview()->artifact->version : '—'),
+                    TextEntry::make('review_time')->label('完成时间')->state(fn () => $this->latestReview()?->created_at?->format('Y-m-d H:i:s') ?? '—'),
+                ]),
+            Section::make('七维评分')
+                ->columns(['default' => 2, 'md' => 4, 'xl' => 7])
+                ->schema(collect([
+                    'continuity_score' => '事实 / 连续性 · 25%', 'plan_score' => '计划遵循 · 15%', 'character_score' => '人物一致性 · 15%',
+                    'progress_score' => '剧情推进 · 15%', 'repetition_score' => '重复度 · 10%', 'pacing_score' => '节奏 / 悬念 · 10%', 'style_score' => '文风 / 可读性 · 10%',
+                ])->map(fn ($label, $field) => TextEntry::make("review_{$field}")->label($label)->state(fn () => $this->latestReview()?->{$field} ?? '—'))->values()->all()),
+            Section::make('Findings')
+                ->description('包含 Narrative Review 发现和 StateValidator 的确定性检查结果。')
+                ->schema([
+                    RepeatableEntry::make('review_findings')->label('')->state(fn () => $this->latestReview()?->findings ?? [])->schema([
+                        TextEntry::make('message')->label('问题'),
+                        TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
+                        TextEntry::make('severity')->label('级别')->badge(),
+                        TextEntry::make('evidence')->label('证据')->placeholder('—')->columnSpanFull(),
+                    ])->columns(3),
+                    TextEntry::make('review_empty')->hiddenLabel()->state('暂无 Review Findings。')->visible(fn (): bool => empty($this->latestReview()?->findings)),
+                ]),
+        ];
+    }
+
+    private function latestReview(): ?Review
+    {
+        return Review::query()->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))->with('artifact')->latest('id')->first();
     }
 
     /** @return array<int, mixed> */
