@@ -69,10 +69,10 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
         ->assertSee('迫使主角离开安全区')
         ->assertSee('取得出港许可')
         ->assertSee('v3')
-        ->assertSee('Draft 尚未接入')
+        ->assertSee('尚无 Chapter Draft')
         ->assertSee('Story Events 尚未接入')
         ->assertSee('Review 尚未接入')
-        ->assertSee('尚无 Chapter Planning Run');
+        ->assertSee('尚无 Generation Run');
 });
 
 test('chapter detail shows useful empty states before planning starts', function () {
@@ -157,4 +157,52 @@ test('scene workspace exposes generation actions and execution metrics', functio
         ->assertSee('字数')
         ->assertSee('耗时')
         ->assertSee('USD 0.012345');
+});
+
+test('draft workspace switches between artifact versions and source scenes', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $scenes = collect([1, 2])->map(function (int $sequence) use ($chapter, $novel): Scene {
+        $scene = Scene::factory()->for($chapter)->create([
+            'sequence' => $sequence,
+            'status' => SceneStatus::Draft,
+        ]);
+        $run = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+            'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft,
+            'content' => "第 {$sequence} 幕正文",
+        ]);
+        $scene->update(['current_artifact_id' => $artifact->getKey()]);
+
+        return $scene;
+    });
+
+    foreach ([1, 2] as $version) {
+        $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+            'scene_id' => null,
+            'stage' => GenerationStage::ChapterAssembly,
+            'status' => RunStatus::Succeeded,
+        ]);
+        GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::ChapterDraft,
+            'version' => $version,
+            'content' => "完整 Draft v{$version}",
+        ]);
+    }
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('Assemble Chapter')
+        ->assertSee('Draft v2')
+        ->assertSee('Draft v1')
+        ->assertSee('完整 Draft v2')
+        ->assertSee('Scene 1')
+        ->assertSee('Scene 2')
+        ->assertSee('第 1 幕正文');
 });

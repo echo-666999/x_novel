@@ -2,13 +2,16 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Jobs\AssembleChapterJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
+use App\Models\GenerationArtifact;
 use App\Models\Scene;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
@@ -129,7 +132,8 @@ class ViewNovelChapter extends ViewRecord
                         ->schema($this->scenesSchema()),
                     Tab::make('Draft')
                         ->icon('heroicon-o-document-text')
-                        ->schema([$this->futureSection('Draft 尚未接入', '章节草稿将在后续生成流水线任务中通过 immutable Artifact 接入。')]),
+                        ->badge(fn (): int => $this->chapterDraftArtifacts()->count())
+                        ->schema($this->draftSchema()),
                     Tab::make('Events')
                         ->icon('heroicon-o-bolt')
                         ->schema([$this->futureSection('Story Events 尚未接入', '正式 Story Events 必须由通过 Review 的 Canonical Chapter 产生。')]),
@@ -361,6 +365,122 @@ class ViewNovelChapter extends ViewRecord
     }
 
     /** @return array<int, mixed> */
+    private function draftSchema(): array
+    {
+        $artifacts = $this->chapterDraftArtifacts();
+        $sections = [
+            Section::make('Chapter Assembly')
+                ->description('按 Scene 顺序组装完整章节；每次结果保存为新的不可变 Artifact 版本。')
+                ->headerActions([
+                    Action::make('assembleChapter')
+                        ->label('Assemble Chapter')
+                        ->icon('heroicon-o-document-plus')
+                        ->disabled(! $this->canAssembleChapter() || $this->hasActiveAssemblyRun())
+                        ->tooltip(match (true) {
+                            $this->hasActiveAssemblyRun() => 'Chapter Assembly 已在运行。',
+                            ! $this->canAssembleChapter() => '所有 Scene 成功后才能组装 Chapter。',
+                            default => null,
+                        })
+                        ->action(function (): void {
+                            AssembleChapterJob::dispatch($this->chapterId);
+
+                            Notification::make()
+                                ->title('Chapter Assembly 已加入队列')
+                                ->body('可在 Draft 或 Runs 页签查看执行状态。')
+                                ->success()
+                                ->send();
+                        }),
+                ])
+                ->columns(['default' => 1, 'md' => 3])
+                ->schema([
+                    TextEntry::make('assembly_scene_count')
+                        ->label('Scenes')
+                        ->state($this->chapter()->scenes->count()),
+                    TextEntry::make('assembly_ready_count')
+                        ->label('已成功')
+                        ->state($this->chapter()->scenes->filter(fn (Scene $scene): bool => $this->canUseForAssembly($scene))->count()),
+                    TextEntry::make('assembly_status')
+                        ->label('Assembly Status')
+                        ->state($this->latestAssemblyRun()?->status)
+                        ->badge()
+                        ->placeholder('尚未运行'),
+                ]),
+        ];
+
+        if ($artifacts->isEmpty()) {
+            $sections[] = Section::make('尚无 Chapter Draft')
+                ->description('所有 Scene 成功后，使用 Assemble Chapter 生成完整草稿。')
+                ->icon('heroicon-o-document-text');
+
+            return $sections;
+        }
+
+        $sections[] = Tabs::make('Artifact Versions')
+            ->tabs($artifacts->map(fn ($artifact): Tab => Tab::make('Draft v'.$artifact->version)
+                ->badge('#'.$artifact->getKey())
+                ->schema([
+                    Section::make('完整 Draft')
+                        ->description('Artifact v'.$artifact->version.' · '.$artifact->checksum)
+                        ->schema([
+                            TextEntry::make('chapter_draft_'.$artifact->getKey())
+                                ->hiddenLabel()
+                                ->state($artifact->content)
+                                ->prose()
+                                ->copyable(),
+                        ]),
+                    Tabs::make('Source Scenes '.$artifact->getKey())
+                        ->tabs($this->chapter()->scenes->map(fn (Scene $scene): Tab => Tab::make('Scene '.$scene->sequence)
+                            ->schema([
+                                TextEntry::make('draft_source_scene_'.$artifact->getKey().'_'.$scene->getKey())
+                                    ->hiddenLabel()
+                                    ->state($scene->currentArtifact?->content)
+                                    ->prose()
+                                    ->copyable(),
+                            ]))->all()),
+                ]))->all());
+
+        return $sections;
+    }
+
+    private function canAssembleChapter(): bool
+    {
+        return $this->chapter()->latestPlan !== null
+            && $this->chapter()->scenes->isNotEmpty()
+            && $this->chapter()->scenes->every(fn (Scene $scene): bool => $this->canUseForAssembly($scene));
+    }
+
+    private function canUseForAssembly(Scene $scene): bool
+    {
+        return $scene->currentArtifact?->type === ArtifactType::SceneDraft
+            && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true);
+    }
+
+    private function hasActiveAssemblyRun(): bool
+    {
+        return $this->chapter()->generationRuns()
+            ->where('stage', GenerationStage::ChapterAssembly)
+            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
+            ->exists();
+    }
+
+    private function latestAssemblyRun()
+    {
+        return $this->chapter()->generationRuns()
+            ->where('stage', GenerationStage::ChapterAssembly)
+            ->latest('id')
+            ->first();
+    }
+
+    private function chapterDraftArtifacts()
+    {
+        return GenerationArtifact::query()
+            ->where('type', ArtifactType::ChapterDraft)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->orderByDesc('version')
+            ->get();
+    }
+
+    /** @return array<int, mixed> */
     private function stateChangesSchema(): array
     {
         return [
@@ -402,11 +522,11 @@ class ViewNovelChapter extends ViewRecord
     private function runsSchema(): array
     {
         return [
-            Section::make('尚无 Chapter Planning Run')
-                ->description('使用 AI Generate Plan 后，规划阶段的状态和错误会显示在这里。')
+            Section::make('尚无 Generation Run')
+                ->description('运行 Planning、Scene Generation 或 Assembly 后，状态和错误会显示在这里。')
                 ->icon('heroicon-o-command-line')
                 ->visible(fn (): bool => $this->chapter()->generationRuns()->doesntExist()),
-            Section::make('Chapter Planning Runs')
+            Section::make('Generation Runs')
                 ->description('按最近执行顺序展示模型、Prompt、State Version 与失败原因。')
                 ->visible(fn (): bool => $this->chapter()->generationRuns()->exists())
                 ->schema([
@@ -454,7 +574,12 @@ class ViewNovelChapter extends ViewRecord
                 'detail' => $chapter->scenes->count().' 个 Scene',
             ],
             [
-                'stage' => 'Draft → Review → Commit',
+                'stage' => 'Assembly',
+                'status' => $this->chapterDraftArtifacts()->isEmpty() ? '尚未组装' : '已生成 Draft',
+                'detail' => $this->chapterDraftArtifacts()->count().' 个 Chapter Draft 版本',
+            ],
+            [
+                'stage' => 'Review → Commit',
                 'status' => '尚未接入',
                 'detail' => '由后续 Generation Pipeline 任务接入',
             ],
