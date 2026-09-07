@@ -1,12 +1,17 @@
 <?php
 
+use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
+use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
+use App\Enums\VolumeStatus;
 use App\Filament\Pages\Generation;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\GenerateSceneJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -15,6 +20,7 @@ use App\Models\Novel;
 use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Models\User;
+use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -197,4 +203,39 @@ test('worker interruption offers resume from persisted state', function () {
         ->callTableAction('resume', $run);
 
     Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $chapter->getKey() && ! $job->regenerate);
+});
+
+test('stalled run is shown as worker lost and can recover from its persisted artifact', function () {
+    Queue::fake();
+    config()->set('generation.stalled_run_after_seconds', 60);
+
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Generating,
+        'current_chapter_sequence' => null,
+    ]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create([
+        'sequence' => 1,
+        'status' => ChapterStatus::Review,
+    ]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Running,
+        'updated_at' => now()->subMinutes(2),
+    ]);
+    GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterDraft]);
+
+    Livewire::test(Generation::class)
+        ->assertSee('已停滞')
+        ->assertTableActionVisible('recover', $run)
+        ->assertTableActionHidden('retry', $run)
+        ->callTableAction('recover', $run)
+        ->assertNotified('恢复任务已排队')
+        ->assertSee('Worker 丢失');
+
+    expect($run->fresh()->error_code)->toBe('worker_lost');
+    Queue::assertPushed(ReviewChapterJob::class, 1);
 });

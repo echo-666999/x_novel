@@ -15,6 +15,7 @@ use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Services\StalledRunRecoveryService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
@@ -41,6 +42,7 @@ class Generation extends Page implements HasTable
         'provider_connection_failed',
         'provider_rate_limited',
         'worker_interrupted',
+        StalledRunRecoveryService::ERROR_CODE,
     ];
 
     private const REBUILD_ERROR_CODES = [
@@ -85,9 +87,14 @@ class Generation extends Page implements HasTable
                     ->color('gray'),
                 TextColumn::make('status')
                     ->label('状态')
-                    ->formatStateUsing(fn (RunStatus $state): string => $state->getLabel())
+                    ->formatStateUsing(fn (RunStatus $state, GenerationRun $record): string => match (true) {
+                        $record->error_code === StalledRunRecoveryService::ERROR_CODE => 'Worker 丢失',
+                        app(StalledRunRecoveryService::class)->isStalled($record) => '已停滞',
+                        default => $state->getLabel(),
+                    })
                     ->badge()
-                    ->color(fn (RunStatus $state): string => $state->getColor()),
+                    ->color(fn (RunStatus $state, GenerationRun $record): string => $record->error_code === StalledRunRecoveryService::ERROR_CODE
+                        || app(StalledRunRecoveryService::class)->isStalled($record) ? 'danger' : $state->getColor()),
                 TextColumn::make('error_code')
                     ->label('错误码')
                     ->badge()
@@ -140,6 +147,23 @@ class Generation extends Page implements HasTable
                     ->icon('heroicon-o-play')
                     ->visible(fn (GenerationRun $record): bool => $this->canResume($record))
                     ->action(fn (GenerationRun $record) => $this->dispatchRun($record, regenerate: false)),
+                Action::make('recover')
+                    ->label('恢复')
+                    ->icon('heroicon-o-arrow-path-rounded-square')
+                    ->color('warning')
+                    ->visible(fn (GenerationRun $record): bool => $this->canRecover($record))
+                    ->requiresConfirmation()
+                    ->modalHeading('恢复 Worker 丢失的任务')
+                    ->modalDescription('系统会根据已保存的 Run、Artifact 和章节状态检测恢复点，不会依赖 Redis 中是否仍有原 Job。')
+                    ->action(function (GenerationRun $record, StalledRunRecoveryService $recovery): void {
+                        $point = $recovery->recover($record);
+
+                        Notification::make()
+                            ->title('恢复任务已排队')
+                            ->body('恢复点：'.$point->label)
+                            ->success()
+                            ->send();
+                    }),
                 Action::make('openChapter')
                     ->label('Open Chapter')
                     ->icon('heroicon-o-arrow-top-right-on-square')
@@ -249,7 +273,7 @@ class Generation extends Page implements HasTable
     {
         return $run->status === RunStatus::Failed
             && $this->isRetryableError($run)
-            && $run->error_code !== 'worker_interrupted'
+            && ! in_array($run->error_code, ['worker_interrupted', StalledRunRecoveryService::ERROR_CODE], true)
             && $this->supportsDispatch($run)
             && $this->isLatestRunForScope($run);
     }
@@ -260,6 +284,29 @@ class Generation extends Page implements HasTable
             && $run->error_code === 'worker_interrupted'
             && $this->supportsDispatch($run)
             && $this->isLatestRunForScope($run);
+    }
+
+    private function canRecover(GenerationRun $run): bool
+    {
+        return ($run->error_code === StalledRunRecoveryService::ERROR_CODE
+                || app(StalledRunRecoveryService::class)->isStalled($run))
+            && data_get($run->context_snapshot, 'recovery.claimed_at') === null
+            && $this->supportsRecovery($run)
+            && $this->isLatestRunForScope($run);
+    }
+
+    private function supportsRecovery(GenerationRun $run): bool
+    {
+        return $run->stage === GenerationStage::SceneGeneration
+            ? $run->scene_id !== null
+            : $run->chapter_id !== null && in_array($run->stage, [
+                GenerationStage::ChapterPlanning,
+                GenerationStage::ChapterAssembly,
+                GenerationStage::EventExtraction,
+                GenerationStage::Review,
+                GenerationStage::Rewrite,
+                GenerationStage::Commit,
+            ], true);
     }
 
     private function supportsDispatch(GenerationRun $run): bool
@@ -303,6 +350,10 @@ class Generation extends Page implements HasTable
 
     private function recommendedAction(GenerationRun $run): string
     {
+        if ($run->error_code === StalledRunRecoveryService::ERROR_CODE) {
+            return '恢复';
+        }
+
         if ($run->error_code === 'worker_interrupted') {
             return 'Resume';
         }
@@ -329,7 +380,7 @@ class Generation extends Page implements HasTable
     private function recommendedActionColor(GenerationRun $run): string
     {
         return match ($this->recommendedAction($run)) {
-            'Retry', 'Resume' => 'warning',
+            'Retry', 'Resume', '恢复' => 'warning',
             '检查输入并人工处理' => 'danger',
             default => 'gray',
         };
