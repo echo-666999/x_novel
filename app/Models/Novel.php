@@ -68,6 +68,12 @@ class Novel extends Model
         return $this->hasMany(GenerationRun::class);
     }
 
+    /** @return HasMany<Memory, $this> */
+    public function memories(): HasMany
+    {
+        return $this->hasMany(Memory::class);
+    }
+
     /** @return HasMany<Character, $this> */
     public function characters(): HasMany
     {

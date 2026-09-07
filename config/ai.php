@@ -28,6 +28,11 @@ return [
         'chapter_max_cost' => env('AI_CHAPTER_MAX_COST'),
     ],
 
+    'embedding' => [
+        'model' => env('AI_EMBEDDING_MODEL', 'text-embedding-3-small'),
+        'dimensions' => (int) env('AI_EMBEDDING_DIMENSIONS', 1536),
+    ],
+
     'providers' => [
         'openai' => [
             'base_url' => env('AI_BASE_URL', 'https://api.openai.com/v1'),
