@@ -114,9 +114,8 @@ class StoryEventExtractor
     private function latestChapterDraft(Chapter $chapter): GenerationArtifact
     {
         $draft = GenerationArtifact::query()
-            ->where('type', ArtifactType::ChapterDraft)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
-            ->orderByDesc('version')
+            ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey())->whereNull('scene_id'))
             ->orderByDesc('id')
             ->first();
 

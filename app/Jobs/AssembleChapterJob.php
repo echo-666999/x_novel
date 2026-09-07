@@ -22,7 +22,7 @@ class AssembleChapterJob implements ShouldQueue
     /** @var array<int> */
     public array $backoff = [10, 30];
 
-    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false)
+    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false, public readonly bool $continueRewrite = false)
     {
         $this->onQueue('generation');
     }
@@ -30,7 +30,10 @@ class AssembleChapterJob implements ShouldQueue
     public function handle(ChapterAssembler $assembler): void
     {
         try {
-            $assembler->assemble($this->chapterId, $this->regenerate);
+            $artifact = $assembler->assemble($this->chapterId, $this->regenerate);
+            if ($artifact !== null && $this->continueRewrite) {
+                ExtractStoryEventsJob::dispatch($this->chapterId, true, true);
+            }
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if (! in_array($exception->errorCode, [

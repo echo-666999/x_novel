@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\StatePatchBuilder;
 use App\Services\StoryEventExtractor;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -23,7 +24,7 @@ class ExtractStoryEventsJob implements ShouldQueue
     /** @var array<int> */
     public array $backoff = [10, 30];
 
-    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false)
+    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false, public readonly bool $continueRewrite = false)
     {
         $this->onQueue('generation');
     }
@@ -31,7 +32,11 @@ class ExtractStoryEventsJob implements ShouldQueue
     public function handle(StoryEventExtractor $extractor): void
     {
         try {
-            $extractor->extract($this->chapterId, $this->regenerate);
+            $artifact = $extractor->extract($this->chapterId, $this->regenerate);
+            if ($artifact !== null && $this->continueRewrite) {
+                app(StatePatchBuilder::class)->build($this->chapterId);
+                ReviewChapterJob::dispatch($this->chapterId, true);
+            }
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if ($exception->errorCode !== 'novel_paused') {

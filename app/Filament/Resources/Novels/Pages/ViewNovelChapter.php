@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Novels\Pages;
 
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
@@ -12,6 +13,7 @@ use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
+use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -21,6 +23,7 @@ use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
 use App\Services\StateValidator;
 use Filament\Actions\Action;
+use Filament\Forms\Components\Select;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -170,6 +173,30 @@ class ViewNovelChapter extends ViewRecord
             Section::make('Narrative Review')
                 ->description('七维评分结合确定性 State Findings 形成最终审校决策。')
                 ->headerActions([
+                    Action::make('rewriteScene')
+                        ->label('重写场景')
+                        ->icon('heroicon-o-arrow-path')
+                        ->color('warning')
+                        ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
+                        ->disabled(fn (): bool => $this->rewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->schema([
+                            Select::make('scene_id')->label('场景')->required()->options(fn (): array => $this->chapter()->scenes->mapWithKeys(fn (Scene $scene): array => [$scene->getKey() => 'Scene '.$scene->sequence.' · '.$scene->goal])->all()),
+                        ])
+                        ->action(function (array $data): void {
+                            RewriteChapterJob::dispatch($this->chapterId, (int) $data['scene_id']);
+                            Notification::make()->title('Scene Rewrite 已加入队列')->success()->send();
+                        }),
+                    Action::make('rewriteChapter')
+                        ->label('重写章节')
+                        ->icon('heroicon-o-document-text')
+                        ->color('warning')
+                        ->requiresConfirmation()
+                        ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
+                        ->disabled(fn (): bool => $this->rewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->action(function (): void {
+                            RewriteChapterJob::dispatch($this->chapterId);
+                            Notification::make()->title('Chapter Rewrite 已加入队列')->success()->send();
+                        }),
                     Action::make('runReview')
                         ->label(fn (): string => $this->latestReview() ? '重新审校' : '开始审校')
                         ->icon('heroicon-o-shield-check')
@@ -203,12 +230,42 @@ class ViewNovelChapter extends ViewRecord
                     ])->columns(3),
                     TextEntry::make('review_empty')->hiddenLabel()->state('暂无 Review Findings。')->visible(fn (): bool => empty($this->latestReview()?->findings)),
                 ]),
+            Section::make('Rewrite 历史')
+                ->description('原稿和最多两次 Rewrite 均作为不可变 Artifact 保留。')
+                ->schema([
+                    RepeatableEntry::make('rewrite_versions')->hiddenLabel()->state(fn (): array => $this->rewriteVersionRows())->schema([
+                        TextEntry::make('label')->label('版本')->badge(),
+                        TextEntry::make('scope')->label('范围'),
+                        TextEntry::make('content')->label('正文')->prose()->columnSpanFull(),
+                    ])->columns(2),
+                ]),
         ];
     }
 
     private function latestReview(): ?Review
     {
         return Review::query()->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))->with('artifact')->latest('id')->first();
+    }
+
+    private function rewriteArtifacts()
+    {
+        return GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->orderBy('id')->get();
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function rewriteVersionRows(): array
+    {
+        $original = GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->oldest('id')->first();
+        $rows = $original === null ? [] : [['label' => 'Original', 'scope' => '整章', 'content' => $original->content]];
+        foreach ($this->rewriteArtifacts() as $index => $artifact) {
+            $rows[] = ['label' => 'Rewrite #'.($index + 1), 'scope' => data_get($artifact->data, 'scope') === 'scene' ? 'Scene' : '整章', 'content' => $artifact->content];
+        }
+
+        return $rows;
     }
 
     /** @return array<int, mixed> */

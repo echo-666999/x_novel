@@ -11,6 +11,7 @@ use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
+use App\Jobs\RewriteChapterJob;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use BackedEnum;
@@ -313,7 +314,7 @@ class Generation extends Page implements HasTable
     private function supportsDispatch(GenerationRun $run): bool
     {
         return match ($run->stage) {
-            GenerationStage::ChapterPlanning, GenerationStage::ChapterAssembly => $run->chapter_id !== null,
+            GenerationStage::ChapterPlanning, GenerationStage::ChapterAssembly, GenerationStage::Review, GenerationStage::Rewrite => $run->chapter_id !== null,
             GenerationStage::EventExtraction => $run->chapter_id !== null,
             GenerationStage::SceneGeneration => $run->scene_id !== null,
             default => false,
@@ -391,6 +392,7 @@ class Generation extends Page implements HasTable
             GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, $regenerate),
             GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
             GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, $regenerate),
+            GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),
             default => null,
         };
 

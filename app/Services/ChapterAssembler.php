@@ -118,7 +118,7 @@ class ChapterAssembler
         foreach ($chapter->scenes as $scene) {
             if (! in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true)
                 || $scene->currentArtifact === null
-                || $scene->currentArtifact->type !== ArtifactType::SceneDraft) {
+                || ! in_array($scene->currentArtifact->type, [ArtifactType::SceneDraft, ArtifactType::RewriteDraft], true)) {
                 throw new AiProviderException(
                     'assembly_scene_incomplete',
                     "Scene {$scene->sequence} 尚未成功，不能组装 Chapter。",

@@ -87,7 +87,7 @@ class ChapterReviewer
 
     private function latestDraft(Chapter $chapter): GenerationArtifact
     {
-        $artifact = GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->latest('version')->latest('id')->first();
+        $artifact = GenerationArtifact::query()->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey())->whereNull('scene_id'))->latest('id')->first();
         if ($artifact === null) {
             throw new AiProviderException('review_input_incomplete', 'Narrative Review 缺少 Chapter Draft。', false);
         }
