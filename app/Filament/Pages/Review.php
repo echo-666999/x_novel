@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Enums\ReviewDecision;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Review as ReviewModel;
+use App\Services\DraftRewriteDiff;
 use BackedEnum;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -12,6 +13,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Pages\Page;
 use Filament\Schemas\Components\EmbeddedTable;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Concerns\InteractsWithTable;
@@ -138,6 +140,13 @@ class Review extends Page implements HasTable
                     TextEntry::make('related_state_path')->label('Story State Path')->fontFamily('mono')->placeholder('—'),
                 ])->columns(3),
             ]),
+            Section::make('Draft / Rewrite Diff')
+                ->description('比较重写前后正文，并核对 Finding 的复审状态。')
+                ->visible(fn (ReviewModel $record): bool => app(DraftRewriteDiff::class)->forReview($record) !== null)
+                ->schema([
+                    View::make('filament.components.draft-rewrite-diff')
+                        ->viewData(fn (ReviewModel $record): array => ['diff' => app(DraftRewriteDiff::class)->forReview($record)]),
+                ]),
         ];
     }
 

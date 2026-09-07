@@ -19,6 +19,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Services\DraftRewriteDiff;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
 use App\Services\StateValidator;
@@ -32,6 +33,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 
 class ViewNovelChapter extends ViewRecord
@@ -238,6 +240,13 @@ class ViewNovelChapter extends ViewRecord
                         TextEntry::make('scope')->label('范围'),
                         TextEntry::make('content')->label('正文')->prose()->columnSpanFull(),
                     ])->columns(2),
+                ]),
+            Section::make('Draft / Rewrite Diff')
+                ->description('对照 Rewrite 前后正文，并根据后续 Review 标记 Finding 是否已解决。')
+                ->visible(fn (): bool => $this->rewriteArtifacts()->isNotEmpty())
+                ->schema([
+                    View::make('filament.components.draft-rewrite-diff')
+                        ->viewData(fn (): array => ['diff' => app(DraftRewriteDiff::class)->forChapter($this->chapterId)]),
                 ]),
         ];
     }
