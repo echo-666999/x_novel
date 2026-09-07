@@ -65,7 +65,7 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
         ->assertSee('Draft 尚未接入')
         ->assertSee('Story Events 尚未接入')
         ->assertSee('Review 尚未接入')
-        ->assertSee('Generation Runs 尚未接入');
+        ->assertSee('尚无 Chapter Planning Run');
 });
 
 test('chapter detail shows useful empty states before planning starts', function () {

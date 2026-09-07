@@ -2,12 +2,16 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Enums\GenerationStage;
+use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
@@ -52,6 +56,39 @@ class ViewNovelChapter extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('generatePlan')
+                ->label('AI Generate Plan')
+                ->icon('heroicon-o-sparkles')
+                ->visible(fn (): bool => $this->chapter()->latestPlan === null)
+                ->disabled(fn (): bool => $this->hasActivePlanningRun())
+                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? 'Chapter Planning 已在运行。' : null)
+                ->action(function (): void {
+                    PlanChapterJob::dispatch($this->chapterId);
+
+                    Notification::make()
+                        ->title('Chapter Plan 已加入生成队列')
+                        ->body('可在 Runs 页签查看执行状态。')
+                        ->success()
+                        ->send();
+                }),
+            Action::make('regeneratePlan')
+                ->label('Regenerate Plan')
+                ->icon('heroicon-o-arrow-path')
+                ->color('gray')
+                ->visible(fn (): bool => $this->chapter()->latestPlan !== null)
+                ->disabled(fn (): bool => $this->hasActivePlanningRun())
+                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? 'Chapter Planning 已在运行。' : null)
+                ->requiresConfirmation()
+                ->modalDescription('将生成新的 Plan 版本；当前版本与 Artifact 会保留用于追踪。')
+                ->action(function (): void {
+                    PlanChapterJob::dispatch($this->chapterId, true);
+
+                    Notification::make()
+                        ->title('Chapter Plan 重新生成已排队')
+                        ->body('可在 Runs 页签查看执行状态。')
+                        ->success()
+                        ->send();
+                }),
             Action::make('planningPreview')
                 ->label('Planning Preview')
                 ->icon('heroicon-o-eye')
@@ -101,7 +138,8 @@ class ViewNovelChapter extends ViewRecord
                         ->schema($this->stateChangesSchema()),
                     Tab::make('Runs')
                         ->icon('heroicon-o-command-line')
-                        ->schema([$this->futureSection('Generation Runs 尚未接入', '生成运行、重试与恢复记录将在后续 Generation Pipeline 任务中接入。')]),
+                        ->badge(fn (): int => $this->chapter()->generationRuns()->count())
+                        ->schema($this->runsSchema()),
                 ]),
         ]);
     }
@@ -281,6 +319,45 @@ class ViewNovelChapter extends ViewRecord
             ->icon('heroicon-o-clock');
     }
 
+    /** @return array<int, mixed> */
+    private function runsSchema(): array
+    {
+        return [
+            Section::make('尚无 Chapter Planning Run')
+                ->description('使用 AI Generate Plan 后，规划阶段的状态和错误会显示在这里。')
+                ->icon('heroicon-o-command-line')
+                ->visible(fn (): bool => $this->chapter()->generationRuns()->doesntExist()),
+            Section::make('Chapter Planning Runs')
+                ->description('按最近执行顺序展示模型、Prompt、State Version 与失败原因。')
+                ->visible(fn (): bool => $this->chapter()->generationRuns()->exists())
+                ->schema([
+                    RepeatableEntry::make('planning_runs')
+                        ->label('')
+                        ->state(fn (): array => $this->chapter()->generationRuns()
+                            ->latest('id')
+                            ->get()
+                            ->map(fn ($run): array => [
+                                'run' => '#'.$run->getKey().' · Attempt '.$run->attempt,
+                                'status' => $run->status,
+                                'model' => $run->model_policy,
+                                'prompt_version' => $run->prompt_version,
+                                'state_version' => $run->state_version === null ? '—' : 'v'.$run->state_version,
+                                'error' => $run->error_code === null ? '—' : $run->error_code.' · '.$run->error_message,
+                            ])
+                            ->all())
+                        ->columns(['default' => 1, 'md' => 3])
+                        ->schema([
+                            TextEntry::make('run')->label('Run'),
+                            TextEntry::make('status')->label('Status')->badge(),
+                            TextEntry::make('model')->label('Model')->placeholder('—'),
+                            TextEntry::make('prompt_version')->label('Prompt Version')->placeholder('—'),
+                            TextEntry::make('state_version')->label('State Version'),
+                            TextEntry::make('error')->label('Error'),
+                        ]),
+                ]),
+        ];
+    }
+
     /** @return array<int, array{stage: string, status: string, detail: string}> */
     private function pipelineStages(): array
     {
@@ -317,5 +394,13 @@ class ViewNovelChapter extends ViewRecord
                 'latestStateVersion',
             ])
             ->firstOrFail();
+    }
+
+    private function hasActivePlanningRun(): bool
+    {
+        return $this->chapter()->generationRuns()
+            ->where('stage', GenerationStage::ChapterPlanning)
+            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
+            ->exists();
     }
 }
