@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
@@ -13,6 +14,7 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -168,8 +170,12 @@ test('next chapter generation and auto generation controls are available while f
 });
 
 test('a generating novel can be paused from the overview with its current stage displayed', function () {
+    Queue::fake();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
-    $chapter = Chapter::factory()->for($novel)->create();
+    $chapter = Chapter::factory()->for($novel)->create([
+        'sequence' => 1,
+        'status' => ChapterStatus::Generating,
+    ]);
     GenerationRun::factory()->for($novel)->for($chapter)->create([
         'scope_type' => 'chapter',
         'scope_id' => $chapter->getKey(),
@@ -177,7 +183,7 @@ test('a generating novel can be paused from the overview with its current stage 
         'status' => RunStatus::Running,
     ]);
 
-    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+    $component = Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertActionVisible('pause')
         ->assertActionHidden('resume')
         ->callAction('pause')
@@ -185,8 +191,10 @@ test('a generating novel can be paused from the overview with its current stage 
         ->assertSee('Paused at: 审校')
         ->assertActionHidden('pause')
         ->assertActionVisible('resume')
-        ->assertActionDisabled('resume')
-        ->assertActionHidden('generateNextChapter');
+        ->assertActionEnabled('resume')
+        ->assertActionHidden('generateNextChapter')
+        ->callAction('resume');
 
-    expect($novel->fresh()->status)->toBe(NovelStatus::Paused);
+    expect($novel->fresh()->status)->toBe(NovelStatus::Generating);
+    $component->assertNotified('生成流程已继续');
 });

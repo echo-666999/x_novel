@@ -11,10 +11,12 @@ use App\Enums\NovelStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
+use App\Services\ResumeResolver;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
+use Illuminate\Validation\ValidationException;
 
 class ViewNovel extends ViewRecord
 {
@@ -123,8 +125,21 @@ class ViewNovel extends ViewRecord
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
                 ->visible(fn (): bool => $this->getRecord()->status === NovelStatus::Paused)
-                ->disabled()
-                ->tooltip('将在 TASK-102 中启用'),
+                ->requiresConfirmation()
+                ->modalHeading('继续生成')
+                ->modalDescription(fn (): string => '检测到的恢复点：'.app(ResumeResolver::class)->detect($this->getRecord())->label)
+                ->action(function (ResumeResolver $resolver): void {
+                    try {
+                        $point = $resolver->resume($this->getRecord());
+                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        Notification::make()->title('无法继续生成')->body($exception->getMessage())->danger()->send();
+
+                        return;
+                    }
+
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('生成流程已继续')->body('恢复点：'.$point->label)->success()->send();
+                }),
             EditAction::make()
                 ->label('编辑基础信息')
                 ->color('gray'),

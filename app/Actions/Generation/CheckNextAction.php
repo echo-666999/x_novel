@@ -31,7 +31,7 @@ class CheckNextAction
         }
 
         if ($nextChapter->wasRecentlyCreated) {
-            PlanChapterJob::dispatch($nextChapter->getKey());
+            PlanChapterJob::dispatch($nextChapter->getKey())->afterCommit();
         }
 
         return $nextChapter;
