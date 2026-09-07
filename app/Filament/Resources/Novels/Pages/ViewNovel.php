@@ -3,9 +3,11 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Generation\GenerateNextChapterAction;
+use App\Actions\Generation\PauseGenerationAction;
 use App\Actions\Generation\SetAutoGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\BudgetExceededException;
+use App\Enums\NovelStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
@@ -57,6 +59,7 @@ class ViewNovel extends ViewRecord
             Action::make('generateNextChapter')
                 ->label('生成下一章')
                 ->icon('heroicon-o-play')
+                ->visible(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused)
                 ->action(function (GenerateNextChapterAction $generateNextChapter): void {
                     try {
                         $chapter = $generateNextChapter->handle($this->getRecord());
@@ -84,7 +87,8 @@ class ViewNovel extends ViewRecord
             Action::make('startAutoGenerate')
                 ->label('开始自动生成')
                 ->icon('heroicon-o-bolt')
-                ->visible(fn (): bool => ! (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
+                ->visible(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused
+                    && ! (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
                 ->action(function (SetAutoGenerationAction $setAutoGeneration): void {
                     $setAutoGeneration->handle($this->getRecord(), true);
                     $this->getRecord()->refresh();
@@ -94,7 +98,8 @@ class ViewNovel extends ViewRecord
                 ->label('停止自动生成')
                 ->icon('heroicon-o-stop')
                 ->color('danger')
-                ->visible(fn (): bool => (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
+                ->visible(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused
+                    && (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
                 ->action(function (SetAutoGenerationAction $setAutoGeneration): void {
                     $setAutoGeneration->handle($this->getRecord(), false);
                     $this->getRecord()->refresh();
@@ -103,13 +108,21 @@ class ViewNovel extends ViewRecord
             Action::make('pause')
                 ->label('暂停')
                 ->icon('heroicon-o-pause')
-                ->color('gray')
-                ->disabled()
-                ->tooltip('将在 TASK-101 中启用'),
+                ->color('warning')
+                ->visible(fn (): bool => in_array($this->getRecord()->status, [NovelStatus::Generating, NovelStatus::Completing], true))
+                ->requiresConfirmation()
+                ->modalHeading('暂停生成')
+                ->modalDescription('已发出的模型请求可以完成并保存草稿；系统不会派发新阶段，也不会提交正式章节。')
+                ->action(function (PauseGenerationAction $pauseGeneration): void {
+                    $pauseGeneration->handle($this->getRecord());
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('小说生成已暂停')->warning()->send();
+                }),
             Action::make('resume')
                 ->label('继续')
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
+                ->visible(fn (): bool => $this->getRecord()->status === NovelStatus::Paused)
                 ->disabled()
                 ->tooltip('将在 TASK-102 中启用'),
             EditAction::make()

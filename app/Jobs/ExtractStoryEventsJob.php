@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\GenerationStageGate;
 use App\Services\StatePatchBuilder;
 use App\Services\StoryEventExtractor;
 use Illuminate\Bus\Queueable;
@@ -34,8 +35,10 @@ class ExtractStoryEventsJob implements ShouldQueue
         try {
             $artifact = $extractor->extract($this->chapterId, $this->regenerate);
             if ($artifact !== null && $this->continueRewrite) {
-                app(StatePatchBuilder::class)->build($this->chapterId);
-                ReviewChapterJob::dispatch($this->chapterId, true);
+                app(GenerationStageGate::class)->dispatchForChapter($this->chapterId, function (): void {
+                    app(StatePatchBuilder::class)->build($this->chapterId);
+                    ReviewChapterJob::dispatch($this->chapterId, true);
+                });
             }
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {

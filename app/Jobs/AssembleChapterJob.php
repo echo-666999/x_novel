@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Services\ChapterAssembler;
+use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -32,7 +33,10 @@ class AssembleChapterJob implements ShouldQueue
         try {
             $artifact = $assembler->assemble($this->chapterId, $this->regenerate);
             if ($artifact !== null && $this->continueRewrite) {
-                ExtractStoryEventsJob::dispatch($this->chapterId, true, true);
+                app(GenerationStageGate::class)->dispatchForChapter(
+                    $this->chapterId,
+                    fn () => ExtractStoryEventsJob::dispatch($this->chapterId, true, true),
+                );
             }
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {

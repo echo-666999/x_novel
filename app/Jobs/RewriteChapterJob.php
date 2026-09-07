@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Services\ChapterRewriter;
+use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -33,11 +34,13 @@ class RewriteChapterJob implements ShouldQueue
             if ($artifact === null) {
                 return;
             }
-            if ($this->sceneId === null) {
-                ExtractStoryEventsJob::dispatch($this->chapterId, true, true);
-            } else {
-                AssembleChapterJob::dispatch($this->chapterId, true, true);
-            }
+            app(GenerationStageGate::class)->dispatchForChapter($this->chapterId, function (): void {
+                if ($this->sceneId === null) {
+                    ExtractStoryEventsJob::dispatch($this->chapterId, true, true);
+                } else {
+                    AssembleChapterJob::dispatch($this->chapterId, true, true);
+                }
+            });
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if (! in_array($exception->errorCode, ['novel_paused', 'rewrite_exhausted'], true)) {

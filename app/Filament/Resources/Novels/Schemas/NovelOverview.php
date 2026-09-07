@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Novels\Schemas;
 
 use App\AI\BudgetService;
 use App\AI\Data\BudgetUsage;
+use App\Enums\NovelStatus;
 use App\Models\Novel;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
@@ -87,6 +88,12 @@ class NovelOverview
                         ->state(fn (Novel $record): string => (bool) data_get($record->settings, 'auto_generate', false) ? 'Auto: ON' : 'Auto: OFF')
                         ->badge()
                         ->color(fn (Novel $record): string => (bool) data_get($record->settings, 'auto_generate', false) ? 'success' : 'gray'),
+                    TextEntry::make('pause_position')
+                        ->label('暂停位置')
+                        ->state(fn (Novel $record): string => 'Paused at: '.data_get($record->settings, 'pause.label', '等待下一阶段'))
+                        ->badge()
+                        ->color('gray')
+                        ->visible(fn (Novel $record): bool => $record->status === NovelStatus::Paused),
                 ]),
             Section::make('预算')
                 ->description('当前小说和当前章节的实际成本；达到 Hard Limit 后不再发送新模型请求。')

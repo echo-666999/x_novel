@@ -171,6 +171,17 @@ test('canonical commit requires a pass review', function () {
         ->toThrow(ValidationException::class, 'PASS Review');
 });
 
+test('a paused novel cannot create a new canonical commit', function () {
+    $fixture = canonicalCommitFixture();
+    $fixture['novel']->update(['status' => NovelStatus::Paused]);
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
+        ->toThrow(ValidationException::class, '只有生成中或收束中的小说可以提交正式章节');
+
+    expect($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and(StoryEvent::query()->count())->toBe(0);
+});
+
 test('a transaction exception after event writes leaves no partial canonical state', function () {
     $fixture = canonicalCommitFixture(['fact_changes' => [[
         'action' => 'create', 'subject_type' => 'novel', 'subject_id' => 1, 'predicate' => 'has_map',

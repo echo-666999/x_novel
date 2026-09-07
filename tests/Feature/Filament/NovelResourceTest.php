@@ -1,11 +1,15 @@
 <?php
 
+use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -158,9 +162,31 @@ test('next chapter generation and auto generation controls are available while f
         ->callAction('stopAutoGenerate')
         ->assertNotified('自动生成已停止')
         ->assertSee('Auto: OFF')
-        ->assertActionExists('pause')
-        ->assertActionDisabled('pause')
-        ->assertActionExists('resume')
-        ->assertActionDisabled('resume')
+        ->assertActionHidden('pause')
+        ->assertActionHidden('resume')
         ->assertActionExists('edit');
+});
+
+test('a generating novel can be paused from the overview with its current stage displayed', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    $chapter = Chapter::factory()->for($novel)->create();
+    GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Running,
+    ]);
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertActionVisible('pause')
+        ->assertActionHidden('resume')
+        ->callAction('pause')
+        ->assertNotified('小说生成已暂停')
+        ->assertSee('Paused at: 审校')
+        ->assertActionHidden('pause')
+        ->assertActionVisible('resume')
+        ->assertActionDisabled('resume')
+        ->assertActionHidden('generateNextChapter');
+
+    expect($novel->fresh()->status)->toBe(NovelStatus::Paused);
 });

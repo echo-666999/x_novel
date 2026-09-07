@@ -2,6 +2,7 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
+use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Providers\FakeAiProvider;
 use App\Data\StateFinding;
@@ -115,6 +116,35 @@ test('review job dispatches canonical commit only for pass reviews with auto com
     (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
 
     Queue::assertPushed(CommitChapterJob::class, fn (CommitChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey());
+});
+
+test('a provider response is saved but pause prevents the review job from dispatching commit', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, new class($fixture['novel']) implements AiProvider
+    {
+        public function __construct(private readonly Novel $novel) {}
+
+        public function generate(AiRequest $request): AiResponse
+        {
+            $this->novel->update(['status' => NovelStatus::Paused]);
+
+            return reviewResponse();
+        }
+    });
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    $completedRun = $fixture['chapter']->generationRuns()
+        ->where('stage', GenerationStage::Review)
+        ->where('status', RunStatus::Succeeded)
+        ->sole();
+
+    expect($completedRun->artifacts()->where('type', ArtifactType::ReviewResult)->exists())->toBeTrue()
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
+    Queue::assertNotPushed(CommitChapterJob::class);
 });
 
 test('review job keeps manual mode when auto commit is disabled', function () {

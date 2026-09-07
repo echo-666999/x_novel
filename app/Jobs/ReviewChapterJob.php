@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\ReviewDecision;
 use App\Services\ChapterReviewer;
+use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -35,7 +36,10 @@ class ReviewChapterJob implements ShouldQueue
 
             if ($review?->decision === ReviewDecision::Pass
                 && (bool) data_get($review->generationRun->novel->settings, 'auto_commit', false)) {
-                CommitChapterJob::dispatch($this->chapterId, $review->getKey());
+                app(GenerationStageGate::class)->dispatchForChapter(
+                    $this->chapterId,
+                    fn () => CommitChapterJob::dispatch($this->chapterId, $review->getKey()),
+                );
             }
         } catch (AiProviderException $e) {
             if (! $e->retryable) {
