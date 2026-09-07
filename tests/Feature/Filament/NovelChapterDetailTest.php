@@ -16,6 +16,7 @@ use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\User;
+use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -205,4 +206,57 @@ test('draft workspace switches between artifact versions and source scenes', fun
         ->assertSee('Scene 1')
         ->assertSee('Scene 2')
         ->assertSee('第 1 幕正文');
+});
+
+test('pipeline timeline identifies the blocked stage and exposes its run details', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $planningRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Succeeded,
+        'context_snapshot' => ['schema_version' => 'context-v1', 'l0' => ['chapter' => ['id' => $chapter->getKey()]]],
+    ]);
+    GenerationArtifact::factory()->for($planningRun)->create([
+        'type' => ArtifactType::ChapterPlan,
+    ]);
+    $scene = Scene::factory()->for($chapter)->create([
+        'sequence' => 1,
+        'status' => SceneStatus::Failed,
+        'goal' => '穿过封锁线',
+    ]);
+    $failedRun = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'model_policy' => 'gpt-test',
+        'prompt_version' => 'scene-writer-v1',
+        'error_code' => 'provider_timeout',
+        'error_message' => '模型请求超时',
+        'started_at' => now()->subSecond(),
+        'finished_at' => now(),
+    ]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $failedRun->getKey(),
+        'novel_id' => $novel->getKey(),
+        'chapter_id' => $chapter->getKey(),
+        'input_tokens' => 120,
+        'output_tokens' => 30,
+        'estimated_cost' => 0.0015,
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('生成流水线')
+        ->assertSeeTextInOrder(['Plan', 'Context', 'Scenes', 'Scene 1', 'Assembly', 'Events', 'Review', 'Commit', 'Memory'])
+        ->assertSee('失败')
+        ->assertActionExists(TestAction::make('inspectTimelinePlan')->schemaComponent('timeline-stage-plan', 'content'), fn ($action): bool => $action->isModalSlideOver())
+        ->assertActionExists(TestAction::make('inspectTimelineScene'.$scene->getKey())->schemaComponent('timeline-stage-scene-'.$scene->getKey(), 'content'), fn ($action): bool => $action->isModalSlideOver())
+        ->mountAction(TestAction::make('inspectTimelineScene'.$scene->getKey())->schemaComponent('timeline-stage-scene-'.$scene->getKey(), 'content'))
+        ->assertSee('gpt-test')
+        ->assertSee('scene-writer-v1')
+        ->assertSee('150')
+        ->assertSee('USD 0.001500')
+        ->assertSee('provider_timeout · 模型请求超时');
 });

@@ -12,6 +12,7 @@ use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Scene;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
@@ -19,6 +20,7 @@ use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
+use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
@@ -188,19 +190,7 @@ class ViewNovelChapter extends ViewRecord
                             : 'v'.$this->chapter()->latestStateVersion->version)
                         ->placeholder('—'),
                 ]),
-            Section::make('流水线状态')
-                ->description('当前阶段只汇总已经落地的 Chapter、Plan、Scene 与 Story State 数据。')
-                ->schema([
-                    RepeatableEntry::make('pipeline')
-                        ->label('')
-                        ->state(fn (): array => $this->pipelineStages())
-                        ->columns(['default' => 1, 'md' => 3])
-                        ->schema([
-                            TextEntry::make('stage')->label('阶段'),
-                            TextEntry::make('status')->label('状态')->badge(),
-                            TextEntry::make('detail')->label('说明'),
-                        ]),
-                ]),
+            $this->pipelineTimelineSection(),
         ];
     }
 
@@ -557,33 +547,210 @@ class ViewNovelChapter extends ViewRecord
         ];
     }
 
-    /** @return array<int, array{stage: string, status: string, detail: string}> */
-    private function pipelineStages(): array
+    private function pipelineTimelineSection(): Section
     {
-        $chapter = $this->chapter();
+        $timeline = $this->pipelineTimeline();
+        $scenes = array_values(array_filter($timeline, fn (array $item): bool => str_starts_with($item['key'], 'scene-')));
+        $beforeScenes = array_values(array_filter($timeline, fn (array $item): bool => in_array($item['key'], ['plan', 'context'], true)));
+        $afterScenes = array_values(array_filter($timeline, fn (array $item): bool => ! in_array($item['key'], ['plan', 'context'], true) && ! str_starts_with($item['key'], 'scene-')));
+
+        return Section::make('生成流水线')
+            ->description('按实际持久化结果展示章节进度；点击任一阶段查看 Run、Artifact 与错误详情。')
+            ->icon('heroicon-o-list-bullet')
+            ->schema([
+                Grid::make(['default' => 1, 'md' => 2])
+                    ->schema(array_map($this->timelineStageSection(...), $beforeScenes)),
+                Section::make('Scenes')
+                    ->description($scenes === [] ? '尚未从 Chapter Plan 同步场景。' : '场景按顺序生成；前序场景完成后才会进入下一场景。')
+                    ->icon('heroicon-o-rectangle-stack')
+                    ->compact()
+                    ->schema([
+                        Grid::make(['default' => 1, 'md' => 2, 'xl' => 3])
+                            ->schema(array_map($this->timelineStageSection(...), $scenes)),
+                    ]),
+                Grid::make(['default' => 1, 'md' => 2, 'xl' => 5])
+                    ->schema(array_map($this->timelineStageSection(...), $afterScenes)),
+            ]);
+    }
+
+    /** @param array<string, mixed> $item */
+    private function timelineStageSection(array $item): Section
+    {
+        return Section::make($item['label'])
+            ->key('timeline-stage-'.$item['key'])
+            ->description($item['detail'])
+            ->icon($this->timelineIcon($item['state']))
+            ->compact()
+            ->headerActions([
+                Action::make('inspectTimeline'.str($item['key'])->studly())
+                    ->label('查看详情')
+                    ->icon('heroicon-o-chevron-right')
+                    ->color($this->timelineColor($item['state']))
+                    ->slideOver()
+                    ->modalHeading($item['label'].' · '.$item['status'])
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('关闭')
+                    ->infolist($this->timelineDetails($item)),
+            ])
+            ->schema([
+                TextEntry::make('timeline_status_'.$item['key'])
+                    ->hiddenLabel()
+                    ->state($item['status'])
+                    ->badge()
+                    ->color($this->timelineColor($item['state'])),
+            ]);
+    }
+
+    /** @return array<int, TextEntry> */
+    private function timelineDetails(array $item): array
+    {
+        /** @var GenerationRun|null $run */
+        $run = $item['run'];
+        /** @var GenerationArtifact|null $artifact */
+        $artifact = $item['artifact'];
+        $usage = $run?->usageRecords;
 
         return [
-            [
-                'stage' => 'Plan',
-                'status' => $chapter->latestPlan === null ? '未建立' : $chapter->latestPlan->status->getLabel(),
-                'detail' => $chapter->latestPlan === null ? '等待手工建立 Chapter Plan' : 'Plan v'.$chapter->latestPlan->version,
-            ],
-            [
-                'stage' => 'Scenes',
-                'status' => $chapter->scenes->isEmpty() ? '未同步' : '已同步',
-                'detail' => $chapter->scenes->count().' 个 Scene',
-            ],
-            [
-                'stage' => 'Assembly',
-                'status' => $this->chapterDraftArtifacts()->isEmpty() ? '尚未组装' : '已生成 Draft',
-                'detail' => $this->chapterDraftArtifacts()->count().' 个 Chapter Draft 版本',
-            ],
-            [
-                'stage' => 'Review → Commit',
-                'status' => '尚未接入',
-                'detail' => '由后续 Generation Pipeline 任务接入',
-            ],
+            TextEntry::make('timeline_detail_status_'.$item['key'])->label('状态')->state($item['status'])->badge()->color($this->timelineColor($item['state'])),
+            TextEntry::make('timeline_detail_description_'.$item['key'])->label('说明')->state($item['detail']),
+            TextEntry::make('timeline_detail_run_'.$item['key'])->label('Generation Run')->state($run === null ? null : '#'.$run->getKey().' · Attempt '.$run->attempt)->placeholder('尚无运行记录'),
+            TextEntry::make('timeline_detail_duration_'.$item['key'])->label('耗时')->state($run?->durationMilliseconds() === null ? null : $run->durationMilliseconds().' ms')->placeholder('—'),
+            TextEntry::make('timeline_detail_model_'.$item['key'])->label('模型')->state($run?->model_policy)->placeholder('—'),
+            TextEntry::make('timeline_detail_tokens_'.$item['key'])->label('Tokens')->state($usage === null ? null : number_format((int) $usage->sum(fn ($record): int => $record->input_tokens + $record->output_tokens)))->placeholder('—'),
+            TextEntry::make('timeline_detail_cost_'.$item['key'])->label('费用')->state($usage === null ? null : config('ai.cost.currency').' '.number_format((float) $usage->sum('estimated_cost'), 6))->placeholder('—'),
+            TextEntry::make('timeline_detail_prompt_'.$item['key'])->label('Prompt Version')->state($run?->prompt_version)->placeholder('—'),
+            TextEntry::make('timeline_detail_state_version_'.$item['key'])->label('State Version')->state($run?->state_version === null ? null : 'v'.$run->state_version)->placeholder('—'),
+            TextEntry::make('timeline_detail_artifact_'.$item['key'])->label('Artifact')->state($artifact === null ? null : $artifact->type->getLabel().' v'.$artifact->version.' · #'.$artifact->getKey())->placeholder('尚无产物'),
+            TextEntry::make('timeline_detail_artifact_content_'.$item['key'])->label('Artifact 内容')->state($artifact?->content)->placeholder('—')->prose()->copyable(),
+            TextEntry::make('timeline_detail_context_'.$item['key'])
+                ->label('Context Snapshot')
+                ->state($item['key'] !== 'context' || $run?->context_snapshot === null ? null : json_encode($run->context_snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))
+                ->placeholder('—')
+                ->fontFamily('mono')
+                ->copyable(),
+            TextEntry::make('timeline_detail_error_'.$item['key'])->label('错误')->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)->placeholder('—'),
         ];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function pipelineTimeline(): array
+    {
+        $chapter = $this->chapter();
+        $items = [];
+        $planningRun = $this->latestTimelineRun(GenerationStage::ChapterPlanning);
+        $contextRun = $chapter->generationRuns->whereNotNull('context_snapshot')->sortByDesc('id')->first();
+
+        $items[] = $this->timelineItem('plan', 'Plan', $planningRun, $this->latestTimelineArtifact(ArtifactType::ChapterPlan), $chapter->latestPlan !== null, $chapter->latestPlan === null ? '等待建立 Chapter Plan' : 'Plan v'.$chapter->latestPlan->version);
+        $items[] = $this->timelineItem('context', 'Context', $contextRun, $this->latestTimelineArtifact(ArtifactType::Context), $contextRun !== null, $contextRun === null ? '等待冻结 L0 / L1 / L2 Context Snapshot' : 'Context Snapshot 已冻结');
+
+        foreach ($chapter->scenes as $scene) {
+            $run = $scene->generationRuns->sortByDesc('id')->first();
+            $complete = $scene->currentArtifact !== null && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true);
+            $items[] = $this->timelineItem('scene-'.$scene->getKey(), 'Scene '.$scene->sequence, $run, $scene->currentArtifact, $complete, $complete ? mb_strlen($scene->currentArtifact->content ?? '').' 字' : $scene->goal);
+        }
+
+        $assemblyArtifact = $this->latestTimelineArtifact(ArtifactType::ChapterDraft);
+        $eventArtifact = $this->latestTimelineArtifact(ArtifactType::EventCandidate) ?? $this->latestTimelineArtifact(ArtifactType::StatePatch);
+        $reviewArtifact = $this->latestTimelineArtifact(ArtifactType::ReviewResult);
+        $memoryRun = $this->latestTimelineRun(GenerationStage::MemorySummary) ?? $this->latestTimelineRun(GenerationStage::Embedding);
+
+        $items[] = $this->timelineItem('assembly', 'Assembly', $this->latestTimelineRun(GenerationStage::ChapterAssembly), $assemblyArtifact, $assemblyArtifact !== null, $assemblyArtifact === null ? '等待组装 Chapter Draft' : 'Chapter Draft v'.$assemblyArtifact->version);
+        $items[] = $this->timelineItem('events', 'Events', $this->latestTimelineRun(GenerationStage::EventExtraction), $eventArtifact, $eventArtifact !== null, $eventArtifact === null ? '等待提取 Story Events' : '事件候选已生成');
+        $items[] = $this->timelineItem('review', 'Review', $this->latestTimelineRun(GenerationStage::Review), $reviewArtifact, $reviewArtifact !== null, $reviewArtifact === null ? '等待审校' : 'Review 结果已生成');
+        $items[] = $this->timelineItem('commit', 'Commit', $this->latestTimelineRun(GenerationStage::Commit), null, $chapter->canonical_artifact_id !== null || $chapter->latestStateVersion !== null, $chapter->latestStateVersion === null ? '等待 Canonical Commit' : '已提交 State v'.$chapter->latestStateVersion->version);
+        $items[] = $this->timelineItem('memory', 'Memory', $memoryRun, $this->latestTimelineArtifact(ArtifactType::Summary), $memoryRun?->status === RunStatus::Succeeded, $memoryRun === null ? '等待正式章节写入 Memory' : 'Memory 更新'.$memoryRun->status->getLabel());
+
+        $blocked = false;
+        $currentAssigned = false;
+
+        foreach ($items as &$item) {
+            if ($blocked && $item['state'] === 'waiting') {
+                $item['state'] = 'waiting';
+                $item['status'] = '等待中';
+
+                continue;
+            }
+
+            if (in_array($item['state'], ['failed', 'running'], true)) {
+                $blocked = true;
+                $currentAssigned = true;
+
+                continue;
+            }
+
+            if (! $currentAssigned && $item['state'] === 'waiting') {
+                $item['state'] = 'current';
+                $item['status'] = '当前阶段';
+                $currentAssigned = true;
+                $blocked = true;
+            }
+        }
+        unset($item);
+
+        return $items;
+    }
+
+    /** @return array<string, mixed> */
+    private function timelineItem(string $key, string $label, ?GenerationRun $run, ?GenerationArtifact $artifact, bool $complete, string $detail): array
+    {
+        $state = match ($run?->status) {
+            RunStatus::Failed, RunStatus::Cancelled => 'failed',
+            RunStatus::Queued, RunStatus::Running => 'running',
+            default => $complete ? 'completed' : 'waiting',
+        };
+
+        return [
+            'key' => $key,
+            'label' => $label,
+            'state' => $state,
+            'status' => match ($state) {
+                'completed' => '已完成',
+                'running' => $run?->status->getLabel() ?? '运行中',
+                'failed' => $run?->status->getLabel() ?? '失败',
+                default => '等待中',
+            },
+            'detail' => $detail,
+            'run' => $run,
+            'artifact' => $artifact,
+        ];
+    }
+
+    private function latestTimelineRun(GenerationStage $stage): ?GenerationRun
+    {
+        return $this->chapter()->generationRuns
+            ->where('stage', $stage)
+            ->sortByDesc('id')
+            ->first();
+    }
+
+    private function latestTimelineArtifact(ArtifactType $type): ?GenerationArtifact
+    {
+        return $this->chapter()->generationRuns
+            ->flatMap->artifacts
+            ->where('type', $type)
+            ->sortByDesc('version')
+            ->first();
+    }
+
+    private function timelineColor(string $state): string
+    {
+        return match ($state) {
+            'completed' => 'success',
+            'running', 'current' => 'primary',
+            'failed' => 'danger',
+            default => 'gray',
+        };
+    }
+
+    private function timelineIcon(string $state): string
+    {
+        return match ($state) {
+            'completed' => 'heroicon-o-check-circle',
+            'running' => 'heroicon-o-arrow-path',
+            'current' => 'heroicon-o-play-circle',
+            'failed' => 'heroicon-o-exclamation-triangle',
+            default => 'heroicon-o-clock',
+        };
     }
 
     private function chapter(): Chapter
@@ -597,6 +764,9 @@ class ViewNovelChapter extends ViewRecord
                 'scenes.povCharacter:id,name',
                 'scenes.currentArtifact',
                 'scenes.generationRuns.usageRecords',
+                'scenes.generationRuns.artifacts',
+                'generationRuns.usageRecords',
+                'generationRuns.artifacts',
                 'latestStateVersion',
             ])
             ->firstOrFail();
