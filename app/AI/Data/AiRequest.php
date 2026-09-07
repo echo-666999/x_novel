@@ -17,6 +17,7 @@ final readonly class AiRequest
         public float $temperature = 0.7,
         public int $maxTokens = 2_000,
         public ?array $responseSchema = null,
+        public ?string $promptVersion = null,
         public array $metadata = [],
     ) {}
 

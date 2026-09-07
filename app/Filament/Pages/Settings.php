@@ -8,6 +8,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\BudgetUsage;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -32,6 +33,11 @@ class Settings extends Page
 
     /** @var array{success: bool, model: string, latency_ms: int|null, message: string}|null */
     public ?array $aiConnectionResult = null;
+
+    public static function getNavigationItemActiveRoutePattern(): string|array
+    {
+        return [static::getRouteName(), AiDebugTest::getRouteName()];
+    }
 
     protected function getHeaderActions(): array
     {
@@ -81,6 +87,13 @@ class Settings extends Page
         return Section::make('AI')
             ->description('当前 Provider 配置与连接检查。凭据仅从环境配置读取。')
             ->icon('heroicon-o-cpu-chip')
+            ->afterHeader([
+                Action::make('openAiDebug')
+                    ->label('AI Debug')
+                    ->icon('heroicon-o-command-line')
+                    ->color('gray')
+                    ->url(AiDebugTest::getUrl()),
+            ])
             ->columns(['default' => 1, 'md' => 3])
             ->schema([
                 Text::make('来源：.env 与 config/services.php；AI 运行配置：config/ai.php')
@@ -116,6 +129,23 @@ class Settings extends Page
                     ->schema([
                         TextEntry::make('stage')->label('Stage')->badge(),
                         TextEntry::make('model')->label('Resolved Model'),
+                        TextEntry::make('source')->label('Source')->color('gray'),
+                    ])
+                    ->columnSpanFull(),
+                RepeatableEntry::make('prompt_versions')
+                    ->label('Prompt Versions')
+                    ->state(fn (): array => collect(app(PromptVersionResolver::class)->all())
+                        ->map(fn (string $version, string $stage): array => [
+                            'stage' => AiStage::from($stage)->getLabel(),
+                            'version' => $version,
+                            'source' => 'config/prompts.php',
+                        ])
+                        ->values()
+                        ->all())
+                    ->columns(['default' => 1, 'md' => 3])
+                    ->schema([
+                        TextEntry::make('stage')->label('Stage')->badge(),
+                        TextEntry::make('version')->label('Current Version')->copyable(),
                         TextEntry::make('source')->label('Source')->color('gray'),
                     ])
                     ->columnSpanFull(),
@@ -157,6 +187,7 @@ class Settings extends Page
                 prompt: 'Reply with OK.',
                 temperature: 0,
                 maxTokens: 8,
+                promptVersion: app(PromptVersionResolver::class)->resolve(AiStage::Planner),
                 metadata: ['purpose' => 'connection_test'],
             ));
 
