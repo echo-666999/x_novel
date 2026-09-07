@@ -9,6 +9,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Validation\ValidationException;
 
 class PlanChapterJob implements ShouldQueue
 {
@@ -38,6 +39,8 @@ class PlanChapterJob implements ShouldQueue
             }
 
             throw $exception;
+        } catch (ValidationException $exception) {
+            $this->fail($exception);
         }
     }
 }

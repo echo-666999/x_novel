@@ -148,6 +148,16 @@ class Generation extends Page implements HasTable
                         ->copyable()
                         ->columnSpanFull(),
                 ]),
+            Section::make('L2 · 近期故事')
+                ->description('来自当前章节之前的正式章节摘要与上一章结尾，不使用向量检索。')
+                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'l2') !== null)
+                ->schema([
+                    TextEntry::make('context_l2')
+                        ->hiddenLabel()
+                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'l2')))
+                        ->fontFamily('mono')
+                        ->copyable(),
+                ]),
             Section::make('Token Allocation')
                 ->description('显示总预算、实际占用和各 Context Section 的分配。')
                 ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'token_allocation') !== null)

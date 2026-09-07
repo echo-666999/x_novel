@@ -13,6 +13,7 @@ final readonly class ContextSnapshot
      * @param  array<int, int>  $recentChapterIds
      * @param  array<string, mixed>  $l0
      * @param  array<string, mixed>  $l1
+     * @param  array<string, mixed>  $l2
      */
     public function __construct(
         public int $novelId,
@@ -34,6 +35,7 @@ final readonly class ContextSnapshot
         public TokenAllocation $tokenAllocation,
         public array $l0,
         public array $l1,
+        public array $l2,
     ) {}
 
     /** @return array<string, mixed> */
@@ -62,6 +64,7 @@ final readonly class ContextSnapshot
             'truncated_sections' => $this->tokenAllocation->truncatedSections,
             'l0' => $this->l0,
             'l1' => $this->l1,
+            'l2' => $this->l2,
         ];
     }
 }

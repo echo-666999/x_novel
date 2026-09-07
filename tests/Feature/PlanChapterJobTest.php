@@ -2,6 +2,7 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
+use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
@@ -16,6 +17,7 @@ use App\Models\Chapter;
 use App\Models\Character;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryStateVersion;
 use App\Models\Volume;
 use App\Services\ChapterPlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -145,6 +147,51 @@ test('invalid structured output fails the run without writing a plan or artifact
             ->and($chapter->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
             ->and($chapter->generationRuns()->sole()->error_code)->toBe('plan_validation_failed')
             ->and($chapter->generationRuns()->sole()->artifacts()->count())->toBe(0);
+    }
+});
+
+test('the queue job does not retry schema or business validation failures', function () {
+    [$chapter, $character] = plannerChapter();
+    $payload = plannerPayload($character->getKey());
+    unset($payload['scene_plans'][0]['outcome']);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(plannerResponse($payload)));
+
+    (new PlanChapterJob($chapter->getKey()))->handle(app(ChapterPlanner::class));
+
+    expect($chapter->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
+        ->and($chapter->generationRuns()->sole()->error_code)->toBe('plan_validation_failed')
+        ->and($chapter->plans()->count())->toBe(0);
+});
+
+test('a canonical state change during provider execution blocks stale plan persistence', function () {
+    [$chapter, $character] = plannerChapter();
+    $payload = plannerPayload($character->getKey());
+    $provider = new class($chapter->novel, plannerResponse($payload)) implements AiProvider
+    {
+        public function __construct(private Novel $novel, private AiResponse $response) {}
+
+        public function generate(AiRequest $request): AiResponse
+        {
+            $nextState = StoryStateVersion::factory()->for($this->novel)->create([
+                'version' => 1,
+                'state' => ['timeline' => ['changed while planning']],
+            ]);
+            $this->novel->update(['canonical_state_version_id' => $nextState->getKey()]);
+
+            return $this->response;
+        }
+    };
+    app()->instance(AiProvider::class, $provider);
+
+    try {
+        app(ChapterPlanner::class)->generate($chapter->getKey());
+        $this->fail('Expected state version conflict was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('state_version_conflict')
+            ->and($exception->retryable)->toBeFalse()
+            ->and($chapter->plans()->count())->toBe(0)
+            ->and($chapter->generationRuns()->sole()->artifacts()->count())->toBe(0)
+            ->and($chapter->generationRuns()->sole()->status)->toBe(RunStatus::Failed);
     }
 });
 

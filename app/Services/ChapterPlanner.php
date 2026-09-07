@@ -16,6 +16,7 @@ use App\Enums\RunStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationRun;
+use App\Models\Novel;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Throwable;
@@ -85,7 +86,7 @@ class ChapterPlanner
             $candidate->setRelation('chapter', $chapter);
             $this->planValidator->validate($candidate)->assertCanGenerate();
 
-            return $this->complete($run, $chapter, $payload, $response->content);
+            return $this->complete($run, $chapter, $payload, $response->content, $context['state_version']);
         } catch (Throwable $exception) {
             $this->fail($run, $exception);
             throw $exception;
@@ -141,10 +142,20 @@ class ChapterPlanner
         });
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, array $payload, string $content): ChapterPlan
+    private function complete(GenerationRun $run, Chapter $chapter, array $payload, string $content, int $expectedStateVersion): ChapterPlan
     {
-        return DB::transaction(function () use ($run, $chapter, $payload, $content): ChapterPlan {
+        return DB::transaction(function () use ($run, $chapter, $payload, $content, $expectedStateVersion): ChapterPlan {
+            $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
+
+            if ($novel->canonicalStateVersion()->value('version') !== $expectedStateVersion) {
+                throw new AiProviderException(
+                    'state_version_conflict',
+                    '生成期间 Canonical Story State 已变化，请基于最新状态重新规划。',
+                    false,
+                );
+            }
+
             $version = ((int) $chapter->plans()->max('version')) + 1;
             $chapter->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
             $plan = $chapter->plans()->create(['version' => $version, 'status' => PlanStatus::Ready, ...$payload]);

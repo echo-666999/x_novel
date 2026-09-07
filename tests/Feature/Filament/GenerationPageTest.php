@@ -95,6 +95,7 @@ test('run inspector exposes l0 l1 token allocation and state version', function 
             'state_version' => 7,
             'l0' => ['bible_hard_constraints' => ['禁止复活死者']],
             'l1' => ['canonical_story_state' => ['timeline' => ['夜幕降临']]],
+            'l2' => ['recent_chapters' => [['sequence' => 6, 'summary' => '风暴逼近']]],
             'token_allocation' => ['budget' => 4000, 'used' => 1200, 'remaining' => 2800, 'sections' => ['l0' => 400, 'l1' => 800]],
         ],
     ]);
@@ -104,5 +105,6 @@ test('run inspector exposes l0 l1 token allocation and state version', function 
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('context_l0')
         ->assertSchemaComponentExists('context_l1')
+        ->assertSchemaComponentExists('context_l2')
         ->assertSchemaComponentExists('context_token_allocation');
 });

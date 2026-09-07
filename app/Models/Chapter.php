@@ -38,6 +38,12 @@ class Chapter extends Model
         return $this->belongsTo(Volume::class);
     }
 
+    /** @return BelongsTo<GenerationArtifact, $this> */
+    public function canonicalArtifact(): BelongsTo
+    {
+        return $this->belongsTo(GenerationArtifact::class, 'canonical_artifact_id');
+    }
+
     /** @return HasMany<StoryStateVersion, $this> */
     public function stateVersions(): HasMany
     {

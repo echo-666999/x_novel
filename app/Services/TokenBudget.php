@@ -8,7 +8,7 @@ use App\Exceptions\ContextBudgetExceededException;
 class TokenBudget
 {
     /** @param array<string, mixed> $sections */
-    public function allocate(int $budget, array $sections): TokenAllocation
+    public function allocate(int $budget, array $sections, array $truncatedSections = []): TokenAllocation
     {
         if ($budget < 1) {
             throw new ContextBudgetExceededException(1, $budget);
@@ -28,6 +28,7 @@ class TokenBudget
             used: $required,
             remaining: $budget - $required,
             sections: $allocation,
+            truncatedSections: $truncatedSections,
         );
     }
 
