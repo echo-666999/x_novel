@@ -16,6 +16,16 @@ enum GenerationStage: string
 
     public function getLabel(): string
     {
-        return str($this->value)->headline()->toString();
+        return match ($this) {
+            self::ChapterPlanning => '章节规划',
+            self::SceneGeneration => '场景生成',
+            self::ChapterAssembly => '章节组装',
+            self::EventExtraction => '事件提取',
+            self::Review => '审校',
+            self::Rewrite => '重写',
+            self::Commit => '正式提交',
+            self::MemorySummary => '记忆摘要',
+            self::Embedding => '向量化',
+        };
     }
 }

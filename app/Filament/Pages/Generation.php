@@ -49,39 +49,39 @@ class Generation extends Page implements HasTable
                 ->with(['novel:id,title', 'chapter:id,novel_id,sequence,title'])
                 ->withSum('usageRecords', 'estimated_cost'))
             ->columns([
-                TextColumn::make('novel.title')->label('Novel')->searchable()->weight('medium'),
+                TextColumn::make('novel.title')->label('小说')->searchable()->weight('medium'),
                 TextColumn::make('chapter.sequence')
-                    ->label('Chapter')
+                    ->label('章节')
                     ->formatStateUsing(fn (?int $state): string => $state === null ? '—' : '第 '.$state.' 章')
                     ->placeholder('—'),
                 TextColumn::make('stage')
-                    ->label('Stage')
+                    ->label('阶段')
                     ->formatStateUsing(fn (GenerationStage $state): string => $state->getLabel())
                     ->badge()
                     ->color('gray'),
                 TextColumn::make('status')
-                    ->label('Status')
+                    ->label('状态')
                     ->formatStateUsing(fn (RunStatus $state): string => $state->getLabel())
                     ->badge()
                     ->color(fn (RunStatus $state): string => $state->getColor()),
-                TextColumn::make('model_policy')->label('Model')->placeholder('—'),
+                TextColumn::make('model_policy')->label('模型')->placeholder('—'),
                 TextColumn::make('duration')
-                    ->label('Duration')
+                    ->label('耗时')
                     ->state(fn (GenerationRun $record): ?int => $record->durationMilliseconds())
                     ->formatStateUsing(fn (int $state): string => number_format($state).' ms')
                     ->placeholder('—')
                     ->alignEnd(),
                 TextColumn::make('usage_records_sum_estimated_cost')
-                    ->label('Cost')
+                    ->label('成本')
                     ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 6))
                     ->alignEnd(),
-                TextColumn::make('created_at')->label('Created')->dateTime('Y-m-d H:i:s')->sortable(),
+                TextColumn::make('created_at')->label('创建时间')->dateTime('Y-m-d H:i:s')->sortable(),
             ])
             ->filters([
-                SelectFilter::make('stage')->options(collect(GenerationStage::cases())->mapWithKeys(
+                SelectFilter::make('stage')->label('阶段')->options(collect(GenerationStage::cases())->mapWithKeys(
                     fn (GenerationStage $stage): array => [$stage->value => $stage->getLabel()],
                 )),
-                SelectFilter::make('status')->options(collect(RunStatus::cases())->mapWithKeys(
+                SelectFilter::make('status')->label('状态')->options(collect(RunStatus::cases())->mapWithKeys(
                     fn (RunStatus $status): array => [$status->value => $status->getLabel()],
                 )),
             ])
@@ -122,6 +122,42 @@ class Generation extends Page implements HasTable
                     ->fontFamily('mono')
                     ->copyable(),
             ]),
+            Section::make('L0 · Hard Constraints')
+                ->description('不可因 Token Budget 删除的 Bible、Locked Fact、World Rule 与 Plan 约束。')
+                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'l0') !== null)
+                ->schema([
+                    TextEntry::make('context_l0')
+                        ->hiddenLabel()
+                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'l0')))
+                        ->fontFamily('mono')
+                        ->copyable(),
+                ]),
+            Section::make('L1 · Current State')
+                ->description('来自该 Run 绑定的不可变 Canonical Story State Version。')
+                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'l1') !== null)
+                ->columns(2)
+                ->schema([
+                    TextEntry::make('context_state_version')
+                        ->label('State Version')
+                        ->state(fn (GenerationRun $record): string => 'v'.data_get($record->context_snapshot, 'state_version', $record->state_version ?? '—'))
+                        ->badge(),
+                    TextEntry::make('context_l1')
+                        ->label('Canonical State')
+                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'l1')))
+                        ->fontFamily('mono')
+                        ->copyable()
+                        ->columnSpanFull(),
+                ]),
+            Section::make('Token Allocation')
+                ->description('显示总预算、实际占用和各 Context Section 的分配。')
+                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'token_allocation') !== null)
+                ->schema([
+                    TextEntry::make('context_token_allocation')
+                        ->hiddenLabel()
+                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'token_allocation')))
+                        ->fontFamily('mono')
+                        ->copyable(),
+                ]),
             Section::make('Artifacts')->schema([
                 RepeatableEntry::make('artifacts')
                     ->hiddenLabel()
@@ -171,6 +207,11 @@ class Generation extends Page implements HasTable
 
     /** @param array<string, mixed>|null $value */
     private function formatJson(?array $value): string
+    {
+        return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+    }
+
+    private function formatJsonValue(mixed $value): string
     {
         return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }

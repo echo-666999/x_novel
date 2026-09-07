@@ -12,7 +12,13 @@ enum RunStatus: string
 
     public function getLabel(): string
     {
-        return str($this->value)->headline()->toString();
+        return match ($this) {
+            self::Queued => '排队中',
+            self::Running => '运行中',
+            self::Succeeded => '已成功',
+            self::Failed => '失败',
+            self::Cancelled => '已取消',
+        };
     }
 
     public function getColor(): string
