@@ -2,6 +2,7 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
+use App\Enums\FactStatus;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
@@ -11,6 +12,8 @@ use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Character;
+use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
@@ -375,4 +378,82 @@ test('state changes workspace builds and displays a candidate patch preview', fu
         ->assertSee('character_moved');
 
     expect($novel->fresh()->storyStateVersions()->count())->toBe(1);
+});
+
+test('state findings panel clearly blocks a golden locked fact conflict', function () {
+    $novel = Novel::factory()->create();
+    $character = Character::factory()->for($novel)->create(['name' => '林舟']);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create();
+    $fact = Fact::factory()->for($novel)->create([
+        'subject_type' => 'character',
+        'subject_id' => $character->getKey(),
+        'predicate' => 'status',
+        'value' => ['value' => 'dead'],
+        'status' => FactStatus::Active,
+        'locked' => true,
+    ]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $event = [
+        'event_type' => 'character_status_changed',
+        'subject_type' => 'character',
+        'subject_id' => (string) $character->getKey(),
+        'payload' => ['status' => 'alive'],
+        'evidence' => [[
+            'artifact_id' => 99,
+            'scene_id' => null,
+            'quote' => '林舟重新站了起来。',
+            'start_offset' => null,
+            'end_offset' => null,
+        ]],
+        'story_time' => null,
+        'confidence' => 0.99,
+    ];
+    $candidate = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => ['status' => 'candidate', 'events' => [$event]],
+    ]);
+    GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::StatePatch,
+        'data' => [
+            'status' => 'candidate',
+            'source_artifact_id' => $candidate->getKey(),
+            'expected_state_version' => 0,
+            'operations' => [[
+                'op' => 'set',
+                'path' => "characters.{$character->getKey()}.status",
+                'value' => 'alive',
+                'source_event_index' => 0,
+            ]],
+            'fact_changes' => [],
+            'foreshadowing_changes' => [],
+            'changes' => [[
+                'path' => "characters.{$character->getKey()}.status",
+                'operation' => 'set',
+                'before' => 'dead',
+                'after' => 'alive',
+                'before_missing' => false,
+                'after_missing' => false,
+                'source_event_index' => 0,
+                'source_event_type' => 'character_status_changed',
+                'source_subject_type' => 'character',
+                'source_subject_id' => (string) $character->getKey(),
+            ]],
+        ],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('State Findings')
+        ->assertSee('BLOCK')
+        ->assertSee('LOCKED_FACT_CONFLICT')
+        ->assertSee('林舟重新站了起来。')
+        ->assertSee('#'.$fact->getKey())
+        ->assertSee("characters.{$character->getKey()}.status");
 });

@@ -17,6 +17,7 @@ use App\Models\GenerationRun;
 use App\Models\Scene;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
+use App\Services\StateValidator;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -589,6 +590,7 @@ class ViewNovelChapter extends ViewRecord
     {
         $artifact = $this->latestStatePatchArtifact();
         $candidate = $this->latestEventCandidateArtifact();
+        $validation = $artifact === null ? null : app(StateValidator::class)->validate($this->chapterId);
 
         return [
             Section::make('State Patch Preview')
@@ -661,6 +663,48 @@ class ViewNovelChapter extends ViewRecord
                 ->description('候选事件没有可由当前确定性 Event Applier 安全映射的状态变化。')
                 ->icon('heroicon-o-check-circle')
                 ->visible($artifact !== null && data_get($artifact?->data, 'changes', []) === []),
+            Section::make('State Findings')
+                ->description('确定性规则优先；任何 BLOCK 都会阻止后续 Canonical Commit。')
+                ->icon('heroicon-o-shield-exclamation')
+                ->visible($validation !== null)
+                ->columns(['default' => 1, 'md' => 2])
+                ->schema([
+                    TextEntry::make('validation_decision')
+                        ->label('Decision')
+                        ->state(fn (): ?string => $validation?->decision())
+                        ->badge()
+                        ->color(fn (): string => $validation?->isBlocked() ? 'danger' : 'success'),
+                    TextEntry::make('validation_count')
+                        ->label('Findings')
+                        ->state(fn (): int => count($validation?->findings ?? [])),
+                    RepeatableEntry::make('state_findings')
+                        ->label('')
+                        ->visible($validation?->findings !== [])
+                        ->columnSpanFull()
+                        ->state(fn (): array => collect($validation?->findings ?? [])->map(fn ($finding): array => [
+                            ...$finding->toArray(),
+                            'severity_label' => $finding->severity->getLabel(),
+                            'related_fact' => $finding->relatedFactId === null ? '—' : '#'.$finding->relatedFactId,
+                            'related_state' => $finding->relatedStatePath ?? '—',
+                            'evidence_display' => $this->formatTimelineJson($finding->evidence),
+                        ])->all())
+                        ->columns(['default' => 1, 'md' => 2, 'xl' => 3])
+                        ->schema([
+                            TextEntry::make('severity_label')
+                                ->label('Severity')
+                                ->badge()
+                                ->color(fn (string $state): string => match ($state) {
+                                    'BLOCK' => 'danger',
+                                    '计划内例外' => 'info',
+                                    default => 'warning',
+                                }),
+                            TextEntry::make('code')->label('Code')->copyable(),
+                            TextEntry::make('message')->label('Message'),
+                            TextEntry::make('evidence_display')->label('Evidence')->fontFamily('mono'),
+                            TextEntry::make('related_fact')->label('Related Fact'),
+                            TextEntry::make('related_state')->label('Related State')->copyable(),
+                        ]),
+                ]),
             Section::make('Canonical State Version')
                 ->description('这里只展示本章关联的只读正式状态版本；具体 Diff 继续由 Story State Inspector 查看。')
                 ->visible(fn (): bool => $this->chapter()->latestStateVersion !== null)
