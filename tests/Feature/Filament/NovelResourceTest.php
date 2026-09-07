@@ -140,13 +140,13 @@ test('the novel workspace overview shows real values and explicit unavailable me
         ]);
 });
 
-test('future generation actions are visible but disabled in the workspace', function () {
+test('next chapter generation is enabled while future workflow actions remain disabled', function () {
     $novel = Novel::factory()->create();
 
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertSee('尚无正式章节')
         ->assertActionExists('generateNextChapter')
-        ->assertActionDisabled('generateNextChapter')
+        ->assertActionEnabled('generateNextChapter')
         ->assertActionExists('autoGenerate')
         ->assertActionDisabled('autoGenerate')
         ->assertActionExists('pause')

@@ -12,6 +12,12 @@ use InvalidArgumentException;
 
 class BudgetService
 {
+    public function assertWithinNovelLimits(Novel $novel): void
+    {
+        $this->assertAvailable($this->dailyUsage());
+        $this->assertAvailable($this->novelUsage($novel));
+    }
+
     public function assertCanRequest(AiRequest $request): void
     {
         $this->assertAvailable($this->dailyUsage());

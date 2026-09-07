@@ -2,7 +2,10 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Generation\GenerateNextChapterAction;
 use App\Actions\Story\InitializeNovelStateAction;
+use App\AI\Exceptions\BudgetExceededException;
+use App\Exceptions\GenerationPreflightException;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use Filament\Actions\Action;
@@ -51,8 +54,30 @@ class ViewNovel extends ViewRecord
             Action::make('generateNextChapter')
                 ->label('生成下一章')
                 ->icon('heroicon-o-play')
-                ->disabled()
-                ->tooltip('将在 TASK-061 中启用'),
+                ->action(function (GenerateNextChapterAction $generateNextChapter): void {
+                    try {
+                        $chapter = $generateNextChapter->handle($this->getRecord());
+                    } catch (GenerationPreflightException|BudgetExceededException $exception) {
+                        Notification::make()
+                            ->title('无法生成下一章')
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    Notification::make()
+                        ->title('章节工作流已就绪')
+                        ->body("第 {$chapter->sequence} 章已创建或恢复。")
+                        ->success()
+                        ->send();
+
+                    $this->redirect(NovelResource::getUrl('chapter', [
+                        'record' => $this->getRecord(),
+                        'chapter' => $chapter,
+                    ]));
+                }),
             Action::make('autoGenerate')
                 ->label('自动生成')
                 ->icon('heroicon-o-bolt')
