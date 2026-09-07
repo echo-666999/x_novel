@@ -10,6 +10,7 @@ use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Pages\Memory as MemoryPage;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
@@ -1146,7 +1147,7 @@ class ViewNovelChapter extends ViewRecord
             ]);
     }
 
-    /** @return array<int, TextEntry> */
+    /** @return array<int, mixed> */
     private function timelineDetails(array $item): array
     {
         /** @var GenerationRun|null $run */
@@ -1173,6 +1174,9 @@ class ViewNovelChapter extends ViewRecord
                 ->placeholder('—')
                 ->fontFamily('mono')
                 ->copyable(),
+            ...($item['key'] === 'context' && $run?->context_snapshot !== null
+                ? ContextInspectorSchema::make(fn (mixed $record): GenerationRun => $run, 'timeline_context_')
+                : []),
             TextEntry::make('timeline_detail_error_'.$item['key'])->label('错误')->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)->placeholder('—'),
         ];
     }

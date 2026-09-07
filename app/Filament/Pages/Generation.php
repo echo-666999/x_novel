@@ -6,6 +6,7 @@ use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
@@ -166,59 +167,14 @@ class Generation extends Page implements HasTable
                 TextEntry::make('state_version')->label('State Version')->placeholder('—'),
                 TextEntry::make('bible_version')->label('Bible Version')->placeholder('—'),
             ]),
-            Section::make('Context Snapshot')->schema([
+            Section::make('原始 Context Snapshot')->schema([
                 TextEntry::make('context_snapshot')
                     ->hiddenLabel()
                     ->state(fn (GenerationRun $record): string => $this->formatJson($record->context_snapshot))
                     ->fontFamily('mono')
                     ->copyable(),
             ]),
-            Section::make('L0 · Hard Constraints')
-                ->description('不可因 Token Budget 删除的 Bible、Locked Fact、World Rule 与 Plan 约束。')
-                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'l0') !== null)
-                ->schema([
-                    TextEntry::make('context_l0')
-                        ->hiddenLabel()
-                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'l0')))
-                        ->fontFamily('mono')
-                        ->copyable(),
-                ]),
-            Section::make('L1 · Current State')
-                ->description('来自该 Run 绑定的不可变 Canonical Story State Version。')
-                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'l1') !== null)
-                ->columns(2)
-                ->schema([
-                    TextEntry::make('context_state_version')
-                        ->label('State Version')
-                        ->state(fn (GenerationRun $record): string => 'v'.data_get($record->context_snapshot, 'state_version', $record->state_version ?? '—'))
-                        ->badge(),
-                    TextEntry::make('context_l1')
-                        ->label('Canonical State')
-                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'l1')))
-                        ->fontFamily('mono')
-                        ->copyable()
-                        ->columnSpanFull(),
-                ]),
-            Section::make('L2 · 近期故事')
-                ->description('来自当前章节之前的正式章节摘要与上一章结尾，不使用向量检索。')
-                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'l2') !== null)
-                ->schema([
-                    TextEntry::make('context_l2')
-                        ->hiddenLabel()
-                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'l2')))
-                        ->fontFamily('mono')
-                        ->copyable(),
-                ]),
-            Section::make('Token Allocation')
-                ->description('显示总预算、实际占用和各 Context Section 的分配。')
-                ->visible(fn (GenerationRun $record): bool => data_get($record->context_snapshot, 'token_allocation') !== null)
-                ->schema([
-                    TextEntry::make('context_token_allocation')
-                        ->hiddenLabel()
-                        ->state(fn (GenerationRun $record): string => $this->formatJsonValue(data_get($record->context_snapshot, 'token_allocation')))
-                        ->fontFamily('mono')
-                        ->copyable(),
-                ]),
+            ...ContextInspectorSchema::make(fn (GenerationRun $record): GenerationRun => $record),
             Section::make('Artifacts')->schema([
                 RepeatableEntry::make('artifacts')
                     ->hiddenLabel()
@@ -285,11 +241,6 @@ class Generation extends Page implements HasTable
 
     /** @param array<string, mixed>|null $value */
     private function formatJson(?array $value): string
-    {
-        return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
-    }
-
-    private function formatJsonValue(mixed $value): string
     {
         return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }

@@ -10,6 +10,7 @@ use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\Scene;
 use App\Models\UsageRecord;
@@ -92,8 +93,14 @@ test('generation page has a useful empty state', function () {
         ->assertSee('每个流水线阶段');
 });
 
-test('run inspector exposes l0 l1 token allocation and state version', function () {
+test('run inspector exposes all context layers tokens truncation and selected memory', function () {
+    $novel = Novel::factory()->create();
+    $memory = Memory::factory()->for($novel)->create([
+        'summary' => '旧都密钥属于主角。',
+        'valid_from_chapter' => 6,
+    ]);
     $run = GenerationRun::factory()->create([
+        'novel_id' => $novel->getKey(),
         'state_version' => 7,
         'context_snapshot' => [
             'schema_version' => 1,
@@ -101,7 +108,11 @@ test('run inspector exposes l0 l1 token allocation and state version', function 
             'l0' => ['bible_hard_constraints' => ['禁止复活死者']],
             'l1' => ['canonical_story_state' => ['timeline' => ['夜幕降临']]],
             'l2' => ['recent_chapters' => [['sequence' => 6, 'summary' => '风暴逼近']]],
-            'token_allocation' => ['budget' => 4000, 'used' => 1200, 'remaining' => 2800, 'sections' => ['l0' => 400, 'l1' => 800]],
+            'l3' => ['memories' => [['id' => $memory->getKey(), 'summary' => '旧都密钥属于主角。', 'final_score' => 0.88]]],
+            'l4' => ['style' => '冷峻克制'],
+            'memory_ids' => [$memory->getKey()],
+            'truncated_sections' => ['l3.long_term_memory'],
+            'token_allocation' => ['budget' => 4000, 'used' => 1200, 'remaining' => 2800, 'sections' => ['l0' => 400, 'l1' => 500, 'l2' => 200, 'l3' => 100]],
         ],
     ]);
 
@@ -111,7 +122,11 @@ test('run inspector exposes l0 l1 token allocation and state version', function 
         ->assertSchemaComponentExists('context_l0')
         ->assertSchemaComponentExists('context_l1')
         ->assertSchemaComponentExists('context_l2')
-        ->assertSchemaComponentExists('context_token_allocation');
+        ->assertSchemaComponentExists('context_l3')
+        ->assertSchemaComponentExists('context_l4')
+        ->assertSchemaComponentExists('context_token_allocation')
+        ->assertSchemaComponentExists('context_truncated_sections')
+        ->assertSchemaComponentExists('context_selected_memories');
 });
 
 test('failed run explains retryability and recommended action', function () {

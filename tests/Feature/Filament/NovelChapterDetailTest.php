@@ -332,7 +332,16 @@ test('pipeline timeline identifies the blocked stage and exposes its run details
         ->assertSee('scene-writer-v1')
         ->assertSee('150')
         ->assertSee('USD 0.001500')
-        ->assertSee('provider_timeout · 模型请求超时');
+        ->assertSee('provider_timeout · 模型请求超时')
+        ->unmountAction()
+        ->mountAction(TestAction::make('inspectTimelineContext')->schemaComponent('timeline-stage-context', 'content'))
+        ->assertSchemaComponentExists('timeline_context_l0')
+        ->assertSchemaComponentExists('timeline_context_l1')
+        ->assertSchemaComponentExists('timeline_context_l2')
+        ->assertSchemaComponentExists('timeline_context_l3')
+        ->assertSchemaComponentExists('timeline_context_l4')
+        ->assertSchemaComponentExists('timeline_context_token_allocation')
+        ->assertSchemaComponentExists('timeline_context_selected_memories');
 });
 
 test('events workspace shows candidates and can dispatch extraction', function () {
