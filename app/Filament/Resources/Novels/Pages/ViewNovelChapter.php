@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\ReviewDecision;
@@ -19,6 +20,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Services\CanonicalCommitService;
 use App\Services\DraftRewriteDiff;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
@@ -35,6 +37,7 @@ use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
+use Illuminate\Validation\ValidationException;
 
 class ViewNovelChapter extends ViewRecord
 {
@@ -115,6 +118,40 @@ class ViewNovelChapter extends ViewRecord
                     'record' => $this->getRecord(),
                     'chapter' => $this->chapter(),
                 ])),
+            Action::make('commitCanonical')
+                ->label('提交正式章节')
+                ->icon('heroicon-o-check-badge')
+                ->color('success')
+                ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::Pass
+                    && $this->chapter()->canonical_artifact_id === null)
+                ->disabled(fn (): bool => $this->canonicalCommitContext() === null)
+                ->tooltip(fn (): ?string => $this->canonicalCommitContext() === null ? '请先完成事件提取、State Patch 与状态校验。' : null)
+                ->modalHeading('提交 Canonical Chapter')
+                ->modalDescription('该操作会原子写入正式事件、事实变化和新的 Story State Version。')
+                ->modalSubmitActionLabel('确认提交')
+                ->schema([
+                    TextEntry::make('commit_draft')->label('草稿版本')->state(fn (): string => $this->canonicalCommitPreview()['draft']),
+                    TextEntry::make('commit_state')->label('故事状态')->state(fn (): string => $this->canonicalCommitPreview()['state']),
+                    TextEntry::make('commit_events')->label('事件数量')->state(fn (): int => $this->canonicalCommitPreview()['events'])->numeric(),
+                    TextEntry::make('commit_facts')->label('事实变化')->state(fn (): int => $this->canonicalCommitPreview()['facts'])->numeric(),
+                    TextEntry::make('commit_changes')->label('状态变化')->state(fn (): int => $this->canonicalCommitPreview()['changes'])->numeric(),
+                ])
+                ->action(function (CanonicalCommitService $canonicalCommit): void {
+                    $context = $this->canonicalCommitContext();
+
+                    if ($context === null) {
+                        throw ValidationException::withMessages(['commit' => 'Canonical Commit 输入尚未准备完成。']);
+                    }
+
+                    $stateVersion = $canonicalCommit->commit($context);
+                    $this->cachedChapter = null;
+
+                    Notification::make()
+                        ->title('章节已提交为正式版本')
+                        ->body('Canonical Story State 已更新至 v'.$stateVersion->version.'。')
+                        ->success()
+                        ->send();
+                }),
             Action::make('chapters')
                 ->label('返回章节列表')
                 ->icon('heroicon-o-arrow-left')
@@ -254,6 +291,58 @@ class ViewNovelChapter extends ViewRecord
     private function latestReview(): ?Review
     {
         return Review::query()->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))->with('artifact')->latest('id')->first();
+    }
+
+    private function canonicalCommitContext(): ?CanonicalCommitData
+    {
+        $review = $this->latestReview();
+        $draftId = (int) data_get($review?->artifact?->data, 'source_artifact_id', 0);
+        $draft = $draftId > 0 ? GenerationArtifact::query()->find($draftId) : null;
+        $candidate = $draft === null ? null : GenerationArtifact::query()
+            ->where('type', ArtifactType::EventCandidate)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->latest('version')->latest('id')->get()
+            ->first(fn (GenerationArtifact $artifact): bool => (int) data_get($artifact->data, 'source_artifact_id') === $draft->getKey());
+        $patch = $candidate === null ? null : GenerationArtifact::query()
+            ->where('type', ArtifactType::StatePatch)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->latest('version')->latest('id')->get()
+            ->first(fn (GenerationArtifact $artifact): bool => (int) data_get($artifact->data, 'source_artifact_id') === $candidate->getKey());
+        $stateVersion = $this->getRecord()->canonicalStateVersion()->first();
+
+        if ($review?->decision !== ReviewDecision::Pass || $draft === null || $candidate === null || $patch === null || $stateVersion === null) {
+            return null;
+        }
+
+        return new CanonicalCommitData(
+            chapterId: $this->chapterId,
+            artifactId: $draft->getKey(),
+            reviewId: $review->getKey(),
+            eventCandidateArtifactId: $candidate->getKey(),
+            statePatchArtifactId: $patch->getKey(),
+            expectedStateVersion: $stateVersion->version,
+            artifactChecksum: $draft->checksum,
+        );
+    }
+
+    /** @return array{draft: string, state: string, events: int, facts: int, changes: int} */
+    private function canonicalCommitPreview(): array
+    {
+        $context = $this->canonicalCommitContext();
+        $draft = $context === null ? null : GenerationArtifact::query()->find($context->artifactId);
+        $candidate = $context === null ? null : GenerationArtifact::query()->find($context->eventCandidateArtifactId);
+        $patch = $context === null ? null : GenerationArtifact::query()->find($context->statePatchArtifactId);
+
+        return [
+            'draft' => $draft === null ? '—' : match ($draft->type) {
+                ArtifactType::RewriteDraft => '重写稿 v'.$draft->version,
+                default => '章节草稿 v'.$draft->version,
+            },
+            'state' => $context === null ? '—' : 'v'.$context->expectedStateVersion.' → v'.($context->expectedStateVersion + 1),
+            'events' => count(data_get($candidate?->data, 'events', [])),
+            'facts' => count(data_get($patch?->data, 'fact_changes', [])),
+            'changes' => count(data_get($patch?->data, 'changes', [])),
+        ];
     }
 
     private function rewriteArtifacts()

@@ -89,6 +89,27 @@ class StatePatchBuilder
         });
     }
 
+    /** @param array<string, mixed> $state @return array<string, mixed> */
+    public function applyArtifact(array $state, GenerationArtifact $artifact): array
+    {
+        if ($artifact->type !== ArtifactType::StatePatch) {
+            throw ValidationException::withMessages(['state_patch' => '指定 Artifact 不是 State Patch。']);
+        }
+
+        $patch = new StatePatch(
+            expectedStateVersion: (int) data_get($artifact->data, 'expected_state_version', -1),
+            operations: data_get($artifact->data, 'operations', []),
+            factChanges: data_get($artifact->data, 'fact_changes', []),
+            foreshadowingChanges: data_get($artifact->data, 'foreshadowing_changes', []),
+        );
+
+        foreach ($patch->operations as $operation) {
+            $state = $this->applyOperation($state, $operation);
+        }
+
+        return $state;
+    }
+
     private function latestCandidateArtifact(Chapter $chapter): GenerationArtifact
     {
         $artifact = GenerationArtifact::query()
