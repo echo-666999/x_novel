@@ -1,13 +1,20 @@
 <?php
 
+use App\Enums\ArtifactType;
+use App\Enums\GenerationStage;
+use App\Enums\RunStatus;
+use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Scene;
 use App\Models\StoryStateVersion;
+use App\Models\UsageRecord;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -106,4 +113,48 @@ test('the chapter list links each chapter to its detail workspace', function () 
             ]),
             $chapter,
         );
+});
+
+test('scene workspace exposes generation actions and execution metrics', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $planned = Scene::factory()->for($chapter)->create(['sequence' => 1]);
+    $completed = Scene::factory()->for($chapter)->create([
+        'sequence' => 2,
+        'status' => SceneStatus::Draft,
+    ]);
+    Scene::factory()->for($chapter)->create([
+        'sequence' => 3,
+        'status' => SceneStatus::Failed,
+    ]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->for($completed)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+        'started_at' => now()->subSecond(),
+        'finished_at' => now(),
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => '已生成的场景正文',
+    ]);
+    $completed->update(['current_artifact_id' => $artifact->getKey()]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $run->getKey(),
+        'novel_id' => $novel->getKey(),
+        'chapter_id' => $chapter->getKey(),
+        'estimated_cost' => 0.012345,
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('Generate')
+        ->assertSee('Retry')
+        ->assertSee('View Artifact')
+        ->assertSee('View Run')
+        ->assertSee('字数')
+        ->assertSee('耗时')
+        ->assertSee('USD 0.012345');
 });

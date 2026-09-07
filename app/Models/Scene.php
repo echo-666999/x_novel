@@ -46,6 +46,12 @@ class Scene extends Model
         return $this->hasMany(GenerationRun::class);
     }
 
+    /** @return BelongsTo<GenerationArtifact, $this> */
+    public function currentArtifact(): BelongsTo
+    {
+        return $this->belongsTo(GenerationArtifact::class, 'current_artifact_id');
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

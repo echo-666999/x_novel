@@ -4,9 +4,12 @@ namespace App\Filament\Resources\Novels\Pages;
 
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
+use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
+use App\Models\Scene;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -241,44 +244,120 @@ class ViewNovelChapter extends ViewRecord
     /** @return array<int, mixed> */
     private function scenesSchema(): array
     {
-        return [
+        $sections = [
             Section::make('尚未同步 Scenes')
                 ->description('先在章节列表保存 Chapter Plan，再使用“同步 Scenes”。')
                 ->icon('heroicon-o-rectangle-stack')
                 ->visible(fn (): bool => $this->chapter()->scenes->isEmpty()),
-            Section::make('Scene 列表')
-                ->description('按执行顺序展示当前章节的场景计划。')
-                ->visible(fn (): bool => $this->chapter()->scenes->isNotEmpty())
-                ->schema([
-                    RepeatableEntry::make('scenes')
-                        ->label('')
-                        ->state(fn (): array => $this->chapter()->scenes
-                            ->map(fn ($scene): array => [
-                                'sequence' => 'Scene '.$scene->sequence,
-                                'status' => $scene->status,
-                                'pov' => $scene->povCharacter?->name,
-                                'location' => $scene->location,
-                                'time_anchor' => $scene->time_anchor,
-                                'goal' => $scene->goal,
-                                'conflict' => $scene->conflict,
-                                'turn' => $scene->turn,
-                                'outcome' => $scene->outcome,
-                            ])
-                            ->all())
-                        ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
-                        ->schema([
-                            TextEntry::make('sequence')->label('Scene')->badge(),
-                            TextEntry::make('status')->label('状态')->badge(),
-                            TextEntry::make('pov')->label('POV')->placeholder('未指定'),
-                            TextEntry::make('location')->label('地点')->placeholder('未指定'),
-                            TextEntry::make('time_anchor')->label('时间锚点')->placeholder('未指定'),
-                            TextEntry::make('goal')->label('目标'),
-                            TextEntry::make('conflict')->label('冲突'),
-                            TextEntry::make('turn')->label('转折'),
-                            TextEntry::make('outcome')->label('结果'),
-                        ]),
-                ]),
         ];
+
+        foreach ($this->chapter()->scenes as $scene) {
+            $sections[] = $this->sceneSection($scene);
+        }
+
+        return $sections;
+    }
+
+    private function sceneSection(Scene $scene): Section
+    {
+        $run = $scene->generationRuns->sortByDesc('id')->first();
+        $artifact = $scene->currentArtifact;
+
+        return Section::make('Scene '.$scene->sequence)
+            ->description($scene->goal)
+            ->headerActions([
+                Action::make('generateScene'.$scene->getKey())
+                    ->label('Generate')
+                    ->icon('heroicon-o-play')
+                    ->visible($scene->status === SceneStatus::Planned)
+                    ->disabled(! $this->canGenerateScene($scene))
+                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序 Scene 成功。' : null)
+                    ->action(fn () => $this->dispatchScene($scene)),
+                Action::make('retryScene'.$scene->getKey())
+                    ->label('Retry')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible($scene->status === SceneStatus::Failed)
+                    ->disabled(! $this->canGenerateScene($scene))
+                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序 Scene 成功。' : null)
+                    ->action(fn () => $this->dispatchScene($scene, true)),
+                Action::make('viewSceneArtifact'.$scene->getKey())
+                    ->label('View Artifact')
+                    ->icon('heroicon-o-document-text')
+                    ->color('gray')
+                    ->visible($artifact !== null)
+                    ->modalHeading('Scene '.$scene->sequence.' · Draft Artifact')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('关闭')
+                    ->infolist([
+                        TextEntry::make('scene_artifact_content_'.$scene->getKey())
+                            ->label('正文')
+                            ->state($artifact?->content)
+                            ->prose()
+                            ->copyable(),
+                        TextEntry::make('scene_artifact_delta_'.$scene->getKey())
+                            ->label('Temporary State Delta')
+                            ->state(fn (): string => json_encode(
+                                data_get($artifact?->data, 'temporary_state_delta', []),
+                                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+                            ) ?: '{}')
+                            ->fontFamily('mono')
+                            ->copyable(),
+                    ]),
+                Action::make('viewSceneRun'.$scene->getKey())
+                    ->label('View Run')
+                    ->icon('heroicon-o-command-line')
+                    ->color('gray')
+                    ->visible($run !== null)
+                    ->modalHeading('Scene '.$scene->sequence.' · Generation Run')
+                    ->modalSubmitAction(false)
+                    ->modalCancelActionLabel('关闭')
+                    ->infolist([
+                        TextEntry::make('scene_run_status_'.$scene->getKey())->label('状态')->state($run?->status)->badge(),
+                        TextEntry::make('scene_run_model_'.$scene->getKey())->label('模型')->state($run?->model_policy)->placeholder('—'),
+                        TextEntry::make('scene_run_prompt_'.$scene->getKey())->label('Prompt Version')->state($run?->prompt_version)->placeholder('—'),
+                        TextEntry::make('scene_run_error_'.$scene->getKey())
+                            ->label('错误')
+                            ->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)
+                            ->placeholder('—'),
+                    ]),
+            ])
+            ->columns(['default' => 2, 'md' => 4, 'xl' => 8])
+            ->schema([
+                TextEntry::make('scene_status_'.$scene->getKey())->label('状态')->state($scene->status)->badge(),
+                TextEntry::make('scene_words_'.$scene->getKey())->label('字数')->state(mb_strlen($artifact?->content ?? ''))->numeric(),
+                TextEntry::make('scene_duration_'.$scene->getKey())
+                    ->label('耗时')
+                    ->state($run?->durationMilliseconds() === null ? null : $run->durationMilliseconds().' ms')
+                    ->placeholder('—'),
+                TextEntry::make('scene_cost_'.$scene->getKey())
+                    ->label('成本')
+                    ->state($run === null ? null : config('ai.cost.currency').' '.number_format((float) $run->usageRecords->sum('estimated_cost'), 6))
+                    ->placeholder('—'),
+                TextEntry::make('scene_pov_'.$scene->getKey())->label('POV')->state($scene->povCharacter?->name)->placeholder('未指定'),
+                TextEntry::make('scene_location_'.$scene->getKey())->label('地点')->state($scene->location)->placeholder('未指定'),
+                TextEntry::make('scene_conflict_'.$scene->getKey())->label('冲突')->state($scene->conflict),
+                TextEntry::make('scene_outcome_'.$scene->getKey())->label('结果')->state($scene->outcome),
+            ]);
+    }
+
+    private function dispatchScene(Scene $scene, bool $regenerate = false): void
+    {
+        GenerateSceneJob::dispatch($scene->getKey(), $regenerate);
+
+        Notification::make()
+            ->title($regenerate ? 'Scene 重试已加入队列' : 'Scene 已加入生成队列')
+            ->body('Scene '.$scene->sequence.' 将在 generation 队列中执行。')
+            ->success()
+            ->send();
+    }
+
+    private function canGenerateScene(Scene $scene): bool
+    {
+        return $this->chapter()->scenes
+            ->where('sequence', '<', $scene->sequence)
+            ->every(fn (Scene $previous): bool => $previous->current_artifact_id !== null
+                && in_array($previous->status, [SceneStatus::Draft, SceneStatus::Accepted], true));
     }
 
     /** @return array<int, mixed> */
@@ -391,6 +470,8 @@ class ViewNovelChapter extends ViewRecord
                 'volume:id,sequence,title',
                 'latestPlan.povCharacter:id,name',
                 'scenes.povCharacter:id,name',
+                'scenes.currentArtifact',
+                'scenes.generationRuns.usageRecords',
                 'latestStateVersion',
             ])
             ->firstOrFail();
