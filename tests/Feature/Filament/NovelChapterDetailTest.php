@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
@@ -319,4 +320,59 @@ test('events workspace shows candidates and can dispatch extraction', function (
         ->callAction(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'));
 
     Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $chapter->getKey() && $job->regenerate);
+});
+
+test('state changes workspace builds and displays a candidate patch preview', function () {
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create();
+    $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => [
+            'status' => 'candidate',
+            'source_artifact_id' => 99,
+            'events' => [[
+                'event_type' => 'character_moved',
+                'subject_type' => 'character',
+                'subject_id' => '12',
+                'payload' => ['from' => '长安', 'to' => '洛阳'],
+                'evidence' => [[
+                    'artifact_id' => 99,
+                    'scene_id' => null,
+                    'quote' => '林舟抵达洛阳。',
+                    'start_offset' => null,
+                    'end_offset' => null,
+                ]],
+                'story_time' => '第三日',
+                'confidence' => 0.95,
+            ]],
+        ],
+    ]);
+
+    $page = Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('State Patch Preview')
+        ->assertSee('尚未生成')
+        ->assertActionExists(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'))
+        ->callAction(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'));
+
+    $page = Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ]);
+
+    $page
+        ->assertSee('Candidate')
+        ->assertSee('characters.12.location')
+        ->assertSee('洛阳')
+        ->assertSee('character_moved');
+
+    expect($novel->fresh()->storyStateVersions()->count())->toBe(1);
 });

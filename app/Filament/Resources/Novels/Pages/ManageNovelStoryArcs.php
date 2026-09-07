@@ -178,6 +178,7 @@ class ManageNovelStoryArcs extends ManageRelatedRecords
         return [
             CreateAction::make()
                 ->label('创建故事线')
+                ->modalHeading('创建故事线')
                 ->icon('heroicon-o-plus'),
         ];
     }

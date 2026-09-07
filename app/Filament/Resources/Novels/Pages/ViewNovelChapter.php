@@ -16,6 +16,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Scene;
 use App\Services\PlanValidator;
+use App\Services\StatePatchBuilder;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -148,6 +149,7 @@ class ViewNovelChapter extends ViewRecord
                         ->schema([$this->futureSection('Review 尚未接入', 'Review 结果和人工处理动作将在后续 Review 工作流任务中接入。')]),
                     Tab::make('State Changes')
                         ->icon('heroicon-o-arrows-right-left')
+                        ->badge(fn (): int => count(data_get($this->latestStatePatchArtifact()?->data, 'changes', [])))
                         ->schema($this->stateChangesSchema()),
                     Tab::make('Runs')
                         ->icon('heroicon-o-command-line')
@@ -585,11 +587,80 @@ class ViewNovelChapter extends ViewRecord
     /** @return array<int, mixed> */
     private function stateChangesSchema(): array
     {
+        $artifact = $this->latestStatePatchArtifact();
+        $candidate = $this->latestEventCandidateArtifact();
+
         return [
-            Section::make('尚无正式 State Changes')
-                ->description('只有 Canonical Commit 才能创建新的 Story State Version。')
+            Section::make('State Patch Preview')
+                ->key('state-patch-preview')
+                ->description('根据 Event Candidates 确定性计算预期状态变化；此操作不会修改 Canonical Story State。')
                 ->icon('heroicon-o-arrows-right-left')
-                ->visible(fn (): bool => $this->chapter()->latestStateVersion === null),
+                ->headerActions([
+                    Action::make('buildStatePatch')
+                        ->label($artifact === null ? 'Build State Patch' : 'Rebuild State Patch')
+                        ->icon('heroicon-o-wrench-screwdriver')
+                        ->disabled($candidate === null)
+                        ->tooltip($candidate === null ? '请先生成 Story Event Candidates。' : null)
+                        ->action(function (): void {
+                            $artifact = app(StatePatchBuilder::class)->build($this->chapterId);
+                            $this->cacheSchema('content', null);
+
+                            Notification::make()
+                                ->title('State Patch 已生成')
+                                ->body('Artifact v'.$artifact->version.'，Canonical Story State 未被修改。')
+                                ->success()
+                                ->send();
+                        }),
+                ])
+                ->columns(['default' => 1, 'md' => 4])
+                ->schema([
+                    TextEntry::make('patch_status')
+                        ->label('Status')
+                        ->state(fn (): string => $artifact === null ? '尚未生成' : 'Candidate')
+                        ->badge()
+                        ->color(fn (): string => $artifact === null ? 'gray' : 'warning'),
+                    TextEntry::make('patch_version')
+                        ->label('Artifact')
+                        ->state(fn (): ?string => $artifact === null ? null : 'v'.$artifact->version)
+                        ->placeholder('—'),
+                    TextEntry::make('expected_state_version')
+                        ->label('Expected State')
+                        ->state(fn (): ?string => $artifact === null ? null : 'v'.data_get($artifact->data, 'expected_state_version'))
+                        ->placeholder('—'),
+                    TextEntry::make('source_event_artifact')
+                        ->label('Source Events')
+                        ->state(fn (): ?string => $artifact === null ? null : '#'.data_get($artifact->data, 'source_artifact_id'))
+                        ->placeholder('—'),
+                ]),
+            Section::make('尚无正式 State Changes')
+                ->description($candidate === null ? '请先生成 Story Event Candidates。' : '点击 Build State Patch 查看本章提交后会改变什么。')
+                ->icon('heroicon-o-document-magnifying-glass')
+                ->visible($artifact === null),
+            Section::make('预期状态变化')
+                ->description('按确定性 Event Applier 生成；Before / After 均为只读预览。')
+                ->visible($artifact !== null && data_get($artifact?->data, 'changes', []) !== [])
+                ->schema([
+                    RepeatableEntry::make('state_changes')
+                        ->label('')
+                        ->state(fn (): array => collect(data_get($artifact?->data, 'changes', []))->map(fn (array $change): array => [
+                            ...$change,
+                            'before_display' => $change['before_missing'] ? '（不存在）' : $this->formatTimelineJson($change['before']),
+                            'after_display' => $change['after_missing'] ? '（已删除）' : $this->formatTimelineJson($change['after']),
+                            'source_event' => '#'.($change['source_event_index'] + 1).' · '.$change['source_event_type'].' · '.($change['source_subject_type'] ?? '—').' '.($change['source_subject_id'] ?? ''),
+                        ])->all())
+                        ->columns(['default' => 1, 'md' => 2, 'xl' => 5])
+                        ->schema([
+                            TextEntry::make('path')->label('Path')->copyable(),
+                            TextEntry::make('operation')->label('Operation')->badge(),
+                            TextEntry::make('before_display')->label('Before')->fontFamily('mono'),
+                            TextEntry::make('after_display')->label('After')->fontFamily('mono'),
+                            TextEntry::make('source_event')->label('Source Event'),
+                        ]),
+                ]),
+            Section::make('没有状态变化')
+                ->description('候选事件没有可由当前确定性 Event Applier 安全映射的状态变化。')
+                ->icon('heroicon-o-check-circle')
+                ->visible($artifact !== null && data_get($artifact?->data, 'changes', []) === []),
             Section::make('Canonical State Version')
                 ->description('这里只展示本章关联的只读正式状态版本；具体 Diff 继续由 Story State Inspector 查看。')
                 ->visible(fn (): bool => $this->chapter()->latestStateVersion !== null)
@@ -611,6 +682,11 @@ class ViewNovelChapter extends ViewRecord
                         ->dateTime(),
                 ]),
         ];
+    }
+
+    private function latestStatePatchArtifact(): ?GenerationArtifact
+    {
+        return $this->latestTimelineArtifact(ArtifactType::StatePatch);
     }
 
     private function futureSection(string $heading, string $description): Section

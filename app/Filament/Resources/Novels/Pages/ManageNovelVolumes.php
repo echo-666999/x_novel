@@ -42,6 +42,7 @@ class ManageNovelVolumes extends ManageRelatedRecords
     public function form(Schema $schema): Schema
     {
         return $schema
+            ->columns(1)
             ->components([
                 Section::make('分卷目标')
                     ->description('定义这一卷存在的目的、高潮和篇幅边界。')
@@ -138,7 +139,10 @@ class ManageNovelVolumes extends ManageRelatedRecords
             ->emptyStateDescription('创建第一卷，明确阶段目标、高潮和篇幅边界。')
             ->emptyStateIcon('heroicon-o-rectangle-stack')
             ->recordActions([
-                EditAction::make()->label('编辑'),
+                EditAction::make()
+                    ->label('编辑')
+                    ->modalHeading('编辑分卷')
+                    ->modalWidth('3xl'),
                 DeleteAction::make()->label('删除'),
             ]);
     }
@@ -148,7 +152,9 @@ class ManageNovelVolumes extends ManageRelatedRecords
         return [
             CreateAction::make()
                 ->label('创建分卷')
-                ->icon('heroicon-o-plus'),
+                ->icon('heroicon-o-plus')
+                ->modalHeading('创建分卷')
+                ->modalWidth('3xl'),
         ];
     }
 }

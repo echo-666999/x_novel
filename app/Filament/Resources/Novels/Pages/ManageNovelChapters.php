@@ -12,12 +12,12 @@ use App\Models\Chapter;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
-use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ManageRelatedRecords;
 use Filament\Schemas\Components\Section;
@@ -51,44 +51,46 @@ class ManageNovelChapters extends ManageRelatedRecords
 
     public function form(Schema $schema): Schema
     {
-        return $schema->components([
-            Section::make('计划章节')
-                ->description('这里只建立章节槽位；完整 Chapter Plan 在后续步骤中维护。')
-                ->columns([
-                    'default' => 1,
-                    'md' => 3,
-                ])
-                ->schema([
-                    TextInput::make('sequence')
-                        ->label('章节序号')
-                        ->helperText('同一部小说内不可重复。')
-                        ->integer()
-                        ->minValue(1)
-                        ->default(fn (): int => ((int) $this->getRecord()->chapters()->max('sequence')) + 1)
-                        ->required()
-                        ->unique(
-                            table: Chapter::class,
-                            column: 'sequence',
-                            modifyRuleUsing: fn (Unique $rule): Unique => $rule->where('novel_id', $this->getRecord()->getKey()),
-                        ),
-                    TextInput::make('title')
-                        ->label('章节标题')
-                        ->required()
-                        ->maxLength(255)
-                        ->columnSpan(2),
-                    Select::make('volume_id')
-                        ->label('所属分卷')
-                        ->options(fn (): array => $this->getRecord()->volumes()
-                            ->get()
-                            ->mapWithKeys(fn ($volume): array => [
-                                $volume->getKey() => "第 {$volume->sequence} 卷 · {$volume->title}",
-                            ])
-                            ->all())
-                        ->searchable()
-                        ->preload()
-                        ->placeholder('暂不指定分卷'),
-                ]),
-        ]);
+        return $schema
+            ->columns(1)
+            ->components([
+                Section::make('计划章节')
+                    ->description('这里只建立章节槽位；完整 Chapter Plan 在后续步骤中维护。')
+                    ->columns([
+                        'default' => 1,
+                        'md' => 3,
+                    ])
+                    ->schema([
+                        TextInput::make('sequence')
+                            ->label('章节序号')
+                            ->helperText('同一部小说内不可重复。')
+                            ->integer()
+                            ->minValue(1)
+                            ->default(fn (): int => ((int) $this->getRecord()->chapters()->max('sequence')) + 1)
+                            ->required()
+                            ->unique(
+                                table: Chapter::class,
+                                column: 'sequence',
+                                modifyRuleUsing: fn (Unique $rule): Unique => $rule->where('novel_id', $this->getRecord()->getKey()),
+                            ),
+                        TextInput::make('title')
+                            ->label('章节标题')
+                            ->required()
+                            ->maxLength(255)
+                            ->columnSpan(2),
+                        Select::make('volume_id')
+                            ->label('所属分卷')
+                            ->options(fn (): array => $this->getRecord()->volumes()
+                                ->get()
+                                ->mapWithKeys(fn ($volume): array => [
+                                    $volume->getKey() => "第 {$volume->sequence} 卷 · {$volume->title}",
+                                ])
+                                ->all())
+                            ->searchable()
+                            ->preload()
+                            ->placeholder('暂不指定分卷'),
+                    ]),
+            ]);
     }
 
     public function table(Table $table): Table
@@ -271,6 +273,8 @@ class ManageNovelChapters extends ManageRelatedRecords
             CreateAction::make()
                 ->label('创建计划章节')
                 ->icon('heroicon-o-plus')
+                ->modalHeading('创建计划章节')
+                ->modalWidth('3xl')
                 ->successNotificationTitle('计划章节已创建'),
         ];
     }
@@ -405,14 +409,14 @@ class ManageNovelChapters extends ManageRelatedRecords
             Section::make('Plan Findings')
                 ->description('Blocked 必须修复后才能进入生成；Warning 需要人工确认。')
                 ->schema([
-                    Placeholder::make('validation_status')
+                    TextEntry::make('validation_status')
                         ->label('校验状态')
-                        ->content(fn (?Chapter $record): string => $record?->latestPlan === null
+                        ->state(fn (?Chapter $record): string => $record?->latestPlan === null
                             ? '尚未保存 Plan'
                             : app(PlanValidator::class)->validate($record->latestPlan)->status()->getLabel()),
-                    Placeholder::make('validation_findings')
+                    TextEntry::make('validation_findings')
                         ->label('Findings')
-                        ->content(function (?Chapter $record): HtmlString|string {
+                        ->state(function (?Chapter $record): HtmlString|string {
                             if ($record?->latestPlan === null) {
                                 return '保存 Plan 后显示检查结果。';
                             }

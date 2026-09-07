@@ -8,6 +8,8 @@ use App\AI\Providers\BudgetGuardAiProvider;
 use App\AI\Providers\OpenAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
+use App\Contracts\StoryEventApplier;
+use App\Services\DeterministicStoryEventApplier;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 
@@ -18,6 +20,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
+        $this->app->bind(StoryEventApplier::class, DeterministicStoryEventApplier::class);
         $this->app->bind(AiProvider::class, function (): AiProvider {
             $provider = match (config('ai.provider')) {
                 'openai' => app(OpenAiProvider::class),
