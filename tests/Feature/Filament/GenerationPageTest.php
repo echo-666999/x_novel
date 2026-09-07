@@ -4,13 +4,18 @@ use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Filament\Pages\Generation;
+use App\Filament\Resources\Novels\NovelResource;
+use App\Jobs\AssembleChapterJob;
+use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -107,4 +112,74 @@ test('run inspector exposes l0 l1 token allocation and state version', function 
         ->assertSchemaComponentExists('context_l1')
         ->assertSchemaComponentExists('context_l2')
         ->assertSchemaComponentExists('context_token_allocation');
+});
+
+test('failed run explains retryability and recommended action', function () {
+    $run = GenerationRun::factory()->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'error_code' => 'state_version_conflict',
+        'error_message' => 'Canonical Story State 已变化。',
+        'finished_at' => now(),
+    ]);
+
+    Livewire::test(Generation::class)
+        ->mountTableAction('inspect', $run)
+        ->assertSchemaComponentExists('error_code', null, fn ($component): bool => $component->getState() === 'state_version_conflict')
+        ->assertSchemaComponentExists('failure_stage', null, fn ($component): bool => $component->getState() === '场景生成')
+        ->assertSchemaComponentExists('failed_at')
+        ->assertSchemaComponentExists('retryable', null, fn ($component): bool => $component->getState() === '否')
+        ->assertSchemaComponentExists('recommended_action', null, fn ($component): bool => $component->getState() === '重建 Context 后重试')
+        ->assertSchemaComponentExists('error_message', null, fn ($component): bool => $component->getState() === 'Canonical Story State 已变化。')
+        ->unmountAction()
+        ->assertTableActionHidden('retry', $run)
+        ->assertTableActionHidden('resume', $run);
+});
+
+test('retry requeues a supported failed stage and keeps the chapter link', function () {
+    Queue::fake();
+
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $scene = Scene::factory()->for($chapter)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'scope_type' => 'scene',
+        'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_timeout',
+    ]);
+
+    Livewire::test(Generation::class)
+        ->assertTableActionVisible('retry', $run)
+        ->assertTableActionHidden('resume', $run)
+        ->assertTableActionHasUrl('openChapter', NovelResource::getUrl('chapter', [
+            'record' => $novel,
+            'chapter' => $chapter,
+        ]), $run)
+        ->callTableAction('retry', $run);
+
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $scene->getKey() && $job->regenerate);
+});
+
+test('worker interruption offers resume from persisted state', function () {
+    Queue::fake();
+
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scene_id' => null,
+        'scope_type' => 'chapter',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Failed,
+        'error_code' => 'worker_interrupted',
+    ]);
+
+    Livewire::test(Generation::class)
+        ->assertTableActionHidden('retry', $run)
+        ->assertTableActionVisible('resume', $run)
+        ->callTableAction('resume', $run);
+
+    Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $chapter->getKey() && ! $job->regenerate);
 });
