@@ -80,6 +80,12 @@ class Chapter extends Model
         return $this->hasMany(GenerationRun::class);
     }
 
+    /** @return HasMany<StoryEvent, $this> */
+    public function storyEvents(): HasMany
+    {
+        return $this->hasMany(StoryEvent::class);
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {

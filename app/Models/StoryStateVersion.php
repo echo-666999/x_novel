@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use LogicException;
 
 #[Fillable([
@@ -44,6 +45,13 @@ class StoryStateVersion extends Model
     public function chapter(): BelongsTo
     {
         return $this->belongsTo(Chapter::class);
+    }
+
+    /** @return HasMany<StoryEvent, $this> */
+    public function storyEvents(): HasMany
+    {
+        return $this->hasMany(StoryEvent::class, 'state_version', 'version')
+            ->where('novel_id', $this->novel_id);
     }
 
     /** @return array<string, string> */

@@ -56,6 +56,12 @@ class Novel extends Model
         return $this->hasMany(Chapter::class)->orderBy('sequence');
     }
 
+    /** @return HasMany<StoryEvent, $this> */
+    public function storyEvents(): HasMany
+    {
+        return $this->hasMany(StoryEvent::class);
+    }
+
     /** @return HasMany<GenerationRun, $this> */
     public function generationRuns(): HasMany
     {

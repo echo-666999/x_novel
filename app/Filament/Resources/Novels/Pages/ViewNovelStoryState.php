@@ -8,6 +8,7 @@ use App\Actions\Story\SupersedeFactAction;
 use App\Enums\FactHardness;
 use App\Enums\FactSourceType;
 use App\Enums\FactStatus;
+use App\Enums\StoryEventStatus;
 use App\Filament\Forms\Components\CharacterPicker;
 use App\Filament\Forms\Components\WorldEntityPicker;
 use App\Filament\Resources\Novels\NovelResource;
@@ -53,6 +54,7 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         'foreshadowings' => '伏笔',
         'reader_promises' => '读者承诺',
         'facts' => '事实',
+        'story_events' => '故事事件',
         'state_diff' => '版本差异',
     ];
 
@@ -66,6 +68,9 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
     public ?int $diffToVersion = null;
 
     public string $activeDomain = 'characters';
+
+    #[Url(as: 'event-status')]
+    public string $eventStatus = 'active';
 
     public function mount(int|string $record): void
     {
@@ -353,6 +358,13 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         }
     }
 
+    public function selectEventStatus(string $status): void
+    {
+        if (in_array($status, ['active', 'invalidated', 'all'], true)) {
+            $this->eventStatus = $status;
+        }
+    }
+
     /** @return array<string, mixed> */
     private function inspectorData(): array
     {
@@ -374,6 +386,17 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         $diffTo = $this->diffToVersion === null
             ? null
             : $storyState->findVersion($novel, $this->diffToVersion);
+        $eventStatus = in_array($this->eventStatus, ['active', 'invalidated', 'all'], true)
+            ? $this->eventStatus
+            : StoryEventStatus::Active->value;
+        $storyEvents = $activeDomain === 'story_events'
+            ? $novel->storyEvents()
+                ->with(['chapter:id,sequence,title', 'scene:id,sequence'])
+                ->when($eventStatus !== 'all', fn ($query) => $query->where('status', $eventStatus))
+                ->orderByDesc('chapter_id')
+                ->orderByDesc('id')
+                ->get()
+            : collect();
 
         return [
             'novel' => $novel,
@@ -381,9 +404,11 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
             'stateVersion' => $stateVersion,
             'domains' => self::DOMAINS,
             'activeDomain' => $activeDomain,
-            'domainState' => in_array($activeDomain, ['facts', 'state_diff'], true)
+            'domainState' => in_array($activeDomain, ['facts', 'story_events', 'state_diff'], true)
                 ? []
                 : ($stateVersion?->state[$activeDomain] ?? []),
+            'eventStatus' => $eventStatus,
+            'storyEvents' => $storyEvents,
             'isCurrent' => $stateVersion?->is($storyState->current($novel)) ?? false,
             'diffFrom' => $diffFrom,
             'diffTo' => $diffTo,
