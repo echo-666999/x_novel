@@ -14,6 +14,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ManageNovelWorld;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
+use App\Filament\Resources\Novels\Pages\ViewNovelEndingAudit;
 use App\Filament\Resources\Novels\Pages\ViewNovelPlanning;
 use App\Filament\Resources\Novels\Pages\ViewNovelPlanningPreview;
 use App\Filament\Resources\Novels\Pages\ViewNovelStoryState;
@@ -83,6 +84,7 @@ class NovelResource extends Resource
             ManageNovelChapters::class,
             ManageNovelVolumes::class,
             ManageNovelStoryArcs::class,
+            ViewNovelEndingAudit::class,
         ]);
     }
 
@@ -103,6 +105,7 @@ class NovelResource extends Resource
             'chapter' => ViewNovelChapter::route('/{record}/chapters/{chapter}'),
             'volumes' => ManageNovelVolumes::route('/{record}/planning/volumes'),
             'story-arcs' => ManageNovelStoryArcs::route('/{record}/planning/story-arcs'),
+            'ending-audit' => ViewNovelEndingAudit::route('/{record}/ending-audit'),
             'edit' => EditNovel::route('/{record}/edit'),
         ];
     }

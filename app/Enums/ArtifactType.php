@@ -13,9 +13,13 @@ enum ArtifactType: string
     case StatePatch = 'state_patch';
     case Summary = 'summary';
     case Context = 'context';
+    case EndingAudit = 'ending_audit';
 
     public function getLabel(): string
     {
-        return str($this->value)->headline()->toString();
+        return match ($this) {
+            self::EndingAudit => '结局审计',
+            default => str($this->value)->headline()->toString(),
+        };
     }
 }

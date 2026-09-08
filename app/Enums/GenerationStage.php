@@ -13,6 +13,7 @@ enum GenerationStage: string
     case Commit = 'commit';
     case MemorySummary = 'memory_summary';
     case Embedding = 'embedding';
+    case EndingAudit = 'ending_audit';
 
     public function getLabel(): string
     {
@@ -26,6 +27,7 @@ enum GenerationStage: string
             self::Commit => '正式提交',
             self::MemorySummary => '记忆摘要',
             self::Embedding => '向量化',
+            self::EndingAudit => '结局审计',
         };
     }
 }
