@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\AutoStopService;
 use App\Services\ChapterPlanner;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -10,6 +11,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class PlanChapterJob implements ShouldQueue
 {
@@ -42,5 +44,10 @@ class PlanChapterJob implements ShouldQueue
         } catch (ValidationException $exception) {
             $this->fail($exception);
         }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
     }
 }

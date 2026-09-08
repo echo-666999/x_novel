@@ -8,10 +8,11 @@ use App\Exceptions\GenerationPreflightException;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
+use App\Services\AutoStopService;
 
 class CheckNextAction
 {
-    public function __construct(private readonly GenerateNextChapterAction $generateNextChapter) {}
+    public function __construct(private readonly GenerateNextChapterAction $generateNextChapter, private readonly AutoStopService $autoStop) {}
 
     public function handle(Novel $novel, int $committedChapterId): ?Chapter
     {
@@ -26,7 +27,9 @@ class CheckNextAction
 
         try {
             $nextChapter = $this->generateNextChapter->handle($novel);
-        } catch (BudgetExceededException|GenerationPreflightException) {
+        } catch (BudgetExceededException|GenerationPreflightException $exception) {
+            $this->autoStop->stopForPreflight($novel, $exception);
+
             return null;
         }
 

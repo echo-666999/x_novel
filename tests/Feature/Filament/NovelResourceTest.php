@@ -198,3 +198,23 @@ test('a generating novel can be paused from the overview with its current stage 
     expect($novel->fresh()->status)->toBe(NovelStatus::Generating);
     $component->assertNotified('生成流程已继续');
 });
+
+test('novel overview explains why automatic generation stopped and recommends an action', function () {
+    $novel = Novel::factory()->create([
+        'settings' => [
+            'auto_generate' => false,
+            'auto_stop' => [
+                'code' => 'budget_limit',
+                'reason' => '生成已达到预算 Hard Limit。',
+                'recommended_action' => '检查并调整小说或全局预算。',
+                'stopped_at' => now()->toISOString(),
+            ],
+        ],
+    ]);
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('自动生成已停止')
+        ->assertSee('生成已达到预算 Hard Limit。')
+        ->assertSee('推荐操作')
+        ->assertSee('检查并调整小说或全局预算。');
+});

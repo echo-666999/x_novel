@@ -110,6 +110,9 @@ class ResumeResolver
 
             $settings = $lockedNovel->settings ?? [];
             $settings['pause']['resumed_at'] = now()->toISOString();
+            if (data_get($settings, 'auto_stop.code') === 'user_pause') {
+                unset($settings['auto_stop']);
+            }
             $lockedNovel->update(['status' => $status, 'settings' => $settings]);
             $this->dispatch($lockedNovel->refresh(), $point);
 

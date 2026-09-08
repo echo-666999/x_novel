@@ -6,11 +6,14 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Services\AutoStopService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class PauseGenerationAction
 {
+    public function __construct(private readonly AutoStopService $autoStop) {}
+
     public function handle(Novel $novel): Novel
     {
         return DB::transaction(function () use ($novel): Novel {
@@ -35,7 +38,10 @@ class PauseGenerationAction
                 'settings' => $settings,
             ]);
 
-            return $lockedNovel->refresh();
+            $paused = $lockedNovel->refresh();
+            $this->autoStop->stop($paused, 'user_pause', '用户暂停了自动生成。', '确认当前状态后点击继续。', false);
+
+            return $paused->refresh();
         });
     }
 

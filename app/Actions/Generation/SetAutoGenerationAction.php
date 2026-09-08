@@ -13,6 +13,9 @@ class SetAutoGenerationAction
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
             $settings = $lockedNovel->settings ?? [];
             $settings['auto_generate'] = $enabled;
+            if ($enabled) {
+                unset($settings['auto_stop']);
+            }
             $lockedNovel->update(['settings' => $settings]);
 
             return $lockedNovel->refresh();

@@ -94,6 +94,17 @@ class NovelOverview
                         ->badge()
                         ->color('gray')
                         ->visible(fn (Novel $record): bool => $record->status === NovelStatus::Paused),
+                    TextEntry::make('auto_stop_reason')
+                        ->label('自动生成已停止')
+                        ->state(fn (Novel $record): ?string => data_get($record->settings, 'auto_stop.reason'))
+                        ->badge()
+                        ->color('danger')
+                        ->visible(fn (Novel $record): bool => filled(data_get($record->settings, 'auto_stop.reason'))),
+                    TextEntry::make('auto_stop_recommended_action')
+                        ->label('推荐操作')
+                        ->state(fn (Novel $record): ?string => data_get($record->settings, 'auto_stop.recommended_action'))
+                        ->color('gray')
+                        ->visible(fn (Novel $record): bool => filled(data_get($record->settings, 'auto_stop.reason'))),
                 ]),
             Section::make('预算')
                 ->description('当前小说和当前章节的实际成本；达到 Hard Limit 后不再发送新模型请求。')

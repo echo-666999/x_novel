@@ -30,7 +30,7 @@ class ChapterReviewer
 
     private const WEIGHTS = ['continuity' => .25, 'plan' => .15, 'character' => .15, 'progress' => .15, 'repetition' => .10, 'pacing' => .10, 'style' => .10];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop) {}
 
     public function review(int $chapterId, bool $regenerate = false): ?Review
     {
@@ -73,7 +73,10 @@ class ChapterReviewer
             }
             $payload = $this->validate($response->structuredData);
 
-            return $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $stateValidation->isBlocked(), $context['state_version']);
+            $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $stateValidation->isBlocked(), $context['state_version']);
+            $this->autoStop->stopForReview($chapter, $review->decision, $stateValidation->isBlocked());
+
+            return $review;
         } catch (Throwable $e) {
             $this->failRun($run, $e);
             throw $e;

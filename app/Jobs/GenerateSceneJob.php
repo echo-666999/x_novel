@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Models\Scene;
+use App\Services\AutoStopService;
 use App\Services\SceneGenerator;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -48,6 +50,10 @@ class GenerateSceneJob implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
+        if ($chapterId !== null) {
+            app(AutoStopService::class)->stopForFailure((int) $chapterId, $exception);
+        }
         app(SceneGenerator::class)->markTerminalFailure(
             $this->sceneId,
             $exception ?? new AiProviderException('scene_generation_failed', 'Scene 生成失败。', false),

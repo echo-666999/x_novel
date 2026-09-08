@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\AutoStopService;
 use App\Services\ChapterAssembler;
 use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
@@ -60,6 +61,7 @@ class AssembleChapterJob implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
         app(ChapterAssembler::class)->markTerminalFailure($this->chapterId);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\AutoStopService;
 use App\Services\ChapterRewriter;
 use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
@@ -56,6 +57,7 @@ class RewriteChapterJob implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
         if ($exception instanceof AiProviderException && in_array($exception->errorCode, ['novel_paused', 'rewrite_exhausted'], true)) {
             return;
         }

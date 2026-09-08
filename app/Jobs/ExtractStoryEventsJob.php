@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\AutoStopService;
 use App\Services\GenerationStageGate;
 use App\Services\StatePatchBuilder;
 use App\Services\StoryEventExtractor;
@@ -60,6 +61,7 @@ class ExtractStoryEventsJob implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
         app(StoryEventExtractor::class)->markTerminalFailure($this->chapterId);
     }
 }

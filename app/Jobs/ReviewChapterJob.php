@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\ReviewDecision;
+use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
 use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
@@ -57,6 +58,7 @@ class ReviewChapterJob implements ShouldQueue
 
     public function failed(?Throwable $e): void
     {
+        app(AutoStopService::class)->stopForFailure($this->chapterId, $e);
         app(ChapterReviewer::class)->markTerminalFailure($this->chapterId);
     }
 }
