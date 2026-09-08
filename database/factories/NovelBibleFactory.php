@@ -28,6 +28,10 @@ class NovelBibleFactory extends Factory
             'ending_contract' => [
                 'final_protagonist_state' => '完成成长并承担选择的后果',
                 'main_conflict_resolution' => '主线冲突得到明确解决',
+                'theme_payoff' => '选择必须伴随后果',
+                'required_foreshadowing_payoff' => ['关键线索得到兑现'],
+                'character_arc_requirements' => ['主角完成从逃避到承担的转变'],
+                'allowed_open_endings' => ['次要角色的远行可以保留开放性'],
             ],
             'status' => BibleStatus::Current,
         ];

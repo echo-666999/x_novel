@@ -100,20 +100,26 @@ class ManageNovelBible extends ViewRecord
                         ->schema([
                             Textarea::make('final_protagonist_state')
                                 ->label('主角最终状态')
+                                ->required()
                                 ->rows(3),
                             Textarea::make('main_conflict_resolution')
                                 ->label('主冲突解决方式')
+                                ->required()
                                 ->rows(3),
                             Textarea::make('theme_payoff')
                                 ->label('主题兑现')
+                                ->required()
                                 ->rows(3),
-                            Textarea::make('allowed_open_endings')
+                            TagsInput::make('allowed_open_endings')
                                 ->label('允许保留的开放结局')
-                                ->rows(3),
+                                ->required()
+                                ->helperText('每项填写一个允许保留到结局之后的问题。'),
                             TagsInput::make('required_foreshadowing_payoff')
-                                ->label('必须回收的伏笔'),
+                                ->label('必须回收的伏笔')
+                                ->required(),
                             TagsInput::make('character_arc_requirements')
-                                ->label('人物弧要求'),
+                                ->label('人物弧要求')
+                                ->required(),
                         ]),
                 ])
                 ->action(function (array $data, CreateBibleVersionAction $createBibleVersion): void {
@@ -145,7 +151,7 @@ class ManageNovelBible extends ViewRecord
             ];
         }
 
-        return $bible->only([
+        $data = $bible->only([
             'logline',
             'themes',
             'tone',
@@ -155,5 +161,12 @@ class ManageNovelBible extends ViewRecord
             'hard_constraints',
             'ending_contract',
         ]);
+
+        foreach (['required_foreshadowing_payoff', 'character_arc_requirements', 'allowed_open_endings'] as $key) {
+            $value = data_get($data, "ending_contract.{$key}", []);
+            data_set($data, "ending_contract.{$key}", is_array($value) ? $value : array_values(array_filter([$value])));
+        }
+
+        return $data;
     }
 }

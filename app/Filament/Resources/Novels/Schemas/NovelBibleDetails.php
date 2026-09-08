@@ -93,6 +93,7 @@ class NovelBibleDetails
                         ->placeholder('—'),
                     TextEntry::make('currentBible.ending_contract.allowed_open_endings')
                         ->label('允许保留的开放结局')
+                        ->bulleted()
                         ->placeholder('—'),
                     TextEntry::make('currentBible.ending_contract.required_foreshadowing_payoff')
                         ->label('必须回收的伏笔')
@@ -150,6 +151,7 @@ class NovelBibleDetails
                                 ->placeholder('—'),
                             TextEntry::make('ending_contract.allowed_open_endings')
                                 ->label('允许保留的开放结局')
+                                ->bulleted()
                                 ->placeholder('—'),
                             TextEntry::make('ending_contract.required_foreshadowing_payoff')
                                 ->label('必须回收的伏笔')

@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Novels\CreateBibleVersionAction;
 use App\Enums\BibleStatus;
 use App\Filament\Resources\Novels\Pages\ManageNovelBible;
 use App\Models\Novel;
@@ -61,7 +62,7 @@ test('the owner can create a bible version from its workspace', function () {
                 'final_protagonist_state' => '接受真相',
                 'main_conflict_resolution' => '揭开禁区来源',
                 'theme_payoff' => '亲情并不等于盲从',
-                'allowed_open_endings' => '保留王都未来走向',
+                'allowed_open_endings' => ['保留王都未来走向'],
                 'required_foreshadowing_payoff' => ['染血地图'],
                 'character_arc_requirements' => ['从依赖走向独立'],
             ],
@@ -75,7 +76,55 @@ test('the owner can create a bible version from its workspace', function () {
         ->and($bible->version)->toBe(1)
         ->and($bible->status)->toBe(BibleStatus::Current)
         ->and($bible->themes)->toBe(['亲情', '真相'])
-        ->and($bible->ending_contract['theme_payoff'])->toBe('亲情并不等于盲从');
+        ->and($bible->ending_contract['theme_payoff'])->toBe('亲情并不等于盲从')
+        ->and($bible->ending_contract['allowed_open_endings'])->toBe(['保留王都未来走向']);
+});
+
+test('ending contract is displayed as six structured requirements', function () {
+    $novel = Novel::factory()->create();
+    NovelBible::factory()->for($novel)->create([
+        'ending_contract' => [
+            'final_protagonist_state' => '主角成为守门人',
+            'main_conflict_resolution' => '关闭雾潮源头',
+            'theme_payoff' => '责任来自主动选择',
+            'required_foreshadowing_payoff' => ['断剑来历'],
+            'character_arc_requirements' => ['主角停止逃避责任'],
+            'allowed_open_endings' => ['远海文明的真相'],
+        ],
+    ]);
+
+    Livewire::test(ManageNovelBible::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('主角最终状态')
+        ->assertSee('主角成为守门人')
+        ->assertSee('主冲突解决方式')
+        ->assertSee('关闭雾潮源头')
+        ->assertSee('主题兑现')
+        ->assertSee('责任来自主动选择')
+        ->assertSee('必须回收的伏笔')
+        ->assertSee('断剑来历')
+        ->assertSee('人物弧要求')
+        ->assertSee('主角停止逃避责任')
+        ->assertSee('允许保留的开放结局')
+        ->assertSee('远海文明的真相');
+});
+
+test('legacy open ending text is normalized when creating the next bible version', function () {
+    $novel = Novel::factory()->create();
+    $first = NovelBible::factory()->for($novel)->create([
+        'ending_contract' => [
+            'final_protagonist_state' => '承担责任',
+            'main_conflict_resolution' => '终结战争',
+            'theme_payoff' => '选择定义身份',
+            'required_foreshadowing_payoff' => ['旧信件'],
+            'character_arc_requirements' => ['停止逃避'],
+            'allowed_open_endings' => '远海文明',
+        ],
+    ]);
+
+    $data = $first->only(['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract']);
+    $next = app(CreateBibleVersionAction::class)->execute($novel, $data);
+
+    expect($next->ending_contract['allowed_open_endings'])->toBe(['远海文明']);
 });
 
 test('the bible workspace validates required narrative fields', function () {

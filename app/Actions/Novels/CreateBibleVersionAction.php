@@ -26,6 +26,8 @@ class CreateBibleVersionAction
      */
     public function execute(Novel $novel, array $attributes): NovelBible
     {
+        $attributes['ending_contract'] = $this->normalizeEndingContract($attributes['ending_contract'] ?? []);
+
         return DB::transaction(function () use ($novel, $attributes): NovelBible {
             /** @var Novel $lockedNovel */
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
@@ -43,5 +45,22 @@ class CreateBibleVersionAction
                 'status' => BibleStatus::Current,
             ]);
         });
+    }
+
+    /**
+     * @param  array<string, mixed>  $contract
+     * @return array<string, mixed>
+     */
+    private function normalizeEndingContract(array $contract): array
+    {
+        foreach (['required_foreshadowing_payoff', 'character_arc_requirements', 'allowed_open_endings'] as $key) {
+            $value = $contract[$key] ?? [];
+            $contract[$key] = collect(is_array($value) ? $value : [$value])
+                ->filter(fn (mixed $item): bool => is_string($item) && filled($item))
+                ->values()
+                ->all();
+        }
+
+        return $contract;
     }
 }
