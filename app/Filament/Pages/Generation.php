@@ -4,7 +4,9 @@ namespace App\Filament\Pages;
 
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
+use App\Filament\Pages\Review as ReviewPage;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AssembleChapterJob;
@@ -15,6 +17,7 @@ use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Review as ReviewModel;
 use App\Services\StalledRunRecoveryService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -32,6 +35,9 @@ use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class Generation extends Page implements HasTable
 {
@@ -63,8 +69,67 @@ class Generation extends Page implements HasTable
     public function content(Schema $schema): Schema
     {
         return $schema->components([
+            Section::make('恢复中心')
+                ->description('集中查看需要人工处理的生成异常，并从已持久化的 Run、Artifact 和 Review 继续。')
+                ->columns(['default' => 2, 'lg' => 4])
+                ->schema([
+                    TextEntry::make('recovery_failed')
+                        ->label('Failed')
+                        ->state(fn (): int => $this->recoveryCounts()['failed'])
+                        ->badge()
+                        ->color(fn (): string => $this->recoveryCounts()['failed'] > 0 ? 'danger' : 'gray'),
+                    TextEntry::make('recovery_blocked')
+                        ->label('Blocked')
+                        ->state(fn (): int => $this->recoveryCounts()['blocked'])
+                        ->badge()
+                        ->color(fn (): string => $this->recoveryCounts()['blocked'] > 0 ? 'danger' : 'gray'),
+                    TextEntry::make('recovery_recoverable')
+                        ->label('Recoverable')
+                        ->state(fn (): int => $this->recoveryCounts()['recoverable'])
+                        ->badge()
+                        ->color(fn (): string => $this->recoveryCounts()['recoverable'] > 0 ? 'warning' : 'gray'),
+                    TextEntry::make('recovery_needs_attention')
+                        ->label('Needs Attention')
+                        ->state(fn (): int => $this->recoveryCounts()['needs_attention'])
+                        ->badge()
+                        ->color(fn (): string => $this->recoveryCounts()['needs_attention'] > 0 ? 'warning' : 'gray'),
+                ]),
             EmbeddedTable::make(),
         ]);
+    }
+
+    /** @return array<int, Action> */
+    protected function getHeaderActions(): array
+    {
+        return [
+            Action::make('resumeNext')
+                ->label('Resume')
+                ->icon('heroicon-o-play')
+                ->visible(fn (): bool => $this->nextRecoverableRun() !== null)
+                ->action(fn () => $this->resumeNext()),
+            Action::make('retryNext')
+                ->label('Retry')
+                ->icon('heroicon-o-arrow-path')
+                ->color('warning')
+                ->visible(fn (): bool => $this->nextRetryableRun() !== null)
+                ->requiresConfirmation()
+                ->modalDescription('重新执行最近一个可重试的失败阶段；已经成功的 Artifact 会保留。')
+                ->action(fn () => $this->retryNext()),
+            Action::make('openReview')
+                ->label('Open Review')
+                ->icon('heroicon-o-inbox')
+                ->color('gray')
+                ->url(ReviewPage::getUrl()),
+            Action::make('openContext')
+                ->label('Open Context')
+                ->icon('heroicon-o-document-magnifying-glass')
+                ->color('gray')
+                ->visible(fn (): bool => $this->contextRun() !== null)
+                ->url(fn (): string => static::getUrl([
+                    'tableAction' => 'inspect',
+                    'tableActionRecord' => $this->contextRun()?->getKey(),
+                ])),
+        ];
     }
 
     public function table(Table $table): Table
@@ -403,5 +468,90 @@ class Generation extends Page implements HasTable
             ->body($run->stage->getLabel().' 将从现有 Run / Artifact 状态继续。')
             ->success()
             ->send();
+    }
+
+    /** @return array{failed: int, blocked: int, recoverable: int, needs_attention: int} */
+    private function recoveryCounts(): array
+    {
+        $runs = $this->latestRuns();
+
+        return [
+            'failed' => $runs->where('status', RunStatus::Failed)->count(),
+            'blocked' => $this->latestReviews()->where('decision', ReviewDecision::Block)->count(),
+            'recoverable' => $runs->filter(fn (GenerationRun $run): bool => $this->canRetry($run) || $this->canResume($run) || $this->canRecover($run))->count(),
+            'needs_attention' => $this->latestReviews()->where('decision', ReviewDecision::NeedsAttention)->count(),
+        ];
+    }
+
+    /** @return Collection<int, GenerationRun> */
+    private function latestRuns(): Collection
+    {
+        return GenerationRun::query()
+            ->whereIn('id', DB::table('generation_runs')
+                ->selectRaw('MAX(id)')
+                ->groupBy('stage', 'scope_type', 'scope_id'))
+            ->latest('id')
+            ->get();
+    }
+
+    /** @return Collection<int, ReviewModel> */
+    private function latestReviews(): Collection
+    {
+        return ReviewModel::query()
+            ->whereIn('id', $this->latestReviewIds())
+            ->get();
+    }
+
+    private function latestReviewIds(): QueryBuilder
+    {
+        $grammar = DB::connection()->getQueryGrammar();
+        $reviews = $grammar->wrapTable('reviews');
+        $id = $grammar->wrap('id');
+
+        return DB::table('reviews')
+            ->join('generation_runs', 'generation_runs.id', '=', 'reviews.generation_run_id')
+            ->whereNotNull('generation_runs.chapter_id')
+            ->groupBy('generation_runs.chapter_id')
+            ->selectRaw("MAX({$reviews}.{$id})");
+    }
+
+    private function nextRetryableRun(): ?GenerationRun
+    {
+        return $this->latestRuns()->first(fn (GenerationRun $run): bool => $this->canRetry($run));
+    }
+
+    private function nextRecoverableRun(): ?GenerationRun
+    {
+        return $this->latestRuns()->first(fn (GenerationRun $run): bool => $this->canResume($run) || $this->canRecover($run));
+    }
+
+    private function contextRun(): ?GenerationRun
+    {
+        return GenerationRun::query()->whereNotNull('context_snapshot')->latest('id')->first();
+    }
+
+    private function retryNext(): void
+    {
+        $run = $this->nextRetryableRun();
+        if ($run !== null) {
+            $this->dispatchRun($run, regenerate: true);
+        }
+    }
+
+    private function resumeNext(): void
+    {
+        $run = $this->nextRecoverableRun();
+        if ($run === null) {
+            return;
+        }
+
+        if ($this->canRecover($run)) {
+            $point = app(StalledRunRecoveryService::class)->recover($run);
+            Notification::make()->title('恢复任务已排队')->body('恢复点：'.$point->label)->success()->send();
+
+            return;
+        }
+
+        $this->dispatchRun($run, regenerate: false);
     }
 }

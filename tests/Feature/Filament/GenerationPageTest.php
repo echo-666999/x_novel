@@ -5,6 +5,7 @@ use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Pages\Generation;
@@ -17,6 +18,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Memory;
 use App\Models\Novel;
+use App\Models\Review;
 use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Models\User;
@@ -97,6 +99,97 @@ test('generation page has a useful empty state', function () {
         ->assertOk()
         ->assertSee('暂无生成记录')
         ->assertSee('每个流水线阶段');
+});
+
+test('recovery dashboard summarizes actionable failures and review gates', function () {
+    $novel = Novel::factory()->create();
+    $retryChapter = Chapter::factory()->for($novel)->create();
+    $resumeChapter = Chapter::factory()->for($novel)->create();
+    $blockedChapter = Chapter::factory()->for($novel)->create();
+    $attentionChapter = Chapter::factory()->for($novel)->create();
+
+    GenerationRun::factory()->for($novel)->for($retryChapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $retryChapter->getKey(),
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_timeout',
+        'context_snapshot' => ['state_version' => 3],
+    ]);
+    GenerationRun::factory()->for($novel)->for($resumeChapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $resumeChapter->getKey(),
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Failed,
+        'error_code' => 'worker_interrupted',
+    ]);
+
+    foreach ([[$blockedChapter, ReviewDecision::Block], [$attentionChapter, ReviewDecision::NeedsAttention]] as [$chapter, $decision]) {
+        $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+            'scope_type' => 'chapter',
+            'scope_id' => $chapter->getKey(),
+            'stage' => GenerationStage::Review,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ReviewResult]);
+        Review::query()->create([
+            'generation_run_id' => $run->getKey(),
+            'artifact_id' => $artifact->getKey(),
+            'decision' => $decision,
+            'score' => 70,
+            'continuity_score' => 70,
+            'plan_score' => 70,
+            'character_score' => 70,
+            'progress_score' => 70,
+            'repetition_score' => 70,
+            'pacing_score' => 70,
+            'style_score' => 70,
+            'findings' => [],
+        ]);
+    }
+
+    Livewire::test(Generation::class)
+        ->assertSchemaComponentExists('recovery_failed', null, fn ($component): bool => $component->getState() === 2)
+        ->assertSchemaComponentExists('recovery_blocked', null, fn ($component): bool => $component->getState() === 1)
+        ->assertSchemaComponentExists('recovery_recoverable', null, fn ($component): bool => $component->getState() === 2)
+        ->assertSchemaComponentExists('recovery_needs_attention', null, fn ($component): bool => $component->getState() === 1)
+        ->assertActionVisible('resumeNext')
+        ->assertActionVisible('retryNext')
+        ->assertActionVisible('openContext')
+        ->assertActionHasUrl('openReview', App\Filament\Pages\Review::getUrl());
+});
+
+test('recovery dashboard quick actions reuse retry resume and context inspection', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create();
+    $retryChapter = Chapter::factory()->for($novel)->create();
+    $resumeChapter = Chapter::factory()->for($novel)->create();
+    $retryRun = GenerationRun::factory()->for($novel)->for($retryChapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $retryChapter->getKey(),
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_timeout',
+        'context_snapshot' => ['state_version' => 4],
+    ]);
+    GenerationRun::factory()->for($novel)->for($resumeChapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $resumeChapter->getKey(),
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Failed,
+        'error_code' => 'worker_interrupted',
+    ]);
+
+    Livewire::test(Generation::class)
+        ->callAction('retryNext')
+        ->assertNotified('失败阶段已重新排队')
+        ->callAction('resumeNext')
+        ->assertNotified('恢复任务已排队')
+        ->assertActionVisible('openContext');
+
+    Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $retryChapter->getKey() && $job->regenerate);
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $resumeChapter->getKey() && ! $job->regenerate);
+    expect($retryRun->context_snapshot)->toBe(['state_version' => 4]);
 });
 
 test('run inspector exposes all context layers tokens truncation and selected memory', function () {
