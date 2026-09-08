@@ -12,6 +12,8 @@ use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
+use App\Models\StoryArc;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -144,6 +146,20 @@ test('the novel workspace overview shows real values and explicit unavailable me
             '待处理伏笔',
             '需要处理',
         ]);
+});
+
+test('the novel overview shows closure debt totals and expandable details', function () {
+    $novel = Novel::factory()->create();
+    NovelBible::factory()->for($novel)->create();
+    StoryArc::factory()->for($novel)->create(['title' => '终结雾潮']);
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('收束债务')
+        ->assertSee('Closure Debt')
+        ->assertSee('关键债务')
+        ->assertSee('债务明细')
+        ->assertSee('终结雾潮')
+        ->assertSee('未完成故事弧');
 });
 
 test('next chapter generation and auto generation controls are available while future workflow actions remain disabled', function () {

@@ -6,6 +6,8 @@ use App\AI\BudgetService;
 use App\AI\Data\BudgetUsage;
 use App\Enums\NovelStatus;
 use App\Models\Novel;
+use App\Services\ClosureDebtService;
+use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
@@ -105,6 +107,47 @@ class NovelOverview
                         ->state(fn (Novel $record): ?string => data_get($record->settings, 'auto_stop.recommended_action'))
                         ->color('gray')
                         ->visible(fn (Novel $record): bool => filled(data_get($record->settings, 'auto_stop.reason'))),
+                ]),
+            Section::make('收束债务')
+                ->description('汇总当前阻碍小说完结的开放故事义务；展开明细可查看具体原因。')
+                ->columns(['default' => 1, 'md' => 2])
+                ->schema([
+                    TextEntry::make('closure_debt_total')
+                        ->label('Closure Debt')
+                        ->state(fn (Novel $record): int => app(ClosureDebtService::class)->calculate($record)->total())
+                        ->badge()
+                        ->color(fn (Novel $record): string => app(ClosureDebtService::class)->calculate($record)->total() > 0 ? 'warning' : 'success'),
+                    TextEntry::make('closure_debt_critical')
+                        ->label('关键债务')
+                        ->state(fn (Novel $record): int => app(ClosureDebtService::class)->calculate($record)->critical())
+                        ->badge()
+                        ->color(fn (Novel $record): string => app(ClosureDebtService::class)->calculate($record)->critical() > 0 ? 'danger' : 'success'),
+                    Section::make('债务明细')
+                        ->description('按来源列出尚未完成、兑现或解决的事项。')
+                        ->collapsible()
+                        ->collapsed()
+                        ->columnSpanFull()
+                        ->schema([
+                            RepeatableEntry::make('closure_debt_items')
+                                ->hiddenLabel()
+                                ->state(fn (Novel $record): array => app(ClosureDebtService::class)->calculate($record)->toArray())
+                                ->schema([
+                                    TextEntry::make('category_label')
+                                        ->label('来源')
+                                        ->badge()
+                                        ->color('gray'),
+                                    TextEntry::make('severity')
+                                        ->label('级别')
+                                        ->badge()
+                                        ->color(fn (string $state): string => $state === '关键' ? 'danger' : 'warning'),
+                                    TextEntry::make('title')
+                                        ->label('事项')
+                                        ->weight('medium'),
+                                    TextEntry::make('reason')
+                                        ->label('未完结原因'),
+                                ])
+                                ->columns(['default' => 1, 'md' => 2]),
+                        ]),
                 ]),
             Section::make('预算')
                 ->description('当前小说和当前章节的实际成本；达到 Hard Limit 后不再发送新模型请求。')
