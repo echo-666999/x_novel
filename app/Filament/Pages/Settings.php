@@ -11,6 +11,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
 use App\Filament\Actions\EmergencyStopAction;
+use App\Services\SystemHealthService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -80,6 +81,7 @@ class Settings extends Page
                     icon: 'heroicon-o-circle-stack',
                 ),
                 $this->budgetSection()->columnSpanFull(),
+                $this->systemHealthSection()->columnSpanFull(),
             ]),
         ]);
     }
@@ -253,6 +255,48 @@ class Settings extends Page
     private function formatBudget(BudgetUsage $usage): string
     {
         return config('ai.cost.currency').' '.number_format($usage->used, 6).' / '.$this->formatLimit($usage->limit, false);
+    }
+
+    private function systemHealthSection(): Section
+    {
+        return Section::make('系统健康')
+            ->description('System Health · MVP 发布、恢复与长期单人运行检查')
+            ->icon('heroicon-o-heart')
+            ->afterHeader([
+                Action::make('refreshSystemHealth')
+                    ->label('重新检查')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('gray')
+                    ->action(fn () => Notification::make()->title('系统健康状态已刷新')->success()->send()),
+            ])
+            ->schema([
+                RepeatableEntry::make('system_health_checks')
+                    ->hiddenLabel()
+                    ->state(fn (): array => app(SystemHealthService::class)->checks()
+                        ->map(fn ($check): array => [
+                            'label' => $check->label,
+                            'status' => $check->statusLabel(),
+                            'status_key' => $check->status,
+                            'detail' => $check->detail,
+                        ])
+                        ->all())
+                    ->columns(['default' => 1, 'md' => 3])
+                    ->schema([
+                        TextEntry::make('label')->label('检查项')->weight('medium'),
+                        TextEntry::make('status')
+                            ->label('状态')
+                            ->badge()
+                            ->color(fn (string $state): string => match ($state) {
+                                '正常' => 'success',
+                                '需要处理' => 'danger',
+                                default => 'warning',
+                            }),
+                        TextEntry::make('detail')->label('说明')->wrap(),
+                    ]),
+                Text::make('备份、隔离恢复演练和 Queue 进程重启必须在目标部署环境执行；具体命令见 docs/development/MVP_RELEASE_CHECKLIST.md。')
+                    ->icon('heroicon-o-information-circle')
+                    ->color('gray'),
+            ]);
     }
 
     private function formatLimit(mixed $limit, bool $withCurrency = true): string

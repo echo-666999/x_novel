@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('generation:mark-stalled')->everyMinute()->withoutOverlapping();
+Schedule::command('horizon:snapshot')->everyFiveMinutes()->withoutOverlapping();
