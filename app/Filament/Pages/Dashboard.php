@@ -2,12 +2,14 @@
 
 namespace App\Filament\Pages;
 
+use App\Actions\Generation\StartMvpSoakRunAction;
 use App\Actions\Generation\StartReliabilityRunAction;
 use App\Actions\Generation\StartSmokeRunAction;
 use App\Filament\Actions\EmergencyStopAction;
 use App\Filament\Widgets\DueForeshadowingsWidget;
 use App\Models\Novel;
 use App\Models\UsageRecord;
+use App\Services\MvpSoakRunService;
 use App\Services\ReliabilityRunService;
 use App\Services\SmokeRunService;
 use Filament\Actions\Action;
@@ -31,6 +33,33 @@ class Dashboard extends BaseDashboard
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('startMvpSoakRun')
+                ->label('启动 100 章浸泡测试')
+                ->icon('heroicon-o-rocket-launch')
+                ->color('warning')
+                ->modalHeading('启动 100 章 MVP Soak Test')
+                ->modalDescription('系统会沿用现有生成主链串行推进 100 个正式章节，并审计状态完整性与费用可追踪性。')
+                ->modalSubmitActionLabel('启动浸泡测试')
+                ->schema([
+                    Select::make('novel_id')
+                        ->label('小说')
+                        ->options(fn (): array => Novel::query()
+                            ->whereIn('status', ['generating', 'completing'])
+                            ->orderBy('title')
+                            ->pluck('title', 'id')
+                            ->all())
+                        ->searchable()
+                        ->required(),
+                ])
+                ->action(function (array $data, StartMvpSoakRunAction $start): void {
+                    $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+
+                    Notification::make()
+                        ->title('100 章 MVP 浸泡测试已启动')
+                        ->body('已排队第 '.$chapter->sequence.' 章，达到 100 章边界后将自动停止。')
+                        ->success()
+                        ->send();
+                }),
             Action::make('startReliabilityRun')
                 ->label('启动 50 章可靠性长跑')
                 ->icon('heroicon-o-shield-check')
@@ -196,6 +225,30 @@ class Dashboard extends BaseDashboard
                         ->contained(false)
                         ->visible(fn (): bool => app(ReliabilityRunService::class)->allSummaries()->isEmpty()),
                 ]),
+            Section::make('MVP Readiness')
+                ->description('100 章浸泡测试的 Canonical、Story State、安全门禁与费用验收')
+                ->icon('heroicon-o-rocket-launch')
+                ->schema([
+                    RepeatableEntry::make('mvp_readiness')
+                        ->hiddenLabel()
+                        ->state(fn (): array => $this->mvpReadiness())
+                        ->columns(['default' => 2, 'lg' => 4])
+                        ->schema([
+                            TextEntry::make('novel')->label('小说')->weight('medium'),
+                            TextEntry::make('readiness')->label('就绪状态')->badge()->color(fn (string $state): string => $state === '已就绪' ? 'success' : 'warning'),
+                            TextEntry::make('progress')->label('Canonical 进度')->badge()->color('info'),
+                            TextEntry::make('integrity')->label('正式数据完整性')->badge()->color(fn (string $state): string => $state === '正常' ? 'success' : 'danger'),
+                            TextEntry::make('guards')->label('生成安全门禁'),
+                            TextEntry::make('story_guards')->label('故事规则门禁'),
+                            TextEntry::make('usage')->label('费用可追踪性')->badge()->color(fn (string $state): string => str_contains($state, '异常 0') ? 'success' : 'danger'),
+                            TextEntry::make('status')->label('运行状态'),
+                        ]),
+                    EmptyState::make('尚未启动 100 章 MVP 浸泡测试')
+                        ->description('点击页面顶部“启动 100 章浸泡测试”选择小说。')
+                        ->icon('heroicon-o-clipboard-document-check')
+                        ->contained(false)
+                        ->visible(fn (): bool => app(MvpSoakRunService::class)->allSummaries()->isEmpty()),
+                ]),
         ]);
     }
 
@@ -234,6 +287,23 @@ class Dashboard extends BaseDashboard
                     'cost_context' => config('ai.cost.currency').' '.number_format($summary->cost, 6)." · 漂移 {$drift} · Context 平均 ".number_format($summary->averageContextTokens).' / 最大 '.number_format($summary->maximumContextTokens),
                 ];
             })
+            ->all();
+    }
+
+    /** @return array<int, array<string, string>> */
+    private function mvpReadiness(): array
+    {
+        return app(MvpSoakRunService::class)->allSummaries()
+            ->map(fn ($summary): array => [
+                'novel' => $summary->novelTitle,
+                'readiness' => $summary->isReady() ? '已就绪' : '验收中',
+                'progress' => "{$summary->canonicalChapters}/100 · {$summary->percent()}%",
+                'integrity' => $summary->duplicateCanonicalCommits === 0 && $summary->missingCanonicalChapters === 0 && $summary->stateIntegrityIssues === 0 ? '正常' : '异常',
+                'guards' => '暂停禁止 Commit · Resume 连续性',
+                'story_guards' => 'Locked Fact · Critical Foreshadowing',
+                'usage' => config('ai.cost.currency').' '.number_format($summary->trackedCost, 6)." · 异常 {$summary->untraceableUsageRecords}",
+                'status' => $summary->statusLabel()." · 重复 {$summary->duplicateCanonicalCommits} · 跳章 {$summary->missingCanonicalChapters} · State 异常 {$summary->stateIntegrityIssues}",
+            ])
             ->all();
     }
 

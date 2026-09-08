@@ -6,11 +6,11 @@ use App\Enums\NovelStatus;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
-use App\Services\SmokeRunService;
+use App\Services\MvpSoakRunService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
-class StartSmokeRunAction
+class StartMvpSoakRunAction
 {
     public function __construct(private readonly GenerateNextChapterAction $generateNextChapter) {}
 
@@ -20,13 +20,9 @@ class StartSmokeRunAction
             $locked = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
 
             if (! in_array($locked->status, [NovelStatus::Generating, NovelStatus::Completing], true)) {
-                throw ValidationException::withMessages(['novel_id' => '只有生成中或收束中的小说可以启动长跑。']);
+                throw ValidationException::withMessages(['novel_id' => '只有生成中或收束中的小说可以启动 MVP 浸泡测试。']);
             }
-
-            if ((data_get($locked->settings, 'smoke_run.status') === 'running'
-                    || data_get($locked->settings, 'reliability_run.status') === 'running'
-                    || data_get($locked->settings, 'soak_run.status') === 'running')
-                && (bool) data_get($locked->settings, 'auto_generate', false)) {
+            if ($this->hasRunningLongRun($locked)) {
                 throw ValidationException::withMessages(['novel_id' => '该小说已有正在运行的长跑。']);
             }
 
@@ -34,21 +30,27 @@ class StartSmokeRunAction
             $settings = $locked->settings ?? [];
             $settings['auto_generate'] = true;
             unset($settings['auto_stop']);
-            $settings['smoke_run'] = [
+            $settings['soak_run'] = [
                 'status' => 'running',
                 'start_sequence' => $start,
-                'target_sequence' => $start + SmokeRunService::CHAPTER_TARGET - 1,
+                'target_sequence' => $start + MvpSoakRunService::CHAPTER_TARGET - 1,
                 'started_at' => now()->toISOString(),
             ];
             $locked->update(['settings' => $settings]);
 
             $chapter = $this->generateNextChapter->handle($locked->refresh());
-
             if ($chapter->wasRecentlyCreated) {
                 PlanChapterJob::dispatch($chapter->getKey())->afterCommit();
             }
 
             return $chapter;
         }, 3);
+    }
+
+    private function hasRunningLongRun(Novel $novel): bool
+    {
+        return (bool) data_get($novel->settings, 'auto_generate', false)
+            && collect(['smoke_run', 'reliability_run', 'soak_run'])
+                ->contains(fn (string $key): bool => data_get($novel->settings, "{$key}.status") === 'running');
     }
 }

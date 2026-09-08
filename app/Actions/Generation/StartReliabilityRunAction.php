@@ -23,7 +23,8 @@ class StartReliabilityRunAction
                 throw ValidationException::withMessages(['novel_id' => '只有生成中或收束中的小说可以启动可靠性长跑。']);
             }
             if ((data_get($locked->settings, 'reliability_run.status') === 'running'
-                    || data_get($locked->settings, 'smoke_run.status') === 'running')
+                    || data_get($locked->settings, 'smoke_run.status') === 'running'
+                    || data_get($locked->settings, 'soak_run.status') === 'running')
                 && (bool) data_get($locked->settings, 'auto_generate', false)) {
                 throw ValidationException::withMessages(['novel_id' => '该小说已有正在运行的长跑。']);
             }
