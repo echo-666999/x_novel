@@ -6,6 +6,7 @@ use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
+use App\Services\ClosureDebtService;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
@@ -39,6 +40,8 @@ class ViewNovelPlanning extends ViewRecord
                 ->viewData(fn (): array => [
                     ...$this->planningData(),
                     'scope' => $this->normalizedScope(),
+                    'isCompleting' => $this->getRecord()->status->value === 'completing',
+                    'closureDebt' => app(ClosureDebtService::class)->calculate($this->getRecord()),
                 ]),
         ]);
     }

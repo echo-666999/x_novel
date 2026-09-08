@@ -1,4 +1,24 @@
 <div class="space-y-4">
+    @if ($isCompleting)
+        <x-filament::section
+            heading="Closing Restrictions Active"
+            description="小说正在收束；后续计划必须推进结局契约或降低 Closure Debt。"
+            icon="heroicon-o-flag"
+        >
+            <div class="flex flex-wrap items-center gap-2">
+                <x-filament::badge color="warning">COMPLETING</x-filament::badge>
+                <x-filament::badge color="gray">Closure Debt: {{ $closureDebt->total() }}</x-filament::badge>
+                <x-filament::badge :color="$closureDebt->critical() > 0 ? 'danger' : 'success'">
+                    Critical: {{ $closureDebt->critical() }}
+                </x-filament::badge>
+            </div>
+
+            <p class="mt-3 text-sm text-gray-600 dark:text-gray-300">
+                禁止新增核心人物、核心主线、世界硬规则和高重要度伏笔。
+            </p>
+        </x-filament::section>
+    @endif
+
     <x-filament::tabs label="规划范围">
         <x-filament::tabs.item
             :active="$scope === 'active'"

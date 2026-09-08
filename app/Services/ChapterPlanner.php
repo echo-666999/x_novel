@@ -30,6 +30,7 @@ class ChapterPlanner
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly PlanValidator $planValidator,
+        private readonly ClosureDebtService $closureDebt,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -63,7 +64,7 @@ class ChapterPlanner
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel ChapterPlanner. Return only JSON matching the supplied schema. Do not invent entity IDs.',
+                systemPrompt: $this->systemPrompt($novel),
                 prompt: 'Create the next executable chapter plan from this authoritative context: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
                 maxTokens: 4_000,
@@ -188,7 +189,7 @@ class ChapterPlanner
             throw new AiProviderException('planner_context_incomplete', 'Chapter Planner 缺少 Bible、Story State 或 Current Volume。', false);
         }
 
-        return [
+        $context = [
             'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
             'chapter' => ['id' => $chapter->getKey(), 'sequence' => $chapter->sequence],
             'bible_version' => $bible->version,
@@ -202,5 +203,37 @@ class ChapterPlanner
             'due_foreshadowings' => $novel->foreshadowings()->whereNotIn('status', ['paid_off', 'abandoned'])->where('due_from_chapter', '<=', $chapter->sequence)->get()->map->only(['id', 'title', 'description', 'promised_payoff', 'due_from_chapter', 'due_to_chapter', 'importance', 'status'])->all(),
             'recent_summaries' => $novel->chapters()->where('status', ChapterStatus::Canonical)->whereNotNull('summary')->latest('sequence')->limit(10)->get(['sequence', 'summary'])->reverse()->values()->all(),
         ];
+
+        if ($novel->status->value === 'completing') {
+            $debt = $this->closureDebt->calculate($novel);
+            $context['closing_restrictions'] = [
+                'active' => true,
+                'forbidden_new_elements' => [
+                    'core_character',
+                    'main_story_arc',
+                    'hard_world_rule',
+                    'high_importance_foreshadowing',
+                ],
+                'instruction' => '推进 Ending Contract 或降低 Closure Debt，不得开启新的核心故事义务。',
+            ];
+            $context['closure_debt'] = [
+                'total' => $debt->total(),
+                'critical' => $debt->critical(),
+                'items' => $debt->toArray(),
+            ];
+        }
+
+        return $context;
+    }
+
+    private function systemPrompt(Novel $novel): string
+    {
+        $prompt = 'You are XNovel ChapterPlanner. Return only JSON matching the supplied schema. Do not invent entity IDs.';
+
+        if ($novel->status->value === 'completing') {
+            $prompt .= ' Closing restrictions are active. Do not introduce a new core character, main story arc, hard world rule, or high-importance foreshadowing. The plan must advance the Ending Contract or reduce Closure Debt.';
+        }
+
+        return $prompt;
     }
 }

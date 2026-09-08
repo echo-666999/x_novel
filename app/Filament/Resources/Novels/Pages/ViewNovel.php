@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\Actions\Generation\GenerateNextChapterAction;
 use App\Actions\Generation\PauseGenerationAction;
 use App\Actions\Generation\SetAutoGenerationAction;
+use App\Actions\Novels\EnterCompletingModeAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\NovelStatus;
@@ -36,12 +37,33 @@ class ViewNovel extends ViewRecord
         /** @var Novel $novel */
         $novel = $this->getRecord();
 
-        return "{$novel->genre} · {$novel->status->getLabel()}";
+        return $novel->status === NovelStatus::Completing
+            ? "{$novel->genre} · COMPLETING · {$novel->status->getLabel()}"
+            : "{$novel->genre} · {$novel->status->getLabel()}";
     }
 
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('enterCompletingMode')
+                ->label('进入收束期')
+                ->icon('heroicon-o-flag')
+                ->color('warning')
+                ->visible(fn (): bool => $this->getRecord()->status === NovelStatus::Generating)
+                ->requiresConfirmation()
+                ->modalHeading('进入收束期')
+                ->modalDescription('进入后 Chapter Planner 将限制新增核心人物、主线、硬世界规则和高重要度伏笔，并优先降低 Closure Debt。')
+                ->action(function (EnterCompletingModeAction $enterCompletingMode): void {
+                    $enterCompletingMode->handle($this->getRecord());
+                    $this->getRecord()->refresh();
+                    $this->refreshFormData(['status']);
+
+                    Notification::make()
+                        ->title('已进入收束期')
+                        ->body('Closing Restrictions Active')
+                        ->warning()
+                        ->send();
+                }),
             Action::make('initializeStoryState')
                 ->label('初始化故事状态')
                 ->icon('heroicon-o-circle-stack')

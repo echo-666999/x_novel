@@ -100,6 +100,29 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($fake->requests())->toHaveCount(1);
 });
 
+test('the planner receives closing restrictions and closure debt in completing mode', function () {
+    [$chapter, $character] = plannerChapter();
+    $chapter->novel->update(['status' => NovelStatus::Completing]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    $request = $fake->requests()[0];
+    $snapshot = $chapter->generationRuns()->sole()->context_snapshot;
+
+    expect($request->systemPrompt)->toContain('Closing restrictions are active')
+        ->and(data_get($snapshot, 'closing_restrictions.active'))->toBeTrue()
+        ->and(data_get($snapshot, 'closing_restrictions.forbidden_new_elements'))->toBe([
+            'core_character',
+            'main_story_arc',
+            'hard_world_rule',
+            'high_importance_foreshadowing',
+        ])
+        ->and(data_get($snapshot, 'closure_debt.total'))->toBe(0)
+        ->and(data_get($snapshot, 'closure_debt.critical'))->toBe(0);
+});
+
 test('duplicate delivery reuses the successful run and does not call the provider twice', function () {
     [$chapter, $character] = plannerChapter();
     $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));

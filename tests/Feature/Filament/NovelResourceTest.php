@@ -185,6 +185,20 @@ test('next chapter generation and auto generation controls are available while f
         ->assertActionExists('edit');
 });
 
+test('a generating novel can enter completing mode from the overview', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertActionVisible('enterCompletingMode')
+        ->callAction('enterCompletingMode')
+        ->assertHasNoActionErrors()
+        ->assertNotified('已进入收束期')
+        ->assertSee('COMPLETING')
+        ->assertActionHidden('enterCompletingMode');
+
+    expect($novel->fresh()->status)->toBe(NovelStatus::Completing);
+});
+
 test('a generating novel can be paused from the overview with its current stage displayed', function () {
     Queue::fake();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);

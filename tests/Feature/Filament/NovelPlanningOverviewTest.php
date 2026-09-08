@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\NovelStatus;
 use App\Enums\StoryArcStatus;
 use App\Enums\StoryArcType;
 use App\Enums\VolumeStatus;
@@ -117,6 +118,17 @@ test('the planning overview has an actionable empty state', function () {
     Livewire::test(ViewNovelPlanning::class, ['record' => $novel->getRouteKey()])
         ->assertSee('当前范围没有规划内容')
         ->assertSee('可在“分卷”和“故事线”中维护小说的规划结构。');
+});
+
+test('the planning overview shows active closing restrictions in completing mode', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Completing]);
+
+    Livewire::test(ViewNovelPlanning::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('Closing Restrictions Active')
+        ->assertSee('COMPLETING')
+        ->assertSee('禁止新增核心人物、核心主线、世界硬规则和高重要度伏笔。')
+        ->assertSee('Closure Debt: 6')
+        ->assertSee('Critical: 6');
 });
 
 test('the planning route is the workspace summary and volume management remains available', function () {
