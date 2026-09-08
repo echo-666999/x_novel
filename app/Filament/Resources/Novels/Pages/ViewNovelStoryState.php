@@ -15,6 +15,7 @@ use App\Filament\Forms\Components\WorldEntityPicker;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Fact;
 use App\Models\Novel;
+use App\Services\StoryStateRebuilder;
 use App\Services\StoryStateService;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Hidden;
@@ -100,6 +101,22 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         $current = app(StoryStateService::class)->current($this->getRecord());
 
         return [
+            Action::make('verifyRebuild')
+                ->label('校验 / 重建')
+                ->icon('heroicon-o-arrow-path')
+                ->color('gray')
+                ->visible($current !== null)
+                ->modalHeading('校验 Story State 重建结果')
+                ->modalDescription('从 State Version 0 重放当前版本范围内的有效 Story Events。')
+                ->requiresConfirmation()
+                ->modalWidth('4xl')
+                ->modalSubmitAction(false)
+                ->modalCancelActionLabel('关闭')
+                ->action(fn (): null => null)
+                ->modalContent(fn (StoryStateRebuilder $rebuilder) => view(
+                    'filament.resources.novels.pages.story-state-rebuild',
+                    ['result' => $rebuilder->rebuild($this->getRecord())],
+                )),
             Action::make('manualCorrection')
                 ->label('人工修正')
                 ->icon('heroicon-o-wrench-screwdriver')

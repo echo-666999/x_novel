@@ -6,6 +6,7 @@ use App\Filament\Resources\Novels\Pages\ViewNovelStoryState;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Models\User;
+use App\Services\StoryStateRebuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -123,4 +124,22 @@ test('the story state inspector stays inside the novel workspace', function () {
         ->assertOk()
         ->assertSee('故事状态检查器')
         ->assertSee('故事状态');
+});
+
+test('the inspector exposes a dry run story state rebuild report', function () {
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+
+    Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
+        ->assertActionExists('verifyRebuild');
+
+    $this->view('filament.resources.novels.pages.story-state-rebuild', [
+        'result' => app(StoryStateRebuilder::class)->rebuild($novel->fresh()),
+    ])
+        ->assertSee('故事状态校验通过')
+        ->assertSee('当前 checksum')
+        ->assertSee('重建 checksum')
+        ->assertSee('本次仅校验，不写入正式状态');
+
+    expect($novel->storyStateVersions()->count())->toBe(1);
 });
