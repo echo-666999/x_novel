@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
@@ -31,6 +32,7 @@ class ChapterPlanner
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly PlanValidator $planValidator,
         private readonly ClosureDebtService $closureDebt,
+        private readonly SyncScenesFromChapterPlanAction $syncScenes,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -168,6 +170,7 @@ class ChapterPlanner
                 'finished_at' => now(),
             ]);
             $chapter->update(['status' => ChapterStatus::Generating]);
+            $this->syncScenes->execute($chapter);
 
             return $plan;
         });

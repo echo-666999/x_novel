@@ -18,6 +18,7 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
+use App\Services\SceneDraftPayload;
 use App\Services\SceneGenerator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -68,6 +69,27 @@ function sceneResponse(string $content, array $delta = []): AiResponse
         model: 'writer-test',
     );
 }
+
+test('scene draft schema keeps dynamic objects compatible with strict structured output', function () {
+    $schema = SceneDraftPayload::schema();
+
+    expect($schema['additionalProperties'])->toBeFalse()
+        ->and(data_get($schema, 'properties.temporary_state_delta.type'))->toBe('string')
+        ->and(data_get($schema, 'properties.declared_events.items.type'))->toBe('string')
+        ->and(data_get($schema, 'properties.self_check.type'))->toBe('string');
+
+    $payload = SceneDraftPayload::validate([
+        'content' => '林舟进入灯塔。',
+        'temporary_state_delta' => '{"characters":{"lin_zhou":{"location":"灯塔"}}}',
+        'declared_events' => ['{"type":"character_moved","subject":"lin_zhou"}'],
+        'uncertainties' => [],
+        'self_check' => '{"passed":true}',
+    ]);
+
+    expect(data_get($payload, 'temporary_state_delta.characters.lin_zhou.location'))->toBe('灯塔')
+        ->and(data_get($payload, 'declared_events.0.type'))->toBe('character_moved')
+        ->and(data_get($payload, 'self_check.passed'))->toBeTrue();
+});
 
 test('scene generator persists an immutable draft artifact and temporary state delta', function () {
     $fixture = sceneGenerationFixture(1);

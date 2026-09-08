@@ -12,6 +12,22 @@ Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、E
 
 ## 2. 权威流水线
 
+新建小说先完成一次初始化规划：
+
+```text
+Novel.status = draft
+→ NovelPlanner 生成结构化 Blueprint Artifact
+→ 用户预览并采用
+→ 写入 Bible / Character / World / Volume / Arc / Foreshadowing
+→ 初始化 Story State
+→ Planning Readiness Check
+→ Novel.status = generating
+```
+
+Blueprint 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。
+
+进入 `generating` 后执行章节流水线：
+
 ```text
 GenerateNextChapterAction
 → PlanChapterJob

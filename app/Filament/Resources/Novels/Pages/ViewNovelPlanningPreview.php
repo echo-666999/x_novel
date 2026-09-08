@@ -16,7 +16,7 @@ class ViewNovelPlanningPreview extends ViewRecord
 {
     protected static string $resource = NovelResource::class;
 
-    protected static ?string $navigationLabel = 'Planning Preview';
+    protected static ?string $navigationLabel = '规划预览';
 
     public int $chapterId;
 
@@ -37,7 +37,7 @@ class ViewNovelPlanningPreview extends ViewRecord
 
     public function getTitle(): string
     {
-        return 'Planning Preview';
+        return '规划预览';
     }
 
     public function getSubheading(): ?string
@@ -53,8 +53,8 @@ class ViewNovelPlanningPreview extends ViewRecord
     public function content(Schema $schema): Schema
     {
         return $schema->components([
-            Section::make('尚未建立 Chapter Plan')
-                ->description('返回章节列表建立完整 Plan 后，才能进行生成前预览。')
+            Section::make('尚未建立章节计划')
+                ->description('返回章节列表建立完整计划后，才能进行生成前预览。')
                 ->icon('heroicon-o-clipboard-document-list')
                 ->visible(fn (): bool => $this->chapterPlan() === null),
             Section::make('本章为什么存在')
@@ -63,13 +63,13 @@ class ViewNovelPlanningPreview extends ViewRecord
                 ->visible(fn (): bool => $this->chapterPlan() !== null)
                 ->schema([
                     TextEntry::make('chapter_function')
-                        ->label('Chapter Function')
+                        ->label('章节功能')
                         ->state(fn (): ?string => $this->chapterPlan()?->chapter_function),
                     TextEntry::make('arc_contribution')
-                        ->label('Arc Contribution')
+                        ->label('故事线贡献')
                         ->state(fn (): ?string => $this->chapterPlan()?->arc_contribution),
                     TextEntry::make('reader_promise')
-                        ->label('Reader Promise')
+                        ->label('读者承诺')
                         ->state(fn (): ?string => $this->chapterPlan()?->reader_promise),
                 ]),
             Section::make('执行基线')
@@ -77,14 +77,14 @@ class ViewNovelPlanningPreview extends ViewRecord
                 ->visible(fn (): bool => $this->chapterPlan() !== null)
                 ->schema([
                     TextEntry::make('plan_version')
-                        ->label('Plan Version')
+                        ->label('计划版本')
                         ->state(fn (): ?string => $this->chapterPlan() === null ? null : 'v'.$this->chapterPlan()->version),
                     TextEntry::make('plan_status')
-                        ->label('Plan Status')
+                        ->label('计划状态')
                         ->state(fn () => $this->chapterPlan()?->status)
                         ->badge(),
                     TextEntry::make('validation_status')
-                        ->label('Findings')
+                        ->label('检查结果')
                         ->state(fn () => $this->validationResult()?->status())
                         ->badge(),
                     TextEntry::make('target_words')
@@ -92,7 +92,7 @@ class ViewNovelPlanningPreview extends ViewRecord
                         ->state(fn (): ?int => $this->chapterPlan()?->target_words)
                         ->numeric(),
                     TextEntry::make('pov')
-                        ->label('POV')
+                        ->label('视角角色')
                         ->state(fn (): ?string => $this->chapterPlan()?->povCharacter?->name),
                     TextEntry::make('tone')
                         ->label('语气 / 钩子')
@@ -100,27 +100,27 @@ class ViewNovelPlanningPreview extends ViewRecord
                             ? null
                             : $this->chapterPlan()->tone.' · '.$this->chapterPlan()->hook_type),
                 ]),
-            Section::make('Scene 流程')
-                ->description('按计划顺序检查每个 Scene 的目标、冲突、转折和结果。')
+            Section::make('场景流程')
+                ->description('按计划顺序检查每个场景的目标、冲突、转折和结果。')
                 ->visible(fn (): bool => $this->chapterPlan() !== null)
                 ->schema([
                     RepeatableEntry::make('scene_flow')
-                        ->label('')
+                        ->hiddenLabel()
                         ->state(fn (): array => $this->sceneFlow())
                         ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
                         ->schema([
                             TextEntry::make('sequence')
-                                ->label('Scene')
+                                ->label('场景')
                                 ->badge(),
                             TextEntry::make('pov')
-                                ->label('POV')
-                                ->placeholder('继承 Chapter Plan'),
+                                ->label('视角角色')
+                                ->placeholder('继承章节计划'),
                             TextEntry::make('location')
                                 ->label('地点')
                                 ->placeholder('未指定'),
                             TextEntry::make('time_anchor')
                                 ->label('时间锚点')
-                                ->placeholder('继承 Chapter Plan'),
+                                ->placeholder('继承章节计划'),
                             TextEntry::make('goal')->label('目标'),
                             TextEntry::make('conflict')->label('冲突'),
                             TextEntry::make('turn')->label('转折'),
@@ -133,32 +133,32 @@ class ViewNovelPlanningPreview extends ViewRecord
                 ->visible(fn (): bool => $this->chapterPlan() !== null)
                 ->schema([
                     TextEntry::make('due_foreshadowings')
-                        ->label('Due Foreshadowings')
+                        ->label('到期伏笔')
                         ->state(fn (): array => $this->dueForeshadowings())
                         ->bulleted()
                         ->placeholder('无'),
                     TextEntry::make('required_facts')
-                        ->label('Required Facts')
+                        ->label('必需事实')
                         ->state(fn (): array => $this->requiredFacts())
                         ->bulleted()
                         ->placeholder('无'),
                     TextEntry::make('forbidden_conflicts')
-                        ->label('Forbidden Conflicts')
+                        ->label('禁止冲突')
                         ->state(fn (): array => $this->chapterPlan()?->forbidden_conflicts ?? [])
                         ->bulleted()
                         ->placeholder('无'),
                     TextEntry::make('must_not_reveal')
-                        ->label('Must Not Reveal')
+                        ->label('禁止揭示')
                         ->state(fn (): array => $this->chapterPlan()?->must_not_reveal ?? [])
                         ->bulleted()
                         ->placeholder('无'),
                 ]),
-            Section::make('Plan Findings')
-                ->description('Blocked 必须修复后才能进入生成；Warning 需要人工确认。')
+            Section::make('计划检查结果')
+                ->description('已阻塞的问题必须修复后才能进入生成；警告项需要人工确认。')
                 ->visible(fn (): bool => $this->chapterPlan() !== null)
                 ->schema([
                     RepeatableEntry::make('findings')
-                        ->label('')
+                        ->hiddenLabel()
                         ->state(fn (): array => $this->findings())
                         ->columns(['default' => 1, 'md' => 3])
                         ->schema([
@@ -203,7 +203,7 @@ class ViewNovelPlanningPreview extends ViewRecord
         return collect($plan->scene_plans ?? [])
             ->values()
             ->map(fn (array $scene, int $index): array => [
-                'sequence' => 'Scene '.($index + 1),
+                'sequence' => '场景 '.($index + 1),
                 'pov' => $characterNames->get($scene['pov_character_id'] ?? $plan->pov_character_id),
                 'location' => $scene['location'] ?? null,
                 'time_anchor' => $scene['time_anchor'] ?? $plan->time_anchor,

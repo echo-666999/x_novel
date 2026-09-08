@@ -49,7 +49,7 @@ class ViewNovelChapter extends ViewRecord
 {
     protected static string $resource = NovelResource::class;
 
-    protected static ?string $navigationLabel = 'Chapter Detail';
+    protected static ?string $navigationLabel = '章节详情';
 
     public int $chapterId;
 
@@ -77,47 +77,47 @@ class ViewNovelChapter extends ViewRecord
 
     public function getSubheading(): ?string
     {
-        return $this->getRecord()->title.' · Chapter Detail 工作台';
+        return $this->getRecord()->title.' · 章节工作台';
     }
 
     protected function getHeaderActions(): array
     {
         return [
             Action::make('generatePlan')
-                ->label('AI Generate Plan')
+                ->label('AI 生成章节计划')
                 ->icon('heroicon-o-sparkles')
                 ->visible(fn (): bool => $this->chapter()->latestPlan === null)
                 ->disabled(fn (): bool => $this->hasActivePlanningRun())
-                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? 'Chapter Planning 已在运行。' : null)
+                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? '章节规划正在运行。' : null)
                 ->action(function (): void {
                     PlanChapterJob::dispatch($this->chapterId);
 
                     Notification::make()
-                        ->title('Chapter Plan 已加入生成队列')
-                        ->body('可在 Runs 页签查看执行状态。')
+                        ->title('章节计划已加入生成队列')
+                        ->body('可在“运行记录”页签查看执行状态。')
                         ->success()
                         ->send();
                 }),
             Action::make('regeneratePlan')
-                ->label('Regenerate Plan')
+                ->label('重新生成计划')
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
                 ->visible(fn (): bool => $this->chapter()->latestPlan !== null)
                 ->disabled(fn (): bool => $this->hasActivePlanningRun())
-                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? 'Chapter Planning 已在运行。' : null)
+                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? '章节规划正在运行。' : null)
                 ->requiresConfirmation()
-                ->modalDescription('将生成新的 Plan 版本；当前版本与 Artifact 会保留用于追踪。')
+                ->modalDescription('将生成新的计划版本；当前版本与产物会保留用于追踪。')
                 ->action(function (): void {
                     PlanChapterJob::dispatch($this->chapterId, true);
 
                     Notification::make()
-                        ->title('Chapter Plan 重新生成已排队')
-                        ->body('可在 Runs 页签查看执行状态。')
+                        ->title('章节计划重新生成已排队')
+                        ->body('可在“运行记录”页签查看执行状态。')
                         ->success()
                         ->send();
                 }),
             Action::make('planningPreview')
-                ->label('Planning Preview')
+                ->label('规划预览')
                 ->icon('heroicon-o-eye')
                 ->visible(fn (): bool => $this->chapter()->latestPlan !== null)
                 ->url(fn (): string => NovelResource::getUrl('planning-preview', [
@@ -131,9 +131,9 @@ class ViewNovelChapter extends ViewRecord
                 ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::Pass
                     && $this->chapter()->canonical_artifact_id === null)
                 ->disabled(fn (): bool => $this->canonicalCommitContext() === null)
-                ->tooltip(fn (): ?string => $this->canonicalCommitContext() === null ? '请先完成事件提取、State Patch 与状态校验。' : null)
-                ->modalHeading('提交 Canonical Chapter')
-                ->modalDescription('该操作会原子写入正式事件、事实变化和新的 Story State Version。')
+                ->tooltip(fn (): ?string => $this->canonicalCommitContext() === null ? '请先完成事件提取、状态补丁与状态校验。' : null)
+                ->modalHeading('提交正式章节')
+                ->modalDescription('该操作会原子写入正式事件、事实变化和新的故事状态版本。')
                 ->modalSubmitActionLabel('确认提交')
                 ->schema([
                     TextEntry::make('commit_draft')->label('草稿版本')->state(fn (): string => $this->canonicalCommitPreview()['draft']),
@@ -146,7 +146,7 @@ class ViewNovelChapter extends ViewRecord
                     $context = $this->canonicalCommitContext();
 
                     if ($context === null) {
-                        throw ValidationException::withMessages(['commit' => 'Canonical Commit 输入尚未准备完成。']);
+                        throw ValidationException::withMessages(['commit' => '正式提交所需数据尚未准备完成。']);
                     }
 
                     $stateVersion = $canonicalCommit->commit($context);
@@ -154,7 +154,7 @@ class ViewNovelChapter extends ViewRecord
 
                     Notification::make()
                         ->title('章节已提交为正式版本')
-                        ->body('Canonical Story State 已更新至 v'.$stateVersion->version.'。')
+                        ->body('正式故事状态已更新至 v'.$stateVersion->version.'。')
                         ->success()
                         ->send();
                 }),
@@ -204,43 +204,43 @@ class ViewNovelChapter extends ViewRecord
     public function content(Schema $schema): Schema
     {
         return $schema->components([
-            Tabs::make('Chapter Workspace')
+            Tabs::make('章节工作台')
                 ->persistTabInQueryString()
                 ->tabs([
-                    Tab::make('Overview')
+                    Tab::make('概览')
                         ->icon('heroicon-o-squares-2x2')
                         ->schema($this->overviewSchema()),
-                    Tab::make('Plan')
+                    Tab::make('计划')
                         ->icon('heroicon-o-clipboard-document-list')
                         ->badge(fn (): string => $this->chapter()->latestPlan === null ? '未建立' : 'v'.$this->chapter()->latestPlan->version)
                         ->schema($this->planSchema()),
-                    Tab::make('Scenes')
+                    Tab::make('场景')
                         ->icon('heroicon-o-rectangle-stack')
                         ->badge(fn (): int => $this->chapter()->scenes->count())
                         ->schema($this->scenesSchema()),
-                    Tab::make('Draft')
+                    Tab::make('草稿')
                         ->icon('heroicon-o-document-text')
                         ->badge(fn (): int => $this->chapterDraftArtifacts()->count())
                         ->schema($this->draftSchema()),
-                    Tab::make('Canonical')
+                    Tab::make('正式版本')
                         ->icon('heroicon-o-check-badge')
                         ->badge(fn (): string => $this->chapter()->canonicalArtifact === null ? '未提交' : '正式')
                         ->schema($this->canonicalSchema()),
-                    Tab::make('Events')
+                    Tab::make('事件')
                         ->icon('heroicon-o-bolt')
                         ->badge(fn (): int => $this->latestEventCandidateArtifact() === null
                             ? 0
                             : count(data_get($this->latestEventCandidateArtifact()?->data, 'events', [])))
                         ->schema($this->eventsSchema()),
-                    Tab::make('Review')
+                    Tab::make('审校')
                         ->icon('heroicon-o-shield-check')
                         ->badge(fn (): string => $this->latestReview()?->decision->getLabel() ?? '未审校')
                         ->schema($this->reviewSchema()),
-                    Tab::make('State Changes')
+                    Tab::make('状态变化')
                         ->icon('heroicon-o-arrows-right-left')
                         ->badge(fn (): int => count(data_get($this->latestStatePatchArtifact()?->data, 'changes', [])))
                         ->schema($this->stateChangesSchema()),
-                    Tab::make('Runs')
+                    Tab::make('运行记录')
                         ->icon('heroicon-o-command-line')
                         ->badge(fn (): int => $this->chapter()->generationRuns()->count())
                         ->schema($this->runsSchema()),
@@ -252,8 +252,8 @@ class ViewNovelChapter extends ViewRecord
     private function reviewSchema(): array
     {
         return [
-            Section::make('Narrative Review')
-                ->description('七维评分结合确定性 State Findings 形成最终审校决策。')
+            Section::make('叙事审校')
+                ->description('七维评分结合确定性状态检查结果形成最终审校决策。')
                 ->headerActions([
                     Action::make('rewriteScene')
                         ->label('重写场景')
@@ -262,11 +262,11 @@ class ViewNovelChapter extends ViewRecord
                         ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
                         ->disabled(fn (): bool => $this->rewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
                         ->schema([
-                            Select::make('scene_id')->label('场景')->required()->options(fn (): array => $this->chapter()->scenes->mapWithKeys(fn (Scene $scene): array => [$scene->getKey() => 'Scene '.$scene->sequence.' · '.$scene->goal])->all()),
+                            Select::make('scene_id')->label('场景')->required()->options(fn (): array => $this->chapter()->scenes->mapWithKeys(fn (Scene $scene): array => [$scene->getKey() => '场景 '.$scene->sequence.' · '.$scene->goal])->all()),
                         ])
                         ->action(function (array $data): void {
                             RewriteChapterJob::dispatch($this->chapterId, (int) $data['scene_id']);
-                            Notification::make()->title('Scene Rewrite 已加入队列')->success()->send();
+                            Notification::make()->title('场景重写已加入队列')->success()->send();
                         }),
                     Action::make('rewriteChapter')
                         ->label('重写章节')
@@ -277,7 +277,7 @@ class ViewNovelChapter extends ViewRecord
                         ->disabled(fn (): bool => $this->rewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
                         ->action(function (): void {
                             RewriteChapterJob::dispatch($this->chapterId);
-                            Notification::make()->title('Chapter Rewrite 已加入队列')->success()->send();
+                            Notification::make()->title('章节重写已加入队列')->success()->send();
                         }),
                     Action::make('runReview')
                         ->label(fn (): string => $this->latestReview() ? '重新审校' : '开始审校')
@@ -285,14 +285,14 @@ class ViewNovelChapter extends ViewRecord
                         ->disabled(fn (): bool => $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
                         ->action(function (): void {
                             ReviewChapterJob::dispatch($this->chapterId, $this->latestReview() !== null);
-                            Notification::make()->title('Narrative Review 已加入生成队列')->success()->send();
+                            Notification::make()->title('叙事审校已加入生成队列')->success()->send();
                         }),
                 ])
                 ->columns(['default' => 1, 'md' => 4])
                 ->schema([
-                    TextEntry::make('review_decision')->label('Decision')->state(fn () => $this->latestReview()?->decision ?? '未审校')->badge(),
+                    TextEntry::make('review_decision')->label('结论')->state(fn () => $this->latestReview()?->decision ?? '未审校')->badge(),
                     TextEntry::make('review_total')->label('总分')->state(fn () => $this->latestReview()?->score ?? '—')->suffix(fn () => $this->latestReview() ? ' / 100' : null),
-                    TextEntry::make('review_version')->label('Review Version')->state(fn () => $this->latestReview()?->artifact?->version ? 'v'.$this->latestReview()->artifact->version : '—'),
+                    TextEntry::make('review_version')->label('审校版本')->state(fn () => $this->latestReview()?->artifact?->version ? 'v'.$this->latestReview()->artifact->version : '—'),
                     TextEntry::make('review_time')->label('完成时间')->state(fn () => $this->latestReview()?->created_at?->format('Y-m-d H:i:s') ?? '—'),
                 ]),
             Section::make('七维评分')
@@ -301,19 +301,19 @@ class ViewNovelChapter extends ViewRecord
                     'continuity_score' => '事实 / 连续性 · 25%', 'plan_score' => '计划遵循 · 15%', 'character_score' => '人物一致性 · 15%',
                     'progress_score' => '剧情推进 · 15%', 'repetition_score' => '重复度 · 10%', 'pacing_score' => '节奏 / 悬念 · 10%', 'style_score' => '文风 / 可读性 · 10%',
                 ])->map(fn ($label, $field) => TextEntry::make("review_{$field}")->label($label)->state(fn () => $this->latestReview()?->{$field} ?? '—'))->values()->all()),
-            Section::make('Findings')
-                ->description('包含 Narrative Review 发现和 StateValidator 的确定性检查结果。')
+            Section::make('问题清单')
+                ->description('包含叙事审校发现和状态校验器的确定性检查结果。')
                 ->schema([
-                    RepeatableEntry::make('review_findings')->label('')->state(fn () => $this->latestReview()?->findings ?? [])->schema([
+                    RepeatableEntry::make('review_findings')->hiddenLabel()->state(fn () => $this->latestReview()?->findings ?? [])->schema([
                         TextEntry::make('message')->label('问题'),
                         TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
                         TextEntry::make('severity')->label('级别')->badge(),
                         TextEntry::make('evidence')->label('证据')->placeholder('—')->columnSpanFull(),
                     ])->columns(3),
-                    TextEntry::make('review_empty')->hiddenLabel()->state('暂无 Review Findings。')->visible(fn (): bool => empty($this->latestReview()?->findings)),
+                    TextEntry::make('review_empty')->hiddenLabel()->state('暂无审校问题。')->visible(fn (): bool => empty($this->latestReview()?->findings)),
                 ]),
-            Section::make('Rewrite 历史')
-                ->description('原稿和最多两次 Rewrite 均作为不可变 Artifact 保留。')
+            Section::make('重写历史')
+                ->description('原稿和最多两次重写均作为不可变产物保留。')
                 ->schema([
                     RepeatableEntry::make('rewrite_versions')->hiddenLabel()->state(fn (): array => $this->rewriteVersionRows())->schema([
                         TextEntry::make('label')->label('版本')->badge(),
@@ -321,8 +321,8 @@ class ViewNovelChapter extends ViewRecord
                         TextEntry::make('content')->label('正文')->prose()->columnSpanFull(),
                     ])->columns(2),
                 ]),
-            Section::make('Draft / Rewrite Diff')
-                ->description('对照 Rewrite 前后正文，并根据后续 Review 标记 Finding 是否已解决。')
+            Section::make('草稿 / 重写差异')
+                ->description('对照重写前后正文，并根据后续审校标记问题是否已解决。')
                 ->visible(fn (): bool => $this->rewriteArtifacts()->isNotEmpty())
                 ->schema([
                     View::make('filament.components.draft-rewrite-diff')
@@ -418,7 +418,7 @@ class ViewNovelChapter extends ViewRecord
                 ->columns(['default' => 1, 'md' => 3, 'xl' => 6])
                 ->schema([
                     TextEntry::make('chapter_status')
-                        ->label('Chapter Status')
+                        ->label('章节状态')
                         ->state(fn () => $this->chapter()->status)
                         ->badge(),
                     TextEntry::make('volume')
@@ -432,15 +432,15 @@ class ViewNovelChapter extends ViewRecord
                         ->state(fn (): int => $this->chapter()->word_count)
                         ->numeric(),
                     TextEntry::make('plan_status')
-                        ->label('Plan')
+                        ->label('计划')
                         ->state(fn () => $this->chapter()->latestPlan?->status)
                         ->badge()
                         ->placeholder('未建立'),
                     TextEntry::make('scene_count')
-                        ->label('Scenes')
+                        ->label('场景数')
                         ->state(fn (): int => $this->chapter()->scenes->count()),
                     TextEntry::make('state_version')
-                        ->label('State Version')
+                        ->label('状态版本')
                         ->state(fn (): ?string => $this->chapter()->latestStateVersion === null
                             ? null
                             : 'v'.$this->chapter()->latestStateVersion->version)
@@ -454,26 +454,26 @@ class ViewNovelChapter extends ViewRecord
     private function planSchema(): array
     {
         return [
-            Section::make('尚未建立 Chapter Plan')
-                ->description('返回章节列表建立 Plan 后，这里会显示生成执行基线。')
+            Section::make('尚未建立章节计划')
+                ->description('返回章节列表建立计划后，这里会显示生成执行基线。')
                 ->icon('heroicon-o-clipboard-document-list')
                 ->visible(fn (): bool => $this->chapter()->latestPlan === null),
             Section::make('章节目标')
-                ->description('完整约束与校验结果可通过右上角 Planning Preview 查看。')
+                ->description('完整约束与校验结果可通过右上角“规划预览”查看。')
                 ->visible(fn (): bool => $this->chapter()->latestPlan !== null)
                 ->columns(['default' => 1, 'lg' => 3])
                 ->schema([
                     TextEntry::make('chapter_function')
-                        ->label('Chapter Function')
+                        ->label('章节功能')
                         ->state(fn (): ?string => $this->chapter()->latestPlan?->chapter_function),
                     TextEntry::make('arc_contribution')
-                        ->label('Arc Contribution')
+                        ->label('故事线贡献')
                         ->state(fn (): ?string => $this->chapter()->latestPlan?->arc_contribution),
                     TextEntry::make('reader_promise')
-                        ->label('Reader Promise')
+                        ->label('读者承诺')
                         ->state(fn (): ?string => $this->chapter()->latestPlan?->reader_promise),
                     TextEntry::make('pov')
-                        ->label('POV')
+                        ->label('视角角色')
                         ->state(fn (): ?string => $this->chapter()->latestPlan?->povCharacter?->name)
                         ->placeholder('未指定'),
                     TextEntry::make('tone')
@@ -482,7 +482,7 @@ class ViewNovelChapter extends ViewRecord
                             ? null
                             : $this->chapter()->latestPlan->tone.' · '.$this->chapter()->latestPlan->hook_type),
                     TextEntry::make('validation')
-                        ->label('Plan Findings')
+                        ->label('计划检查结果')
                         ->state(fn () => $this->chapter()->latestPlan === null
                             ? null
                             : app(PlanValidator::class)->validate($this->chapter()->latestPlan)->status())
@@ -495,8 +495,8 @@ class ViewNovelChapter extends ViewRecord
     private function scenesSchema(): array
     {
         $sections = [
-            Section::make('尚未同步 Scenes')
-                ->description('先在章节列表保存 Chapter Plan，再使用“同步 Scenes”。')
+            Section::make('尚未同步场景')
+                ->description('先在章节列表保存章节计划，再使用“同步场景”。')
                 ->icon('heroicon-o-rectangle-stack')
                 ->visible(fn (): bool => $this->chapter()->scenes->isEmpty()),
         ];
@@ -513,30 +513,30 @@ class ViewNovelChapter extends ViewRecord
         $run = $scene->generationRuns->sortByDesc('id')->first();
         $artifact = $scene->currentArtifact;
 
-        return Section::make('Scene '.$scene->sequence)
+        return Section::make('场景 '.$scene->sequence)
             ->description($scene->goal)
             ->headerActions([
                 Action::make('generateScene'.$scene->getKey())
-                    ->label('Generate')
+                    ->label('生成')
                     ->icon('heroicon-o-play')
                     ->visible($scene->status === SceneStatus::Planned)
                     ->disabled(! $this->canGenerateScene($scene))
-                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序 Scene 成功。' : null)
+                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
                     ->action(fn () => $this->dispatchScene($scene)),
                 Action::make('retryScene'.$scene->getKey())
-                    ->label('Retry')
+                    ->label('重试')
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
                     ->visible($scene->status === SceneStatus::Failed)
                     ->disabled(! $this->canGenerateScene($scene))
-                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序 Scene 成功。' : null)
+                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
                     ->action(fn () => $this->dispatchScene($scene, true)),
                 Action::make('viewSceneArtifact'.$scene->getKey())
-                    ->label('View Artifact')
+                    ->label('查看产物')
                     ->icon('heroicon-o-document-text')
                     ->color('gray')
                     ->visible($artifact !== null)
-                    ->modalHeading('Scene '.$scene->sequence.' · Draft Artifact')
+                    ->modalHeading('场景 '.$scene->sequence.' · 草稿产物')
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('关闭')
                     ->infolist([
@@ -546,7 +546,7 @@ class ViewNovelChapter extends ViewRecord
                             ->prose()
                             ->copyable(),
                         TextEntry::make('scene_artifact_delta_'.$scene->getKey())
-                            ->label('Temporary State Delta')
+                            ->label('临时状态变化')
                             ->state(fn (): string => json_encode(
                                 data_get($artifact?->data, 'temporary_state_delta', []),
                                 JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
@@ -555,17 +555,17 @@ class ViewNovelChapter extends ViewRecord
                             ->copyable(),
                     ]),
                 Action::make('viewSceneRun'.$scene->getKey())
-                    ->label('View Run')
+                    ->label('查看运行记录')
                     ->icon('heroicon-o-command-line')
                     ->color('gray')
                     ->visible($run !== null)
-                    ->modalHeading('Scene '.$scene->sequence.' · Generation Run')
+                    ->modalHeading('场景 '.$scene->sequence.' · 生成运行记录')
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('关闭')
                     ->infolist([
                         TextEntry::make('scene_run_status_'.$scene->getKey())->label('状态')->state($run?->status)->badge(),
                         TextEntry::make('scene_run_model_'.$scene->getKey())->label('模型')->state($run?->model_policy)->placeholder('—'),
-                        TextEntry::make('scene_run_prompt_'.$scene->getKey())->label('Prompt Version')->state($run?->prompt_version)->placeholder('—'),
+                        TextEntry::make('scene_run_prompt_'.$scene->getKey())->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
                         TextEntry::make('scene_run_error_'.$scene->getKey())
                             ->label('错误')
                             ->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)
@@ -584,7 +584,7 @@ class ViewNovelChapter extends ViewRecord
                     ->label('成本')
                     ->state($run === null ? null : config('ai.cost.currency').' '.number_format((float) $run->usageRecords->sum('estimated_cost'), 6))
                     ->placeholder('—'),
-                TextEntry::make('scene_pov_'.$scene->getKey())->label('POV')->state($scene->povCharacter?->name)->placeholder('未指定'),
+                TextEntry::make('scene_pov_'.$scene->getKey())->label('视角角色')->state($scene->povCharacter?->name)->placeholder('未指定'),
                 TextEntry::make('scene_location_'.$scene->getKey())->label('地点')->state($scene->location)->placeholder('未指定'),
                 TextEntry::make('scene_conflict_'.$scene->getKey())->label('冲突')->state($scene->conflict),
                 TextEntry::make('scene_outcome_'.$scene->getKey())->label('结果')->state($scene->outcome),
@@ -596,8 +596,8 @@ class ViewNovelChapter extends ViewRecord
         GenerateSceneJob::dispatch($scene->getKey(), $regenerate);
 
         Notification::make()
-            ->title($regenerate ? 'Scene 重试已加入队列' : 'Scene 已加入生成队列')
-            ->body('Scene '.$scene->sequence.' 将在 generation 队列中执行。')
+            ->title($regenerate ? '场景重试已加入队列' : '场景已加入生成队列')
+            ->body('场景 '.$scene->sequence.' 将在生成队列中执行。')
             ->success()
             ->send();
     }
@@ -615,15 +615,15 @@ class ViewNovelChapter extends ViewRecord
     {
         $artifacts = $this->chapterDraftArtifacts();
         $sections = [
-            Section::make('Chapter Assembly')
-                ->description('按 Scene 顺序组装完整章节；每次结果保存为新的不可变 Artifact 版本。')
+            Section::make('章节组装')
+                ->description('按场景顺序组装完整章节；每次结果保存为新的不可变产物版本。')
                 ->headerActions([
                     Action::make('assembleChapter')
-                        ->label('Assemble Chapter')
+                        ->label('组装章节')
                         ->icon('heroicon-o-document-plus')
                         ->disabled(! $this->canAssembleChapter() || $this->hasActiveAssemblyRun())
                         ->tooltip(match (true) {
-                            $this->hasActiveAssemblyRun() => 'Chapter Assembly 已在运行。',
+                            $this->hasActiveAssemblyRun() => '章节组装正在运行。',
                             ! $this->canAssembleChapter() => '所有 Scene 成功后才能组装 Chapter。',
                             default => null,
                         })
@@ -631,8 +631,8 @@ class ViewNovelChapter extends ViewRecord
                             AssembleChapterJob::dispatch($this->chapterId);
 
                             Notification::make()
-                                ->title('Chapter Assembly 已加入队列')
-                                ->body('可在 Draft 或 Runs 页签查看执行状态。')
+                                ->title('章节组装已加入队列')
+                                ->body('可在“草稿”或“运行记录”页签查看执行状态。')
                                 ->success()
                                 ->send();
                         }),
@@ -640,13 +640,13 @@ class ViewNovelChapter extends ViewRecord
                 ->columns(['default' => 1, 'md' => 3])
                 ->schema([
                     TextEntry::make('assembly_scene_count')
-                        ->label('Scenes')
+                        ->label('场景数')
                         ->state($this->chapter()->scenes->count()),
                     TextEntry::make('assembly_ready_count')
                         ->label('已成功')
                         ->state($this->chapter()->scenes->filter(fn (Scene $scene): bool => $this->canUseForAssembly($scene))->count()),
                     TextEntry::make('assembly_status')
-                        ->label('Assembly Status')
+                        ->label('组装状态')
                         ->state($this->latestAssemblyRun()?->status)
                         ->badge()
                         ->placeholder('尚未运行'),
@@ -654,19 +654,19 @@ class ViewNovelChapter extends ViewRecord
         ];
 
         if ($artifacts->isEmpty()) {
-            $sections[] = Section::make('尚无 Chapter Draft')
-                ->description('所有 Scene 成功后，使用 Assemble Chapter 生成完整草稿。')
+            $sections[] = Section::make('尚无章节草稿')
+                ->description('所有场景生成成功后，使用“组装章节”生成完整草稿。')
                 ->icon('heroicon-o-document-text');
 
             return $sections;
         }
 
         $sections[] = Tabs::make('Artifact Versions')
-            ->tabs($artifacts->map(fn ($artifact): Tab => Tab::make('Draft v'.$artifact->version)
+            ->tabs($artifacts->map(fn ($artifact): Tab => Tab::make('草稿 v'.$artifact->version)
                 ->badge('#'.$artifact->getKey())
                 ->schema([
-                    Section::make('完整 Draft')
-                        ->description('Artifact v'.$artifact->version.' · '.$artifact->checksum)
+                    Section::make('完整草稿')
+                        ->description('产物 v'.$artifact->version.' · '.$artifact->checksum)
                         ->schema([
                             TextEntry::make('chapter_draft_'.$artifact->getKey())
                                 ->hiddenLabel()
@@ -674,8 +674,8 @@ class ViewNovelChapter extends ViewRecord
                                 ->prose()
                                 ->copyable(),
                         ]),
-                    Tabs::make('Source Scenes '.$artifact->getKey())
-                        ->tabs($this->chapter()->scenes->map(fn (Scene $scene): Tab => Tab::make('Scene '.$scene->sequence)
+                    Tabs::make('来源场景 '.$artifact->getKey())
+                        ->tabs($this->chapter()->scenes->map(fn (Scene $scene): Tab => Tab::make('场景 '.$scene->sequence)
                             ->schema([
                                 TextEntry::make('draft_source_scene_'.$artifact->getKey().'_'.$scene->getKey())
                                     ->hiddenLabel()
@@ -705,7 +705,7 @@ class ViewNovelChapter extends ViewRecord
         if ($artifact === null) {
             return [
                 Section::make('尚无正式章节')
-                    ->description('当前内容仍是 Draft；只有通过 Review 和 Canonical Commit 后才会在这里显示正式正文。')
+                    ->description('当前内容仍是草稿；只有通过审校和正式提交后才会在这里显示正式正文。')
                     ->icon('heroicon-o-check-badge'),
             ];
         }
@@ -717,12 +717,12 @@ class ViewNovelChapter extends ViewRecord
 
         return [
             Section::make('正式章节')
-                ->description('Canonical 内容只读，作为后续章节与正式故事状态的依据。')
+                ->description('正式内容只读，作为后续章节与正式故事状态的依据。')
                 ->icon('heroicon-o-check-badge')
                 ->columns(['default' => 1, 'md' => 3, 'xl' => 6])
                 ->schema([
                     TextEntry::make('canonical_artifact')
-                        ->label('Canonical Artifact')
+                        ->label('正式产物')
                         ->state("{$artifactLabel} v{$artifact->version} · #{$artifact->getKey()}"),
                     TextEntry::make('canonical_at')
                         ->label('正式提交时间')
@@ -737,7 +737,7 @@ class ViewNovelChapter extends ViewRecord
                         ->state($stateVersion === null ? null : 'v'.$stateVersion->version)
                         ->placeholder('—'),
                     TextEntry::make('canonical_review')
-                        ->label('Review 结果')
+                        ->label('审校结果')
                         ->state($review?->decision)
                         ->badge()
                         ->placeholder('—'),
@@ -746,7 +746,7 @@ class ViewNovelChapter extends ViewRecord
                         ->state(config('ai.cost.currency').' '.number_format($this->canonicalCost(), 6)),
                     TextEntry::make('canonical_memory_count')
                         ->hiddenLabel()
-                        ->state('Memory Created: '.$this->chapterMemoryCount())
+                        ->state('已创建记忆：'.$this->chapterMemoryCount())
                         ->icon('heroicon-o-circle-stack')
                         ->url(MemoryPage::getUrl([
                             'tableFilters' => [
@@ -755,7 +755,7 @@ class ViewNovelChapter extends ViewRecord
                             ],
                         ])),
                 ]),
-            Section::make('Canonical 正文')
+            Section::make('正式正文')
                 ->schema([
                     TextEntry::make('canonical_content')
                         ->hiddenLabel()
@@ -833,7 +833,7 @@ class ViewNovelChapter extends ViewRecord
         $artifact = $this->latestEventCandidateArtifact();
         $events = collect(data_get($artifact?->data, 'events', []))
             ->map(fn (array $event): array => [
-                'status' => 'Candidate',
+                'status' => '候选',
                 'type' => str((string) data_get($event, 'event_type'))->headline()->toString(),
                 'subject' => filled(data_get($event, 'subject_type'))
                     ? data_get($event, 'subject_type').' · '.(data_get($event, 'subject_id') ?? '—')
@@ -842,36 +842,36 @@ class ViewNovelChapter extends ViewRecord
                 'story_time' => data_get($event, 'story_time'),
                 'payload' => $this->formatTimelineJson(data_get($event, 'payload', [])),
                 'evidence' => collect(data_get($event, 'evidence', []))
-                    ->map(fn (array $evidence): string => 'Artifact #'.data_get($evidence, 'artifact_id').' · '.
-                        (data_get($evidence, 'scene_id') === null ? 'Chapter Draft' : 'Scene #'.data_get($evidence, 'scene_id')).
+                    ->map(fn (array $evidence): string => '产物 #'.data_get($evidence, 'artifact_id').' · '.
+                        (data_get($evidence, 'scene_id') === null ? '章节草稿' : '场景 #'.data_get($evidence, 'scene_id')).
                         "\n“".data_get($evidence, 'quote').'”')
                     ->implode("\n\n"),
             ])
             ->all();
 
         return [
-            Section::make('Story Event Candidates')
+            Section::make('故事事件候选')
                 ->key('story-event-candidates')
-                ->description('候选事件来自 Chapter Draft；只有后续验证、Review 与 Canonical Commit 才能写入正式 Story Events。')
+                ->description('候选事件来自章节草稿；只有经过后续验证、审校与正式提交，才能写入正式故事事件。')
                 ->icon('heroicon-o-bolt')
                 ->headerActions([
                     Action::make('extractStoryEvents')
-                        ->label($artifact === null ? 'Extract Events' : 'Re-extract Events')
+                        ->label($artifact === null ? '提取事件' : '重新提取事件')
                         ->icon('heroicon-o-sparkles')
                         ->disabled($this->chapterDraftArtifacts()->isEmpty() || $this->hasActiveEventExtractionRun())
                         ->tooltip(match (true) {
-                            $this->chapterDraftArtifacts()->isEmpty() => '需要先完成 Chapter Assembly。',
-                            $this->hasActiveEventExtractionRun() => 'Story Event Extraction 已在运行。',
+                            $this->chapterDraftArtifacts()->isEmpty() => '需要先完成章节组装。',
+                            $this->hasActiveEventExtractionRun() => '故事事件提取正在运行。',
                             default => null,
                         })
                         ->requiresConfirmation($artifact !== null)
-                        ->modalDescription($artifact === null ? null : '将创建新的不可变 Candidate Artifact 版本，现有候选不会被覆盖。')
+                        ->modalDescription($artifact === null ? null : '将创建新的不可变候选产物版本，现有候选不会被覆盖。')
                         ->action(function () use ($artifact): void {
                             ExtractStoryEventsJob::dispatch($this->chapterId, $artifact !== null);
 
                             Notification::make()
-                                ->title('Story Event Extraction 已加入队列')
-                                ->body('候选事件不会修改正式 Story State。')
+                                ->title('故事事件提取已加入队列')
+                                ->body('候选事件不会修改正式故事状态。')
                                 ->success()
                                 ->send();
                         }),
@@ -880,21 +880,21 @@ class ViewNovelChapter extends ViewRecord
                 ->schema([
                     TextEntry::make('event_candidate_status')
                         ->label('数据级别')
-                        ->state($artifact === null ? null : 'Candidate')
+                        ->state($artifact === null ? null : '候选')
                         ->badge()
                         ->color('warning')
                         ->placeholder('尚未提取'),
                     TextEntry::make('event_candidate_version')
-                        ->label('Artifact Version')
+                        ->label('产物版本')
                         ->state($artifact === null ? null : 'v'.$artifact->version.' · #'.$artifact->getKey())
                         ->placeholder('—'),
                     TextEntry::make('event_candidate_source')
-                        ->label('Source Artifact')
+                        ->label('来源产物')
                         ->state($artifact === null ? null : '#'.data_get($artifact->data, 'source_artifact_id'))
                         ->placeholder('—'),
                 ]),
             Section::make('尚无候选事件')
-                ->description($artifact === null ? '完成 Chapter Assembly 后运行 Extract Events。' : 'Extractor 已完成，本章没有识别到会改变后续 Story State 的事件。')
+                ->description($artifact === null ? '完成章节组装后运行“提取事件”。' : '事件提取已完成，本章没有识别到会改变后续故事状态的事件。')
                 ->icon('heroicon-o-information-circle')
                 ->visible($events === []),
             Section::make('候选事件')
@@ -906,12 +906,12 @@ class ViewNovelChapter extends ViewRecord
                         ->columns(['default' => 1, 'md' => 3])
                         ->schema([
                             TextEntry::make('status')->label('级别')->badge()->color('warning'),
-                            TextEntry::make('type')->label('Type')->badge()->color('gray'),
-                            TextEntry::make('subject')->label('Subject'),
-                            TextEntry::make('confidence')->label('Confidence'),
-                            TextEntry::make('story_time')->label('Story Time')->placeholder('—'),
-                            TextEntry::make('payload')->label('Payload')->fontFamily('mono')->copyable()->columnSpanFull(),
-                            TextEntry::make('evidence')->label('Evidence')->prose()->copyable()->columnSpanFull(),
+                            TextEntry::make('type')->label('类型')->badge()->color('gray'),
+                            TextEntry::make('subject')->label('主体'),
+                            TextEntry::make('confidence')->label('置信度'),
+                            TextEntry::make('story_time')->label('故事时间')->placeholder('—'),
+                            TextEntry::make('payload')->label('数据')->fontFamily('mono')->copyable()->columnSpanFull(),
+                            TextEntry::make('evidence')->label('证据')->prose()->copyable()->columnSpanFull(),
                         ]),
                 ]),
         ];
@@ -943,23 +943,23 @@ class ViewNovelChapter extends ViewRecord
         $validation = $artifact === null ? null : app(StateValidator::class)->validate($this->chapterId);
 
         return [
-            Section::make('State Patch Preview')
+            Section::make('状态补丁预览')
                 ->key('state-patch-preview')
-                ->description('根据 Event Candidates 确定性计算预期状态变化；此操作不会修改 Canonical Story State。')
+                ->description('根据候选事件确定性计算预期状态变化；此操作不会修改正式故事状态。')
                 ->icon('heroicon-o-arrows-right-left')
                 ->headerActions([
                     Action::make('buildStatePatch')
-                        ->label($artifact === null ? 'Build State Patch' : 'Rebuild State Patch')
+                        ->label($artifact === null ? '生成状态补丁' : '重新生成状态补丁')
                         ->icon('heroicon-o-wrench-screwdriver')
                         ->disabled($candidate === null)
-                        ->tooltip($candidate === null ? '请先生成 Story Event Candidates。' : null)
+                        ->tooltip($candidate === null ? '请先生成故事事件候选。' : null)
                         ->action(function (): void {
                             $artifact = app(StatePatchBuilder::class)->build($this->chapterId);
                             $this->cacheSchema('content', null);
 
                             Notification::make()
-                                ->title('State Patch 已生成')
-                                ->body('Artifact v'.$artifact->version.'，Canonical Story State 未被修改。')
+                                ->title('状态补丁已生成')
+                                ->body('产物 v'.$artifact->version.'，正式故事状态未被修改。')
                                 ->success()
                                 ->send();
                         }),
@@ -967,33 +967,33 @@ class ViewNovelChapter extends ViewRecord
                 ->columns(['default' => 1, 'md' => 4])
                 ->schema([
                     TextEntry::make('patch_status')
-                        ->label('Status')
-                        ->state(fn (): string => $artifact === null ? '尚未生成' : 'Candidate')
+                        ->label('状态')
+                        ->state(fn (): string => $artifact === null ? '尚未生成' : '候选')
                         ->badge()
                         ->color(fn (): string => $artifact === null ? 'gray' : 'warning'),
                     TextEntry::make('patch_version')
-                        ->label('Artifact')
+                        ->label('产物')
                         ->state(fn (): ?string => $artifact === null ? null : 'v'.$artifact->version)
                         ->placeholder('—'),
                     TextEntry::make('expected_state_version')
-                        ->label('Expected State')
+                        ->label('预期状态版本')
                         ->state(fn (): ?string => $artifact === null ? null : 'v'.data_get($artifact->data, 'expected_state_version'))
                         ->placeholder('—'),
                     TextEntry::make('source_event_artifact')
-                        ->label('Source Events')
+                        ->label('来源事件')
                         ->state(fn (): ?string => $artifact === null ? null : '#'.data_get($artifact->data, 'source_artifact_id'))
                         ->placeholder('—'),
                 ]),
-            Section::make('尚无正式 State Changes')
-                ->description($candidate === null ? '请先生成 Story Event Candidates。' : '点击 Build State Patch 查看本章提交后会改变什么。')
+            Section::make('尚无正式状态变化')
+                ->description($candidate === null ? '请先生成故事事件候选。' : '点击“生成状态补丁”查看本章提交后会改变什么。')
                 ->icon('heroicon-o-document-magnifying-glass')
                 ->visible($artifact === null),
             Section::make('预期状态变化')
-                ->description('按确定性 Event Applier 生成；Before / After 均为只读预览。')
+                ->description('按确定性事件应用器生成；变更前和变更后均为只读预览。')
                 ->visible($artifact !== null && data_get($artifact?->data, 'changes', []) !== [])
                 ->schema([
                     RepeatableEntry::make('state_changes')
-                        ->label('')
+                        ->hiddenLabel()
                         ->state(fn (): array => collect(data_get($artifact?->data, 'changes', []))->map(fn (array $change): array => [
                             ...$change,
                             'before_display' => $change['before_missing'] ? '（不存在）' : $this->formatTimelineJson($change['before']),
@@ -1002,33 +1002,33 @@ class ViewNovelChapter extends ViewRecord
                         ])->all())
                         ->columns(['default' => 1, 'md' => 2, 'xl' => 5])
                         ->schema([
-                            TextEntry::make('path')->label('Path')->copyable(),
-                            TextEntry::make('operation')->label('Operation')->badge(),
-                            TextEntry::make('before_display')->label('Before')->fontFamily('mono'),
-                            TextEntry::make('after_display')->label('After')->fontFamily('mono'),
-                            TextEntry::make('source_event')->label('Source Event'),
+                            TextEntry::make('path')->label('路径')->copyable(),
+                            TextEntry::make('operation')->label('操作')->badge(),
+                            TextEntry::make('before_display')->label('变更前')->fontFamily('mono'),
+                            TextEntry::make('after_display')->label('变更后')->fontFamily('mono'),
+                            TextEntry::make('source_event')->label('来源事件'),
                         ]),
                 ]),
             Section::make('没有状态变化')
-                ->description('候选事件没有可由当前确定性 Event Applier 安全映射的状态变化。')
+                ->description('候选事件没有可由当前确定性事件应用器安全映射的状态变化。')
                 ->icon('heroicon-o-check-circle')
                 ->visible($artifact !== null && data_get($artifact?->data, 'changes', []) === []),
-            Section::make('State Findings')
-                ->description('确定性规则优先；任何 BLOCK 都会阻止后续 Canonical Commit。')
+            Section::make('状态检查结果')
+                ->description('确定性规则优先；任何阻断项都会阻止后续正式提交。')
                 ->icon('heroicon-o-shield-exclamation')
                 ->visible($validation !== null)
                 ->columns(['default' => 1, 'md' => 2])
                 ->schema([
                     TextEntry::make('validation_decision')
-                        ->label('Decision')
+                        ->label('结论')
                         ->state(fn (): ?string => $validation?->decision())
                         ->badge()
                         ->color(fn (): string => $validation?->isBlocked() ? 'danger' : 'success'),
                     TextEntry::make('validation_count')
-                        ->label('Findings')
+                        ->label('问题数')
                         ->state(fn (): int => count($validation?->findings ?? [])),
                     RepeatableEntry::make('state_findings')
-                        ->label('')
+                        ->hiddenLabel()
                         ->visible($validation?->findings !== [])
                         ->columnSpanFull()
                         ->state(fn (): array => collect($validation?->findings ?? [])->map(fn ($finding): array => [
@@ -1041,33 +1041,33 @@ class ViewNovelChapter extends ViewRecord
                         ->columns(['default' => 1, 'md' => 2, 'xl' => 3])
                         ->schema([
                             TextEntry::make('severity_label')
-                                ->label('Severity')
+                                ->label('级别')
                                 ->badge()
                                 ->color(fn (string $state): string => match ($state) {
                                     'BLOCK' => 'danger',
                                     '计划内例外' => 'info',
                                     default => 'warning',
                                 }),
-                            TextEntry::make('code')->label('Code')->copyable(),
-                            TextEntry::make('message')->label('Message'),
-                            TextEntry::make('evidence_display')->label('Evidence')->fontFamily('mono'),
-                            TextEntry::make('related_fact')->label('Related Fact'),
-                            TextEntry::make('related_state')->label('Related State')->copyable(),
+                            TextEntry::make('code')->label('规则代码')->copyable(),
+                            TextEntry::make('message')->label('说明'),
+                            TextEntry::make('evidence_display')->label('证据')->fontFamily('mono'),
+                            TextEntry::make('related_fact')->label('关联事实'),
+                            TextEntry::make('related_state')->label('关联状态')->copyable(),
                         ]),
                 ]),
-            Section::make('Canonical State Version')
-                ->description('这里只展示本章关联的只读正式状态版本；具体 Diff 继续由 Story State Inspector 查看。')
+            Section::make('正式故事状态版本')
+                ->description('这里只展示本章关联的只读正式状态版本；具体差异可在故事状态检查器中查看。')
                 ->visible(fn (): bool => $this->chapter()->latestStateVersion !== null)
                 ->columns(['default' => 1, 'md' => 3])
                 ->schema([
                     TextEntry::make('canonical_version')
-                        ->label('Version')
+                        ->label('版本')
                         ->state(fn (): ?string => $this->chapter()->latestStateVersion === null
                             ? null
                             : 'v'.$this->chapter()->latestStateVersion->version)
                         ->badge(),
                     TextEntry::make('checksum')
-                        ->label('Checksum')
+                        ->label('校验值')
                         ->state(fn (): ?string => $this->chapter()->latestStateVersion?->checksum)
                         ->copyable(),
                     TextEntry::make('created_at')
@@ -1094,21 +1094,21 @@ class ViewNovelChapter extends ViewRecord
     private function runsSchema(): array
     {
         return [
-            Section::make('尚无 Generation Run')
-                ->description('运行 Planning、Scene Generation 或 Assembly 后，状态和错误会显示在这里。')
+            Section::make('尚无生成运行记录')
+                ->description('运行章节规划、场景生成或章节组装后，状态和错误会显示在这里。')
                 ->icon('heroicon-o-command-line')
                 ->visible(fn (): bool => $this->chapter()->generationRuns()->doesntExist()),
-            Section::make('Generation Runs')
-                ->description('按最近执行顺序展示模型、Prompt、State Version 与失败原因。')
+            Section::make('生成运行记录')
+                ->description('按最近执行顺序展示模型、提示词、状态版本与失败原因。')
                 ->visible(fn (): bool => $this->chapter()->generationRuns()->exists())
                 ->schema([
                     RepeatableEntry::make('planning_runs')
-                        ->label('')
+                        ->hiddenLabel()
                         ->state(fn (): array => $this->chapter()->generationRuns()
                             ->latest('id')
                             ->get()
                             ->map(fn ($run): array => [
-                                'run' => '#'.$run->getKey().' · Attempt '.$run->attempt,
+                                'run' => '#'.$run->getKey().' · 第 '.$run->attempt.' 次尝试',
                                 'status' => $run->status,
                                 'model' => $run->model_policy,
                                 'prompt_version' => $run->prompt_version,
@@ -1118,12 +1118,12 @@ class ViewNovelChapter extends ViewRecord
                             ->all())
                         ->columns(['default' => 1, 'md' => 3])
                         ->schema([
-                            TextEntry::make('run')->label('Run'),
-                            TextEntry::make('status')->label('Status')->badge(),
-                            TextEntry::make('model')->label('Model')->placeholder('—'),
-                            TextEntry::make('prompt_version')->label('Prompt Version')->placeholder('—'),
-                            TextEntry::make('state_version')->label('State Version'),
-                            TextEntry::make('error')->label('Error'),
+                            TextEntry::make('run')->label('运行记录'),
+                            TextEntry::make('status')->label('状态')->badge(),
+                            TextEntry::make('model')->label('模型')->placeholder('—'),
+                            TextEntry::make('prompt_version')->label('提示词版本')->placeholder('—'),
+                            TextEntry::make('state_version')->label('状态版本'),
+                            TextEntry::make('error')->label('错误'),
                         ]),
                 ]),
         ];
@@ -1137,13 +1137,13 @@ class ViewNovelChapter extends ViewRecord
         $afterScenes = array_values(array_filter($timeline, fn (array $item): bool => ! in_array($item['key'], ['plan', 'context'], true) && ! str_starts_with($item['key'], 'scene-')));
 
         return Section::make('生成流水线')
-            ->description('按实际持久化结果展示章节进度；点击任一阶段查看 Run、Artifact 与错误详情。')
+            ->description('按实际持久化结果展示章节进度；点击任一阶段查看运行记录、产物与错误详情。')
             ->icon('heroicon-o-list-bullet')
             ->schema([
                 Grid::make(['default' => 1, 'md' => 2])
                     ->schema(array_map($this->timelineStageSection(...), $beforeScenes)),
-                Section::make('Scenes')
-                    ->description($scenes === [] ? '尚未从 Chapter Plan 同步场景。' : '场景按顺序生成；前序场景完成后才会进入下一场景。')
+                Section::make('场景')
+                    ->description($scenes === [] ? '尚未从章节计划同步场景。' : '场景按顺序生成；前序场景完成后才会进入下一场景。')
                     ->icon('heroicon-o-rectangle-stack')
                     ->compact()
                     ->schema([
@@ -1195,17 +1195,17 @@ class ViewNovelChapter extends ViewRecord
         return [
             TextEntry::make('timeline_detail_status_'.$item['key'])->label('状态')->state($item['status'])->badge()->color($this->timelineColor($item['state'])),
             TextEntry::make('timeline_detail_description_'.$item['key'])->label('说明')->state($item['detail']),
-            TextEntry::make('timeline_detail_run_'.$item['key'])->label('Generation Run')->state($run === null ? null : '#'.$run->getKey().' · Attempt '.$run->attempt)->placeholder('尚无运行记录'),
+            TextEntry::make('timeline_detail_run_'.$item['key'])->label('生成运行记录')->state($run === null ? null : '#'.$run->getKey().' · 第 '.$run->attempt.' 次尝试')->placeholder('尚无运行记录'),
             TextEntry::make('timeline_detail_duration_'.$item['key'])->label('耗时')->state($run?->durationMilliseconds() === null ? null : $run->durationMilliseconds().' ms')->placeholder('—'),
             TextEntry::make('timeline_detail_model_'.$item['key'])->label('模型')->state($run?->model_policy)->placeholder('—'),
-            TextEntry::make('timeline_detail_tokens_'.$item['key'])->label('Tokens')->state($usage === null ? null : number_format((int) $usage->sum(fn ($record): int => $record->input_tokens + $record->output_tokens)))->placeholder('—'),
+            TextEntry::make('timeline_detail_tokens_'.$item['key'])->label('令牌数')->state($usage === null ? null : number_format((int) $usage->sum(fn ($record): int => $record->input_tokens + $record->output_tokens)))->placeholder('—'),
             TextEntry::make('timeline_detail_cost_'.$item['key'])->label('费用')->state($usage === null ? null : config('ai.cost.currency').' '.number_format((float) $usage->sum('estimated_cost'), 6))->placeholder('—'),
-            TextEntry::make('timeline_detail_prompt_'.$item['key'])->label('Prompt Version')->state($run?->prompt_version)->placeholder('—'),
-            TextEntry::make('timeline_detail_state_version_'.$item['key'])->label('State Version')->state($run?->state_version === null ? null : 'v'.$run->state_version)->placeholder('—'),
-            TextEntry::make('timeline_detail_artifact_'.$item['key'])->label('Artifact')->state($artifact === null ? null : $artifact->type->getLabel().' v'.$artifact->version.' · #'.$artifact->getKey())->placeholder('尚无产物'),
-            TextEntry::make('timeline_detail_artifact_content_'.$item['key'])->label('Artifact 内容')->state($artifact?->content)->placeholder('—')->prose()->copyable(),
+            TextEntry::make('timeline_detail_prompt_'.$item['key'])->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
+            TextEntry::make('timeline_detail_state_version_'.$item['key'])->label('状态版本')->state($run?->state_version === null ? null : 'v'.$run->state_version)->placeholder('—'),
+            TextEntry::make('timeline_detail_artifact_'.$item['key'])->label('产物')->state($artifact === null ? null : $artifact->type->getLabel().' v'.$artifact->version.' · #'.$artifact->getKey())->placeholder('尚无产物'),
+            TextEntry::make('timeline_detail_artifact_content_'.$item['key'])->label('产物内容')->state($artifact?->content)->placeholder('—')->prose()->copyable(),
             TextEntry::make('timeline_detail_context_'.$item['key'])
-                ->label('Context Snapshot')
+                ->label('上下文快照')
                 ->state($item['key'] !== 'context' || $run?->context_snapshot === null ? null : json_encode($run->context_snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))
                 ->placeholder('—')
                 ->fontFamily('mono')
@@ -1225,13 +1225,13 @@ class ViewNovelChapter extends ViewRecord
         $planningRun = $this->latestTimelineRun(GenerationStage::ChapterPlanning);
         $contextRun = $chapter->generationRuns->whereNotNull('context_snapshot')->sortByDesc('id')->first();
 
-        $items[] = $this->timelineItem('plan', 'Plan', $planningRun, $this->latestTimelineArtifact(ArtifactType::ChapterPlan), $chapter->latestPlan !== null, $chapter->latestPlan === null ? '等待建立 Chapter Plan' : 'Plan v'.$chapter->latestPlan->version);
-        $items[] = $this->timelineItem('context', 'Context', $contextRun, $this->latestTimelineArtifact(ArtifactType::Context), $contextRun !== null, $contextRun === null ? '等待冻结 L0 / L1 / L2 Context Snapshot' : 'Context Snapshot 已冻结');
+        $items[] = $this->timelineItem('plan', '计划', $planningRun, $this->latestTimelineArtifact(ArtifactType::ChapterPlan), $chapter->latestPlan !== null, $chapter->latestPlan === null ? '等待建立章节计划' : '计划 v'.$chapter->latestPlan->version);
+        $items[] = $this->timelineItem('context', '上下文', $contextRun, $this->latestTimelineArtifact(ArtifactType::Context), $contextRun !== null, $contextRun === null ? '等待冻结 L0 / L1 / L2 上下文快照' : '上下文快照已冻结');
 
         foreach ($chapter->scenes as $scene) {
             $run = $scene->generationRuns->sortByDesc('id')->first();
             $complete = $scene->currentArtifact !== null && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true);
-            $items[] = $this->timelineItem('scene-'.$scene->getKey(), 'Scene '.$scene->sequence, $run, $scene->currentArtifact, $complete, $complete ? mb_strlen($scene->currentArtifact->content ?? '').' 字' : $scene->goal);
+            $items[] = $this->timelineItem('scene-'.$scene->getKey(), '场景 '.$scene->sequence, $run, $scene->currentArtifact, $complete, $complete ? mb_strlen($scene->currentArtifact->content ?? '').' 字' : $scene->goal);
         }
 
         $assemblyArtifact = $this->latestTimelineArtifact(ArtifactType::ChapterDraft);
@@ -1239,11 +1239,11 @@ class ViewNovelChapter extends ViewRecord
         $reviewArtifact = $this->latestTimelineArtifact(ArtifactType::ReviewResult);
         $memoryRun = $this->latestTimelineRun(GenerationStage::MemorySummary) ?? $this->latestTimelineRun(GenerationStage::Embedding);
 
-        $items[] = $this->timelineItem('assembly', 'Assembly', $this->latestTimelineRun(GenerationStage::ChapterAssembly), $assemblyArtifact, $assemblyArtifact !== null, $assemblyArtifact === null ? '等待组装 Chapter Draft' : 'Chapter Draft v'.$assemblyArtifact->version);
-        $items[] = $this->timelineItem('events', 'Events', $this->latestTimelineRun(GenerationStage::EventExtraction), $eventArtifact, $eventArtifact !== null, $eventArtifact === null ? '等待提取 Story Events' : '事件候选已生成');
-        $items[] = $this->timelineItem('review', 'Review', $this->latestTimelineRun(GenerationStage::Review), $reviewArtifact, $reviewArtifact !== null, $reviewArtifact === null ? '等待审校' : 'Review 结果已生成');
-        $items[] = $this->timelineItem('commit', 'Commit', $this->latestTimelineRun(GenerationStage::Commit), null, $chapter->canonical_artifact_id !== null || $chapter->latestStateVersion !== null, $chapter->latestStateVersion === null ? '等待 Canonical Commit' : '已提交 State v'.$chapter->latestStateVersion->version);
-        $items[] = $this->timelineItem('memory', 'Memory', $memoryRun, $this->latestTimelineArtifact(ArtifactType::Summary), $memoryRun?->status === RunStatus::Succeeded, $memoryRun === null ? '等待正式章节写入 Memory' : 'Memory 更新'.$memoryRun->status->getLabel());
+        $items[] = $this->timelineItem('assembly', '章节组装', $this->latestTimelineRun(GenerationStage::ChapterAssembly), $assemblyArtifact, $assemblyArtifact !== null, $assemblyArtifact === null ? '等待组装章节草稿' : '章节草稿 v'.$assemblyArtifact->version);
+        $items[] = $this->timelineItem('events', '事件', $this->latestTimelineRun(GenerationStage::EventExtraction), $eventArtifact, $eventArtifact !== null, $eventArtifact === null ? '等待提取故事事件' : '事件候选已生成');
+        $items[] = $this->timelineItem('review', '审校', $this->latestTimelineRun(GenerationStage::Review), $reviewArtifact, $reviewArtifact !== null, $reviewArtifact === null ? '等待审校' : '审校结果已生成');
+        $items[] = $this->timelineItem('commit', '正式提交', $this->latestTimelineRun(GenerationStage::Commit), null, $chapter->canonical_artifact_id !== null || $chapter->latestStateVersion !== null, $chapter->latestStateVersion === null ? '等待正式提交' : '已提交状态 v'.$chapter->latestStateVersion->version);
+        $items[] = $this->timelineItem('memory', '记忆', $memoryRun, $this->latestTimelineArtifact(ArtifactType::Summary), $memoryRun?->status === RunStatus::Succeeded, $memoryRun === null ? '等待正式章节写入记忆' : '记忆更新'.$memoryRun->status->getLabel());
 
         $blocked = false;
         $currentAssigned = false;

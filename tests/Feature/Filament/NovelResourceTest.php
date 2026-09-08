@@ -136,7 +136,7 @@ test('the novel workspace overview shows real values and explicit unavailable me
             '尚未接入',
             '当前章节',
             '第 12 章',
-            '当前 State Version',
+            '当前故事版本',
             '生成状态',
             '质量与运营',
             '今日成本',
@@ -162,8 +162,15 @@ test('the novel overview shows closure debt totals and expandable details', func
         ->assertSee('未完成故事弧');
 });
 
-test('next chapter generation and auto generation controls are available while future workflow actions remain disabled', function () {
-    $novel = Novel::factory()->create();
+test('draft novels show planning entry and generating novels show chapter controls', function () {
+    $draft = Novel::factory()->create();
+
+    Livewire::test(ViewNovel::class, ['record' => $draft->getRouteKey()])
+        ->assertActionVisible('generateNovelBlueprint')
+        ->assertActionHidden('generateNextChapter')
+        ->assertActionHidden('startAutoGenerate');
+
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
 
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertSee('尚无正式章节')
@@ -180,7 +187,7 @@ test('next chapter generation and auto generation controls are available while f
         ->callAction('stopAutoGenerate')
         ->assertNotified('自动生成已停止')
         ->assertSee('Auto: OFF')
-        ->assertActionHidden('pause')
+        ->assertActionVisible('pause')
         ->assertActionHidden('resume')
         ->assertActionExists('edit');
 });

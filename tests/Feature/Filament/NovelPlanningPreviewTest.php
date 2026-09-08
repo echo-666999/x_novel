@@ -76,29 +76,29 @@ test('planning preview shows the complete chapter plan in reading order', functi
     ])
         ->assertOk()
         ->assertSeeTextInOrder([
-            'Planning Preview',
+            '规划预览',
             '雾海长明 · 第 12 章 · 旧港夜航',
             '本章为什么存在',
-            'Chapter Function',
+            '章节功能',
             '迫使主角离开安全区',
-            'Arc Contribution',
+            '故事线贡献',
             '推进失踪船队主线',
-            'Reader Promise',
+            '读者承诺',
             '确认钟声来自沉没灯塔',
-            'Scene 流程',
-            'Scene 1',
+            '场景流程',
+            '场景 1',
             '取得出港许可',
-            'Scene 2',
+            '场景 2',
             '穿过封锁线',
             '约束与伏笔',
             '潮汐钟声',
-            'Required Facts',
+            '必需事实',
             'can_swim',
-            'Forbidden Conflicts',
+            '禁止冲突',
             '林舟不得突然学会游泳',
-            'Plan Findings',
+            '计划检查结果',
         ])
-        ->assertSee('Valid');
+        ->assertSee('有效');
 });
 
 test('a chapter with no plan shows the preview empty state', function () {
@@ -110,8 +110,8 @@ test('a chapter with no plan shows the preview empty state', function () {
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
-        ->assertSee('尚未建立 Chapter Plan')
-        ->assertSee('返回章节列表建立完整 Plan 后');
+        ->assertSee('尚未建立章节计划')
+        ->assertSee('返回章节列表建立完整计划后');
 });
 
 test('planning preview rejects a chapter from another novel', function () {

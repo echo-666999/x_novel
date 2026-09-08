@@ -59,6 +59,31 @@ class InitializeNovelStateAction
         });
     }
 
+    public function refreshBeforeFirstChapter(Novel $novel): StoryStateVersion
+    {
+        return DB::transaction(function () use ($novel): StoryStateVersion {
+            $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
+
+            if ($lockedNovel->chapters()->exists() || $lockedNovel->storyEvents()->exists()) {
+                throw new \LogicException('已有章节或正式事件时不能刷新初始故事状态。');
+            }
+
+            $lockedNovel->load(['currentBible', 'characters', 'worldEntities', 'foreshadowings']);
+            $state = $this->initialState($lockedNovel);
+            $version = ((int) $lockedNovel->storyStateVersions()->max('version')) + 1;
+            $stateVersion = $lockedNovel->storyStateVersions()->create([
+                'version' => $version,
+                'chapter_id' => null,
+                'state' => $state,
+                'checksum' => $this->storyState->checksum($state),
+            ]);
+
+            $lockedNovel->update(['canonical_state_version_id' => $stateVersion->getKey()]);
+
+            return $stateVersion;
+        });
+    }
+
     /** @return array<string, mixed> */
     private function initialState(Novel $novel): array
     {

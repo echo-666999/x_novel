@@ -20,6 +20,7 @@ use App\Models\NovelBible;
 use App\Models\StoryStateVersion;
 use App\Models\Volume;
 use App\Services\ChapterPlanner;
+use App\Services\ChapterPlanPayload;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 
@@ -81,6 +82,16 @@ function plannerResponse(array $payload): AiResponse
     );
 }
 
+test('the chapter plan response schema requires every declared scene field', function () {
+    $sceneSchema = ChapterPlanPayload::schema()['properties']['scene_plans']['items'];
+
+    expect($sceneSchema['required'])
+        ->toEqualCanonicalizing(array_keys($sceneSchema['properties']))
+        ->and($sceneSchema['properties']['pov_character_id']['type'])->toContain('null')
+        ->and($sceneSchema['properties']['location']['type'])->toContain('null')
+        ->and($sceneSchema['properties']['time_anchor']['type'])->toContain('null');
+});
+
 test('the planner creates a validated plan artifact and succeeds its run', function () {
     [$chapter, $character] = plannerChapter();
     $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
@@ -93,6 +104,8 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
 
     expect($plan->status)->toBe(PlanStatus::Ready)
         ->and($plan->scene_plans)->toHaveCount(1)
+        ->and($chapter->scenes()->count())->toBe(1)
+        ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->prompt_version)->toBe('chapter-planner-v1')

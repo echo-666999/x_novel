@@ -14,9 +14,9 @@ enum PlanFindingSeverity: string implements HasColor, HasLabel
     public function getLabel(): string
     {
         return match ($this) {
-            self::Valid => 'Valid',
-            self::Warning => 'Warning',
-            self::Blocked => 'Blocked',
+            self::Valid => '有效',
+            self::Warning => '警告',
+            self::Blocked => '已阻塞',
         };
     }
 

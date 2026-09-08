@@ -66,26 +66,26 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
     ])
         ->assertOk()
         ->assertSee('第 12 章 · 旧港夜航')
-        ->assertSee('Chapter Detail 工作台')
+        ->assertSee('章节工作台')
         ->assertSeeTextInOrder([
-            'Overview',
-            'Plan',
-            'Scenes',
-            'Draft',
-            'Canonical',
-            'Events',
-            'Review',
-            'State Changes',
-            'Runs',
+            '概览',
+            '计划',
+            '场景',
+            '草稿',
+            '正式版本',
+            '事件',
+            '审校',
+            '状态变化',
+            '运行记录',
         ])
         ->assertSee('迫使主角离开安全区')
         ->assertSee('取得出港许可')
         ->assertSee('v3')
-        ->assertSee('尚无 Chapter Draft')
-        ->assertSee('Story Event Candidates')
+        ->assertSee('尚无章节草稿')
+        ->assertSee('故事事件候选')
         ->assertSee('尚无候选事件')
-        ->assertSee('Narrative Review')
-        ->assertSee('尚无 Generation Run');
+        ->assertSee('叙事审校')
+        ->assertSee('尚无生成运行记录');
 });
 
 test('canonical chapter viewer separates the formal text from drafts and shows its provenance', function () {
@@ -138,14 +138,14 @@ test('canonical chapter viewer separates the formal text from drafts and shows i
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
-        ->assertSee('Canonical')
+        ->assertSee('正式版本')
         ->assertSee('正式')
         ->assertSee('章节草稿 v2')
         ->assertSee('2026-09-07 16:30:00')
         ->assertSee('v4')
         ->assertSee('通过')
         ->assertSee('USD 0.012345')
-        ->assertSee('Memory Created: 1')
+        ->assertSee('已创建记忆：1')
         ->assertSee('/x/memory')
         ->assertSee('这是已经提交的正式章节正文。');
 });
@@ -159,9 +159,9 @@ test('chapter detail shows useful empty states before planning starts', function
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
-        ->assertSee('尚未建立 Chapter Plan')
-        ->assertSee('尚未同步 Scenes')
-        ->assertSee('尚无正式 State Changes');
+        ->assertSee('尚未建立章节计划')
+        ->assertSee('尚未同步场景')
+        ->assertSee('尚无正式状态变化');
 });
 
 test('chapter detail rejects a chapter from another novel', function () {
@@ -225,10 +225,10 @@ test('scene workspace exposes generation actions and execution metrics', functio
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
-        ->assertSee('Generate')
-        ->assertSee('Retry')
-        ->assertSee('View Artifact')
-        ->assertSee('View Run')
+        ->assertSee('生成')
+        ->assertSee('重试')
+        ->assertSee('查看产物')
+        ->assertSee('查看运行记录')
         ->assertSee('字数')
         ->assertSee('耗时')
         ->assertSee('USD 0.012345');
@@ -273,12 +273,12 @@ test('draft workspace switches between artifact versions and source scenes', fun
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
-        ->assertSee('Assemble Chapter')
-        ->assertSee('Draft v2')
-        ->assertSee('Draft v1')
-        ->assertSee('完整 Draft v2')
-        ->assertSee('Scene 1')
-        ->assertSee('Scene 2')
+        ->assertSee('组装章节')
+        ->assertSee('草稿 v2')
+        ->assertSee('草稿 v1')
+        ->assertSee('完整草稿')
+        ->assertSee('场景 1')
+        ->assertSee('场景 2')
         ->assertSee('第 1 幕正文');
 });
 
@@ -323,7 +323,7 @@ test('pipeline timeline identifies the blocked stage and exposes its run details
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertSee('生成流水线')
-        ->assertSeeTextInOrder(['Plan', 'Context', 'Scenes', 'Scene 1', 'Assembly', 'Events', 'Review', 'Commit', 'Memory'])
+        ->assertSeeTextInOrder(['计划', '上下文', '场景', '场景 1', '章节组装', '事件', '审校', '正式提交', '记忆'])
         ->assertSee('失败')
         ->assertActionExists(TestAction::make('inspectTimelinePlan')->schemaComponent('timeline-stage-plan', 'content'), fn ($action): bool => $action->isModalSlideOver())
         ->assertActionExists(TestAction::make('inspectTimelineScene'.$scene->getKey())->schemaComponent('timeline-stage-scene-'.$scene->getKey(), 'content'), fn ($action): bool => $action->isModalSlideOver())
@@ -389,8 +389,8 @@ test('events workspace shows candidates and can dispatch extraction', function (
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
-        ->assertSee('Story Event Candidates')
-        ->assertSee('Candidate')
+        ->assertSee('故事事件候选')
+        ->assertSee('候选')
         ->assertSee('Character Moved')
         ->assertSee('character · 12')
         ->assertSee('95.0%')
@@ -437,7 +437,7 @@ test('state changes workspace builds and displays a candidate patch preview', fu
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
-        ->assertSee('State Patch Preview')
+        ->assertSee('状态补丁预览')
         ->assertSee('尚未生成')
         ->assertActionExists(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'))
         ->callAction(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'));
@@ -448,7 +448,7 @@ test('state changes workspace builds and displays a candidate patch preview', fu
     ]);
 
     $page
-        ->assertSee('Candidate')
+        ->assertSee('候选')
         ->assertSee('characters.12.location')
         ->assertSee('洛阳')
         ->assertSee('character_moved');
@@ -526,7 +526,7 @@ test('state findings panel clearly blocks a golden locked fact conflict', functi
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
-        ->assertSee('State Findings')
+        ->assertSee('状态检查结果')
         ->assertSee('BLOCK')
         ->assertSee('LOCKED_FACT_CONFLICT')
         ->assertSee('林舟重新站了起来。')

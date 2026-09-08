@@ -42,7 +42,15 @@ final class ChapterPlanPayload
                     'items' => [
                         'type' => 'object',
                         'additionalProperties' => false,
-                        'required' => ['goal', 'conflict', 'turn', 'outcome'],
+                        'required' => [
+                            'goal',
+                            'conflict',
+                            'turn',
+                            'outcome',
+                            'pov_character_id',
+                            'location',
+                            'time_anchor',
+                        ],
                         'properties' => [
                             'goal' => ['type' => 'string'],
                             'conflict' => ['type' => 'string'],
