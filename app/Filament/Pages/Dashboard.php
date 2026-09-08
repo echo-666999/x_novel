@@ -2,9 +2,17 @@
 
 namespace App\Filament\Pages;
 
+use App\Actions\Generation\StartSmokeRunAction;
 use App\Filament\Actions\EmergencyStopAction;
 use App\Filament\Widgets\DueForeshadowingsWidget;
+use App\Models\Novel;
 use App\Models\UsageRecord;
+use App\Services\SmokeRunService;
+use Filament\Actions\Action;
+use Filament\Forms\Components\Select;
+use Filament\Infolists\Components\RepeatableEntry;
+use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Pages\Dashboard as BaseDashboard;
 use Filament\Schemas\Components\EmptyState;
 use Filament\Schemas\Components\Grid;
@@ -20,7 +28,36 @@ class Dashboard extends BaseDashboard
 
     protected function getHeaderActions(): array
     {
-        return [EmergencyStopAction::make()];
+        return [
+            Action::make('startSmokeRun')
+                ->label('启动 20 章长跑')
+                ->icon('heroicon-o-play-circle')
+                ->color('primary')
+                ->modalHeading('启动 20 章 Smoke Run')
+                ->modalDescription('系统会沿用现有自动生成主链，每次只推进下一章，并在连续完成 20 个 Canonical Chapter 后自动停止。')
+                ->modalSubmitActionLabel('启动长跑')
+                ->schema([
+                    Select::make('novel_id')
+                        ->label('小说')
+                        ->options(fn (): array => Novel::query()
+                            ->whereIn('status', ['generating', 'completing'])
+                            ->orderBy('title')
+                            ->pluck('title', 'id')
+                            ->all())
+                        ->searchable()
+                        ->required(),
+                ])
+                ->action(function (array $data, StartSmokeRunAction $start): void {
+                    $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+
+                    Notification::make()
+                        ->title('20 章长跑已启动')
+                        ->body('已排队第 '.$chapter->sequence.'章，后续章节将在上一章正式提交后依次启动。')
+                        ->success()
+                        ->send();
+                }),
+            EmergencyStopAction::make(),
+        ];
     }
 
     public function content(Schema $schema): Schema
@@ -68,7 +105,58 @@ class Dashboard extends BaseDashboard
                     DueForeshadowingsWidget::class,
                 ]),
             ]),
+            Section::make('20 章长跑进度')
+                ->description('Long Run Progress · 连续章节、Canonical State 与实际 Provider 成本')
+                ->icon('heroicon-o-arrow-trending-up')
+                ->schema([
+                    RepeatableEntry::make('smoke_runs')
+                        ->hiddenLabel()
+                        ->state(fn (): array => $this->smokeRunProgress())
+                        ->columns(['default' => 2, 'lg' => 6])
+                        ->schema([
+                            TextEntry::make('novel')->label('小说')->weight('medium'),
+                            TextEntry::make('status')
+                                ->label('状态')
+                                ->badge()
+                                ->color(fn (string $state): string => match ($state) {
+                                    '运行中' => 'info',
+                                    '已完成' => 'success',
+                                    '已停止' => 'danger',
+                                    default => 'gray',
+                                }),
+                            TextEntry::make('progress')->label('章节进度')->badge()->color('info'),
+                            TextEntry::make('cost')->label('可追踪成本')->fontFamily('mono'),
+                            TextEntry::make('sequence_health')
+                                ->label('章节连续性')
+                                ->badge()
+                                ->color(fn (string $state): string => $state === '正常' ? 'success' : 'danger'),
+                            TextEntry::make('state_health')
+                                ->label('State 连续性')
+                                ->badge()
+                                ->color(fn (string $state): string => $state === '正常' ? 'success' : 'danger'),
+                        ]),
+                    EmptyState::make('尚未启动 20 章长跑')
+                        ->description('点击页面顶部“启动 20 章长跑”选择小说。')
+                        ->icon('heroicon-o-clock')
+                        ->contained(false)
+                        ->visible(fn (): bool => app(SmokeRunService::class)->allProgress()->isEmpty()),
+                ]),
         ]);
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function smokeRunProgress(): array
+    {
+        return app(SmokeRunService::class)->allProgress()
+            ->map(fn ($progress): array => [
+                'novel' => $progress->novelTitle,
+                'status' => $progress->statusLabel(),
+                'progress' => "{$progress->canonicalChapters}/20 · {$progress->percent()}%",
+                'cost' => config('ai.cost.currency').' '.number_format($progress->cost, 6),
+                'sequence_health' => $progress->sequenceHealthy() ? '正常' : '异常',
+                'state_health' => $progress->stateContinuous ? '正常' : '异常',
+            ])
+            ->all();
     }
 
     private function hasUsageToday(): bool

@@ -9,10 +9,15 @@ use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Services\AutoStopService;
+use App\Services\SmokeRunService;
 
 class CheckNextAction
 {
-    public function __construct(private readonly GenerateNextChapterAction $generateNextChapter, private readonly AutoStopService $autoStop) {}
+    public function __construct(
+        private readonly GenerateNextChapterAction $generateNextChapter,
+        private readonly AutoStopService $autoStop,
+        private readonly SmokeRunService $smokeRun,
+    ) {}
 
     public function handle(Novel $novel, int $committedChapterId): ?Chapter
     {
@@ -22,6 +27,10 @@ class CheckNextAction
         if (! (bool) data_get($novel->settings, 'auto_generate', false)
             || $committedChapter?->status !== ChapterStatus::Canonical
             || $committedChapter->sequence !== $novel->current_chapter_sequence) {
+            return null;
+        }
+
+        if ($this->smokeRun->completeIfTargetReached($novel, $committedChapter->sequence)) {
             return null;
         }
 
