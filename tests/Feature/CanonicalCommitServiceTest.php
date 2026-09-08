@@ -5,7 +5,10 @@ use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
+use App\Enums\FactStatus;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
+use App\Enums\MemoryStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
@@ -16,8 +19,10 @@ use App\Jobs\PlanChapterJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Fact;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\Review;
 use App\Models\StoryEvent;
@@ -26,8 +31,11 @@ use App\Models\User;
 use App\Models\Volume;
 use App\Services\CanonicalCommitService;
 use App\Services\EmergencyStopService;
+use App\Services\LatestCanonicalChapterRollback;
+use App\Services\MemoryInvalidator;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
@@ -122,6 +130,173 @@ test('canonical commit atomically persists events state and pointers', function 
         ->and(StoryEvent::query()->count())->toBe(1)
         ->and(StoryEvent::query()->sole()->state_version)->toBe(1)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
+});
+
+test('latest canonical chapter rollback restores pointers and invalidates derived data', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture(['fact_changes' => [[
+        'action' => 'create', 'subject_type' => 'novel', 'subject_id' => 1,
+        'predicate' => 'has_star_map', 'value' => true, 'source_event_index' => 0,
+    ]]]);
+    $committedState = app(CanonicalCommitService::class)->commit($fixture['data']);
+    $event = StoryEvent::query()->sole();
+    $memory = Memory::factory()->for($fixture['novel'])->create([
+        'source_type' => 'story_event', 'source_id' => $event->getKey(), 'valid_from_chapter' => 1,
+    ]);
+
+    $result = app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '修正结尾事件');
+
+    expect($result)->toMatchArray(['from_state_version' => 1, 'to_state_version' => 0, 'events' => 1, 'memories' => 1])
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Void)
+        ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
+        ->and($fixture['novel']->fresh()->current_chapter_sequence)->toBeNull()
+        ->and($event->fresh()->status->value)->toBe('invalidated')
+        ->and($event->fresh()->invalidated_at)->not->toBeNull()
+        ->and($memory->fresh()->status)->toBe(MemoryStatus::Invalid)
+        ->and(Fact::query()->sole()->status)->toBe(FactStatus::Invalidated)
+        ->and(StoryStateVersion::query()->find($committedState->getKey()))->not->toBeNull();
+});
+
+test('rollback restores facts superseded by the latest canonical chapter', function () {
+    $fixture = canonicalCommitFixture();
+    $fact = Fact::factory()->for($fixture['novel'])->create(['status' => FactStatus::Active]);
+    $patchData = $fixture['patch']->data;
+    $patchData['fact_changes'] = [['action' => 'supersede', 'fact_id' => $fact->getKey(), 'source_event_index' => 0]];
+    DB::table('generation_artifacts')->where('id', $fixture['patch']->getKey())->update([
+        'data' => json_encode($patchData, JSON_THROW_ON_ERROR),
+    ]);
+
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+    expect($fact->fresh()->status)->toBe(FactStatus::Superseded);
+
+    app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '恢复被替代的事实');
+
+    expect($fact->fresh()->status)->toBe(FactStatus::Active);
+});
+
+test('rollback restores foreshadowing projection from the previous state', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'status' => ForeshadowingStatus::PaidOff,
+        'reinforce_count' => 3,
+        'payoff_chapter_id' => $fixture['chapter']->getKey(),
+    ]);
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+    $previous = $fixture['state']->state;
+    $previous['foreshadowings'][(string) $foreshadowing->getKey()] = ['status' => 'reinforced', 'reinforce_count' => 2];
+    DB::table('story_state_versions')->where('id', $fixture['state']->getKey())->update([
+        'state' => json_encode($previous, JSON_THROW_ON_ERROR),
+    ]);
+    $event = StoryEvent::query()->sole();
+    DB::table('story_events')->where('id', $event->getKey())->update([
+        'event_type' => EventType::ForeshadowingPaidOff->value,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $foreshadowing->getKey(),
+    ]);
+
+    app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '恢复伏笔状态');
+
+    expect($foreshadowing->fresh()->status)->toBe(ForeshadowingStatus::Reinforced)
+        ->and($foreshadowing->fresh()->reinforce_count)->toBe(2)
+        ->and($foreshadowing->fresh()->payoff_chapter_id)->toBeNull();
+});
+
+test('a non latest canonical chapter cannot be rolled back', function () {
+    $fixture = canonicalCommitFixture();
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+    $latest = Chapter::factory()->for($fixture['novel'])->create(['sequence' => 2, 'status' => ChapterStatus::Canonical]);
+    $latestState = StoryStateVersion::factory()->for($fixture['novel'])->for($latest)->create(['version' => 2]);
+    $fixture['novel']->update(['current_chapter_sequence' => 2, 'canonical_state_version_id' => $latestState->getKey()]);
+
+    expect(fn () => app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '不应允许'))
+        ->toThrow(ValidationException::class, '只能回滚当前最新的正式章节');
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
+});
+
+test('recanonicalization after rollback uses a monotonically increasing state version', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    $service = app(CanonicalCommitService::class);
+    $service->commit($fixture['data']);
+    app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '重新提交这一章');
+
+    $nextState = $service->commit($fixture['data']);
+
+    expect($nextState->version)->toBe(2)
+        ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($nextState->getKey())
+        ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->pluck('version')->all())->toBe([0, 1, 2])
+        ->and(StoryEvent::query()->where('status', 'active')->count())->toBe(1)
+        ->and(StoryEvent::query()->where('status', 'invalidated')->count())->toBe(1);
+});
+
+test('rollback skips correction versions from the same chapter when restoring state', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    $committed = app(CanonicalCommitService::class)->commit($fixture['data']);
+    $correction = StoryStateVersion::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'version' => 2,
+        'state' => $committed->state,
+        'checksum' => $committed->checksum,
+    ]);
+    $fixture['novel']->update(['canonical_state_version_id' => $correction->getKey()]);
+
+    $result = app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '撤销该章及其更正');
+
+    expect($result['from_state_version'])->toBe(2)
+        ->and($result['to_state_version'])->toBe(0)
+        ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey());
+});
+
+test('latest canonical chapter rollback requires a reason', function () {
+    $fixture = canonicalCommitFixture();
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+
+    expect(fn () => app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], ' '))
+        ->toThrow(ValidationException::class, '必须填写回滚原因');
+});
+
+test('rollback failure leaves canonical data unchanged', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+    $event = StoryEvent::query()->sole();
+    $failingInvalidator = new class extends MemoryInvalidator
+    {
+        public function invalidateForChapter(int $chapterId): int
+        {
+            throw new RuntimeException('模拟 Memory 失效失败');
+        }
+    };
+
+    expect(fn () => (new LatestCanonicalChapterRollback($failingInvalidator))->rollback($fixture['chapter'], '验证事务回滚'))
+        ->toThrow(RuntimeException::class, '模拟 Memory 失效失败');
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
+        ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBe($fixture['draft']->getKey())
+        ->and($fixture['novel']->fresh()->current_chapter_sequence)->toBe(1)
+        ->and($event->fresh()->status->value)->toBe('active')
+        ->and($event->fresh()->invalidated_at)->toBeNull();
+});
+
+test('latest canonical chapter can be rolled back from its workbench', function () {
+    $this->actingAs(User::factory()->create());
+    $fixture = canonicalCommitFixture();
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertActionVisible('rollbackLatestCanonical')
+        ->callAction('rollbackLatestCanonical', data: ['reason' => '调整结尾节奏'])
+        ->assertHasNoActionErrors()
+        ->assertNotified('最新正式章节已回滚')
+        ->assertActionHidden('rollbackLatestCanonical');
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Void);
 });
 
 test('canonical commit applies fact changes with story event provenance', function () {

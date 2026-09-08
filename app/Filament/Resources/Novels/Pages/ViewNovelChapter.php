@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Novels\Pages;
 
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
+use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
@@ -25,11 +26,13 @@ use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Services\CanonicalCommitService;
 use App\Services\DraftRewriteDiff;
+use App\Services\LatestCanonicalChapterRollback;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
 use App\Services\StateValidator;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -153,6 +156,39 @@ class ViewNovelChapter extends ViewRecord
                         ->title('章节已提交为正式版本')
                         ->body('Canonical Story State 已更新至 v'.$stateVersion->version.'。')
                         ->success()
+                        ->send();
+                }),
+            Action::make('rollbackLatestCanonical')
+                ->label('回滚最新正式章节')
+                ->icon('heroicon-o-arrow-uturn-left')
+                ->color('danger')
+                ->visible(fn (): bool => $this->chapter()->status === ChapterStatus::Canonical
+                    && $this->chapter()->sequence === $this->getRecord()->current_chapter_sequence)
+                ->requiresConfirmation()
+                ->modalHeading('回滚最新正式章节')
+                ->modalDescription('此操作会失效本章的正式事件和记忆，恢复上一个故事状态指针。历史数据不会删除。')
+                ->modalSubmitActionLabel('确认回滚')
+                ->schema([
+                    TextEntry::make('rollback_state')->label('受影响状态')->state(fn (): string => app(LatestCanonicalChapterRollback::class)->impact($this->chapter())['state']),
+                    TextEntry::make('rollback_events')->label('受影响事件')->state(fn (): int => app(LatestCanonicalChapterRollback::class)->impact($this->chapter())['events'])->numeric(),
+                    TextEntry::make('rollback_memories')->label('受影响记忆')->state(fn (): int => app(LatestCanonicalChapterRollback::class)->impact($this->chapter())['memories'])->numeric(),
+                    Textarea::make('reason')->label('回滚原因')->required()->maxLength(1000)->columnSpanFull(),
+                ])
+                ->action(function (array $data, LatestCanonicalChapterRollback $rollback): void {
+                    try {
+                        $result = $rollback->rollback($this->chapter(), $data['reason']);
+                    } catch (ValidationException $exception) {
+                        Notification::make()->title('无法回滚章节')->body($exception->getMessage())->danger()->send();
+
+                        return;
+                    }
+
+                    $this->cachedChapter = null;
+                    $this->getRecord()->refresh();
+                    Notification::make()
+                        ->title('最新正式章节已回滚')
+                        ->body("故事状态已恢复至 v{$result['to_state_version']}，{$result['events']} 个事件和 {$result['memories']} 条记忆已失效。")
+                        ->warning()
                         ->send();
                 }),
             Action::make('chapters')

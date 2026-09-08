@@ -57,7 +57,7 @@ class CanonicalCommitService
             [$artifact, $review, $candidateArtifact, $patchArtifact] = $this->loadFrozenInputs($chapter, $data);
             $this->stateValidator->validate($chapter->getKey())->assertCanCommit();
             $events = $this->eventCandidates($candidateArtifact);
-            $nextVersion = $currentState->version + 1;
+            $nextVersion = ((int) $novel->storyStateVersions()->max('version')) + 1;
             $nextState = $this->statePatchBuilder->applyArtifact($currentState->state, $patchArtifact);
 
             if (data_get($patchArtifact->data, 'after_checksum') !== $this->storyState->checksum($nextState)) {
@@ -252,7 +252,7 @@ class CanonicalCommitService
             throw ValidationException::withMessages(['chapter' => '章节已经使用另一个 Artifact 完成 Canonical Commit。']);
         }
 
-        $stateVersion = $chapter->stateVersions()->where('version', $data->expectedStateVersion + 1)->first();
+        $stateVersion = $chapter->stateVersions()->latest('version')->first();
 
         if ($stateVersion === null) {
             throw ValidationException::withMessages(['chapter' => '章节已标记正式，但缺少对应 Story State Version。']);
