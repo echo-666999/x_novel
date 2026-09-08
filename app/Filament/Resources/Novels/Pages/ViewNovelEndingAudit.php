@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Novels\CompleteNovelAction;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -41,11 +42,32 @@ class ViewNovelEndingAudit extends ViewRecord
                 ->label($this->latestAudit() ? '重新审计' : '运行审计')
                 ->icon('heroicon-o-clipboard-document-check')
                 ->color('warning')
-                ->disabled(fn (): bool => $this->getRecord()->status !== NovelStatus::Completing)
-                ->tooltip(fn (): ?string => $this->getRecord()->status === NovelStatus::Completing ? null : '只有收束中的小说可以执行审计。')
+                ->visible(fn (): bool => $this->getRecord()->status === NovelStatus::Completing)
                 ->action(function (): void {
                     EndingAuditJob::dispatchSync($this->getRecord()->getKey());
                     Notification::make()->title('结局审计已完成')->success()->send();
+                }),
+            Action::make('completeNovel')
+                ->label('完成小说')
+                ->icon('heroicon-o-check-circle')
+                ->color('success')
+                ->visible(fn (): bool => $this->getRecord()->status === NovelStatus::Completing)
+                ->disabled(fn (): bool => data_get($this->latestAudit()?->data, 'decision') !== 'PASS')
+                ->tooltip(fn (): ?string => data_get($this->latestAudit()?->data, 'decision') === 'PASS' ? null : '结局审计 PASS 后才能完成小说。')
+                ->requiresConfirmation()
+                ->modalHeading('完成小说')
+                ->modalDescription('小说将进入已完结状态，并停止自动生成。结局审计记录仍可查看。')
+                ->action(function (CompleteNovelAction $completeNovel): void {
+                    try {
+                        $completeNovel->handle($this->getRecord());
+                    } catch (ValidationException $exception) {
+                        Notification::make()->title('无法完成小说')->body($exception->getMessage())->danger()->send();
+
+                        return;
+                    }
+
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('小说已完结')->success()->send();
                 }),
         ];
     }
@@ -58,9 +80,10 @@ class ViewNovelEndingAudit extends ViewRecord
                 ->icon('heroicon-o-clipboard-document-check')
                 ->visible(fn (): bool => $this->latestAudit() === null),
             Section::make('审计结论')
-                ->columns(['default' => 1, 'md' => 3])
+                ->columns(['default' => 1, 'md' => 4])
                 ->visible(fn (): bool => $this->latestAudit() !== null)
                 ->schema([
+                    TextEntry::make('novel_status')->label('小说状态')->state(fn (): NovelStatus => $this->getRecord()->status)->badge()->color(fn (NovelStatus $state): string => $state->getColor())->formatStateUsing(fn (NovelStatus $state): string => $state->getLabel()),
                     TextEntry::make('audit_decision')->label('审计结论')->state(fn (): ?string => data_get($this->latestAudit()?->data, 'decision'))->badge()->color(fn (string $state): string => $state === 'PASS' ? 'success' : 'danger'),
                     TextEntry::make('audit_state_version')->label('故事状态版本')->state(fn (): mixed => data_get($this->latestAudit()?->data, 'state_version'))->placeholder('—'),
                     TextEntry::make('audit_bible_version')->label('小说设定版本')->state(fn (): mixed => data_get($this->latestAudit()?->data, 'bible_version'))->placeholder('—'),

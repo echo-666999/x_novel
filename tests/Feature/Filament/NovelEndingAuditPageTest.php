@@ -2,6 +2,7 @@
 
 use App\Enums\NovelStatus;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelEndingAudit;
 use App\Models\Novel;
 use App\Models\NovelBible;
@@ -57,5 +58,37 @@ test('the ending audit action is disabled before completing mode', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
 
     Livewire::test(ViewNovelEndingAudit::class, ['record' => $novel->getRouteKey()])
-        ->assertActionDisabled('runAudit');
+        ->assertActionHidden('runAudit')
+        ->assertActionHidden('completeNovel');
+});
+
+test('a passing audit can complete the novel while keeping the audit visible', function () {
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Completing,
+        'settings' => ['auto_generate' => true],
+    ]);
+    NovelBible::factory()->for($novel)->create();
+    $state = StoryStateVersion::factory()->for($novel)->create([
+        'state' => [
+            'characters' => [], 'relationships' => [], 'locations' => [], 'items' => [],
+            'world' => ['crises' => []], 'timeline' => [], 'open_threads' => [],
+            'foreshadowings' => [], 'reader_promises' => [],
+            'character_arcs' => [['title' => '主角成长弧', 'status' => 'completed']],
+        ],
+    ]);
+    $novel->update(['canonical_state_version_id' => $state->getKey()]);
+
+    Livewire::test(ViewNovelEndingAudit::class, ['record' => $novel->getRouteKey()])
+        ->callAction('runAudit')
+        ->assertActionEnabled('completeNovel')
+        ->callAction('completeNovel')
+        ->assertNotified('小说已完结')
+        ->assertSeeText('已完成')
+        ->assertSeeText('PASS')
+        ->assertActionHidden('runAudit')
+        ->assertActionHidden('completeNovel');
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertActionDisabled('generateNextChapter')
+        ->assertActionDisabled('startAutoGenerate');
 });

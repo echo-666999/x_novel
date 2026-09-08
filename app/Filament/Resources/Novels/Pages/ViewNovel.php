@@ -84,6 +84,8 @@ class ViewNovel extends ViewRecord
                 ->label('生成下一章')
                 ->icon('heroicon-o-play')
                 ->visible(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused)
+                ->disabled(fn (): bool => $this->getRecord()->status === NovelStatus::Completed)
+                ->tooltip(fn (): ?string => $this->getRecord()->status === NovelStatus::Completed ? '小说已完结，不能继续生成。' : null)
                 ->action(function (GenerateNextChapterAction $generateNextChapter): void {
                     try {
                         $chapter = $generateNextChapter->handle($this->getRecord());
@@ -113,6 +115,8 @@ class ViewNovel extends ViewRecord
                 ->icon('heroicon-o-bolt')
                 ->visible(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused
                     && ! (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
+                ->disabled(fn (): bool => $this->getRecord()->status === NovelStatus::Completed)
+                ->tooltip(fn (): ?string => $this->getRecord()->status === NovelStatus::Completed ? '小说已完结，不能开启自动生成。' : null)
                 ->action(function (SetAutoGenerationAction $setAutoGeneration): void {
                     $setAutoGeneration->handle($this->getRecord(), true);
                     $this->getRecord()->refresh();
