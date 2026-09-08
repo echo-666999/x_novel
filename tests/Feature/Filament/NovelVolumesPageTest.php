@@ -1,8 +1,10 @@
 <?php
 
+use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Models\Novel;
+use App\Models\StoryArc;
 use App\Models\User;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -105,4 +107,49 @@ test('the planning workspace validates required fields and scoped sequence uniqu
             'target_words' => 'min',
             'status' => 'required',
         ]);
+});
+
+test('volume detail shows completion checklist and completes an unblocked active volume', function () {
+    $novel = Novel::factory()->create();
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+
+    Livewire::test(ManageNovelVolumes::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionExists('completionChecklist', fn ($action): bool => $action->isModalSlideOver())
+        ->mountTableAction('completionChecklist', $volume)
+        ->assertSchemaComponentExists('completion_checks', null, fn ($component): bool => collect($component->getState())
+            ->pluck('label')
+            ->all() === ['Volume Goal', 'Climax', 'Required Arcs', 'Character Stage Changes', 'Due Foreshadowings', 'Blocking Findings'])
+        ->unmountAction()
+        ->assertTableActionEnabled('completeVolume', $volume)
+        ->callTableAction('completeVolume', $volume)
+        ->assertNotified('分卷已完成');
+
+    expect($volume->fresh()->status)->toBe(VolumeStatus::Completed);
+});
+
+test('volume completion action is disabled while a required arc remains open', function () {
+    $novel = Novel::factory()->create();
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => StoryArcStatus::Active]);
+
+    Livewire::test(ManageNovelVolumes::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionDisabled('completeVolume', $volume);
+});
+
+test('ordinary volume editing cannot bypass the completion gate', function () {
+    $novel = Novel::factory()->create();
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+
+    Livewire::test(ManageNovelVolumes::class, ['record' => $novel->getRouteKey()])
+        ->callTableAction('edit', $volume, data: [
+            'sequence' => $volume->sequence,
+            'title' => $volume->title,
+            'goal' => $volume->goal,
+            'climax' => $volume->climax,
+            'target_words' => $volume->target_words,
+            'status' => VolumeStatus::Completed->value,
+        ])
+        ->assertHasTableActionErrors(['status']);
+
+    expect($volume->fresh()->status)->toBe(VolumeStatus::Active);
 });
