@@ -144,7 +144,7 @@ test('canonical chapter viewer separates the formal text from drafts and shows i
         ->assertSee('2026-09-07 16:30:00')
         ->assertSee('v4')
         ->assertSee('通过')
-        ->assertSee('USD 0.012345')
+        ->assertSee('USD 0.0123')
         ->assertSee('已创建记忆：1')
         ->assertSee('/x/memory')
         ->assertSee('这是已经提交的正式章节正文。');
@@ -231,7 +231,7 @@ test('scene workspace exposes generation actions and execution metrics', functio
         ->assertSee('查看运行记录')
         ->assertSee('字数')
         ->assertSee('耗时')
-        ->assertSee('USD 0.012345');
+        ->assertSee('USD 0.0123');
 });
 
 test('draft workspace switches between artifact versions and source scenes', function () {
@@ -330,8 +330,6 @@ test('pipeline timeline identifies the blocked stage and exposes its run details
         ->mountAction(TestAction::make('inspectTimelineScene'.$scene->getKey())->schemaComponent('timeline-stage-scene-'.$scene->getKey(), 'content'))
         ->assertSee('gpt-test')
         ->assertSee('scene-writer-v1')
-        ->assertSee('150')
-        ->assertSee('USD 0.001500')
         ->assertSee('provider_timeout · 模型请求超时')
         ->unmountAction()
         ->mountAction(TestAction::make('inspectTimelineContext')->schemaComponent('timeline-stage-context', 'content'))

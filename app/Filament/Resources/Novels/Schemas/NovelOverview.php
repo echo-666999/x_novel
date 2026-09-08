@@ -206,8 +206,8 @@ class NovelOverview
 
     private static function formatBudget(BudgetUsage $usage): string
     {
-        $limit = $usage->limit === null ? '无限制' : number_format($usage->limit, 6);
+        $limit = $usage->limit === null ? '无限制' : number_format($usage->limit, 4);
 
-        return config('ai.cost.currency').' '.number_format($usage->used, 6).' / '.$limit;
+        return config('ai.cost.currency').' '.number_format($usage->used, 4).' / '.$limit;
     }
 }

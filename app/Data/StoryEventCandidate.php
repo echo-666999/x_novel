@@ -34,7 +34,10 @@ final readonly class StoryEventCandidate
                 'event_type' => ['type' => 'string', 'enum' => array_column(EventType::cases(), 'value')],
                 'subject_type' => ['type' => ['string', 'null']],
                 'subject_id' => ['type' => ['string', 'integer', 'null']],
-                'payload' => ['type' => 'object'],
+                'payload' => [
+                    'type' => 'string',
+                    'description' => 'Event payload encoded as a JSON object. Use {} when the event has no payload.',
+                ],
                 'evidence' => [
                     'type' => 'array',
                     'minItems' => 1,
@@ -60,6 +63,7 @@ final readonly class StoryEventCandidate
     /** @param array<string, mixed> $data */
     public static function fromArray(array $data): self
     {
+        $data['payload'] = self::decodePayload($data['payload'] ?? null);
         $allowed = array_keys(self::schema()['properties']);
 
         if (array_diff(array_keys($data), $allowed) !== []) {
@@ -122,5 +126,23 @@ final readonly class StoryEventCandidate
             'story_time' => $this->storyTime,
             'confidence' => $this->confidence,
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private static function decodePayload(mixed $payload): array
+    {
+        if (is_array($payload)) {
+            return $payload;
+        }
+
+        if (is_string($payload)) {
+            $decoded = json_decode($payload);
+
+            if (is_object($decoded)) {
+                return json_decode($payload, true);
+            }
+        }
+
+        throw ValidationException::withMessages(['payload' => 'Story Event Candidate payload 必须是 JSON 对象。']);
     }
 }

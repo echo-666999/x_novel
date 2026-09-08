@@ -582,7 +582,7 @@ class ViewNovelChapter extends ViewRecord
                     ->placeholder('—'),
                 TextEntry::make('scene_cost_'.$scene->getKey())
                     ->label('成本')
-                    ->state($run === null ? null : config('ai.cost.currency').' '.number_format((float) $run->usageRecords->sum('estimated_cost'), 6))
+                    ->state($run === null ? null : config('ai.cost.currency').' '.number_format((float) $run->usageRecords->sum('estimated_cost'), 4))
                     ->placeholder('—'),
                 TextEntry::make('scene_pov_'.$scene->getKey())->label('视角角色')->state($scene->povCharacter?->name)->placeholder('未指定'),
                 TextEntry::make('scene_location_'.$scene->getKey())->label('地点')->state($scene->location)->placeholder('未指定'),
@@ -743,7 +743,7 @@ class ViewNovelChapter extends ViewRecord
                         ->placeholder('—'),
                     TextEntry::make('canonical_cost')
                         ->label('章节累计成本')
-                        ->state(config('ai.cost.currency').' '.number_format($this->canonicalCost(), 6)),
+                        ->state(config('ai.cost.currency').' '.number_format($this->canonicalCost(), 4)),
                     TextEntry::make('canonical_memory_count')
                         ->hiddenLabel()
                         ->state('已创建记忆：'.$this->chapterMemoryCount())
@@ -1199,7 +1199,7 @@ class ViewNovelChapter extends ViewRecord
             TextEntry::make('timeline_detail_duration_'.$item['key'])->label('耗时')->state($run?->durationMilliseconds() === null ? null : $run->durationMilliseconds().' ms')->placeholder('—'),
             TextEntry::make('timeline_detail_model_'.$item['key'])->label('模型')->state($run?->model_policy)->placeholder('—'),
             TextEntry::make('timeline_detail_tokens_'.$item['key'])->label('令牌数')->state($usage === null ? null : number_format((int) $usage->sum(fn ($record): int => $record->input_tokens + $record->output_tokens)))->placeholder('—'),
-            TextEntry::make('timeline_detail_cost_'.$item['key'])->label('费用')->state($usage === null ? null : config('ai.cost.currency').' '.number_format((float) $usage->sum('estimated_cost'), 6))->placeholder('—'),
+            TextEntry::make('timeline_detail_cost_'.$item['key'])->label('费用')->state($usage === null ? null : config('ai.cost.currency').' '.number_format((float) $usage->sum('estimated_cost'), 4))->placeholder('—'),
             TextEntry::make('timeline_detail_prompt_'.$item['key'])->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
             TextEntry::make('timeline_detail_state_version_'.$item['key'])->label('状态版本')->state($run?->state_version === null ? null : 'v'.$run->state_version)->placeholder('—'),
             TextEntry::make('timeline_detail_artifact_'.$item['key'])->label('产物')->state($artifact === null ? null : $artifact->type->getLabel().' v'.$artifact->version.' · #'.$artifact->getKey())->placeholder('尚无产物'),

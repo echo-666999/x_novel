@@ -175,7 +175,7 @@ class Generation extends Page implements HasTable
                     ->alignEnd(),
                 TextColumn::make('usage_records_sum_estimated_cost')
                     ->label('成本')
-                    ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 6))
+                    ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 4))
                     ->alignEnd(),
                 TextColumn::make('created_at')->label('创建时间')->dateTime('Y-m-d H:i:s')->sortable(),
             ])
@@ -322,7 +322,7 @@ class Generation extends Page implements HasTable
                         TextEntry::make('latency_ms')->label('Latency')->suffix(' ms')->numeric(),
                         TextEntry::make('estimated_cost')
                             ->label('Cost')
-                            ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 6)),
+                            ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 4)),
                     ]),
             ]),
         ];

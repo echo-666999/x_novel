@@ -254,7 +254,7 @@ class Settings extends Page
 
     private function formatBudget(BudgetUsage $usage): string
     {
-        return config('ai.cost.currency').' '.number_format($usage->used, 6).' / '.$this->formatLimit($usage->limit, false);
+        return config('ai.cost.currency').' '.number_format($usage->used, 4).' / '.$this->formatLimit($usage->limit, false);
     }
 
     private function systemHealthSection(): Section
@@ -305,7 +305,7 @@ class Settings extends Page
             return '无限制';
         }
 
-        $value = number_format((float) $limit, 6);
+        $value = number_format((float) $limit, 4);
 
         return $withCurrency ? config('ai.cost.currency').' '.$value : $value;
     }

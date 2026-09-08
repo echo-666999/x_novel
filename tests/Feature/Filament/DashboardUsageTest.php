@@ -31,7 +31,7 @@ test('dashboard shows todays provider cost and token totals', function () {
         ->assertOk()
         ->assertSeeTextInOrder([
             '今日成本',
-            'USD 0.012345',
+            'USD 0.0123',
             '成功 Provider 请求',
             '今日 Tokens',
             '2,000',
@@ -42,7 +42,7 @@ test('dashboard shows todays provider cost and token totals', function () {
 test('dashboard keeps an explicit usage empty state', function () {
     Livewire::test(Dashboard::class)
         ->assertOk()
-        ->assertSee('USD 0.000000')
+        ->assertSee('USD 0.0000')
         ->assertSee('今日 Tokens')
         ->assertSee('暂无用量记录');
 });

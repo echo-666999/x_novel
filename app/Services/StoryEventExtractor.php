@@ -62,7 +62,7 @@ class StoryEventExtractor
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel StoryEventExtractor. Identify only events that change later story state. Return structured JSON matching the schema. Every event needs traceable text evidence. Ambiguous implications must use low confidence. Never mutate canonical story data.',
+                systemPrompt: 'You are XNovel StoryEventExtractor. Identify only events that change later story state. Return structured JSON matching the schema. Every evidence quote must be copied verbatim from the supplied chapter draft. Ambiguous implications must use low confidence. Never mutate canonical story data.',
                 prompt: 'Extract Story Event Candidates from this chapter draft and authoritative context: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
@@ -218,6 +218,21 @@ class StoryEventExtractor
                 throw ValidationException::withMessages(['events' => 'Story Event Candidate 必须是对象。']);
             }
 
+            $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($draft): mixed {
+                if (! is_array($evidence)) {
+                    return $evidence;
+                }
+
+                // The source artifact is authoritative server context, not a value the model should infer.
+                $evidence['artifact_id'] = $draft->getKey();
+
+                if (is_string($evidence['quote'] ?? null)) {
+                    $evidence['quote'] = $this->resolveEvidenceQuote((string) $draft->content, $evidence['quote']);
+                }
+
+                return $evidence;
+            })->all();
+
             $candidate = StoryEventCandidate::fromArray($event);
             $this->validateEvidence($candidate, $chapter, $draft);
             $this->validateSubject($candidate, $chapter);
@@ -229,8 +244,12 @@ class StoryEventExtractor
     private function validateEvidence(StoryEventCandidate $candidate, Chapter $chapter, GenerationArtifact $draft): void
     {
         foreach ($candidate->evidence as $evidence) {
-            if ($evidence['artifact_id'] !== $draft->getKey() || ! str_contains((string) $draft->content, $evidence['quote'])) {
-                throw ValidationException::withMessages(['evidence' => 'Candidate Evidence 必须来自当前 Chapter Draft。']);
+            if ($evidence['artifact_id'] !== $draft->getKey()) {
+                throw ValidationException::withMessages(['evidence' => 'Candidate Evidence 的来源产物与当前 Chapter Draft 不一致。']);
+            }
+
+            if (! str_contains((string) $draft->content, $evidence['quote'])) {
+                throw ValidationException::withMessages(['evidence' => 'Candidate Evidence quote 必须逐字来自当前 Chapter Draft。']);
             }
 
             if ($evidence['scene_id'] !== null && ! $chapter->scenes->contains('id', $evidence['scene_id'])) {
@@ -256,6 +275,47 @@ class StoryEventExtractor
         if (! $valid) {
             throw ValidationException::withMessages(['subject_id' => 'Story Event Candidate 引用了当前 Novel 之外的实体。']);
         }
+    }
+
+    private function resolveEvidenceQuote(string $draft, string $quote): string
+    {
+        $quote = trim($quote, " \n\r\t\v\0\"'“”‘’");
+
+        if ($quote === '' || str_contains($draft, $quote)) {
+            return $quote;
+        }
+
+        $whitespacePattern = preg_replace('/\\s+/u', '\\s+', preg_quote($quote, '/'));
+
+        if (is_string($whitespacePattern)
+            && preg_match('/'.$whitespacePattern.'/u', $draft, $match) === 1) {
+            return $match[0];
+        }
+
+        $fragments = preg_split('/(?:…+|\.{3,})/u', $quote);
+
+        if (is_array($fragments) && count($fragments) > 1) {
+            $fragments = array_values(array_filter(array_map('trim', $fragments), fn (string $fragment): bool => mb_strlen($fragment) >= 4));
+            $start = null;
+            $end = 0;
+
+            foreach ($fragments as $fragment) {
+                $position = mb_strpos($draft, $fragment, $end);
+
+                if ($position === false) {
+                    return $quote;
+                }
+
+                $start ??= $position;
+                $end = $position + mb_strlen($fragment);
+            }
+
+            if ($start !== null) {
+                return mb_substr($draft, $start, $end - $start);
+            }
+        }
+
+        return $quote;
     }
 
     /** @param array<int, StoryEventCandidate> $candidates */

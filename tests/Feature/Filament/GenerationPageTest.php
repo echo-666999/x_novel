@@ -59,7 +59,7 @@ test('generation page lists traceable run fields', function () {
         ->assertSee('章节规划')
         ->assertSee('已成功')
         ->assertSee('gpt-test-model')
-        ->assertSee('USD 0.012345');
+        ->assertSee('USD 0.0123');
 });
 
 test('generation run inspector shows context artifacts errors and usage', function () {

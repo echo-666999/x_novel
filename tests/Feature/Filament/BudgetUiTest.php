@@ -26,11 +26,11 @@ test('settings shows the global budget usage and defaults', function () {
     Livewire::test(Settings::class)
         ->assertOk()
         ->assertSee('Daily Used / Limit')
-        ->assertSee('USD 1.250000 / 5.000000')
+        ->assertSee('USD 1.2500 / 5.0000')
         ->assertSee('Novel Total Default')
-        ->assertSee('USD 20.000000')
+        ->assertSee('USD 20.0000')
         ->assertSee('Chapter Max Default')
-        ->assertSee('USD 4.000000');
+        ->assertSee('USD 4.0000');
 });
 
 test('novel overview shows novel and current chapter used versus limit', function () {
@@ -55,9 +55,9 @@ test('novel overview shows novel and current chapter used versus limit', functio
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertOk()
         ->assertSee('Novel Used / Limit')
-        ->assertSee('USD 2.250000 / 8.000000')
+        ->assertSee('USD 2.2500 / 8.0000')
         ->assertSee('Current Chapter Used / Limit')
-        ->assertSee('USD 1.500000 / 2.000000');
+        ->assertSee('USD 1.5000 / 2.0000');
 });
 
 test('novel budget overrides can be saved without replacing other settings', function () {

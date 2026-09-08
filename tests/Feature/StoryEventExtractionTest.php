@@ -93,6 +93,17 @@ test('story event candidate validates the documented event shape', function () {
         ->and($candidate->evidence[0]['artifact_id'])->toBe($fixture['draft']->getKey());
 });
 
+test('story event candidate schema supports strict output and restores a JSON payload', function () {
+    $fixture = eventExtractionFixture();
+    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event['payload'] = '{"from":"长安","to":"洛阳"}';
+
+    $candidate = StoryEventCandidate::fromArray($event);
+
+    expect(data_get(StoryEventCandidate::schema(), 'properties.payload.type'))->toBe('string')
+        ->and($candidate->payload)->toBe(['from' => '长安', 'to' => '洛阳']);
+});
+
 test('extractor creates a candidate artifact without changing canonical story state', function () {
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture));
@@ -107,9 +118,50 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v1')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
 });
+
+test('extractor binds evidence to the authoritative chapter draft instead of trusting a model artifact id', function () {
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
+        'evidence' => [[
+            'artifact_id' => 999999,
+            'scene_id' => null,
+            'quote' => '林舟终于抵达洛阳城下。',
+            'start_offset' => 0,
+            'end_offset' => 12,
+        ]],
+    ]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.0.evidence.0.artifact_id'))->toBe($fixture['draft']->getKey());
+});
+
+test('extractor resolves harmless evidence formatting differences to an exact draft quote', function (string $quote) {
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => null,
+            'quote' => $quote,
+            'start_offset' => null,
+            'end_offset' => null,
+        ]],
+    ]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.0.evidence.0.quote'))->toBe('林舟终于抵达洛阳城下。城门在身后关闭。');
+})->with([
+    'outer quotation marks' => '“林舟终于抵达洛阳城下。城门在身后关闭。”',
+    'ellipsis excerpt' => '林舟终于抵达洛阳城下。……城门在身后关闭。',
+]);
 
 test('duplicate extraction reuses the successful candidate artifact', function () {
     $fixture = eventExtractionFixture();
@@ -139,7 +191,7 @@ test('invalid event evidence is rejected before artifact persistence', function 
     app()->instance(AiProvider::class, $fake);
 
     expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
-        ->toThrow(ValidationException::class, 'Evidence 必须来自当前 Chapter Draft');
+        ->toThrow(ValidationException::class, 'Evidence quote 必须逐字来自当前 Chapter Draft');
 
     expect(GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->count())->toBe(0)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->status)->toBe(RunStatus::Failed);

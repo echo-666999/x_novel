@@ -142,7 +142,7 @@ class AiDebugTest extends Page
                                     TextEntry::make('debug_cost')
                                         ->label('Cost')
                                         ->state(fn (): ?string => isset($this->result['cost'])
-                                            ? config('ai.cost.currency').' '.number_format((float) $this->result['cost'], 6)
+                                            ? config('ai.cost.currency').' '.number_format((float) $this->result['cost'], 4)
                                             : null)
                                         ->placeholder('—'),
                                     TextEntry::make('debug_latency')

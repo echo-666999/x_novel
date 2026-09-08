@@ -117,7 +117,7 @@ class NovelForm
         $limit = config("ai.budget.{$key}");
 
         return is_numeric($limit)
-            ? config('ai.cost.currency').' '.number_format((float) $limit, 6)
+            ? config('ai.cost.currency').' '.number_format((float) $limit, 4)
             : '无限制';
     }
 }
