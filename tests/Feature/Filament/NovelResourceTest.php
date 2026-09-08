@@ -56,6 +56,8 @@ test('the owner can create a novel and enters its workbench', function () {
             'genre' => '玄幻',
             'premise' => '失去故乡的少年踏上寻找真相的旅程。',
             'target_words' => 1_000_000,
+            'generation_chapter_target_words' => 3_500,
+            'generation_narrative_style' => '简洁克制，短句为主，对白自然。',
         ])
         ->call('create')
         ->assertHasNoFormErrors()
@@ -64,7 +66,9 @@ test('the owner can create a novel and enters its workbench', function () {
     $novel = Novel::query()->sole();
 
     expect($novel->title)->toBe('长夜将明')
-        ->and($novel->status)->toBe(NovelStatus::Draft);
+        ->and($novel->status)->toBe(NovelStatus::Draft)
+        ->and(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(3_500)
+        ->and(data_get($novel->settings, 'generation.narrative_style'))->toBe('简洁克制，短句为主，对白自然。');
 
     $this->get(NovelResource::getUrl('view', ['record' => $novel]))
         ->assertOk()
@@ -80,6 +84,8 @@ test('the owner can edit a novels basic information', function () {
             'genre' => '科幻',
             'premise' => '远航者寻找失落文明。',
             'target_words' => 600_000,
+            'generation_chapter_target_words' => 4_000,
+            'generation_narrative_style' => '冷峻凝练，强调悬疑氛围。',
         ])
         ->call('save')
         ->assertHasNoFormErrors();
@@ -88,6 +94,7 @@ test('the owner can edit a novels basic information', function () {
         ->title->toBe('群星彼岸')
         ->genre->toBe('科幻')
         ->target_words->toBe(600_000)
+        ->settings->toMatchArray(['generation' => ['chapter_target_words' => 4_000, 'narrative_style' => '冷峻凝练，强调悬疑氛围。']])
         ->status->toBe(NovelStatus::Draft)
         ->current_chapter_sequence->toBeNull();
 });
@@ -98,12 +105,16 @@ test('novel form validates required fields and positive target words', function 
             'title' => '',
             'genre' => '',
             'target_words' => 0,
+            'generation_chapter_target_words' => 100,
+            'generation_narrative_style' => '',
         ])
         ->call('create')
         ->assertHasFormErrors([
             'title' => 'required',
             'genre' => 'required',
             'target_words' => 'min',
+            'generation_chapter_target_words' => 'min',
+            'generation_narrative_style' => 'required',
         ]);
 });
 

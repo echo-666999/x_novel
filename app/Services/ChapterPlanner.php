@@ -85,6 +85,7 @@ class ChapterPlanner
             }
 
             $payload = ChapterPlanPayload::validate($response->structuredData);
+            $payload['target_words'] = (int) data_get($novel->settings, 'generation.chapter_target_words', $payload['target_words']);
             $candidate = new ChapterPlan($payload);
             $candidate->setRelation('chapter', $chapter);
             $this->planValidator->validate($candidate)->assertCanGenerate();
@@ -194,6 +195,10 @@ class ChapterPlanner
 
         $context = [
             'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
+            'generation_preferences' => [
+                'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
+                'narrative_style' => (string) data_get($novel->settings, 'generation.narrative_style', $bible->tone),
+            ],
             'chapter' => ['id' => $chapter->getKey(), 'sequence' => $chapter->sequence],
             'bible_version' => $bible->version,
             'bible' => $bible->only(['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract']),

@@ -20,6 +20,12 @@ class EditNovel extends EditRecord
         $data['ai_model_overrides'] = data_get($data, 'settings.ai.models', []);
         $data['budget_limits'] = data_get($data, 'settings.budget', []);
         $data['auto_commit'] = (bool) data_get($data, 'settings.auto_commit', false);
+        $data['generation_chapter_target_words'] = (int) data_get($data, 'settings.generation.chapter_target_words', 3_000);
+        $data['generation_narrative_style'] = (string) data_get(
+            $data,
+            'settings.generation.narrative_style',
+            $this->getRecord()->currentBible?->tone ?? '叙事清晰自然，语言风格保持统一。',
+        );
 
         return $data;
     }
@@ -32,6 +38,17 @@ class EditNovel extends EditRecord
             ->filter()
             ->all();
         $settings = $this->getRecord()->settings ?? [];
+        $generation = [
+            'chapter_target_words' => (int) $data['generation_chapter_target_words'],
+            'narrative_style' => trim((string) $data['generation_narrative_style']),
+        ];
+        $generationDefaults = [
+            'chapter_target_words' => 3_000,
+            'narrative_style' => $this->getRecord()->currentBible?->tone ?? '叙事清晰自然，语言风格保持统一。',
+        ];
+        if (array_key_exists('generation', $settings) || $generation !== $generationDefaults) {
+            $settings['generation'] = $generation;
+        }
         $settings['ai'] ??= [];
         $settings['ai']['models'] = $overrides;
         $budgetLimits = collect($data['budget_limits'] ?? [])
@@ -49,7 +66,7 @@ class EditNovel extends EditRecord
         }
 
         $data['settings'] = $settings;
-        unset($data['ai_model_overrides'], $data['budget_limits'], $data['auto_commit']);
+        unset($data['ai_model_overrides'], $data['budget_limits'], $data['auto_commit'], $data['generation_chapter_target_words'], $data['generation_narrative_style']);
 
         return $data;
     }

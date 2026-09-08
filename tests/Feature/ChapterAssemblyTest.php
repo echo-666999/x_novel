@@ -91,6 +91,7 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($artifact->data['ordered_scene_checksums'])->toBe($fixture['scenes']->pluck('currentArtifact.checksum')->all())
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->context_snapshot['ordered_scene_checksums'])->toHaveCount(3)
+        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
         ->and(mb_strpos($prompt, 'Scene 1 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 2 正文'))
         ->and(mb_strpos($prompt, 'Scene 2 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 3 正文'));
 });

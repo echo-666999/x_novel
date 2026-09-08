@@ -70,6 +70,11 @@ class SceneGenerator
         $context['scene_task'] = $scene->only([
             'id', 'sequence', 'pov_character_id', 'location', 'time_anchor', 'goal', 'conflict', 'turn', 'outcome',
         ]);
+        $context['writing_constraints'] = [
+            'chapter_target_words' => $plan->target_words,
+            'scene_target_words' => (int) ceil($plan->target_words / max(1, $chapter->scenes()->count())),
+            'narrative_style' => (string) data_get($novel->settings, 'generation.narrative_style', data_get($context, 'l0.bible.tone', '')),
+        ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'model' => $settings->model,
@@ -92,7 +97,7 @@ class SceneGenerator
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel SceneWriter. Write only this scene. Return JSON matching the schema. Draft output must never mutate canonical story state.',
+                systemPrompt: 'You are XNovel SceneWriter. Write only this scene in the required narrative style and approximately meet scene_target_words. Return JSON matching the schema. Draft output must never mutate canonical story state.',
                 prompt: 'Generate the scene from this authoritative context: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.7,
                 maxTokens: (int) config('generation.scene_max_output_tokens', 4_000),

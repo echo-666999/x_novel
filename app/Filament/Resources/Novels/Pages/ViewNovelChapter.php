@@ -1150,7 +1150,7 @@ class ViewNovelChapter extends ViewRecord
                         Grid::make(['default' => 1, 'md' => 2, 'xl' => 3])
                             ->schema(array_map($this->timelineStageSection(...), $scenes)),
                     ]),
-                Grid::make(['default' => 1, 'md' => 2, 'xl' => 5])
+                Grid::make(['default' => 1, 'md' => 2, 'xl' => 3])
                     ->schema(array_map($this->timelineStageSection(...), $afterScenes)),
             ]);
     }

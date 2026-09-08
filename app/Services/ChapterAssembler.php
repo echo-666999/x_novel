@@ -72,7 +72,7 @@ class ChapterAssembler
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel ChapterAssembler. Assemble the supplied scenes into one polished chapter. Preserve scene order and outcomes. Improve transitions, consistency, and repetition only. Do not introduce major facts, abilities, world rules, or knowledge.',
+                systemPrompt: 'You are XNovel ChapterAssembler. Assemble the supplied scenes into one polished chapter in the required narrative style and keep the result close to chapter_target_words. Preserve scene order and outcomes. Improve transitions, consistency, and repetition only. Do not introduce major facts, abilities, world rules, or knowledge.',
                 prompt: 'Return only the complete chapter prose assembled from this input: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.3,
                 maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
@@ -149,6 +149,10 @@ class ChapterAssembler
                 'must_reveal', 'may_hint', 'must_not_reveal', 'forbidden_conflicts',
             ]),
             'style_constraints' => $chapter->novel->currentBible?->only(['tone', 'pov', 'tense', 'taboos', 'hard_constraints']) ?? [],
+            'writing_constraints' => [
+                'chapter_target_words' => $chapter->latestPlan->target_words,
+                'narrative_style' => (string) data_get($chapter->novel->settings, 'generation.narrative_style', $chapter->novel->currentBible?->tone),
+            ],
             'ordered_scene_checksums' => $artifacts->pluck('checksum')->all(),
             'scenes' => $chapter->scenes->values()->map(fn ($scene, int $index): array => [
                 'scene_id' => $scene->getKey(),

@@ -17,6 +17,14 @@ class CreateNovel extends CreateRecord
     /** @param  array<string, mixed>  $data */
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        $data['settings'] = [
+            'generation' => [
+                'chapter_target_words' => (int) $data['generation_chapter_target_words'],
+                'narrative_style' => trim((string) $data['generation_narrative_style']),
+            ],
+        ];
+
+        unset($data['generation_chapter_target_words'], $data['generation_narrative_style']);
         unset($data['ai_model_overrides'], $data['budget_limits']);
 
         return $data;

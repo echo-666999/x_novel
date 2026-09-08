@@ -38,6 +38,10 @@ class NovelPlanner
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $context = [
             'novel' => $novel->only(['id', 'title', 'genre', 'premise', 'target_words']),
+            'generation_preferences' => [
+                'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
+                'narrative_style' => (string) data_get($novel->settings, 'generation.narrative_style', ''),
+            ],
             'requested_volume_count' => $volumeCount,
         ];
         $inputHash = hash('sha256', json_encode([
