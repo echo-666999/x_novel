@@ -83,6 +83,45 @@
             </div>
         </x-filament::section>
 
+        <x-filament::section
+            heading="投影健康状态"
+            description="Projection Health · 人物、世界实体和伏笔投影均以当前 Canonical Story State 为准"
+            icon="heroicon-o-presentation-chart-line"
+        >
+            <x-slot name="afterHeader">
+                <x-filament::badge :color="$projectionHealth->isHealthy() ? 'success' : ($projectionHealth->errors === [] ? 'warning' : 'danger')">
+                    {{ $projectionHealth->isHealthy() ? '健康' : ($projectionHealth->errors === [] ? '存在漂移' : '无法重建') }}
+                </x-filament::badge>
+            </x-slot>
+
+            <div class="grid gap-4 md:grid-cols-3">
+                @foreach ([
+                    ['label' => '人物', 'checked' => $projectionHealth->charactersChecked, 'drift' => count($projectionHealth->characterDriftIds)],
+                    ['label' => '世界实体', 'checked' => $projectionHealth->worldEntitiesChecked, 'drift' => count($projectionHealth->worldEntityDriftIds)],
+                    ['label' => '伏笔', 'checked' => $projectionHealth->foreshadowingsChecked, 'drift' => count($projectionHealth->foreshadowingDriftIds)],
+                ] as $projection)
+                    <div class="rounded-xl border border-gray-200 p-4 dark:border-white/10">
+                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ $projection['label'] }}</p>
+                        <p class="mt-2 text-sm font-semibold text-gray-950 dark:text-white">
+                            已检查 {{ $projection['checked'] }} · 漂移 {{ $projection['drift'] }}
+                        </p>
+                    </div>
+                @endforeach
+            </div>
+
+            @if ($projectionHealth->errors !== [])
+                <ul class="mt-4 space-y-1 text-sm text-danger-600 dark:text-danger-400">
+                    @foreach ($projectionHealth->errors as $error)
+                        <li>{{ $error }}</li>
+                    @endforeach
+                </ul>
+            @elseif ($projectionHealth->driftCount() > 0)
+                <p class="mt-4 text-sm text-gray-600 dark:text-gray-300">
+                    共发现 {{ $projectionHealth->driftCount() }} 条投影漂移。使用页面顶部“重建投影”进行修复。
+                </p>
+            @endif
+        </x-filament::section>
+
         <x-filament::tabs label="故事状态领域">
             @foreach ($domains as $domain => $label)
                 <x-filament::tabs.item

@@ -15,6 +15,7 @@ use App\Filament\Forms\Components\WorldEntityPicker;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Fact;
 use App\Models\Novel;
+use App\Services\ProjectionRebuilder;
 use App\Services\StoryStateRebuilder;
 use App\Services\StoryStateService;
 use Filament\Actions\Action;
@@ -117,6 +118,25 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
                     'filament.resources.novels.pages.story-state-rebuild',
                     ['result' => $rebuilder->rebuild($this->getRecord())],
                 )),
+            Action::make('rebuildProjections')
+                ->label('重建投影')
+                ->icon('heroicon-o-arrow-path-rounded-square')
+                ->color('warning')
+                ->visible($current !== null)
+                ->requiresConfirmation()
+                ->modalHeading('重建领域投影')
+                ->modalDescription('以当前 Canonical Story State 覆盖人物、世界实体和伏笔的派生投影。正式状态和故事事件不会改变。')
+                ->modalSubmitActionLabel('确认重建')
+                ->action(function (ProjectionRebuilder $rebuilder): void {
+                    $health = $rebuilder->rebuild($this->getRecord());
+                    $this->getRecord()->unsetRelations();
+
+                    Notification::make()
+                        ->title('领域投影已重建')
+                        ->body("已根据 State Version v{$health->stateVersion} 校验 {$health->checkedCount()} 条投影。")
+                        ->success()
+                        ->send();
+                }),
             Action::make('manualCorrection')
                 ->label('人工修正')
                 ->icon('heroicon-o-wrench-screwdriver')
@@ -456,6 +476,9 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
             ? $this->activeDomain
             : 'characters';
         $storyState = app(StoryStateService::class);
+        $projectionHealth = $storyState->current($novel) === null
+            ? null
+            : app(ProjectionRebuilder::class)->inspect($novel);
         $stateVersion = $this->selectedVersion === null
             ? null
             : $storyState->findVersion($novel, $this->selectedVersion);
@@ -494,6 +517,7 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
             'stateChanges' => $diffFrom !== null && $diffTo !== null
                 ? $storyState->diff($diffFrom->state, $diffTo->state)
                 : [],
+            'projectionHealth' => $projectionHealth,
         ];
     }
 

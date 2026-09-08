@@ -3,6 +3,7 @@
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ViewNovelStoryState;
+use App\Models\Character;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Models\User;
@@ -142,4 +143,26 @@ test('the inspector exposes a dry run story state rebuild report', function () {
         ->assertSee('本次仅校验，不写入正式状态');
 
     expect($novel->storyStateVersions()->count())->toBe(1);
+});
+
+test('the inspector shows projection health and rebuilds drift through a domain action', function () {
+    $novel = Novel::factory()->create();
+    $character = Character::factory()->for($novel)->create([
+        'current_state' => ['location' => '长安'],
+    ]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $character->update(['current_state' => ['location' => '错误地点']]);
+
+    Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('投影健康状态')
+        ->assertSee('存在漂移')
+        ->assertSee('漂移 1')
+        ->assertActionExists('rebuildProjections')
+        ->callAction('rebuildProjections')
+        ->assertHasNoActionErrors()
+        ->assertNotified('领域投影已重建')
+        ->assertSee('健康')
+        ->assertSee('漂移 0');
+
+    expect($character->fresh()->current_state)->toBe(['location' => '长安']);
 });
