@@ -9,6 +9,7 @@ use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Services\AutoStopService;
+use App\Services\ReliabilityRunService;
 use App\Services\SmokeRunService;
 
 class CheckNextAction
@@ -16,6 +17,7 @@ class CheckNextAction
     public function __construct(
         private readonly GenerateNextChapterAction $generateNextChapter,
         private readonly AutoStopService $autoStop,
+        private readonly ReliabilityRunService $reliabilityRun,
         private readonly SmokeRunService $smokeRun,
     ) {}
 
@@ -30,7 +32,8 @@ class CheckNextAction
             return null;
         }
 
-        if ($this->smokeRun->completeIfTargetReached($novel, $committedChapter->sequence)) {
+        if ($this->reliabilityRun->completeIfTargetReached($novel, $committedChapter->sequence)
+            || $this->smokeRun->completeIfTargetReached($novel, $committedChapter->sequence)) {
             return null;
         }
 

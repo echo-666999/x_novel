@@ -2,11 +2,13 @@
 
 namespace App\Filament\Pages;
 
+use App\Actions\Generation\StartReliabilityRunAction;
 use App\Actions\Generation\StartSmokeRunAction;
 use App\Filament\Actions\EmergencyStopAction;
 use App\Filament\Widgets\DueForeshadowingsWidget;
 use App\Models\Novel;
 use App\Models\UsageRecord;
+use App\Services\ReliabilityRunService;
 use App\Services\SmokeRunService;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -29,6 +31,33 @@ class Dashboard extends BaseDashboard
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('startReliabilityRun')
+                ->label('启动 50 章可靠性长跑')
+                ->icon('heroicon-o-shield-check')
+                ->color('success')
+                ->modalHeading('启动 50 章 Reliability Run')
+                ->modalDescription('系统会串行推进 50 个正式章节，并持续汇总重试、恢复、记忆、审校、成本和上下文指标。')
+                ->modalSubmitActionLabel('启动可靠性长跑')
+                ->schema([
+                    Select::make('novel_id')
+                        ->label('小说')
+                        ->options(fn (): array => Novel::query()
+                            ->whereIn('status', ['generating', 'completing'])
+                            ->orderBy('title')
+                            ->pluck('title', 'id')
+                            ->all())
+                        ->searchable()
+                        ->required(),
+                ])
+                ->action(function (array $data, StartReliabilityRunAction $start): void {
+                    $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+
+                    Notification::make()
+                        ->title('50 章可靠性长跑已启动')
+                        ->body('已排队第 '.$chapter->sequence.' 章，达到 50 章边界后将自动停止。')
+                        ->success()
+                        ->send();
+                }),
             Action::make('startSmokeRun')
                 ->label('启动 20 章长跑')
                 ->icon('heroicon-o-play-circle')
@@ -141,6 +170,32 @@ class Dashboard extends BaseDashboard
                         ->contained(false)
                         ->visible(fn (): bool => app(SmokeRunService::class)->allProgress()->isEmpty()),
                 ]),
+            Section::make('50 章可靠性汇总')
+                ->description('Reliability Summary · 生成恢复、记忆、审校、成本与上下文趋势')
+                ->icon('heroicon-o-shield-check')
+                ->schema([
+                    RepeatableEntry::make('reliability_runs')
+                        ->hiddenLabel()
+                        ->state(fn (): array => $this->reliabilityRunSummaries())
+                        ->columns(['default' => 2, 'lg' => 4])
+                        ->schema([
+                            TextEntry::make('novel')->label('小说')->weight('medium'),
+                            TextEntry::make('status')->label('状态')->badge()->color(fn (string $state): string => match ($state) {
+                                '运行中' => 'info', '已完成' => 'success', '已停止' => 'danger', default => 'gray',
+                            }),
+                            TextEntry::make('progress')->label('章节进度')->badge()->color('info'),
+                            TextEntry::make('continuity')->label('连续性')->badge()->color(fn (string $state): string => $state === '正常' ? 'success' : 'danger'),
+                            TextEntry::make('recovery')->label('重试 / Worker 恢复'),
+                            TextEntry::make('memory')->label('记忆 / 向量'),
+                            TextEntry::make('story')->label('伏笔 / 审校 / 重写'),
+                            TextEntry::make('cost_context')->label('成本 / 上下文')->fontFamily('mono'),
+                        ]),
+                    EmptyState::make('尚未启动 50 章可靠性长跑')
+                        ->description('点击页面顶部“启动 50 章可靠性长跑”选择小说。')
+                        ->icon('heroicon-o-chart-bar-square')
+                        ->contained(false)
+                        ->visible(fn (): bool => app(ReliabilityRunService::class)->allSummaries()->isEmpty()),
+                ]),
         ]);
     }
 
@@ -156,6 +211,29 @@ class Dashboard extends BaseDashboard
                 'sequence_health' => $progress->sequenceHealthy() ? '正常' : '异常',
                 'state_health' => $progress->stateContinuous ? '正常' : '异常',
             ])
+            ->all();
+    }
+
+    /** @return array<int, array<string, string>> */
+    private function reliabilityRunSummaries(): array
+    {
+        return app(ReliabilityRunService::class)->allSummaries()
+            ->map(function ($summary): array {
+                $drift = $summary->costDriftPercent === null
+                    ? '样本不足'
+                    : sprintf('%+.2f%%', $summary->costDriftPercent);
+
+                return [
+                    'novel' => $summary->novelTitle,
+                    'status' => $summary->statusLabel(),
+                    'progress' => "{$summary->canonicalChapters}/50 · {$summary->percent()}%",
+                    'continuity' => $summary->sequenceContinuous && $summary->stateContinuous ? '正常' : '异常',
+                    'recovery' => "重试 {$summary->retryRuns} · Worker {$summary->workerRecoveries}/{$summary->workerCrashes}",
+                    'memory' => "{$summary->memories} 条 · 已向量化 {$summary->embeddedMemories}",
+                    'story' => "伏笔 {$summary->foreshadowingEvents} · 审校 {$summary->reviews} · 重写 {$summary->rewrites}",
+                    'cost_context' => config('ai.cost.currency').' '.number_format($summary->cost, 6)." · 漂移 {$drift} · Context 平均 ".number_format($summary->averageContextTokens).' / 最大 '.number_format($summary->maximumContextTokens),
+                ];
+            })
             ->all();
     }
 
