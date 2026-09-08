@@ -39,7 +39,7 @@ test('ai debug page shows the required fields and resolved defaults', function (
         ->assertOk()
         ->assertSet('data.task_type', 'planner')
         ->assertSet('data.model', 'planner-test-model')
-        ->assertSet('data.prompt_version', 'chapter-planner-v1')
+        ->assertSet('data.prompt_version', 'chapter-planner-v2')
         ->assertSee('Task Type')
         ->assertSee('Model')
         ->assertSee('Prompt Version')
@@ -56,7 +56,7 @@ test('changing task type refreshes model and prompt version', function () {
     Livewire::test(AiDebugTest::class)
         ->set('data.task_type', 'writer')
         ->assertSet('data.model', 'writer-test-model')
-        ->assertSet('data.prompt_version', 'scene-writer-v1');
+        ->assertSet('data.prompt_version', 'scene-writer-v2');
 });
 
 test('ai debug test calls the tracked provider and displays metrics', function () {
@@ -84,7 +84,7 @@ test('ai debug test calls the tracked provider and displays metrics', function (
 
     expect($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->model)->toBe('planner-test-model')
-        ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v1')
+        ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v2')
         ->and($fake->requests()[0]->metadata)->toBe([
             'purpose' => 'ai_debug_test',
             'task_type' => 'planner',

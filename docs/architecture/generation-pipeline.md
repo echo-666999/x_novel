@@ -194,6 +194,8 @@ due_foreshadowings
 scene_plans
 ```
 
+小说级 `Style Profile` 由主文风 Preset、最多两种辅助文风、语言时代感、故事节奏、叙事视角及六项可选参数组成。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 按场景数获得参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
+
 Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
 
 `completing` 时禁止无批准新增核心主线、核心人物、硬规则、高重要度伏笔，并要求推进 Ending Plan 或降低 Closure Debt。

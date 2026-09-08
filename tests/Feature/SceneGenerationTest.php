@@ -93,7 +93,7 @@ test('scene draft schema keeps dynamic objects compatible with strict structured
 
 test('scene generator persists an immutable draft artifact and temporary state delta', function () {
     $fixture = sceneGenerationFixture(1);
-    $fixture['novel']->update(['settings' => ['generation' => ['narrative_style' => '明快、对白自然']]]);
+    $fixture['novel']->update(['settings' => ['editorial' => ['primary_style' => 'light_humorous', 'secondary_styles' => [], 'style_parameters' => []]]]);
     $fake = (new FakeAiProvider)->enqueue(sceneResponse('雨幕中，林舟推开了门。', [
         'characters' => ['lin_zhou' => ['location' => '灯塔']],
     ]));
@@ -112,7 +112,8 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($run->stage)->toBe(GenerationStage::SceneGeneration)
         ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'scene_task', 'temporary_state']);
     expect(data_get($run->context_snapshot, 'writing_constraints.scene_target_words'))->toBe($fixture['plan']->target_words)
-        ->and(data_get($run->context_snapshot, 'writing_constraints.narrative_style'))->toBe('明快、对白自然');
+        ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.primary_style'))->toBe('轻松幽默')
+        ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.instructions.0'))->toContain('情境幽默');
 });
 
 test('scene two cannot execute before scene one succeeds', function () {

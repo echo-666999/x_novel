@@ -20,11 +20,12 @@ use Throwable;
 
 class NovelPlanner
 {
-    public const PROMPT_VERSION = 'novel-planner-v1';
+    public const PROMPT_VERSION = 'novel-planner-v2';
 
     public function __construct(
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
+        private readonly NarrativeStyleProfile $narrativeStyleProfile,
     ) {}
 
     public function generate(Novel $novel, int $volumeCount = 5): GenerationArtifact
@@ -40,7 +41,7 @@ class NovelPlanner
             'novel' => $novel->only(['id', 'title', 'genre', 'premise', 'target_words']),
             'generation_preferences' => [
                 'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
-                'narrative_style' => (string) data_get($novel->settings, 'generation.narrative_style', ''),
+                'style_profile' => $this->narrativeStyleProfile->forNovel($novel),
             ],
             'requested_volume_count' => $volumeCount,
         ];

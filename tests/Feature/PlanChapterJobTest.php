@@ -94,7 +94,10 @@ test('the chapter plan response schema requires every declared scene field', fun
 
 test('the planner creates a validated plan artifact and succeeds its run', function () {
     [$chapter, $character] = plannerChapter();
-    $chapter->novel->update(['settings' => ['generation' => ['chapter_target_words' => 4_200, 'narrative_style' => '冷峻简洁']]]);
+    $chapter->novel->update(['settings' => [
+        'generation' => ['chapter_target_words' => 4_200],
+        'editorial' => ['primary_style' => 'austere', 'secondary_styles' => [], 'style_parameters' => []],
+    ]]);
     $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
     app()->instance(AiProvider::class, $fake);
 
@@ -110,10 +113,10 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v1')
+        ->and($run->prompt_version)->toBe('chapter-planner-v2')
         ->and($run->artifacts()->sole()->type)->toBe(ArtifactType::ChapterPlan)
         ->and($fake->requests())->toHaveCount(1)
-        ->and($fake->requests()[0]->prompt)->toContain('冷峻简洁');
+        ->and($fake->requests()[0]->prompt)->toContain('冷峻克制');
 });
 
 test('the planner receives closing restrictions and closure debt in completing mode', function () {

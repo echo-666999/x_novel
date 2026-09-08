@@ -57,7 +57,15 @@ test('the owner can create a novel and enters its workbench', function () {
             'premise' => '失去故乡的少年踏上寻找真相的旅程。',
             'target_words' => 1_000_000,
             'generation_chapter_target_words' => 3_500,
-            'generation_narrative_style' => '简洁克制，短句为主，对白自然。',
+            'editorial_subgenre' => '东方玄幻',
+            'editorial_target_platform' => 'qidian',
+            'editorial_story_tone' => 'serious',
+            'editorial_primary_style' => 'steady_weighty',
+            'editorial_secondary_styles' => ['plain_realist', 'austere'],
+            'editorial_language_era' => 'vernacular_ancient',
+            'editorial_pacing' => 'balanced',
+            'editorial_narrative_pov' => 'third_limited',
+            'editorial_style_parameters' => ['dialogue_ratio' => 3],
         ])
         ->call('create')
         ->assertHasNoFormErrors()
@@ -68,7 +76,9 @@ test('the owner can create a novel and enters its workbench', function () {
     expect($novel->title)->toBe('长夜将明')
         ->and($novel->status)->toBe(NovelStatus::Draft)
         ->and(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(3_500)
-        ->and(data_get($novel->settings, 'generation.narrative_style'))->toBe('简洁克制，短句为主，对白自然。');
+        ->and(data_get($novel->settings, 'editorial.primary_style'))->toBe('steady_weighty')
+        ->and(data_get($novel->settings, 'editorial.secondary_styles'))->toBe(['plain_realist', 'austere'])
+        ->and(data_get($novel->settings, 'editorial.style_parameters.dialogue_ratio'))->toBe(3);
 
     $this->get(NovelResource::getUrl('view', ['record' => $novel]))
         ->assertOk()
@@ -85,7 +95,8 @@ test('the owner can edit a novels basic information', function () {
             'premise' => '远航者寻找失落文明。',
             'target_words' => 600_000,
             'generation_chapter_target_words' => 4_000,
-            'generation_narrative_style' => '冷峻凝练，强调悬疑氛围。',
+            'editorial_primary_style' => 'suspenseful',
+            'editorial_secondary_styles' => ['austere'],
         ])
         ->call('save')
         ->assertHasNoFormErrors();
@@ -94,9 +105,11 @@ test('the owner can edit a novels basic information', function () {
         ->title->toBe('群星彼岸')
         ->genre->toBe('科幻')
         ->target_words->toBe(600_000)
-        ->settings->toMatchArray(['generation' => ['chapter_target_words' => 4_000, 'narrative_style' => '冷峻凝练，强调悬疑氛围。']])
         ->status->toBe(NovelStatus::Draft)
         ->current_chapter_sequence->toBeNull();
+    expect(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(4_000)
+        ->and(data_get($novel->settings, 'editorial.primary_style'))->toBe('suspenseful')
+        ->and(data_get($novel->settings, 'editorial.secondary_styles'))->toBe(['austere']);
 });
 
 test('novel form validates required fields and positive target words', function () {
@@ -106,7 +119,7 @@ test('novel form validates required fields and positive target words', function 
             'genre' => '',
             'target_words' => 0,
             'generation_chapter_target_words' => 100,
-            'generation_narrative_style' => '',
+            'editorial_primary_style' => null,
         ])
         ->call('create')
         ->assertHasFormErrors([
@@ -114,7 +127,7 @@ test('novel form validates required fields and positive target words', function 
             'genre' => 'required',
             'target_words' => 'min',
             'generation_chapter_target_words' => 'min',
-            'generation_narrative_style' => 'required',
+            'editorial_primary_style' => 'required',
         ]);
 });
 

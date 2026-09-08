@@ -31,6 +31,7 @@ class SceneGenerator
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly ContextBuilder $contextBuilder,
+        private readonly NarrativeStyleProfile $narrativeStyleProfile,
     ) {}
 
     public function generate(int $sceneId, bool $regenerate = false): ?GenerationArtifact
@@ -73,7 +74,7 @@ class SceneGenerator
         $context['writing_constraints'] = [
             'chapter_target_words' => $plan->target_words,
             'scene_target_words' => (int) ceil($plan->target_words / max(1, $chapter->scenes()->count())),
-            'narrative_style' => (string) data_get($novel->settings, 'generation.narrative_style', data_get($context, 'l0.bible.tone', '')),
+            'style_profile' => $this->narrativeStyleProfile->forNovel($novel),
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,

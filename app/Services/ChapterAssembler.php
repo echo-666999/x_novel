@@ -29,6 +29,7 @@ class ChapterAssembler
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
+        private readonly NarrativeStyleProfile $narrativeStyleProfile,
     ) {}
 
     public function assemble(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -151,7 +152,7 @@ class ChapterAssembler
             'style_constraints' => $chapter->novel->currentBible?->only(['tone', 'pov', 'tense', 'taboos', 'hard_constraints']) ?? [],
             'writing_constraints' => [
                 'chapter_target_words' => $chapter->latestPlan->target_words,
-                'narrative_style' => (string) data_get($chapter->novel->settings, 'generation.narrative_style', $chapter->novel->currentBible?->tone),
+                'style_profile' => $this->narrativeStyleProfile->forNovel($chapter->novel),
             ],
             'ordered_scene_checksums' => $artifacts->pluck('checksum')->all(),
             'scenes' => $chapter->scenes->values()->map(fn ($scene, int $index): array => [

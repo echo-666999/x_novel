@@ -33,6 +33,7 @@ class ChapterPlanner
         private readonly PlanValidator $planValidator,
         private readonly ClosureDebtService $closureDebt,
         private readonly SyncScenesFromChapterPlanAction $syncScenes,
+        private readonly NarrativeStyleProfile $narrativeStyleProfile,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -197,7 +198,7 @@ class ChapterPlanner
             'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
             'generation_preferences' => [
                 'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
-                'narrative_style' => (string) data_get($novel->settings, 'generation.narrative_style', $bible->tone),
+                'style_profile' => $this->narrativeStyleProfile->forNovel($novel),
             ],
             'chapter' => ['id' => $chapter->getKey(), 'sequence' => $chapter->sequence],
             'bible_version' => $bible->version,

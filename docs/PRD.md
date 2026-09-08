@@ -402,6 +402,18 @@ created_at
 updated_at
 ```
 
+`settings` 中的小说级创作偏好保持结构化并与题材分离：
+
+```text
+generation.chapter_target_words
+editorial.subgenre / target_platform / story_tone
+editorial.primary_style / secondary_styles
+editorial.language_era / pacing / narrative_pov
+editorial.style_parameters
+```
+
+主文风使用有限 Preset，辅助文风与 1～5 级参数用于微调；生成前展开为明确的 Style Profile 指令。
+
 ---
 
 ### novel_bibles
