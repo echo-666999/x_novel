@@ -27,7 +27,7 @@ class ChapterRewriter
 {
     private const STALE_RUN_SECONDS = 120;
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -68,6 +68,7 @@ class ChapterRewriter
             'must_not_change' => $chapter->latestPlan->only(['must_not_reveal', 'forbidden_conflicts']),
             'state_version' => $chapter->novel->canonicalStateVersion->version,
             'current_state' => $chapter->novel->canonicalStateVersion->state,
+            'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
             'locked_facts' => $chapter->novel->facts()->where('locked', true)->where('status', 'active')
                 ->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value'])->all(),
             'length_requirement' => [
@@ -91,7 +92,7 @@ class ChapterRewriter
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 章节重写器。只修复给定问题，保留计划要求的剧情结果和既定事实。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words，且不要超过 length_requirement.maximum_words。字数不足时，通过展开原有场景的动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。只返回修订后的简体中文正文。',
+                systemPrompt: '你是 XNovel 章节重写器。只修复给定问题，保留计划要求的剧情结果和既定事实。处理连续性问题时必须对照 previous_chapter_ending，让正文开头交代时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words；length_requirement.maximum_words 是不可超过的硬上限，字数统计排除空白和换行。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有场景的动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。只返回修订后的简体中文正文。',
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
@@ -102,6 +103,15 @@ class ChapterRewriter
             if ($content === '') {
                 throw new AiProviderException('rewrite_empty_draft', 'Rewrite 返回了空正文。', false);
             }
+
+            $content = $this->repairLengthIfNeeded(
+                content: $content,
+                brief: $brief,
+                model: $settings->model,
+                promptVersion: $promptVersion,
+                metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value],
+            );
+            $this->validateLength($content, $brief['length_requirement']);
 
             return $this->complete($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt, $brief['state_version']);
         } catch (Throwable $exception) {
@@ -162,6 +172,71 @@ class ChapterRewriter
     {
         return GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)
             ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))->count();
+    }
+
+    /** @param array<string, mixed> $brief
+     * @param  array<string, mixed>  $metadata
+     */
+    private function repairLengthIfNeeded(string $content, array $brief, string $model, string $promptVersion, array $metadata): string
+    {
+        $requirement = $brief['length_requirement'];
+
+        for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
+            $actual = $this->lengthPolicy->count($content);
+            $minimum = (int) $requirement['minimum_words'];
+            $maximum = (int) $requirement['maximum_words'];
+            $tooShort = $actual < $minimum;
+            $tooLong = $actual > $maximum;
+
+            if (! $tooShort && ! $tooLong) {
+                break;
+            }
+
+            $response = $this->provider->generate(new AiRequest(
+                model: $model,
+                systemPrompt: $tooLong
+                    ? '你是 XNovel 重写稿压缩器。当前重写稿仍然超限。保留必须修复的问题、计划结果、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
+                    : '你是 XNovel 重写稿扩写器。当前重写稿仍然过短。保留已经完成的修复、计划结果和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
+                prompt: ($tooLong ? '请压缩以下重写稿：' : '请扩写以下重写稿：').json_encode([
+                    'scope' => $brief['scope'],
+                    'findings' => $brief['findings'],
+                    'must_preserve' => $brief['must_preserve'],
+                    'must_not_change' => $brief['must_not_change'],
+                    'length_requirement' => $requirement,
+                    'current_words' => $actual,
+                    'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
+                    'repair_attempt' => $attempt,
+                    'content' => $content,
+                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                temperature: 0.2,
+                maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
+                promptVersion: $promptVersion,
+                metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
+            ));
+            $content = trim($response->content);
+
+            if ($content === '') {
+                throw new AiProviderException('rewrite_empty_draft', 'Rewrite 字数修复返回了空正文。', false);
+            }
+        }
+
+        return $content;
+    }
+
+    /** @param array<string, mixed> $requirement */
+    private function validateLength(string $content, array $requirement): void
+    {
+        $actual = $this->lengthPolicy->count($content);
+        $minimum = (int) $requirement['minimum_words'];
+        $maximum = (int) $requirement['maximum_words'];
+
+        if ($actual < $minimum || $actual > $maximum) {
+            throw new AiProviderException(
+                'rewrite_length_out_of_range',
+                "重写稿 {$actual} 字，必须控制在 {$minimum}～{$maximum} 字；本次结果不会成为当前版本。",
+                false,
+            );
+        }
     }
 
     private function startRun(Chapter $chapter, ?int $sceneId, GenerationArtifact $source, string $findingHash, int $attempt, string $inputHash, array $brief, string $model, string $promptVersion): array

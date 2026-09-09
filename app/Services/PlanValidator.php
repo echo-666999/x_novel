@@ -70,6 +70,17 @@ class PlanValidator
                 }
             }
         }
+
+        $hasPreviousCanonicalChapter = $plan->chapter->novel->chapters()
+            ->where('status', 'canonical')
+            ->where('sequence', '<', $plan->chapter->sequence)
+            ->exists();
+        if ($hasPreviousCanonicalChapter && blank(data_get($plan->scene_plans, '0.transition_from_previous'))) {
+            $findings[] = $this->blocked(
+                'MISSING_CHAPTER_TRANSITION',
+                '第一场景必须说明如何承接上一章正式结尾；如有时间、地点或行动跳跃，需要写明正文中的过渡过程。',
+            );
+        }
     }
 
     /**

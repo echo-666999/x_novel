@@ -98,11 +98,14 @@ class ManageNovelChapters extends ManageRelatedRecords
     public function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with([
-                'volume:id,sequence,title',
-                'latestStateVersion',
-                'latestPlan',
-            ]))
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query
+                ->with([
+                    'volume:id,sequence,title',
+                    'latestStateVersion',
+                    'latestPlan',
+                    'latestReview',
+                ])
+                ->withSum('usageRecords', 'estimated_cost'))
             ->columns([
                 TextColumn::make('sequence')
                     ->label('章节')
@@ -129,14 +132,14 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->numeric()
                     ->alignEnd()
                     ->sortable(),
-                TextColumn::make('review_decision')
+                TextColumn::make('latestReview.decision')
                     ->label('审校')
-                    ->state('尚未接入')
-                    ->color('gray'),
-                TextColumn::make('cost')
+                    ->badge()
+                    ->placeholder('未审校'),
+                TextColumn::make('usage_records_sum_estimated_cost')
                     ->label('成本')
-                    ->state('尚未接入')
-                    ->color('gray')
+                    ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 4))
+                    ->placeholder('—')
                     ->alignEnd(),
                 TextColumn::make('latestStateVersion.version')
                     ->label('故事版本')
@@ -389,6 +392,10 @@ class ManageNovelChapters extends ManageRelatedRecords
                                 ->label('时间锚点')
                                 ->maxLength(255)
                                 ->placeholder('继承 Chapter Plan 时间锚点'),
+                            Textarea::make('transition_from_previous')
+                                ->label('与上一段的衔接')
+                                ->helperText('第一场景说明如何承接上一章正式结尾；后续场景说明如何承接前一场景。')
+                                ->rows(2),
                             Textarea::make('goal')->label('目标')->rows(2)->required(),
                             Textarea::make('conflict')->label('冲突')->rows(2)->required(),
                             Textarea::make('turn')->label('转折')->rows(2)->required(),

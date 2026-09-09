@@ -30,7 +30,7 @@ class ChapterReviewer
 
     private const WEIGHTS = ['continuity' => .25, 'plan' => .15, 'character' => .15, 'progress' => .15, 'repetition' => .10, 'pacing' => .10, 'style' => .10];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding) {}
 
     public function review(int $chapterId, bool $regenerate = false): ?Review
     {
@@ -41,11 +41,22 @@ class ChapterReviewer
 
         $draft = $this->latestDraft($chapter);
         $stateValidation = $this->stateValidator->validate($chapterId);
+        $missingPrerequisite = collect($stateValidation->findings)->first(
+            fn ($finding): bool => in_array($finding->code, ['INVALID_STATE_PATCH', 'INVALID_EVENT_REFERENCE'], true),
+        );
+        if ($missingPrerequisite !== null) {
+            throw new AiProviderException(
+                'review_prerequisite_missing',
+                '当前章节缺少与最新事件候选对应的有效 State Patch，请先补建状态补丁后重新审校。',
+                false,
+            );
+        }
         $lengthCheck = $this->lengthCheck($draft->content, (int) $chapter->latestPlan?->target_words);
         $context = [
             'chapter_id' => $chapter->getKey(),
             'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum, 'content' => $draft->content],
-            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal']),
+            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal', 'scene_plans']),
+            'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
             'length_check' => $lengthCheck,
             'state_version' => $chapter->novel->canonicalStateVersion?->version,
             'state_findings' => array_map(fn ($finding) => $finding->toArray(), $stateValidation->findings),
@@ -65,7 +76,7 @@ class ChapterReviewer
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 叙事审校器。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。所有 finding 的 message 与 evidence 必须使用简体中文。只报告有明确文本证据、可以执行修复且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。可以建议 PASS、REWRITE、NEEDS_ATTENTION 或 BLOCK，但最终流程决策由 Laravel 作出。',
+                systemPrompt: '你是 XNovel 叙事审校器。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头；时间、地点或行动发生跳跃却没有在正文中交代时，必须给出 continuity finding。所有 finding 的 message 与 evidence 必须使用简体中文。只报告有明确文本证据、可以执行修复且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。可以建议 PASS、REWRITE、NEEDS_ATTENTION 或 BLOCK，但最终流程决策由 Laravel 作出。',
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: (int) config('generation.review_max_output_tokens', 4000), responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],

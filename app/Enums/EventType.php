@@ -46,6 +46,63 @@ enum EventType: string
     case EventInvalidated = 'event_invalidated';
     case ManualCorrection = 'manual_correction';
 
+    /** @return array<int, string> */
+    public function allowedSubjectTypes(): array
+    {
+        return match ($this) {
+            self::CharacterStatusChanged,
+            self::CharacterMoved,
+            self::CharacterInjured,
+            self::CharacterRecovered,
+            self::CharacterGoalChanged,
+            self::CharacterEmotionChanged,
+            self::CharacterLearned,
+            self::CharacterForgot,
+            self::CharacterAbilityAcquired,
+            self::CharacterAbilityChanged => ['character'],
+
+            self::RelationshipChanged,
+            self::PromiseMade,
+            self::PromiseBroken,
+            self::DebtCreated,
+            self::DebtResolved => ['relationship'],
+
+            self::ItemAcquired,
+            self::ItemTransferred,
+            self::ItemLost,
+            self::ItemDestroyed,
+            self::ItemStateChanged => ['item'],
+
+            self::ConflictStarted,
+            self::ConflictEscalated,
+            self::ConflictResolved => ['conflict'],
+
+            self::ThreadOpened,
+            self::ThreadProgressed,
+            self::ThreadClosed => ['thread'],
+
+            self::ReaderPromiseCreated,
+            self::ReaderPromiseResolved => ['reader_promise'],
+
+            self::ForeshadowingPlanted,
+            self::ForeshadowingReinforced,
+            self::ForeshadowingDue,
+            self::ForeshadowingPaidOff,
+            self::ForeshadowingAbandoned => ['foreshadowing'],
+
+            self::WorldRuleRevealed,
+            self::WorldRuleChanged,
+            self::WorldStateChanged => ['world', 'world_entity'],
+
+            self::LocationStateChanged => ['location', 'world_entity'],
+            self::FactionStateChanged => ['faction', 'world_entity'],
+
+            self::EventCorrected,
+            self::EventInvalidated,
+            self::ManualCorrection => [],
+        };
+    }
+
     public function getLabel(): string
     {
         return str($this->value)->headline()->toString();

@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\HasOneThrough;
 
 #[Fillable([
     'novel_id',
@@ -78,6 +79,18 @@ class Chapter extends Model
     public function generationRuns(): HasMany
     {
         return $this->hasMany(GenerationRun::class);
+    }
+
+    /** @return HasOneThrough<Review, GenerationRun, $this> */
+    public function latestReview(): HasOneThrough
+    {
+        return $this->hasOneThrough(Review::class, GenerationRun::class)->latestOfMany();
+    }
+
+    /** @return HasMany<UsageRecord, $this> */
+    public function usageRecords(): HasMany
+    {
+        return $this->hasMany(UsageRecord::class);
     }
 
     /** @return HasMany<StoryEvent, $this> */

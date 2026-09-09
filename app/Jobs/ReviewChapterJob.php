@@ -44,7 +44,7 @@ class ReviewChapterJob implements ShouldQueue
             }
         } catch (AiProviderException $e) {
             if (! $e->retryable) {
-                if ($e->errorCode !== 'novel_paused') {
+                if (! in_array($e->errorCode, ['novel_paused', 'review_prerequisite_missing'], true)) {
                     $reviewer->markTerminalFailure($this->chapterId);
                 } $this->fail($e);
 
@@ -58,6 +58,10 @@ class ReviewChapterJob implements ShouldQueue
 
     public function failed(?Throwable $e): void
     {
+        if ($e instanceof AiProviderException && in_array($e->errorCode, ['novel_paused', 'review_prerequisite_missing'], true)) {
+            return;
+        }
+
         app(AutoStopService::class)->stopForFailure($this->chapterId, $e);
         app(ChapterReviewer::class)->markTerminalFailure($this->chapterId);
     }

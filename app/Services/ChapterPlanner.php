@@ -34,6 +34,7 @@ class ChapterPlanner
         private readonly ClosureDebtService $closureDebt,
         private readonly SyncScenesFromChapterPlanAction $syncScenes,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly PreviousChapterEnding $previousChapterEnding,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -70,7 +71,8 @@ class ChapterPlanner
                 systemPrompt: $this->systemPrompt($novel),
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
-                    .'due_foreshadowings 只能使用 due_foreshadowings[].id，due_foreshadowings 为空时必须返回 []。上下文：'
+                    .'due_foreshadowings 只能使用 due_foreshadowings[].id，due_foreshadowings 为空时必须返回 []。'
+                    .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。上下文：'
                     .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
                 maxTokens: 4_000,
@@ -217,6 +219,7 @@ class ChapterPlanner
             'active_facts' => $novel->facts()->where('status', 'active')->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value', 'locked'])->all(),
             'due_foreshadowings' => $novel->foreshadowings()->whereNotIn('status', ['paid_off', 'abandoned'])->where('due_from_chapter', '<=', $chapter->sequence)->get()->map->only(['id', 'title', 'description', 'promised_payoff', 'due_from_chapter', 'due_to_chapter', 'importance', 'status'])->all(),
             'recent_summaries' => $novel->chapters()->where('status', ChapterStatus::Canonical)->whereNotNull('summary')->latest('sequence')->limit(10)->get(['sequence', 'summary'])->reverse()->values()->all(),
+            'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
         ];
 
         if ($novel->status->value === 'completing') {
@@ -243,7 +246,7 @@ class ChapterPlanner
 
     private function systemPrompt(Novel $novel): string
     {
-        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。';
+        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。';
 
         if ($novel->status->value === 'completing') {
             $prompt .= ' 当前处于收束阶段：不得新增核心人物、主线、硬世界规则或高重要度伏笔；计划必须推进结局契约或降低收束债务。';

@@ -11,13 +11,16 @@ use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Review;
+use App\Services\DraftLengthPolicy;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
-class OverrideChapterReviewAction
+class AcceptOverlengthChapterAction
 {
+    public function __construct(private readonly DraftLengthPolicy $lengthPolicy) {}
+
     public function execute(Chapter $chapter, string $reason, ?int $actorId = null): Review
     {
         $validated = Validator::make(compact('reason'), [
@@ -25,30 +28,43 @@ class OverrideChapterReviewAction
         ])->validate();
 
         return DB::transaction(function () use ($chapter, $validated, $actorId): Review {
-            $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
+            $chapter = Chapter::query()->lockForUpdate()->with(['novel.canonicalStateVersion', 'latestPlan'])->findOrFail($chapter->getKey());
             $source = Review::query()
                 ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
                 ->with(['artifact', 'generationRun'])
                 ->latest('id')
                 ->first();
-            if ($source?->decision !== ReviewDecision::NeedsAttention) {
-                throw ValidationException::withMessages(['review' => '只有需要人工处理的最新 Review 可以人工通过。']);
-            }
-            if (collect($source->findings)->contains(fn (array $finding): bool => data_get($finding, 'severity') === 'hard')) {
-                throw ValidationException::withMessages(['review' => '当前 Review 存在硬冲突，不能人工通过。']);
-            }
-            if (collect($source->findings)->contains(fn (array $finding): bool => in_array(data_get($finding, 'code'), ['CHAPTER_LENGTH_TOO_SHORT', 'CHAPTER_LENGTH_TOO_LONG'], true))) {
-                throw ValidationException::withMessages(['review' => '字数问题不能通过普通 Override 清除；超出上限时请使用“接受超限版本”，低于下限时请先修改正文。']);
+
+            if ($source?->decision === ReviewDecision::Pass
+                && data_get($source->artifact?->data, 'manual_length_exception') === true
+                && data_get($source->artifact?->data, 'manual_length_exception_reason') === $validated['reason']) {
+                return $source;
             }
 
-            $draftId = (int) data_get($source->artifact->data, 'source_artifact_id');
-            $draft = GenerationArtifact::query()->findOrFail($draftId);
+            if ($source?->decision !== ReviewDecision::NeedsAttention) {
+                throw ValidationException::withMessages(['review' => '只有需要人工处理的最新 Review 可以接受超限版本。']);
+            }
+            if (collect($source->findings)->contains(fn (array $finding): bool => data_get($finding, 'severity') === 'hard')) {
+                throw ValidationException::withMessages(['review' => '当前 Review 存在硬冲突，不能接受超限版本。']);
+            }
+            if (! collect($source->findings)->contains(fn (array $finding): bool => data_get($finding, 'code') === 'CHAPTER_LENGTH_TOO_LONG')) {
+                throw ValidationException::withMessages(['review' => '当前 Review 没有章节字数超限问题。']);
+            }
+
+            $draft = GenerationArtifact::query()->findOrFail((int) data_get($source->artifact->data, 'source_artifact_id'));
+            $target = (int) $chapter->latestPlan?->target_words;
+            $actual = $this->lengthPolicy->count($draft->content);
+            $maximum = $this->lengthPolicy->chapterMaximum($target);
+            if ($target < 1 || $actual <= $maximum) {
+                throw ValidationException::withMessages(['review' => '当前正文按照最新字数口径没有超过上限，请重新审校。']);
+            }
+
             $stateVersion = $chapter->novel->canonicalStateVersion?->version;
             if ($stateVersion === null || $source->generationRun->state_version !== $stateVersion) {
                 throw ValidationException::withMessages(['review' => 'Review 使用的故事状态版本已经过期，请先重新审校。']);
             }
 
-            $key = 'review:manual-override:'.$chapter->getKey().':'.$source->getKey().':'.hash('sha256', $validated['reason']);
+            $key = 'review:manual-length-exception:'.$chapter->getKey().':'.$source->getKey().':'.hash('sha256', $validated['reason']);
             $existing = GenerationRun::query()->where('idempotency_key', $key)->with('review')->first();
             if ($existing?->review !== null) {
                 return $existing->review;
@@ -69,12 +85,15 @@ class OverrideChapterReviewAction
                 'idempotency_key' => $key,
                 'input_hash' => hash('sha256', $key),
                 'state_version' => $stateVersion,
-                'prompt_version' => 'manual-override-v1',
+                'prompt_version' => 'manual-length-exception-v1',
                 'model_policy' => 'manual',
                 'context_snapshot' => [
-                    'manual_override' => true,
+                    'manual_length_exception' => true,
                     'source_review_id' => $source->getKey(),
                     'source_artifact_id' => $draft->getKey(),
+                    'target_words' => $target,
+                    'actual_words' => $actual,
+                    'maximum_words' => $maximum,
                     'reason' => $validated['reason'],
                     'actor_id' => $actorId,
                 ],
@@ -94,12 +113,14 @@ class OverrideChapterReviewAction
                     'pacing' => (float) $source->pacing_score,
                     'style' => (float) $source->style_score,
                 ],
-                'findings' => [],
+                'findings' => $source->findings,
                 'source_artifact_id' => $draft->getKey(),
-                'manual_override' => true,
-                'manual_override_reason' => $validated['reason'],
+                'manual_length_exception' => true,
+                'manual_length_exception_reason' => $validated['reason'],
+                'target_words' => $target,
+                'actual_words' => $actual,
+                'maximum_words' => $maximum,
                 'source_review_id' => $source->getKey(),
-                'overridden_findings' => $source->findings,
                 'actor_id' => $actorId,
             ];
             $encoded = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -121,15 +142,17 @@ class OverrideChapterReviewAction
                 'repetition_score' => $source->repetition_score,
                 'pacing_score' => $source->pacing_score,
                 'style_score' => $source->style_score,
-                'findings' => [],
+                'findings' => $source->findings,
             ]);
             $chapter->update(['status' => ChapterStatus::Review]);
 
-            Log::warning('章节审校已人工 Override 为通过。', [
+            Log::warning('章节超限版本已由人工明确接受。', [
                 'chapter_id' => $chapter->getKey(),
                 'source_review_id' => $source->getKey(),
                 'review_id' => $review->getKey(),
                 'artifact_id' => $artifact->getKey(),
+                'actual_words' => $actual,
+                'maximum_words' => $maximum,
                 'reason' => $validated['reason'],
                 'actor_id' => $actorId,
             ]);

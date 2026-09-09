@@ -101,7 +101,30 @@ test('story event candidate schema supports strict output and restores a JSON pa
     $candidate = StoryEventCandidate::fromArray($event);
 
     expect(data_get(StoryEventCandidate::schema(), 'properties.payload.type'))->toBe('string')
+        ->and(data_get(StoryEventCandidate::schema(), 'properties.subject_type.enum'))->toContain('world_entity', null)
+        ->and(data_get(StoryEventCandidate::schema(), 'properties.subject_type.enum'))->not->toContain('concept')
         ->and($candidate->payload)->toBe(['from' => '长安', 'to' => '洛阳']);
+});
+
+test('story event candidate rejects world entity subtypes with an actionable message', function () {
+    $fixture = eventExtractionFixture();
+    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event['event_type'] = EventType::WorldRuleRevealed->value;
+    $event['subject_type'] = 'concept';
+
+    expect(fn () => StoryEventCandidate::fromArray($event))
+        ->toThrow(ValidationException::class, 'subject_type [concept] 不在允许范围内')
+        ->and(fn () => StoryEventCandidate::fromArray($event))
+        ->toThrow(ValidationException::class, '必须使用 world_entity');
+});
+
+test('story event candidate rejects an event and subject type mismatch', function () {
+    $fixture = eventExtractionFixture();
+    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event['event_type'] = EventType::ForeshadowingReinforced->value;
+
+    expect(fn () => StoryEventCandidate::fromArray($event))
+        ->toThrow(ValidationException::class, 'event_type [foreshadowing_reinforced] 要求 subject_type 为 [foreshadowing]，实际为 [character]');
 });
 
 test('extractor creates a candidate artifact without changing canonical story state', function () {
@@ -117,9 +140,13 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v2')
+        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v4')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('内部 type（例如 concept、rule、location、faction）不能作为 subject_type')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_* 事件必须引用对应的 foreshadowing ID')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('没有有效主体时必须省略该事件')
+        ->and(data_get($run->context_snapshot, 'event_subject_type_rules.promise_made'))->toBe(['relationship'])
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
 });
@@ -206,6 +233,26 @@ test('invalid event evidence is rejected before artifact persistence', function 
 
     expect(GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->count())->toBe(0)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->status)->toBe(RunStatus::Failed);
+});
+
+test('extractor records the candidate index and invalid value for validation failures', function () {
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
+        'event_type' => EventType::WorldRuleRevealed->value,
+        'subject_type' => 'concept',
+    ]));
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '第 1 个事件字段 subject_type：subject_type [concept] 不在允许范围内');
+
+    $run = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole();
+
+    expect($run->status)->toBe(RunStatus::Failed)
+        ->and($run->error_code)->toBe('event_validation_failed')
+        ->and($run->error_message)->toContain('第 1 个事件字段 subject_type')
+        ->and($run->error_message)->toContain('subject_type [concept]')
+        ->and(GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->count())->toBe(0);
 });
 
 test('retryable provider failure is recorded and retried from event extraction', function () {

@@ -50,6 +50,7 @@ final class ChapterPlanPayload
                             'pov_character_id',
                             'location',
                             'time_anchor',
+                            'transition_from_previous',
                         ],
                         'properties' => [
                             'goal' => ['type' => 'string'],
@@ -59,6 +60,7 @@ final class ChapterPlanPayload
                             'pov_character_id' => ['type' => ['integer', 'null']],
                             'location' => ['type' => ['string', 'null']],
                             'time_anchor' => ['type' => ['string', 'null']],
+                            'transition_from_previous' => ['type' => ['string', 'null']],
                         ],
                     ],
                 ],
@@ -108,6 +110,7 @@ final class ChapterPlanPayload
             'scene_plans.*.pov_character_id' => ['nullable', 'integer'],
             'scene_plans.*.location' => ['nullable', 'string'],
             'scene_plans.*.time_anchor' => ['nullable', 'string'],
+            'scene_plans.*.transition_from_previous' => ['nullable', 'string'],
         ])->validate();
     }
 }

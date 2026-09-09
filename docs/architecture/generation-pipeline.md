@@ -165,6 +165,7 @@ Active Arcs
 Current Story State
 Due Foreshadowings
 Recent Summaries
+Previous Canonical Chapter Ending
 Ending Contract
 Closure Debt（completing 时）
 ```
@@ -194,9 +195,11 @@ due_foreshadowings
 scene_plans
 ```
 
+`scene_plans[*].transition_from_previous` 明确记录衔接安排。存在上一章正式版本时，第一场景必须说明如何承接上一章结尾；发生时间、地点或行动跳跃时，正文必须呈现必要的抵达、安置或时间流逝过程，不能直接从上一章行动跳到次日新地点。
+
 小说级 `Style Profile` 由主文风 Preset、最多两种辅助文风、语言时代感、故事节奏、叙事视角及六项可选参数组成。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
 
-字数控制使用统一的多字节字符计数。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；最后一个待生成 Scene 负责将场景总量补足至章节下限，若不足最多进行一次受控重新生成。Chapter Draft 的可接受范围默认为目标字数的 85%～115%。最终审校由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而 PASS。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene、Assembler 和 Rewrite 输出超出当前上下限时最多进行一次定向扩写或压缩，修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
 
 Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
 
@@ -240,6 +243,8 @@ MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_stat
 
 输入 Scene Plan、Chapter Plan、Canonical State、Temporary State、Context Snapshot、Previous Scene Tail；输出 `scene_draft`。
 
+第一场景同时读取 `previous_chapter_ending` 和 `transition_from_previous`，保证正文实际写出跨章衔接。
+
 建议 Envelope：
 
 ```json
@@ -282,6 +287,8 @@ assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
 
 `ExtractStoryEventsJob` 输入 Chapter Draft、Plan、Current State、Locked Facts；输出 `event_candidate`。
 
+`subject_type` 必须同时通过 Provider JSON Schema 和 Laravel 业务校验。`current_state.world.entities` 中的实体统一引用为 `world_entity`，不得把实体内部的 `concept`、`rule`、`location` 或 `faction` 分类直接作为 `subject_type`。Laravel 还必须校验事件类型与主体类型匹配，例如 `foreshadowing_*` 只能引用 `foreshadowing`。校验失败信息必须包含候选事件序号、字段、错误值和允许值。
+
 幂等键：
 
 ```text
@@ -289,6 +296,8 @@ events:{draft_checksum}:{state_version}:{prompt_version}
 ```
 
 之后 Laravel `StatePatchBuilder` 确定性生成 `state_patch` Artifact；`StateValidator` 校验 Current State、Candidates、Patch、Locked Facts、Plan Overrides。Hard Conflict 必须阻止 PASS。
+
+人工重新提取事件也必须继续执行 State Patch 和 Review。Review 开始前若缺少当前草稿对应的 Event Candidate 或 State Patch，流程以 `review_prerequisite_missing` 终止，不调用模型，也不创建错误的 BLOCK Review。历史上由缺失补丁造成的 BLOCK 在章节工作台提供“补建状态补丁并重新审校”恢复入口，原 Review 保持不可变。
 
 ## 12. ReviewChapterJob
 
@@ -303,7 +312,10 @@ Plot Progress
 Repetition
 Pacing
 Style
+Previous Canonical Chapter Ending
 ```
+
+连续性维度必须比较上一章正式结尾与本章开头，对未交代的时间、地点或行动跳跃给出可执行 Finding。
 
 输出 `reviews` + `review_result`。
 
@@ -325,6 +337,8 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 ## 13. RewriteChapterJob
 
 输入 Source Artifact、Review Findings、Plan、Current State、Locked Facts；输出 `rewrite_draft`。
+
+重写跨章连续性问题时同时输入 `previous_chapter_ending`，使模型能依据真实上一章结尾补写过渡，而不是只依赖 Finding 的概述。
 
 Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
 
@@ -535,12 +549,12 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v3
-scene-writer-v6
-assembler-v4
-event-extractor-v2
-reviewer-v3
-rewrite-v3
+chapter-planner-v4
+scene-writer-v8
+assembler-v6
+event-extractor-v4
+reviewer-v4
+rewrite-v5
 summary-v1
 ```
 

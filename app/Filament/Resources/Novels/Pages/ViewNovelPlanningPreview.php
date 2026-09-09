@@ -135,6 +135,10 @@ class ViewNovelPlanningPreview extends ViewRecord
                             TextEntry::make('time_anchor')
                                 ->label('时间锚点')
                                 ->placeholder('继承章节计划'),
+                            TextEntry::make('transition_from_previous')
+                                ->label('衔接安排')
+                                ->placeholder('未指定')
+                                ->columnSpanFull(),
                             TextEntry::make('goal')->label('目标'),
                             TextEntry::make('conflict')->label('冲突'),
                             TextEntry::make('turn')->label('转折'),
@@ -221,6 +225,7 @@ class ViewNovelPlanningPreview extends ViewRecord
                 'pov' => $characterNames->get($scene['pov_character_id'] ?? $plan->pov_character_id),
                 'location' => $scene['location'] ?? null,
                 'time_anchor' => $scene['time_anchor'] ?? $plan->time_anchor,
+                'transition_from_previous' => $scene['transition_from_previous'] ?? null,
                 'goal' => $scene['goal'] ?? null,
                 'conflict' => $scene['conflict'] ?? null,
                 'turn' => $scene['turn'] ?? null,

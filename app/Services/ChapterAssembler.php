@@ -31,6 +31,7 @@ class ChapterAssembler
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
         private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly PreviousChapterEnding $previousChapterEnding,
     ) {}
 
     public function assemble(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -74,7 +75,7 @@ class ChapterAssembler
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文，遵守指定文风。必须保留各场景中有效的动作、对话、环境和人物反应，不得把正文压缩成摘要。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不要超过 chapter_maximum_words。可以补足场景衔接和既定情节的表现细节，但不得用无意义重复凑字，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，只返回完整章节正文。',
+                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文，遵守指定文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折和结果；对重复动作、重复解释和重复感受应主动合并。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，只返回完整章节正文。',
                 prompt: '请组装以下场景并只返回完整的简体中文章节正文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.3,
                 maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
@@ -91,6 +92,20 @@ class ChapterAssembler
             if ($content === '') {
                 throw new AiProviderException('assembly_empty_draft', 'Chapter Assembly 返回了空正文。', false);
             }
+
+            $content = $this->repairLengthIfNeeded(
+                content: $content,
+                context: $context,
+                model: $settings->model,
+                promptVersion: $promptVersion,
+                metadata: [
+                    'generation_run_id' => $run->getKey(),
+                    'novel_id' => $chapter->novel_id,
+                    'chapter_id' => $chapter->getKey(),
+                    'stage' => AiStage::Assembler->value,
+                ],
+            );
+            $this->validateLength($content, $context['writing_constraints']);
 
             return $this->complete(
                 $run,
@@ -150,8 +165,9 @@ class ChapterAssembler
             'state_version' => $stateVersion,
             'chapter_plan' => $chapter->latestPlan->only([
                 'id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'tone', 'hook_type',
-                'must_reveal', 'may_hint', 'must_not_reveal', 'forbidden_conflicts',
+                'must_reveal', 'may_hint', 'must_not_reveal', 'forbidden_conflicts', 'scene_plans',
             ]),
+            'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
             'style_constraints' => $chapter->novel->currentBible?->only(['tone', 'pov', 'tense', 'taboos', 'hard_constraints']) ?? [],
             'writing_constraints' => [
                 'chapter_target_words' => $targetWords,
@@ -260,6 +276,68 @@ class ChapterAssembler
 
             return $artifact;
         });
+    }
+
+    /** @param array<string, mixed> $context
+     * @param  array<string, mixed>  $metadata
+     */
+    private function repairLengthIfNeeded(string $content, array $context, string $model, string $promptVersion, array $metadata): string
+    {
+        $constraints = $context['writing_constraints'];
+
+        for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
+            $actual = $this->lengthPolicy->count($content);
+            $minimum = (int) $constraints['chapter_minimum_words'];
+            $maximum = (int) $constraints['chapter_maximum_words'];
+            $tooShort = $actual < $minimum;
+            $tooLong = $actual > $maximum;
+
+            if (! $tooShort && ! $tooLong) {
+                break;
+            }
+
+            $response = $this->provider->generate(new AiRequest(
+                model: $model,
+                systemPrompt: $tooLong
+                    ? '你是 XNovel 章节压缩器。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
+                    : '你是 XNovel 章节扩写器。将过短草稿扩写为完整章节，保留计划和既定事实，通过既定场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
+                prompt: ($tooLong ? '请压缩以下超限章节：' : '请扩写以下过短章节：').json_encode([
+                    'chapter_plan' => $context['chapter_plan'],
+                    'writing_constraints' => $constraints,
+                    'current_words' => $actual,
+                    'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
+                    'repair_attempt' => $attempt,
+                    'content' => $content,
+                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                temperature: 0.2,
+                maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
+                promptVersion: $promptVersion,
+                metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
+            ));
+            $content = trim($response->content);
+
+            if ($content === '') {
+                throw new AiProviderException('assembly_empty_draft', 'Chapter Assembly 字数修复返回了空正文。', false);
+            }
+        }
+
+        return $content;
+    }
+
+    /** @param array<string, mixed> $constraints */
+    private function validateLength(string $content, array $constraints): void
+    {
+        $actual = $this->lengthPolicy->count($content);
+        $minimum = (int) $constraints['chapter_minimum_words'];
+        $maximum = (int) $constraints['chapter_maximum_words'];
+
+        if ($actual < $minimum || $actual > $maximum) {
+            throw new AiProviderException(
+                'assembly_length_out_of_range',
+                "章节组装稿 {$actual} 字，必须控制在 {$minimum}～{$maximum} 字。",
+                false,
+            );
+        }
     }
 
     private function failRun(GenerationRun $run, Throwable $exception): void

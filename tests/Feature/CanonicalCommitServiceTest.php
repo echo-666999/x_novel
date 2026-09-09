@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
@@ -18,6 +19,7 @@ use App\Jobs\CommitChapterJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
@@ -42,12 +44,17 @@ use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    Queue::fake([UpdateMemoryJob::class]);
+});
+
 /** @return array<string, mixed> */
 function canonicalCommitFixture(array $patchOverrides = [], ReviewDecision $decision = ReviewDecision::Pass): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     $state = app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1, 'status' => ChapterStatus::Review]);
+    ChapterPlan::factory()->for($chapter)->create(['target_words' => 20]);
     $draftRun = GenerationRun::factory()->create([
         'novel_id' => $novel->getKey(), 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter',
         'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded,
@@ -345,6 +352,74 @@ test('canonical commit requires a pass review', function () {
 
     expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
         ->toThrow(ValidationException::class, 'PASS Review');
+});
+
+test('canonical commit rejects a draft below the strict chapter minimum', function () {
+    $fixture = canonicalCommitFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
+        ->toThrow(ValidationException::class, '少于严格下限 85 字');
+
+    expect($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and(StoryEvent::query()->count())->toBe(0);
+});
+
+test('canonical commit rejects an overlength draft without an explicit recorded exception', function () {
+    $fixture = canonicalCommitFixture();
+    $content = $fixture['draft']->content.str_repeat('补', 6);
+    $checksum = hash('sha256', $content);
+    DB::table('generation_artifacts')->where('id', $fixture['draft']->getKey())->update([
+        'content' => $content,
+        'checksum' => $checksum,
+    ]);
+    $data = new CanonicalCommitData(
+        $fixture['chapter']->getKey(), $fixture['draft']->getKey(), $fixture['review']->getKey(),
+        $fixture['candidate']->getKey(), $fixture['patch']->getKey(), 0, $checksum,
+    );
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($data))
+        ->toThrow(ValidationException::class, '超过严格上限 23 字');
+
+    expect($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and(StoryEvent::query()->count())->toBe(0);
+});
+
+test('canonical commit accepts an overlength draft only with its matching recorded exception', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture();
+    $content = $fixture['draft']->content.str_repeat('补', 6);
+    $checksum = hash('sha256', $content);
+    DB::table('generation_artifacts')->where('id', $fixture['draft']->getKey())->update([
+        'content' => $content,
+        'checksum' => $checksum,
+    ]);
+    $finding = [
+        'code' => 'CHAPTER_LENGTH_TOO_LONG',
+        'severity' => 'warning',
+        'message' => '章节超过严格字数上限。',
+    ];
+    $fixture['review']->update([
+        'decision' => ReviewDecision::NeedsAttention,
+        'findings' => [$finding],
+    ]);
+    $accepted = app(AcceptOverlengthChapterAction::class)->execute(
+        $fixture['chapter'],
+        '该剧情节点不可拆分。',
+        7,
+    );
+    $data = new CanonicalCommitData(
+        $fixture['chapter']->getKey(), $fixture['draft']->getKey(), $accepted->getKey(),
+        $fixture['candidate']->getKey(), $fixture['patch']->getKey(), 0, $checksum,
+    );
+
+    app(CanonicalCommitService::class)->commit($data);
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
+        ->and($fixture['chapter']->fresh()->word_count)->toBe(24)
+        ->and($accepted->fresh()->findings)->toContainEqual($finding)
+        ->and(data_get($accepted->artifact->data, 'manual_length_exception'))->toBeTrue()
+        ->and(StoryEvent::query()->count())->toBe(1);
 });
 
 test('a paused novel cannot create a new canonical commit', function () {

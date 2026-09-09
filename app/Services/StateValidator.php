@@ -41,6 +41,11 @@ class StateValidator
             return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', 'State Patch 引用的 Event Candidate Artifact 不存在。')]);
         }
 
+        $latestDraft = $this->latestDraft($chapter);
+        if ($latestDraft !== null && (int) data_get($candidateArtifact->data, 'source_artifact_id') !== $latestDraft->getKey()) {
+            return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', 'State Patch 对应的事件候选不是从当前最新章节草稿提取的。')]);
+        }
+
         $stateVersion = $chapter->novel->canonicalStateVersion;
         $findings = [];
 
@@ -86,6 +91,15 @@ class StateValidator
         }
 
         return array_map(fn (array $event): StoryEventCandidate => StoryEventCandidate::fromArray($event), $events);
+    }
+
+    private function latestDraft(Chapter $chapter): ?GenerationArtifact
+    {
+        return GenerationArtifact::query()
+            ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey())->whereNull('scene_id'))
+            ->latest('id')
+            ->first();
     }
 
     private function patch(GenerationArtifact $artifact): StatePatch

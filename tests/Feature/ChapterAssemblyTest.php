@@ -38,6 +38,7 @@ function chapterAssemblyFixture(int $sceneCount = 2): array
     ChapterPlan::factory()->for($chapter)->create([
         'tone' => '紧张',
         'scene_plans' => [],
+        'target_words' => 7,
     ]);
     $scenes = collect(range(1, $sceneCount))->map(function (int $sequence) use ($chapter, $novel): Scene {
         $scene = Scene::factory()->for($chapter)->create([
@@ -78,6 +79,7 @@ function assemblyResponse(string $content = '完整章节正文'): AiResponse
 
 test('assembler combines multiple scene drafts in sequence into a chapter draft', function () {
     $fixture = chapterAssemblyFixture(3);
+    $fixture['chapter']->latestPlan->update(['target_words' => 12]);
     $fake = (new FakeAiProvider)->enqueue(assemblyResponse('第一幕。第二幕。第三幕。'));
     app()->instance(AiProvider::class, $fake);
 
@@ -92,10 +94,11 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->context_snapshot['ordered_scene_checksums'])->toHaveCount(3)
         ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
-        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'))->toBe(2550)
-        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_maximum_words'))->toBe(3450)
+        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'))->toBe(11)
+        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_maximum_words'))->toBe(14)
         ->and($artifact->data['word_count'])->toBe(mb_strlen('第一幕。第二幕。第三幕。'))
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得把正文压缩成摘要')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('previous_chapter_ending')
         ->and(mb_strpos($prompt, 'Scene 1 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 2 正文'))
         ->and(mb_strpos($prompt, 'Scene 2 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 3 正文'));
 });
@@ -173,6 +176,39 @@ test('retryable assembly failures are recorded and retry from assembly only', fu
         ->and($fixture['scenes']->every(fn (Scene $scene): bool => $scene->fresh()->status === SceneStatus::Draft))->toBeTrue();
 });
 
+test('an overlength assembly is compressed once before it becomes a chapter draft', function () {
+    $fixture = chapterAssemblyFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(assemblyResponse(str_repeat('超', 120)))
+        ->enqueue(assemblyResponse(str_repeat('改', 100)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('改', 100))
+        ->and($artifact->data['word_count'])->toBe(100)
+        ->and($artifact->data['maximum_words'])->toBe(115)
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->systemPrompt)->toContain('章节压缩器');
+});
+
+test('an assembly that remains overlength after compression is never persisted', function () {
+    $fixture = chapterAssemblyFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(assemblyResponse(str_repeat('超', 120)))
+        ->enqueue(assemblyResponse(str_repeat('仍', 116)));
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '必须控制在 85～115 字');
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(0)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::ChapterAssembly)->sole()->status)->toBe(RunStatus::Failed)
+        ->and($fake->requests())->toHaveCount(2);
+});
+
 test('a stale assembly run is marked interrupted before recovery', function () {
     $fixture = chapterAssemblyFixture();
     $stale = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
@@ -209,7 +245,8 @@ test('state version changes during assembly prevent draft persistence', function
 
         public function generate(AiRequest $request): AiResponse
         {
-            $version = StoryStateVersion::factory()->for($this->novel)->create(['version' => 1]);
+            $nextVersion = (int) $this->novel->storyStateVersions()->max('version') + 1;
+            $version = StoryStateVersion::factory()->for($this->novel)->create(['version' => $nextVersion]);
             $this->novel->update(['canonical_state_version_id' => $version->getKey()]);
 
             return assemblyResponse();

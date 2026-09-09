@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Story\InitializeNovelStateAction;
@@ -17,6 +18,7 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Review;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
@@ -138,4 +140,57 @@ test('manual review override cannot bypass a hard conflict', function () {
     ))->toThrow(ValidationException::class, '存在硬冲突');
 
     expect(Review::query()->count())->toBe(1);
+});
+
+test('ordinary manual override cannot clear a chapter length finding', function () {
+    $fixture = manualReviewFixture([[
+        'code' => 'CHAPTER_LENGTH_TOO_LONG',
+        'severity' => 'warning',
+        'message' => '章节超过严格字数上限。',
+    ]]);
+
+    expect(fn () => app(OverrideChapterReviewAction::class)->execute(
+        $fixture['chapter'],
+        '仍然想用普通 Override。',
+    ))->toThrow(ValidationException::class, '字数问题不能通过普通 Override 清除');
+
+    expect(Review::query()->count())->toBe(1);
+});
+
+test('accepting an overlength chapter records a distinct exception and preserves the finding', function () {
+    $finding = [
+        'code' => 'CHAPTER_LENGTH_TOO_LONG',
+        'severity' => 'warning',
+        'message' => '章节超过严格字数上限。',
+    ];
+    $fixture = manualReviewFixture([$finding]);
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $content = str_repeat('超', 120);
+    DB::table('generation_artifacts')->where('id', $fixture['draft']->getKey())->update([
+        'content' => $content,
+        'checksum' => hash('sha256', $content),
+    ]);
+
+    $review = app(AcceptOverlengthChapterAction::class)->execute(
+        $fixture['chapter'],
+        '剧情节点不可拆分，明确接受本章超限。',
+        7,
+    );
+    $sameReview = app(AcceptOverlengthChapterAction::class)->execute(
+        $fixture['chapter'],
+        '剧情节点不可拆分，明确接受本章超限。',
+        7,
+    );
+
+    expect($review->decision)->toBe(ReviewDecision::Pass)
+        ->and($sameReview->is($review))->toBeTrue()
+        ->and($review->findings)->toContainEqual($finding)
+        ->and(data_get($review->artifact->data, 'manual_length_exception'))->toBeTrue()
+        ->and(data_get($review->artifact->data, 'manual_length_exception_reason'))->toBe('剧情节点不可拆分，明确接受本章超限。')
+        ->and(data_get($review->artifact->data, 'actual_words'))->toBe(120)
+        ->and(data_get($review->artifact->data, 'maximum_words'))->toBe(115)
+        ->and(data_get($review->artifact->data, 'findings'))->toContainEqual($finding)
+        ->and($review->generationRun->prompt_version)->toBe('manual-length-exception-v1')
+        ->and($fixture['review']->fresh()->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(Review::query()->count())->toBe(2);
 });

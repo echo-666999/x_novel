@@ -33,6 +33,7 @@ class CanonicalCommitService
         private readonly StoryStateService $storyState,
         private readonly CheckNextAction $checkNextAction,
         private readonly EmergencyStopService $emergencyStop,
+        private readonly DraftLengthPolicy $lengthPolicy,
     ) {}
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
@@ -55,6 +56,7 @@ class CanonicalCommitService
             }
 
             [$artifact, $review, $candidateArtifact, $patchArtifact] = $this->loadFrozenInputs($chapter, $data);
+            $this->validateDraftLength($chapter, $artifact, $review);
             $this->stateValidator->validate($chapter->getKey())->assertCanCommit();
             $events = $this->eventCandidates($candidateArtifact);
             $nextVersion = ((int) $novel->storyStateVersions()->max('version')) + 1;
@@ -77,7 +79,7 @@ class CanonicalCommitService
             $chapter->update([
                 'status' => ChapterStatus::Canonical,
                 'canonical_artifact_id' => $artifact->getKey(),
-                'word_count' => mb_strlen($artifact->content ?? ''),
+                'word_count' => $this->lengthPolicy->count($artifact->content),
             ]);
             $novel->update([
                 'canonical_state_version_id' => $stateVersion->getKey(),
@@ -151,6 +153,43 @@ class CanonicalCommitService
         }
 
         return [$artifact, $review, $candidate, $patch];
+    }
+
+    private function validateDraftLength(Chapter $chapter, GenerationArtifact $artifact, Review $review): void
+    {
+        $target = (int) $chapter->latestPlan?->target_words;
+        if ($target < 1) {
+            throw ValidationException::withMessages(['artifact' => 'Canonical Artifact 缺少有效的章节目标字数。']);
+        }
+
+        $actual = $this->lengthPolicy->count($artifact->content);
+        $minimum = $this->lengthPolicy->chapterMinimum($target);
+        $maximum = $this->lengthPolicy->chapterMaximum($target);
+
+        if ($actual < $minimum) {
+            throw ValidationException::withMessages(['artifact' => "Canonical Artifact 当前 {$actual} 字，少于严格下限 {$minimum} 字。"]);
+        }
+
+        if ($actual <= $maximum) {
+            return;
+        }
+
+        $reviewData = $review->artifact->data;
+        $hasRecordedException = data_get($reviewData, 'manual_length_exception') === true
+            && $review->generationRun->prompt_version === 'manual-length-exception-v1'
+            && $review->generationRun->model_policy === 'manual'
+            && data_get($review->generationRun->context_snapshot, 'manual_length_exception') === true
+            && (int) data_get($reviewData, 'source_artifact_id') === $artifact->getKey()
+            && (int) data_get($reviewData, 'actual_words') === $actual
+            && (int) data_get($reviewData, 'maximum_words') === $maximum
+            && filled(data_get($reviewData, 'manual_length_exception_reason'))
+            && collect(data_get($reviewData, 'findings', []))->contains(
+                fn (array $finding): bool => data_get($finding, 'code') === 'CHAPTER_LENGTH_TOO_LONG',
+            );
+
+        if (! $hasRecordedException) {
+            throw ValidationException::withMessages(['artifact' => "Canonical Artifact 当前 {$actual} 字，超过严格上限 {$maximum} 字；必须先压缩正文或明确执行“接受超限版本”。"]);
+        }
     }
 
     /** @return array<int, StoryEventCandidate> */

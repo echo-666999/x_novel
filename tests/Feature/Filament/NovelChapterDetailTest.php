@@ -13,6 +13,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -74,8 +75,8 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
             '场景',
             '草稿',
             '事件',
-            '审校',
             '状态变化',
+            '审校',
             '正式版本',
             '运行记录',
         ])
@@ -339,6 +340,47 @@ test('needs attention review exposes manual edit and override actions instead of
         ->assertOk()
         ->assertSee('人工修改正文')
         ->assertSee('人工通过（Override）')
+        ->assertDontSee('强制重新审校');
+});
+
+test('an overlength review exposes the dedicated acceptance action instead of ordinary override', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
+    ChapterPlan::factory()->for($chapter)->create(['target_words' => 100]);
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Rewrite,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => str_repeat('超', 120),
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => ['source_artifact_id' => $draft->getKey()],
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::NeedsAttention,
+        'findings' => [[
+            'code' => 'CHAPTER_LENGTH_TOO_LONG',
+            'severity' => 'warning',
+            'message' => '章节 120 字，超过严格上限 115 字。',
+        ]],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('人工修改正文')
+        ->assertSee('接受超限版本')
+        ->assertDontSee('人工通过（Override）')
         ->assertDontSee('强制重新审校');
 });
 
@@ -657,7 +699,64 @@ test('events workspace shows candidates and can dispatch extraction', function (
         ->assertActionExists(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'))
         ->callAction(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'));
 
-    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $chapter->getKey() && $job->regenerate);
+    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $chapter->getKey()
+        && $job->regenerate
+        && $job->continueRewrite);
+});
+
+test('a false block caused by a missing state patch exposes one click recovery', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Blocked]);
+    ChapterPlan::factory()->for($chapter)->create();
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '当前章节草稿。',
+    ]);
+    $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $candidate = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => ['status' => 'candidate', 'source_artifact_id' => $draft->getKey(), 'events' => []],
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => ['source_artifact_id' => $draft->getKey()],
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::Block,
+        'findings' => [[
+            'code' => 'INVALID_STATE_PATCH',
+            'severity' => 'hard',
+            'message' => '本章尚未生成 State Patch。',
+        ]],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('本次 BLOCK 来自流程产物缺失')
+        ->assertActionExists(TestAction::make('recoverReviewPrerequisites')->schemaComponent('review-next-step', 'content'))
+        ->callAction(TestAction::make('recoverReviewPrerequisites')->schemaComponent('review-next-step', 'content'));
+
+    $patch = GenerationArtifact::query()->where('type', ArtifactType::StatePatch)->sole();
+    expect((int) data_get($patch->data, 'source_artifact_id'))->toBe($candidate->getKey())
+        ->and(Review::query()->count())->toBe(1);
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $chapter->getKey() && $job->regenerate);
 });
 
 test('state changes workspace builds and displays a candidate patch preview', function () {

@@ -4,6 +4,7 @@ use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
+use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Data\StateFinding;
 use App\Data\StateValidationResult;
@@ -74,6 +75,32 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($fake->requests()[0]->systemPrompt)->toContain('may_hint 是可选提示');
 });
 
+test('narrative review compares the opening with the previous canonical ending', function () {
+    $fixture = reviewFixture();
+    $fixture['chapter']->update(['sequence' => 2]);
+    $previous = Chapter::factory()->for($fixture['novel'])->create([
+        'sequence' => 1,
+        'status' => ChapterStatus::Canonical,
+    ]);
+    $previousRun = GenerationRun::factory()->for($fixture['novel'])->for($previous)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $previousDraft = GenerationArtifact::factory()->for($previousRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '两人正沿山路走向学院。',
+    ]);
+    $previous->update(['canonical_artifact_id' => $previousDraft->getKey()]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect(data_get($review->generationRun->context_snapshot, 'previous_chapter_ending.text'))->toBe('两人正沿山路走向学院。')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('本章开头');
+});
+
 test('deterministic length check forces a short chapter into rewrite', function () {
     $fixture = reviewFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 100]);
@@ -120,6 +147,22 @@ test('deterministic hard state finding overrides narrative score with block', fu
     expect($review->decision)->toBe(ReviewDecision::Block)
         ->and($review->findings[0]['code'])->toBe('LOCKED_FACT_CONFLICT')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked);
+});
+
+test('missing state patch stops review before an ai request and does not create a false block review', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([
+        new StateFinding('INVALID_STATE_PATCH', StateFindingSeverity::Hard, '本章尚未生成 State Patch。'),
+    ]));
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '请先补建状态补丁');
+
+    expect($fake->requests())->toHaveCount(0)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Review)->count())->toBe(0)
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
 test('low score requests rewrite and ambiguous model block requires attention', function (string $recommended, int $score, ReviewDecision $expected) {

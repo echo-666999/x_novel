@@ -2,7 +2,10 @@
 
 use App\Enums\ChapterStatus;
 use App\Enums\CharacterStatus;
+use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
+use App\Enums\ReviewDecision;
+use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
@@ -11,8 +14,11 @@ use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
+use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\Review;
 use App\Models\StoryStateVersion;
+use App\Models\UsageRecord;
 use App\Models\User;
 use App\Models\Volume;
 use App\Services\PlanValidator;
@@ -44,6 +50,38 @@ test('the chapter workspace lists only the current novels chapters', function ()
         'version' => 2,
         'chapter_id' => $canonical->getKey(),
     ]);
+    $olderReviewRun = GenerationRun::factory()->for($novel)->for($canonical)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $canonical->getKey(),
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    Review::factory()->for($olderReviewRun)->create([
+        'decision' => ReviewDecision::Rewrite,
+        'score' => 72,
+    ]);
+    $latestReviewRun = GenerationRun::factory()->for($novel)->for($canonical)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $canonical->getKey(),
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    Review::factory()->for($latestReviewRun)->create([
+        'decision' => ReviewDecision::Pass,
+        'score' => 91,
+    ]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $olderReviewRun->getKey(),
+        'novel_id' => $novel->getKey(),
+        'chapter_id' => $canonical->getKey(),
+        'estimated_cost' => 0.012345,
+    ]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $latestReviewRun->getKey(),
+        'novel_id' => $novel->getKey(),
+        'chapter_id' => $canonical->getKey(),
+        'estimated_cost' => 0.000655,
+    ]);
     $otherChapter = Chapter::factory()->create(['title' => '不应出现']);
 
     Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
@@ -56,7 +94,11 @@ test('the chapter workspace lists only the current novels chapters', function ()
         ->assertSee('已规划')
         ->assertSee('正式章节')
         ->assertSee('3,200')
-        ->assertSee('尚未接入')
+        ->assertSee('未审校')
+        ->assertSee('通过')
+        ->assertDontSee('需要重写')
+        ->assertSee('USD 0.0130')
+        ->assertDontSee('尚未接入')
         ->assertSee('v2')
         ->assertActionExists('create');
 });

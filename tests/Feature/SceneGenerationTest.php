@@ -84,6 +84,10 @@ test('scene allocation shares the chapter word budget across remaining scenes', 
         ->and($policy->sceneAllocation(3000, 300, 1)['required_scene_words'])->toBe(2250);
 });
 
+test('draft length excludes spaces tabs and line breaks', function () {
+    expect(app(DraftLengthPolicy::class)->count("甲 \n\t 乙\r\n丙"))->toBe(3);
+});
+
 test('scene draft schema keeps dynamic objects compatible with strict structured output', function () {
     $schema = SceneDraftPayload::schema();
 
@@ -107,6 +111,12 @@ test('scene draft schema keeps dynamic objects compatible with strict structured
 
 test('scene generator persists an immutable draft artifact and temporary state delta', function () {
     $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update([
+        'target_words' => 11,
+        'scene_plans' => [[
+            'transition_from_previous' => '先写抵达学院和入住过程，再进入次日清晨。',
+        ]],
+    ]);
     $fixture['novel']->update(['settings' => ['editorial' => ['primary_style' => 'light_humorous', 'secondary_styles' => [], 'style_parameters' => []]]]);
     $fake = (new FakeAiProvider)->enqueue(sceneResponse('雨幕中，林舟推开了门。', [
         'characters' => ['lin_zhou' => ['location' => '灯塔']],
@@ -121,15 +131,17 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($artifact->content)->toBe('雨幕中，林舟推开了门。')
         ->and(data_get($artifact->data, 'temporary_state_delta.characters.lin_zhou.location'))->toBe('灯塔')
         ->and(data_get($artifact->data, 'word_count'))->toBe(11)
-        ->and(data_get($artifact->data, 'target_words'))->toBe(8)
+        ->and(data_get($artifact->data, 'target_words'))->toBe(11)
         ->and($scene->status)->toBe(SceneStatus::Draft)
         ->and($scene->current_artifact_id)->toBe($artifact->getKey())
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->stage)->toBe(GenerationStage::SceneGeneration)
         ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'scene_task', 'temporary_state']);
     expect(data_get($run->context_snapshot, 'writing_constraints.scene_target_words'))->toBe($fixture['plan']->target_words)
+        ->and(data_get($run->context_snapshot, 'scene_task.transition_from_previous'))->toBe('先写抵达学院和入住过程，再进入次日清晨。')
         ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.primary_style'))->toBe('轻松幽默')
-        ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.instructions.0'))->toContain('情境幽默');
+        ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.instructions.0'))->toContain('情境幽默')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日');
 });
 
 test('a final scene budget shortfall is expanded once before the chapter is blocked', function () {
@@ -167,6 +179,40 @@ test('a successful length expansion becomes the scene draft', function () {
         ->and($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->prompt)->toContain('终局真相');
+});
+
+test('an overlength scene is compressed once before it becomes the current draft', function () {
+    $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('超', 120)))
+        ->enqueue(sceneResponse(str_repeat('改', 100)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('改', 100))
+        ->and($artifact->data['word_count'])->toBe(100)
+        ->and($fixture['scenes']->first()->fresh()->current_artifact_id)->toBe($artifact->getKey())
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->systemPrompt)->toContain('场景压缩器');
+});
+
+test('an overlength scene is rejected when compression still exceeds the hard maximum', function () {
+    $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('超', 120)))
+        ->enqueue(sceneResponse(str_repeat('仍', 116)));
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey()))
+        ->toThrow(AiProviderException::class, '最多允许 115 字');
+
+    expect($fixture['scenes']->first()->fresh()->current_artifact_id)->toBeNull()
+        ->and($fixture['scenes']->first()->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
+        ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts')->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(2);
 });
 
 test('cascade generation shifts an early scene shortfall to the next scene', function () {
@@ -256,7 +302,7 @@ test('the next scene receives previous temporary state and scene tail', function
     $fixture = sceneGenerationFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse('第一幕结尾：门后传来钟声。', ['items' => ['key' => ['owner' => '林舟']]]))
-        ->enqueue(sceneResponse('第二幕开始。'));
+        ->enqueue(sceneResponse('第二幕。'));
     app()->instance(AiProvider::class, $fake);
     $generator = app(SceneGenerator::class);
 
@@ -270,6 +316,7 @@ test('the next scene receives previous temporary state and scene tail', function
 
 test('duplicate delivery reuses the successful scene artifact without another provider call', function () {
     $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 14]);
     $fake = (new FakeAiProvider)->enqueue(sceneResponse('唯一的 Scene Draft。'));
     app()->instance(AiProvider::class, $fake);
     $generator = app(SceneGenerator::class);
@@ -285,6 +332,7 @@ test('duplicate delivery reuses the successful scene artifact without another pr
 
 test('regenerating a scene preserves the previous artifact and returns the chapter to generation', function () {
     $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 11]);
     $scene = $fixture['scenes']->first();
     $previousRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->for($scene)->create([
         'stage' => GenerationStage::SceneGeneration,
@@ -351,6 +399,7 @@ test('a stale running scene is marked interrupted and resumed with a new run', f
 
 test('retryable provider failures are recorded and rethrown for queue retry', function () {
     $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 12]);
     $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', 'timeout', true));
     app()->instance(AiProvider::class, $fake);
     $job = new GenerateSceneJob($fixture['scenes']->first()->getKey());

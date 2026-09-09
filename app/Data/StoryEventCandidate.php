@@ -9,6 +9,21 @@ use Illuminate\Validation\ValidationException;
 
 final readonly class StoryEventCandidate
 {
+    public const SUBJECT_TYPES = [
+        'character',
+        'relationship',
+        'item',
+        'conflict',
+        'thread',
+        'reader_promise',
+        'foreshadowing',
+        'world',
+        'world_entity',
+        'location',
+        'faction',
+        'chapter',
+    ];
+
     /**
      * @param  array<string, mixed>  $payload
      * @param  array<int, array<string, mixed>>  $evidence
@@ -32,7 +47,11 @@ final readonly class StoryEventCandidate
             'required' => ['event_type', 'subject_type', 'subject_id', 'payload', 'evidence', 'story_time', 'confidence'],
             'properties' => [
                 'event_type' => ['type' => 'string', 'enum' => array_column(EventType::cases(), 'value')],
-                'subject_type' => ['type' => ['string', 'null']],
+                'subject_type' => [
+                    'type' => ['string', 'null'],
+                    'enum' => [...self::SUBJECT_TYPES, null],
+                    'description' => 'Use world_entity for every entity from current_state.world.entities, including entities whose internal type is concept, rule, location, or faction. Foreshadowing events must use foreshadowing.',
+                ],
                 'subject_id' => ['type' => ['string', 'integer', 'null']],
                 'payload' => [
                     'type' => 'string',
@@ -80,10 +99,7 @@ final readonly class StoryEventCandidate
 
         $validated = Validator::make($data, [
             'event_type' => ['required', 'string', Rule::enum(EventType::class)],
-            'subject_type' => ['present', 'nullable', 'string', Rule::in([
-                'character', 'relationship', 'item', 'conflict', 'thread', 'reader_promise',
-                'foreshadowing', 'world', 'world_entity', 'location', 'faction', 'chapter',
-            ])],
+            'subject_type' => ['present', 'nullable', 'string', Rule::in(self::SUBJECT_TYPES)],
             'subject_id' => ['present', 'nullable'],
             'payload' => ['present', 'array'],
             'evidence' => ['required', 'array', 'min:1'],
@@ -95,7 +111,21 @@ final readonly class StoryEventCandidate
             'evidence.*.end_offset' => ['present', 'nullable', 'integer', 'min:0'],
             'story_time' => ['present', 'nullable', 'string'],
             'confidence' => ['required', 'numeric', 'between:0,1'],
+        ], [
+            'event_type.enum' => 'event_type [:input] 不在允许范围内：'.implode(', ', array_column(EventType::cases(), 'value')).'。',
+            'subject_type.in' => 'subject_type [:input] 不在允许范围内：'.implode(', ', self::SUBJECT_TYPES).'。World Entity 的内部分类（例如 concept）必须使用 world_entity。',
         ])->validate();
+
+        $eventType = EventType::from($validated['event_type']);
+        $allowedSubjectTypes = $eventType->allowedSubjectTypes();
+
+        if ($validated['subject_type'] !== null
+            && $allowedSubjectTypes !== []
+            && ! in_array($validated['subject_type'], $allowedSubjectTypes, true)) {
+            throw ValidationException::withMessages([
+                'subject_type' => "event_type [{$eventType->value}] 要求 subject_type 为 [".implode(', ', $allowedSubjectTypes)."]，实际为 [{$validated['subject_type']}]。",
+            ]);
+        }
 
         foreach ($validated['evidence'] as $evidence) {
             if ($evidence['start_offset'] !== null && $evidence['end_offset'] !== null && $evidence['end_offset'] < $evidence['start_offset']) {
@@ -104,7 +134,7 @@ final readonly class StoryEventCandidate
         }
 
         return new self(
-            eventType: EventType::from($validated['event_type']),
+            eventType: $eventType,
             subjectType: $validated['subject_type'],
             subjectId: $validated['subject_id'] === null ? null : (string) $validated['subject_id'],
             payload: $validated['payload'],

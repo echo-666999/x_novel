@@ -24,6 +24,7 @@ class ContextBuilder
     public function __construct(
         private readonly TokenBudget $tokenBudget,
         private readonly MemoryRetriever $memoryRetriever,
+        private readonly PreviousChapterEnding $previousChapterEnding,
     ) {}
 
     public function buildForRun(GenerationRun $run, ContextRequest $request): ContextSnapshot
@@ -260,7 +261,7 @@ class ContextBuilder
             ->with('canonicalArtifact:id,content')
             ->get();
         $previous = $chapters->first();
-        $ending = $this->previousChapterEnding($previous);
+        $ending = $this->previousChapterEnding->from($previous);
         $selected = [];
         $truncated = false;
 
@@ -306,31 +307,6 @@ class ContextBuilder
             'previous_chapter_ending' => $ending,
             'story_events' => [],
             'story_events_status' => 'pending_task_070',
-        ];
-    }
-
-    /** @return array<string, mixed>|null */
-    private function previousChapterEnding(?Chapter $chapter): ?array
-    {
-        if ($chapter === null) {
-            return null;
-        }
-
-        $content = $chapter->canonicalArtifact?->content;
-        $source = filled($content) ? 'canonical_artifact' : 'chapter_summary';
-        $text = filled($content) ? $content : $chapter->summary;
-
-        if (blank($text)) {
-            return null;
-        }
-
-        $limit = max(100, (int) config('context.previous_chapter_ending_characters', 1_000));
-
-        return [
-            'chapter_id' => $chapter->getKey(),
-            'sequence' => $chapter->sequence,
-            'source' => $source,
-            'text' => mb_substr((string) $text, -$limit),
         ];
     }
 }

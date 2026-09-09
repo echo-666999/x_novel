@@ -66,6 +66,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
             'pov_character_id' => $characterId,
             'location' => '旧港',
             'time_anchor' => '黄昏',
+            'transition_from_previous' => null,
         ]],
         ...$overrides,
     ];
@@ -116,7 +117,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v3')
+        ->and($run->prompt_version)->toBe('chapter-planner-v4')
         ->and($run->artifacts()->sole()->type)->toBe(ArtifactType::ChapterPlan)
         ->and($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->prompt)->toContain('冷峻克制')
@@ -144,6 +145,36 @@ test('the planner receives closing restrictions and closure debt in completing m
         ])
         ->and(data_get($snapshot, 'closure_debt.total'))->toBe(0)
         ->and(data_get($snapshot, 'closure_debt.critical'))->toBe(0);
+});
+
+test('the planner receives the previous canonical ending and requires a scene transition', function () {
+    [$chapter, $character] = plannerChapter();
+    $chapter->update(['sequence' => 2]);
+    $previous = Chapter::factory()->for($chapter->novel)->create([
+        'sequence' => 1,
+        'status' => ChapterStatus::Canonical,
+        'title' => '启程',
+    ]);
+    $previousRun = GenerationRun::factory()->for($chapter->novel)->for($previous)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $previousArtifact = GenerationArtifact::factory()->for($previousRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '林舟与苏离沿石阶向魔法学院走去。',
+    ]);
+    $previous->update(['canonical_artifact_id' => $previousArtifact->getKey()]);
+    $payload = plannerPayload($character->getKey());
+    $payload['scene_plans'][0]['transition_from_previous'] = '写出抵达学院、办理登记并入住，随后过渡到次日清晨。';
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    $snapshot = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->sole()->context_snapshot;
+    expect(data_get($snapshot, 'previous_chapter_ending.text'))->toBe('林舟与苏离沿石阶向魔法学院走去。')
+        ->and($fake->requests()[0]->prompt)->toContain('transition_from_previous')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得静默跳过');
 });
 
 test('duplicate delivery reuses the successful run and does not call the provider twice', function () {

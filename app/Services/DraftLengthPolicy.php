@@ -6,7 +6,9 @@ class DraftLengthPolicy
 {
     public function count(?string $content): int
     {
-        return mb_strlen(trim((string) $content));
+        $normalized = preg_replace('/\s+/u', '', (string) $content);
+
+        return mb_strlen($normalized ?? '');
     }
 
     /** @return array{chapter_target_words: int, chapter_minimum_words: int, chapter_maximum_words: int, allocated_scene_words: int, remaining_chapter_words: int, remaining_scene_count: int, scene_target_words: int, required_scene_words: int, maximum_scene_words: int} */
@@ -16,6 +18,8 @@ class DraftLengthPolicy
         $remainingChapterWords = max(0, $chapterTarget - $allocatedWords);
         $isFinalScene = $remainingSceneCount === 1;
 
+        $sceneTargetWords = max(1, (int) ceil($remainingChapterWords / $remainingSceneCount));
+
         return [
             'chapter_target_words' => $chapterTarget,
             'chapter_minimum_words' => $this->chapterMinimum($chapterTarget),
@@ -23,11 +27,14 @@ class DraftLengthPolicy
             'allocated_scene_words' => $allocatedWords,
             'remaining_chapter_words' => $remainingChapterWords,
             'remaining_scene_count' => $remainingSceneCount,
-            'scene_target_words' => max(1, (int) ceil($remainingChapterWords / $remainingSceneCount)),
+            'scene_target_words' => $sceneTargetWords,
             'required_scene_words' => $isFinalScene
                 ? max(0, $this->chapterMinimum($chapterTarget) - $allocatedWords)
                 : 0,
-            'maximum_scene_words' => max(1, $this->chapterMaximum($chapterTarget) - $allocatedWords),
+            'maximum_scene_words' => max(
+                1,
+                $this->chapterMaximum($chapterTarget) - $allocatedWords,
+            ),
         ];
     }
 

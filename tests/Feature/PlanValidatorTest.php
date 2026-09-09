@@ -11,6 +11,7 @@ use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
+use App\Models\Novel;
 use App\Services\PlanValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -78,6 +79,38 @@ test('an inactive pov produces a warning without blocking generation', function 
     expect($result->status())->toBe(PlanFindingSeverity::Warning)
         ->and($result->canGenerate())->toBeTrue()
         ->and(collect($result->findings)->pluck('code'))->toContain('INACTIVE_POV');
+});
+
+test('a chapter after a canonical chapter requires an explicit opening transition', function () {
+    $novel = Novel::factory()->create();
+    Chapter::factory()->for($novel)->create(['sequence' => 1, 'status' => 'canonical']);
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 2]);
+    $plan = validPlan([
+        'chapter' => $chapter,
+        'scene_plans' => [[
+            'goal' => '进入学院',
+            'conflict' => '守门人盘问',
+            'turn' => '导师出面',
+            'outcome' => '获得临时宿舍',
+            'transition_from_previous' => null,
+        ]],
+    ]);
+
+    $result = app(PlanValidator::class)->validate($plan);
+
+    expect(collect($result->findings)->pluck('code'))->toContain('MISSING_CHAPTER_TRANSITION')
+        ->and($result->canGenerate())->toBeFalse();
+
+    $plan->update(['scene_plans' => [[
+        'goal' => '进入学院',
+        'conflict' => '守门人盘问',
+        'turn' => '导师出面',
+        'outcome' => '获得临时宿舍',
+        'transition_from_previous' => '承接走向学院的结尾，写出入院登记和入住，再过渡到次日醒来。',
+    ]]]);
+
+    expect(collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code'))
+        ->not->toContain('MISSING_CHAPTER_TRANSITION');
 });
 
 test('a required fact conflicting with a locked fact blocks a plan', function () {

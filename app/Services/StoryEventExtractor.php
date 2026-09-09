@@ -11,6 +11,7 @@ use App\Data\StoryEventCandidate;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\EventType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
@@ -62,7 +63,7 @@ class StoryEventExtractor
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。固定字段与 event_type 枚举保持规定值；其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中该类型已经存在的实体。没有有效主体时必须省略该事件，不能借用角色 ID 充当 relationship、conflict、thread 或其他类型的 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_* 事件必须引用对应的 foreshadowing ID。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
@@ -146,6 +147,9 @@ class StoryEventExtractor
             ]),
             'state_version' => $chapter->novel->canonicalStateVersion->version,
             'current_state' => $chapter->novel->canonicalStateVersion->state,
+            'event_subject_type_rules' => collect(EventType::cases())->mapWithKeys(
+                fn (EventType $type): array => [$type->value => $type->allowedSubjectTypes()],
+            )->all(),
             'locked_facts' => $chapter->novel->facts()
                 ->where('locked', true)
                 ->where('status', 'active')
@@ -217,32 +221,52 @@ class StoryEventExtractor
             throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须只返回 events 数组。']);
         }
 
-        return collect($payload['events'])->map(function (mixed $event) use ($chapter, $draft): StoryEventCandidate {
+        return collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft): StoryEventCandidate {
             if (! is_array($event)) {
-                throw ValidationException::withMessages(['events' => 'Story Event Candidate 必须是对象。']);
+                throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
             }
 
-            $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($draft): mixed {
-                if (! is_array($evidence)) {
+            try {
+                $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($draft): mixed {
+                    if (! is_array($evidence)) {
+                        return $evidence;
+                    }
+
+                    // The source artifact is authoritative server context, not a value the model should infer.
+                    $evidence['artifact_id'] = $draft->getKey();
+
+                    if (is_string($evidence['quote'] ?? null)) {
+                        $evidence['quote'] = $this->resolveEvidenceQuote((string) $draft->content, $evidence['quote']);
+                    }
+
                     return $evidence;
-                }
+                })->all();
 
-                // The source artifact is authoritative server context, not a value the model should infer.
-                $evidence['artifact_id'] = $draft->getKey();
+                $candidate = StoryEventCandidate::fromArray($event);
+                $this->validateEvidence($candidate, $chapter, $draft);
+                $this->validateSubject($candidate, $chapter);
 
-                if (is_string($evidence['quote'] ?? null)) {
-                    $evidence['quote'] = $this->resolveEvidenceQuote((string) $draft->content, $evidence['quote']);
-                }
-
-                return $evidence;
-            })->all();
-
-            $candidate = StoryEventCandidate::fromArray($event);
-            $this->validateEvidence($candidate, $chapter, $draft);
-            $this->validateSubject($candidate, $chapter);
-
-            return $candidate;
+                return $candidate;
+            } catch (ValidationException $exception) {
+                throw $this->withCandidateIndex($exception, $index);
+            }
         })->all();
+    }
+
+    private function withCandidateIndex(ValidationException $exception, int $index): ValidationException
+    {
+        $messages = [];
+
+        foreach ($exception->errors() as $field => $fieldMessages) {
+            $messages["events.{$index}.{$field}"] = array_map(
+                fn (string $message): string => '第 '.($index + 1)." 个事件字段 {$field}：{$message}",
+                $fieldMessages,
+            );
+        }
+
+        return ValidationException::withMessages($messages ?: [
+            "events.{$index}" => '第 '.($index + 1).' 个事件校验失败。',
+        ]);
     }
 
     private function validateEvidence(StoryEventCandidate $candidate, Chapter $chapter, GenerationArtifact $draft): void

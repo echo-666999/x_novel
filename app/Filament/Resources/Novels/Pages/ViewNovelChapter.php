@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
@@ -240,14 +241,14 @@ class ViewNovelChapter extends ViewRecord
                             ? 0
                             : count(data_get($this->latestEventCandidateArtifact()?->data, 'events', [])))
                         ->schema($this->eventsSchema()),
-                    Tab::make('审校')
-                        ->icon('heroicon-o-shield-check')
-                        ->badge(fn (): string => $this->latestReview()?->decision->getLabel() ?? '未审校')
-                        ->schema($this->reviewSchema()),
                     Tab::make('状态变化')
                         ->icon('heroicon-o-arrows-right-left')
                         ->badge(fn (): int => count(data_get($this->latestStatePatchArtifact()?->data, 'changes', [])))
                         ->schema($this->stateChangesSchema()),
+                    Tab::make('审校')
+                        ->icon('heroicon-o-shield-check')
+                        ->badge(fn (): string => $this->latestReview()?->decision->getLabel() ?? '未审校')
+                        ->schema($this->reviewSchema()),
                     Tab::make('正式版本')
                         ->icon('heroicon-o-check-badge')
                         ->badge(fn (): string => $this->chapter()->canonicalArtifact === null ? '未提交' : '正式')
@@ -267,9 +268,29 @@ class ViewNovelChapter extends ViewRecord
 
         return [
             Section::make('当前下一步')
+                ->key('review-next-step')
                 ->description('重写完成后会自动继续事件提取、状态补丁和重新审校，无需再次手动发起审校。')
                 ->icon('heroicon-o-map')
                 ->headerActions([
+                    Action::make('recoverReviewPrerequisites')
+                        ->label('补建状态补丁并重新审校')
+                        ->icon('heroicon-o-arrow-path-rounded-square')
+                        ->color('warning')
+                        ->visible(fn (): bool => $this->hasRecoverableReviewPrerequisiteFinding())
+                        ->disabled(fn (): bool => $this->latestEventCandidateArtifact() === null
+                            || $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
+                        ->tooltip(fn (): ?string => $this->latestEventCandidateArtifact() === null ? '请先重新提取故事事件。' : null)
+                        ->action(function (): void {
+                            $artifact = app(StatePatchBuilder::class)->build($this->chapterId);
+                            ReviewChapterJob::dispatch($this->chapterId, true);
+                            $this->cacheSchema('content', null);
+
+                            Notification::make()
+                                ->title('状态补丁已补建，重新审校已排队')
+                                ->body("已保留原审校记录并创建 State Patch v{$artifact->version}。")
+                                ->success()
+                                ->send();
+                        }),
                     Action::make('manuallyReviseChapter')
                         ->label('人工修改正文')
                         ->icon('heroicon-o-pencil-square')
@@ -314,7 +335,8 @@ class ViewNovelChapter extends ViewRecord
                         ->label('人工通过（Override）')
                         ->icon('heroicon-o-shield-check')
                         ->color('danger')
-                        ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::NeedsAttention)
+                        ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::NeedsAttention
+                            && ! $this->hasLengthReviewFinding())
                         ->disabled(fn (): bool => $this->hasHardReviewFinding())
                         ->tooltip(fn (): ?string => $this->hasHardReviewFinding() ? '当前 Review 存在硬冲突，不能人工通过。' : '保留原 Review 和 Findings，并创建一条带原因的人工 PASS Review。')
                         ->requiresConfirmation()
@@ -336,6 +358,43 @@ class ViewNovelChapter extends ViewRecord
                             Notification::make()
                                 ->title('章节审校已人工通过')
                                 ->body("已创建 Review v{$review->artifact->version}，现在可以提交正式章节。")
+                                ->warning()
+                                ->send();
+                        }),
+                    Action::make('acceptOverlengthChapter')
+                        ->label('接受超限版本')
+                        ->icon('heroicon-o-exclamation-triangle')
+                        ->color('danger')
+                        ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::NeedsAttention
+                            && $this->hasOverlengthReviewFinding())
+                        ->disabled(fn (): bool => $this->hasHardReviewFinding())
+                        ->tooltip(fn (): ?string => $this->hasHardReviewFinding() ? '当前 Review 存在硬冲突，不能接受超限版本。' : '明确记录字数超限例外，原字数问题会保留在新的 PASS Review 中。')
+                        ->requiresConfirmation()
+                        ->modalHeading('接受当前超限版本')
+                        ->modalDescription(function (): string {
+                            $draft = $this->currentReviewDraft();
+                            $target = (int) $this->chapter()->latestPlan?->target_words;
+                            $actual = app(DraftLengthPolicy::class)->count($draft?->content);
+                            $maximum = app(DraftLengthPolicy::class)->chapterMaximum($target);
+
+                            return "当前正文 {$actual} 字，严格上限 {$maximum} 字。该操作会保留字数 Finding，并创建明确标记为“人工接受超限”的 PASS Review。";
+                        })
+                        ->modalSubmitActionLabel('确认接受超限')
+                        ->schema([
+                            Textarea::make('reason')
+                                ->label('接受原因')
+                                ->helperText('请说明为什么本章可以例外超过严格字数上限。')
+                                ->rows(4)
+                                ->maxLength(2000)
+                                ->required(),
+                        ])
+                        ->action(function (array $data, AcceptOverlengthChapterAction $accept): void {
+                            $review = $accept->execute($this->chapter(), $data['reason'], auth()->id());
+                            $this->cachedChapter = null;
+
+                            Notification::make()
+                                ->title('已记录人工接受超限')
+                                ->body("已创建带超限例外标记的 Review v{$review->artifact->version}，字数问题仍保留。")
                                 ->warning()
                                 ->send();
                         }),
@@ -405,8 +464,13 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-shield-check')
                         ->color(fn (): string => $this->latestReview() ? 'gray' : 'primary')
                         ->visible(fn (): bool => ! in_array($this->latestReview()?->decision, [ReviewDecision::NeedsAttention, ReviewDecision::Block], true))
-                        ->tooltip(fn (): ?string => $this->latestReview() ? '仅用于在正文未变化时再次执行审校；正常重写完成后系统会自动重新审校。' : null)
-                        ->disabled(fn (): bool => $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
+                        ->tooltip(fn (): ?string => match (true) {
+                            ! $this->reviewPrerequisitesReady() => '请先提取故事事件并生成与其对应的状态补丁。',
+                            $this->latestReview() !== null => '仅用于在正文未变化时再次执行审校；正常重写完成后系统会自动重新审校。',
+                            default => null,
+                        })
+                        ->disabled(fn (): bool => ! $this->reviewPrerequisitesReady()
+                            || $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
                         ->action(function (): void {
                             ReviewChapterJob::dispatch($this->chapterId, $this->latestReview() !== null);
                             Notification::make()->title('叙事审校已加入生成队列')->success()->send();
@@ -488,10 +552,23 @@ class ViewNovelChapter extends ViewRecord
             ];
         }
 
+        if ($this->hasRecoverableReviewPrerequisiteFinding()) {
+            return [
+                'action' => '补建状态补丁并重新审校', 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '本次 BLOCK 来自流程产物缺失，不是正文或锁定事实冲突。点击上方按钮即可从现有事件候选恢复。',
+                'flow' => '现有事件候选 → 补建状态补丁 → 创建新审校版本；原审校记录保留。',
+            ];
+        }
+
         if ($review->decision === ReviewDecision::Pass) {
+            $lengthException = (bool) data_get($review->artifact?->data, 'manual_length_exception', false);
+
             return [
                 'action' => '提交正式章节', 'color' => 'success', 'budget' => $budget, 'after_pass' => $afterPass,
-                'explanation' => '当前 Review 已通过。系统不会额外显示“通过”按钮；PASS 是审校结论，下一步是正式提交。', 'flow' => 'PASS → Canonical Commit → 正式事件与故事状态更新。',
+                'explanation' => $lengthException
+                    ? '当前 Review 由人工明确接受字数超限，原字数问题和接受原因均已保留；下一步可以提交正式章节。'
+                    : '当前 Review 已通过。系统不会额外显示“通过”按钮；PASS 是审校结论，下一步是正式提交。',
+                'flow' => 'PASS → Canonical Commit → 正式事件与故事状态更新。',
             ];
         }
 
@@ -557,7 +634,7 @@ class ViewNovelChapter extends ViewRecord
                 ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
                 ->whereHas('artifact', fn ($query) => $query->where('data->source_artifact_id', $reviewedDraft->getKey()))
                 ->oldest('id')->first();
-            $wordCount = (int) data_get($rewrite->data, 'word_count', 0);
+            $wordCount = app(DraftLengthPolicy::class)->count($rewrite->content);
             $scope = data_get($rewrite->data, 'scope') === 'scene'
                 ? '场景 '.($rewrite->generationRun?->scene_id ?? '—')
                 : '整章';
@@ -615,6 +692,20 @@ class ViewNovelChapter extends ViewRecord
     {
         return collect($this->latestReview()?->findings)
             ->contains(fn (array $finding): bool => data_get($finding, 'severity') === 'hard');
+    }
+
+    private function hasLengthReviewFinding(): bool
+    {
+        return collect($this->latestReview()?->findings)->contains(
+            fn (array $finding): bool => in_array(data_get($finding, 'code'), ['CHAPTER_LENGTH_TOO_SHORT', 'CHAPTER_LENGTH_TOO_LONG'], true),
+        );
+    }
+
+    private function hasOverlengthReviewFinding(): bool
+    {
+        return collect($this->latestReview()?->findings)->contains(
+            fn (array $finding): bool => data_get($finding, 'code') === 'CHAPTER_LENGTH_TOO_LONG',
+        );
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -1208,7 +1299,7 @@ class ViewNovelChapter extends ViewRecord
                         ->placeholder('—'),
                     TextEntry::make('canonical_word_count')
                         ->label('字数')
-                        ->state($this->chapter()->word_count)
+                        ->state(app(DraftLengthPolicy::class)->count($artifact->content))
                         ->numeric(),
                     TextEntry::make('canonical_state_version')
                         ->label('故事状态版本')
@@ -1387,7 +1478,7 @@ class ViewNovelChapter extends ViewRecord
                         ->requiresConfirmation($artifact !== null)
                         ->modalDescription($artifact === null ? null : '将创建新的不可变候选产物版本，现有候选不会被覆盖。')
                         ->action(function () use ($artifact): void {
-                            ExtractStoryEventsJob::dispatch($this->chapterId, $artifact !== null);
+                            ExtractStoryEventsJob::dispatch($this->chapterId, $artifact !== null, true);
 
                             Notification::make()
                                 ->title('故事事件提取已加入队列')
@@ -1601,6 +1692,26 @@ class ViewNovelChapter extends ViewRecord
     private function latestStatePatchArtifact(): ?GenerationArtifact
     {
         return $this->latestTimelineArtifact(ArtifactType::StatePatch);
+    }
+
+    private function hasRecoverableReviewPrerequisiteFinding(): bool
+    {
+        return collect($this->latestReview()?->findings)->contains(
+            fn (array $finding): bool => in_array((string) data_get($finding, 'code'), ['INVALID_STATE_PATCH', 'INVALID_EVENT_REFERENCE'], true),
+        );
+    }
+
+    private function reviewPrerequisitesReady(): bool
+    {
+        $candidate = $this->latestEventCandidateArtifact();
+        $patch = $this->latestStatePatchArtifact();
+        $draft = $this->currentDraftArtifact();
+
+        return $candidate !== null
+            && $patch !== null
+            && $draft !== null
+            && (int) data_get($candidate->data, 'source_artifact_id') === $draft->getKey()
+            && (int) data_get($patch->data, 'source_artifact_id') === $candidate->getKey();
     }
 
     private function futureSection(string $heading, string $description): Section
