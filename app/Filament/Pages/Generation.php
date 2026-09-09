@@ -2,6 +2,7 @@
 
 namespace App\Filament\Pages;
 
+use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\ReviewDecision;
@@ -11,13 +12,13 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
-use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Review as ReviewModel;
+use App\Models\Scene;
 use App\Services\StalledRunRecoveryService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -420,11 +421,11 @@ class Generation extends Page implements HasTable
         }
 
         if ($run->error_code === 'worker_interrupted') {
-            return 'Resume';
+            return '继续执行';
         }
 
         if ($this->isRetryableError($run)) {
-            return 'Retry';
+            return '重试';
         }
 
         if (in_array($run->error_code, self::REBUILD_ERROR_CODES, true)) {
@@ -445,7 +446,7 @@ class Generation extends Page implements HasTable
     private function recommendedActionColor(GenerationRun $run): string
     {
         return match ($this->recommendedAction($run)) {
-            'Retry', 'Resume', '恢复' => 'warning',
+            '重试', '继续执行', '恢复' => 'warning',
             '检查输入并人工处理' => 'danger',
             default => 'gray',
         };
@@ -453,15 +454,20 @@ class Generation extends Page implements HasTable
 
     private function dispatchRun(GenerationRun $run, bool $regenerate): void
     {
-        match ($run->stage) {
-            GenerationStage::ChapterPlanning => PlanChapterJob::dispatch($run->chapter_id, $regenerate),
-            GenerationStage::SceneGeneration => GenerateSceneJob::dispatch($run->scene_id, $regenerate),
-            GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, $regenerate),
-            GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
-            GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, $regenerate),
-            GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),
-            default => null,
-        };
+        if ($run->stage === GenerationStage::SceneGeneration) {
+            app(RegenerateSceneSequenceAction::class)->handle(
+                Scene::query()->findOrFail((int) $run->scene_id),
+            );
+        } else {
+            match ($run->stage) {
+                GenerationStage::ChapterPlanning => PlanChapterJob::dispatch($run->chapter_id, $regenerate),
+                GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, $regenerate),
+                GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
+                GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, $regenerate),
+                GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),
+                default => null,
+            };
+        }
 
         Notification::make()
             ->title($regenerate ? '失败阶段已重新排队' : '恢复任务已排队')

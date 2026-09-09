@@ -6,6 +6,7 @@ use App\Data\PlanValidationResult;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\ChapterPlan;
 use App\Services\PlanValidator;
+use Filament\Actions\Action;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Resources\Pages\ViewRecord;
@@ -48,6 +49,20 @@ class ViewNovelPlanningPreview extends ViewRecord
         return $chapter === null
             ? $this->getRecord()->title
             : $this->getRecord()->title." · 第 {$chapter->sequence} 章 · {$chapter->title}";
+    }
+
+    protected function getHeaderActions(): array
+    {
+        return [
+            Action::make('backToChapter')
+                ->label('返回章节工作台')
+                ->icon('heroicon-o-arrow-left')
+                ->color('gray')
+                ->url(fn (): string => NovelResource::getUrl('chapter', [
+                    'record' => $this->getRecord(),
+                    'chapter' => $this->chapterId,
+                ])),
+        ];
     }
 
     public function content(Schema $schema): Schema

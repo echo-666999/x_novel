@@ -75,6 +75,11 @@ test('planning preview shows the complete chapter plan in reading order', functi
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
+        ->assertActionVisible('backToChapter')
+        ->assertActionHasUrl('backToChapter', NovelResource::getUrl('chapter', [
+            'record' => $novel,
+            'chapter' => $chapter,
+        ]))
         ->assertSeeTextInOrder([
             '规划预览',
             '雾海长明 · 第 12 章 · 旧港夜航',

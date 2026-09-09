@@ -117,7 +117,7 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v1')
+        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v2')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())

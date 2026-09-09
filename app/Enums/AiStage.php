@@ -16,14 +16,14 @@ enum AiStage: string
     public function getLabel(): string
     {
         return match ($this) {
-            self::Planner => 'Planner',
-            self::Writer => 'Writer',
-            self::Assembler => 'Assembler',
-            self::Extractor => 'Extractor',
-            self::Reviewer => 'Reviewer',
-            self::Rewrite => 'Rewrite',
-            self::Summary => 'Summary',
-            self::Embedding => 'Embedding',
+            self::Planner => '章节规划',
+            self::Writer => '场景写作',
+            self::Assembler => '章节组装',
+            self::Extractor => '事件提取',
+            self::Reviewer => '叙事审校',
+            self::Rewrite => '章节重写',
+            self::Summary => '摘要生成',
+            self::Embedding => '向量生成',
         };
     }
 }

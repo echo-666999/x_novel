@@ -194,7 +194,9 @@ due_foreshadowings
 scene_plans
 ```
 
-小说级 `Style Profile` 由主文风 Preset、最多两种辅助文风、语言时代感、故事节奏、叙事视角及六项可选参数组成。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 按场景数获得参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
+小说级 `Style Profile` 由主文风 Preset、最多两种辅助文风、语言时代感、故事节奏、叙事视角及六项可选参数组成。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
+
+字数控制使用统一的多字节字符计数。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；最后一个待生成 Scene 负责将场景总量补足至章节下限，若不足最多进行一次受控重新生成。Chapter Draft 的可接受范围默认为目标字数的 85%～115%。最终审校由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而 PASS。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
 
 Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
 
@@ -254,7 +256,9 @@ scene:{scene_id}:{input_hash}:{prompt_version}:{model}
 
 轻量校验正文非空、长度合理、Envelope 合法、参与角色有效、无明显 must_not_reveal 违规。
 
-Provider Retry 默认 2~3 次，指数退避 + jitter，并尊重 Retry-After。耗尽后 Run failed、Chapter blocked、Auto Generation stop。成功 Scene Artifact 保留，Resume 从失败 Scene 继续。
+Provider Retry 默认 2~3 次，指数退避 + jitter，并尊重 Retry-After。最后一个待生成场景若无法补足章节最低字数，使用返回的短稿进行最多一次定向扩写，而不是重复发送相同原始请求。耗尽后 Run failed、Chapter blocked、Auto Generation stop。成功 Scene Artifact 保留，Resume 从失败 Scene 继续。
+
+人工重试或重新生成某个 Scene 时，从该 Scene 开始清空当前产物指针并将它及后续 Scene 重置为 `planned`；历史 Artifact 保留。系统使用同一个重生成批次标识按顺序投递这些 Scene，后续 Scene 根据前面实际完成字数承接章节剩余预算。同一批次重复投递时复用成功 Artifact。
 
 MVP 不做 Scene Parallel。
 
@@ -525,12 +529,12 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v1
-scene-writer-v1
-assembler-v1
-event-extractor-v1
-reviewer-v1
-rewrite-v1
+chapter-planner-v3
+scene-writer-v6
+assembler-v4
+event-extractor-v2
+reviewer-v3
+rewrite-v3
 summary-v1
 ```
 

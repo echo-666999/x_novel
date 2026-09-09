@@ -32,14 +32,23 @@ class SceneGenerator
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly ContextBuilder $contextBuilder,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly DraftLengthPolicy $lengthPolicy,
     ) {}
 
-    public function generate(int $sceneId, bool $regenerate = false): ?GenerationArtifact
+    public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null): ?GenerationArtifact
     {
-        $scene = Scene::query()->with(['chapter.novel.canonicalStateVersion', 'chapter.latestPlan'])->findOrFail($sceneId);
+        $scene = Scene::query()->with([
+            'chapter.novel.canonicalStateVersion',
+            'chapter.latestPlan',
+            'chapter.scenes.currentArtifact',
+        ])->findOrFail($sceneId);
         $chapter = $scene->chapter;
         $novel = $chapter->novel;
         $plan = $chapter->latestPlan;
+
+        if ($chapter->status === ChapterStatus::Canonical) {
+            throw new AiProviderException('canonical_scene_immutable', '正式章节不能直接重新生成场景，请先回滚该章节。', false);
+        }
 
         if ($novel->status === NovelStatus::Paused) {
             throw new AiProviderException('novel_paused', '小说已暂停，不能开始新的 Scene 生成阶段。', false);
@@ -72,18 +81,18 @@ class SceneGenerator
             'id', 'sequence', 'pov_character_id', 'location', 'time_anchor', 'goal', 'conflict', 'turn', 'outcome',
         ]);
         $context['writing_constraints'] = [
-            'chapter_target_words' => $plan->target_words,
-            'scene_target_words' => (int) ceil($plan->target_words / max(1, $chapter->scenes()->count())),
+            ...$this->sceneAllocation($scene, (int) $plan->target_words),
             'style_profile' => $this->narrativeStyleProfile->forNovel($novel),
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'model' => $settings->model,
             'prompt_version' => $promptVersion,
+            'regeneration_batch_id' => $regenerationBatchId,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $baseKey = "scene:{$scene->getKey()}:{$inputHash}:{$promptVersion}:{$settings->model}";
 
-        [$run, $reused] = $this->startRun($scene, $baseKey, $inputHash, $context, $settings->model, $promptVersion, $regenerate);
+        [$run, $reused] = $this->startRun($scene, $baseKey, $inputHash, $context, $settings->model, $promptVersion, $regenerate, $regenerationBatchId);
 
         if ($reused) {
             $artifact = $run->artifacts()->where('type', ArtifactType::SceneDraft)->latest('id')->first();
@@ -98,8 +107,8 @@ class SceneGenerator
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel SceneWriter. Write only this scene in the required narrative style and approximately meet scene_target_words. Return JSON matching the schema. Draft output must never mutate canonical story state.',
-                prompt: 'Generate the scene from this authoritative context: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 场景写作器。只写当前场景，严格遵守指定文风。scene_target_words 是从章节剩余字数预算和剩余场景数动态计算的当前参考字数，不是所有场景统一的固定配额；场景可以按叙事需要长短变化，未使用的字数由后续场景承接。当 required_scene_words 大于 0 时，当前是最后一个待生成场景，正文必须至少达到该字数，使各场景总量达到章节下限。通过完整的动作、对话、环境、感官和人物反应展开既定场景，不得用提纲、摘要、无意义重复或新增重大事实凑字。返回符合 Schema 的 JSON；除固定字段和枚举值外，正文及所有自然语言内容必须使用简体中文。草稿不得修改正式故事状态。',
+                prompt: '请根据以下权威上下文生成当前场景：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.7,
                 maxTokens: (int) config('generation.scene_max_output_tokens', 4_000),
                 responseSchema: SceneDraftPayload::schema(),
@@ -118,9 +127,23 @@ class SceneGenerator
             }
 
             $payload = SceneDraftPayload::validate($response->structuredData);
+            $payload = $this->repairLengthIfNeeded(
+                payload: $payload,
+                context: $context,
+                model: $settings->model,
+                promptVersion: $promptVersion,
+                metadata: [
+                    'generation_run_id' => $run->getKey(),
+                    'novel_id' => $novel->getKey(),
+                    'chapter_id' => $chapter->getKey(),
+                    'scene_id' => $scene->getKey(),
+                    'stage' => AiStage::Writer->value,
+                ],
+            );
             $this->validatePlanConstraints($payload['content'], $plan->must_not_reveal ?? []);
+            $this->validateLength($payload['content'], $context['writing_constraints']);
 
-            return $this->complete($run, $scene, $payload, $snapshot->stateVersion);
+            return $this->complete($run, $scene, $payload, $snapshot->stateVersion, $context['writing_constraints']);
         } catch (Throwable $exception) {
             $this->failRun($run, $exception);
             throw $exception;
@@ -185,9 +208,9 @@ class SceneGenerator
     }
 
     /** @return array{0: GenerationRun, 1: bool} */
-    private function startRun(Scene $scene, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate): array
+    private function startRun(Scene $scene, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate, ?string $regenerationBatchId): array
     {
-        return DB::transaction(function () use ($scene, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate): array {
+        return DB::transaction(function () use ($scene, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate, $regenerationBatchId): array {
             $scene = Scene::query()->lockForUpdate()->findOrFail($scene->getKey());
             $runs = $scene->generationRuns()->where('stage', GenerationStage::SceneGeneration);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
@@ -226,19 +249,23 @@ class SceneGenerator
                 'bible_version' => data_get($context, 'bible_version'),
                 'prompt_version' => $promptVersion,
                 'model_policy' => $model,
-                'context_snapshot' => $context,
+                'context_snapshot' => [
+                    ...$context,
+                    'regeneration_batch_id' => $regenerationBatchId,
+                ],
                 'started_at' => now(),
             ]);
             $scene->update(['status' => SceneStatus::Generating]);
+            $scene->chapter()->update(['status' => ChapterStatus::Generating]);
 
             return [$run, false];
         });
     }
 
     /** @param array<string, mixed> $payload */
-    private function complete(GenerationRun $run, Scene $scene, array $payload, int $expectedStateVersion): GenerationArtifact
+    private function complete(GenerationRun $run, Scene $scene, array $payload, int $expectedStateVersion, array $writingConstraints): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $scene, $payload, $expectedStateVersion): GenerationArtifact {
+        return DB::transaction(function () use ($run, $scene, $payload, $expectedStateVersion, $writingConstraints): GenerationArtifact {
             $scene = Scene::query()->lockForUpdate()->with('chapter.novel')->findOrFail($scene->getKey());
             $currentVersion = $scene->chapter->novel->canonicalStateVersion()->value('version');
 
@@ -250,7 +277,14 @@ class SceneGenerator
                 'type' => ArtifactType::SceneDraft,
                 'version' => 1,
                 'content' => $payload['content'],
-                'data' => collect($payload)->except('content')->all(),
+                'data' => [
+                    ...collect($payload)->except('content')->all(),
+                    'word_count' => $this->lengthPolicy->count($payload['content']),
+                    'target_words' => $writingConstraints['scene_target_words'],
+                    'required_words' => $writingConstraints['required_scene_words'],
+                    'allocated_scene_words' => $writingConstraints['allocated_scene_words'],
+                    'remaining_scene_count' => $writingConstraints['remaining_scene_count'],
+                ],
                 'checksum' => hash('sha256', $payload['content']),
             ]);
             $scene->update(['status' => SceneStatus::Draft, 'current_artifact_id' => $artifact->getKey()]);
@@ -268,6 +302,76 @@ class SceneGenerator
                 throw new AiProviderException('scene_plan_violation', "Scene 正文包含禁止揭示内容：{$forbidden}", false);
             }
         }
+    }
+
+    /** @param array<string, mixed> $writingConstraints */
+    private function validateLength(string $content, array $writingConstraints): void
+    {
+        $actual = $this->lengthPolicy->count($content);
+        $required = (int) $writingConstraints['required_scene_words'];
+
+        if ($required > 0 && $actual < $required) {
+            $chapterTotal = (int) $writingConstraints['allocated_scene_words'] + $actual;
+
+            throw new AiProviderException(
+                'scene_budget_shortfall',
+                "当前已是最后一个待生成场景；生成后本章场景合计 {$chapterTotal} 字，章节目标 {$writingConstraints['chapter_target_words']} 字，至少需要达到 {$writingConstraints['chapter_minimum_words']} 字。当前场景至少需要 {$required} 字。",
+                false,
+            );
+        }
+    }
+
+    /** @param array<string, mixed> $payload
+     * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $metadata
+     * @return array<string, mixed>
+     */
+    private function repairLengthIfNeeded(array $payload, array $context, string $model, string $promptVersion, array $metadata): array
+    {
+        $constraints = $context['writing_constraints'];
+        $required = (int) $constraints['required_scene_words'];
+
+        for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
+            if ($required === 0 || $this->lengthPolicy->count($payload['content']) >= $required) {
+                break;
+            }
+
+            $response = $this->provider->generate(new AiRequest(
+                model: $model,
+                systemPrompt: '你是 XNovel 场景扩写器。输入包含一份字数不足的场景草稿。请在不改变场景目标、冲突、转折、结果和既定事实的前提下，将它扩写为完整替换稿。必须保留原有有效内容，通过动作过程、对话反应、环境感官、人物心理和自然过渡补足细节。完整正文至少达到 required_scene_words，并尽量接近 scene_target_words；不得输出提纲、摘要、解释或无意义重复，不得新增重大事实、能力、世界规则或角色知识。返回符合 Schema 的 JSON，所有自然语言使用简体中文。',
+                prompt: '请扩写以下短稿：'.json_encode([
+                    'scene_task' => $context['scene_task'],
+                    'writing_constraints' => $constraints,
+                    'must_not_reveal' => data_get($context, 'l0.plan_constraints.must_not_reveal', []),
+                    'repair_attempt' => $attempt,
+                    'current_words' => $this->lengthPolicy->count($payload['content']),
+                    'draft' => $payload,
+                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                temperature: 0.4,
+                maxTokens: (int) config('generation.scene_max_output_tokens', 4_000),
+                responseSchema: SceneDraftPayload::schema(),
+                promptVersion: $promptVersion,
+                metadata: [...$metadata, 'length_repair_attempt' => $attempt],
+            ));
+
+            if ($response->structuredData === null) {
+                throw new AiProviderException('scene_schema_invalid', 'AI 场景扩写未返回合法的结构化 Scene Draft。', false);
+            }
+
+            $payload = SceneDraftPayload::validate($response->structuredData);
+        }
+
+        return $payload;
+    }
+
+    /** @return array<string, int> */
+    private function sceneAllocation(Scene $scene, int $chapterTarget): array
+    {
+        $otherScenes = $scene->chapter->scenes->where('id', '!=', $scene->getKey());
+        $allocatedWords = $otherScenes->sum(fn (Scene $other): int => $this->lengthPolicy->count($other->currentArtifact?->content));
+        $remainingSceneCount = 1 + $otherScenes->whereNull('current_artifact_id')->count();
+
+        return $this->lengthPolicy->sceneAllocation($chapterTarget, $allocatedWords, $remainingSceneCount);
     }
 
     private function failRun(GenerationRun $run, Throwable $exception): void

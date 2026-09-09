@@ -13,6 +13,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use JsonException;
 
 class OpenAiProvider implements AiProvider, EmbeddingProvider
@@ -171,22 +172,29 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $status = $response->status();
         $providerMessage = $response->json('error.message');
 
+        Log::warning('AI Provider 请求失败。', [
+            'status' => $status,
+            'provider_message' => is_string($providerMessage) ? $providerMessage : null,
+        ]);
+
         return match ($status) {
             401, 403 => new AiProviderException(
                 'provider_authentication_failed',
-                is_string($providerMessage) ? $providerMessage : 'AI Provider 认证失败。',
+                'AI Provider 认证失败，请检查 API Key 和访问权限。',
                 false,
                 $status,
             ),
             408, 429 => new AiProviderException(
                 $status === 429 ? 'provider_rate_limited' : 'provider_timeout',
-                is_string($providerMessage) ? $providerMessage : 'AI Provider 暂时不可用，请稍后重试。',
+                $status === 429 ? 'AI Provider 请求频率受限，请稍后重试。' : 'AI Provider 请求超时，请稍后重试。',
                 true,
                 $status,
             ),
             default => new AiProviderException(
                 'provider_request_failed',
-                is_string($providerMessage) ? $providerMessage : 'AI Provider 请求失败。',
+                $status >= 500
+                    ? "AI Provider 服务暂时不可用（HTTP {$status}），请稍后重试。"
+                    : "AI Provider 拒绝了请求（HTTP {$status}），请检查输入数据和结构化输出格式。",
                 $status >= 500,
                 $status,
             ),

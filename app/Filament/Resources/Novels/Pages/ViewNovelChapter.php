@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -25,6 +26,7 @@ use App\Models\Review;
 use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Services\CanonicalCommitService;
+use App\Services\DraftLengthPolicy;
 use App\Services\DraftRewriteDiff;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\PlanValidator;
@@ -54,6 +56,8 @@ class ViewNovelChapter extends ViewRecord
     public int $chapterId;
 
     protected ?Chapter $cachedChapter = null;
+
+    protected ?int $cachedPlanningRunId = null;
 
     public function mount(int|string $record, int|string|null $chapter = null): void
     {
@@ -103,8 +107,12 @@ class ViewNovelChapter extends ViewRecord
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
                 ->visible(fn (): bool => $this->chapter()->latestPlan !== null)
-                ->disabled(fn (): bool => $this->hasActivePlanningRun())
-                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? '章节规划正在运行。' : null)
+                ->disabled(fn (): bool => $this->hasActivePlanningRun() || ! $this->canRegeneratePlan())
+                ->tooltip(fn (): ?string => match (true) {
+                    $this->hasActivePlanningRun() => '章节规划正在运行。',
+                    ! $this->canRegeneratePlan() => '场景已进入生成流程，请在“场景”页签重新生成单个场景。仅已废弃章节可整体重新规划。',
+                    default => null,
+                })
                 ->requiresConfirmation()
                 ->modalDescription('将生成新的计划版本；当前版本与产物会保留用于追踪。')
                 ->action(function (): void {
@@ -128,7 +136,8 @@ class ViewNovelChapter extends ViewRecord
                 ->label('提交正式章节')
                 ->icon('heroicon-o-check-badge')
                 ->color('success')
-                ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::Pass
+                ->visible(fn (): bool => $this->chapter()->status === ChapterStatus::Review
+                    && $this->latestReview()?->decision === ReviewDecision::Pass
                     && $this->chapter()->canonical_artifact_id === null)
                 ->disabled(fn (): bool => $this->canonicalCommitContext() === null)
                 ->tooltip(fn (): ?string => $this->canonicalCommitContext() === null ? '请先完成事件提取、状态补丁与状态校验。' : null)
@@ -222,10 +231,6 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-document-text')
                         ->badge(fn (): int => $this->chapterDraftArtifacts()->count())
                         ->schema($this->draftSchema()),
-                    Tab::make('正式版本')
-                        ->icon('heroicon-o-check-badge')
-                        ->badge(fn (): string => $this->chapter()->canonicalArtifact === null ? '未提交' : '正式')
-                        ->schema($this->canonicalSchema()),
                     Tab::make('事件')
                         ->icon('heroicon-o-bolt')
                         ->badge(fn (): int => $this->latestEventCandidateArtifact() === null
@@ -240,6 +245,10 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-arrows-right-left')
                         ->badge(fn (): int => count(data_get($this->latestStatePatchArtifact()?->data, 'changes', [])))
                         ->schema($this->stateChangesSchema()),
+                    Tab::make('正式版本')
+                        ->icon('heroicon-o-check-badge')
+                        ->badge(fn (): string => $this->chapter()->canonicalArtifact === null ? '未提交' : '正式')
+                        ->schema($this->canonicalSchema()),
                     Tab::make('运行记录')
                         ->icon('heroicon-o-command-line')
                         ->badge(fn (): int => $this->chapter()->generationRuns()->count())
@@ -304,7 +313,7 @@ class ViewNovelChapter extends ViewRecord
             Section::make('问题清单')
                 ->description('包含叙事审校发现和状态校验器的确定性检查结果。')
                 ->schema([
-                    RepeatableEntry::make('review_findings')->hiddenLabel()->state(fn () => $this->latestReview()?->findings ?? [])->schema([
+                    RepeatableEntry::make('review_findings')->hiddenLabel()->state(fn (): array => $this->localizedReviewFindings())->schema([
                         TextEntry::make('message')->label('问题'),
                         TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
                         TextEntry::make('severity')->label('级别')->badge(),
@@ -333,7 +342,33 @@ class ViewNovelChapter extends ViewRecord
 
     private function latestReview(): ?Review
     {
-        return Review::query()->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))->with('artifact')->latest('id')->first();
+        return Review::query()
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $this->chapterId)
+                ->where('id', '>', $this->currentPlanningRunId()))
+            ->with('artifact')->latest('id')->first();
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function localizedReviewFindings(): array
+    {
+        $dimensions = [
+            'continuity' => '事实 / 连续性',
+            'plan' => '计划遵循',
+            'character' => '人物一致性',
+            'progress' => '剧情推进',
+            'repetition' => '重复度',
+            'pacing' => '节奏 / 悬念',
+            'style' => '文风 / 可读性',
+        ];
+        $severities = ['warning' => '警告', 'error' => '错误', 'hard' => '阻断', 'soft' => '提醒'];
+
+        return collect($this->latestReview()?->findings ?? [])
+            ->map(fn (array $finding): array => [
+                ...$finding,
+                'dimension' => $dimensions[(string) ($finding['dimension'] ?? '')] ?? ($finding['dimension'] ?? '状态一致性'),
+                'severity' => $severities[(string) ($finding['severity'] ?? '')] ?? ($finding['severity'] ?? '—'),
+            ])->all();
     }
 
     private function canonicalCommitContext(): ?CanonicalCommitData
@@ -391,7 +426,9 @@ class ViewNovelChapter extends ViewRecord
     private function rewriteArtifacts()
     {
         return GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $this->chapterId)
+                ->where('id', '>', $this->currentPlanningRunId()))
             ->orderBy('id')->get();
     }
 
@@ -399,7 +436,9 @@ class ViewNovelChapter extends ViewRecord
     private function rewriteVersionRows(): array
     {
         $original = GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $this->chapterId)
+                ->where('id', '>', $this->currentPlanningRunId()))
             ->oldest('id')->first();
         $rows = $original === null ? [] : [['label' => 'Original', 'scope' => '整章', 'content' => $original->content]];
         foreach ($this->rewriteArtifacts() as $index => $artifact) {
@@ -415,7 +454,7 @@ class ViewNovelChapter extends ViewRecord
         return [
             Section::make('章节概览')
                 ->description('从计划到正式状态的单章工作入口。')
-                ->columns(['default' => 1, 'md' => 3, 'xl' => 6])
+                ->columns(['default' => 1, 'md' => 4, 'xl' => 8])
                 ->schema([
                     TextEntry::make('chapter_status')
                         ->label('章节状态')
@@ -427,10 +466,34 @@ class ViewNovelChapter extends ViewRecord
                             ? null
                             : "第 {$this->chapter()->volume->sequence} 卷 · {$this->chapter()->volume->title}")
                         ->placeholder('未指定'),
-                    TextEntry::make('word_count')
-                        ->label('字数')
-                        ->state(fn (): int => $this->chapter()->word_count)
-                        ->numeric(),
+                    TextEntry::make('draft_word_count')
+                        ->label('当前稿字数')
+                        ->state(function (): ?int {
+                            $artifact = $this->currentDraftArtifact();
+
+                            return $artifact === null ? null : app(DraftLengthPolicy::class)->count($artifact->content);
+                        })
+                        ->numeric()
+                        ->placeholder('尚无草稿'),
+                    TextEntry::make('target_word_count')
+                        ->label('目标字数')
+                        ->state(fn (): ?int => $this->chapter()->latestPlan?->target_words)
+                        ->numeric()
+                        ->placeholder('未建立'),
+                    TextEntry::make('word_completion')
+                        ->label('字数完成度')
+                        ->state(function (): ?string {
+                            $artifact = $this->currentDraftArtifact();
+                            $target = (int) $this->chapter()->latestPlan?->target_words;
+
+                            return $artifact === null || $target <= 0
+                                ? null
+                                : app(DraftLengthPolicy::class)->completionPercentage(
+                                    app(DraftLengthPolicy::class)->count($artifact->content),
+                                    $target,
+                                ).'%';
+                        })
+                        ->placeholder('—'),
                     TextEntry::make('plan_status')
                         ->label('计划')
                         ->state(fn () => $this->chapter()->latestPlan?->status)
@@ -514,6 +577,7 @@ class ViewNovelChapter extends ViewRecord
         $artifact = $scene->currentArtifact;
 
         return Section::make('场景 '.$scene->sequence)
+            ->key('scene-'.$scene->getKey())
             ->description($scene->goal)
             ->headerActions([
                 Action::make('generateScene'.$scene->getKey())
@@ -530,7 +594,25 @@ class ViewNovelChapter extends ViewRecord
                     ->visible($scene->status === SceneStatus::Failed)
                     ->disabled(! $this->canGenerateScene($scene))
                     ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
-                    ->action(fn () => $this->dispatchScene($scene, true)),
+                    ->requiresConfirmation()
+                    ->modalHeading('重试场景 '.$scene->sequence)
+                    ->modalDescription('将重置当前场景及其后续场景并按顺序重新生成。历史产物会保留。')
+                    ->modalSubmitActionLabel('确认重试')
+                    ->action(fn (RegenerateSceneSequenceAction $regenerate) => $this->regenerateSceneSequence($scene, $regenerate)),
+                Action::make('regenerateScene'.$scene->getKey())
+                    ->label('重新生成')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible($artifact !== null
+                        && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true)
+                        && $this->chapter()->status !== ChapterStatus::Canonical)
+                    ->disabled(! $this->canGenerateScene($scene))
+                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
+                    ->requiresConfirmation()
+                    ->modalHeading('重新生成场景 '.$scene->sequence)
+                    ->modalDescription('将重置当前场景及其后续场景并按顺序重新生成。历史产物会保留；完成后需要重新组装章节并重新审校。')
+                    ->modalSubmitActionLabel('确认重新生成')
+                    ->action(fn (RegenerateSceneSequenceAction $regenerate) => $this->regenerateSceneSequence($scene, $regenerate)),
                 Action::make('viewSceneArtifact'.$scene->getKey())
                     ->label('查看产物')
                     ->icon('heroicon-o-document-text')
@@ -591,13 +673,25 @@ class ViewNovelChapter extends ViewRecord
             ]);
     }
 
-    private function dispatchScene(Scene $scene, bool $regenerate = false): void
+    private function dispatchScene(Scene $scene): void
     {
-        GenerateSceneJob::dispatch($scene->getKey(), $regenerate);
+        GenerateSceneJob::dispatch($scene->getKey());
 
         Notification::make()
-            ->title($regenerate ? '场景重试已加入队列' : '场景已加入生成队列')
+            ->title('场景已加入生成队列')
             ->body('场景 '.$scene->sequence.' 将在生成队列中执行。')
+            ->success()
+            ->send();
+    }
+
+    private function regenerateSceneSequence(Scene $scene, RegenerateSceneSequenceAction $regenerate): void
+    {
+        $count = $regenerate->handle($scene);
+        $this->cachedChapter = null;
+
+        Notification::make()
+            ->title('场景级联重新生成已加入队列')
+            ->body("将从场景 {$scene->sequence} 开始，按顺序重新生成 {$count} 个场景。")
             ->success()
             ->send();
     }
@@ -608,6 +702,13 @@ class ViewNovelChapter extends ViewRecord
             ->where('sequence', '<', $scene->sequence)
             ->every(fn (Scene $previous): bool => $previous->current_artifact_id !== null
                 && in_array($previous->status, [SceneStatus::Draft, SceneStatus::Accepted], true));
+    }
+
+    private function canRegeneratePlan(): bool
+    {
+        return $this->chapter()->status === ChapterStatus::Void
+            || $this->chapter()->scenes->every(fn (Scene $scene): bool => $scene->status === SceneStatus::Planned
+                && $scene->current_artifact_id === null);
     }
 
     /** @return array<int, mixed> */
@@ -637,7 +738,7 @@ class ViewNovelChapter extends ViewRecord
                                 ->send();
                         }),
                 ])
-                ->columns(['default' => 1, 'md' => 3])
+                ->columns(['default' => 1, 'md' => 3, 'xl' => 6])
                 ->schema([
                     TextEntry::make('assembly_scene_count')
                         ->label('场景数')
@@ -650,6 +751,26 @@ class ViewNovelChapter extends ViewRecord
                         ->state($this->latestAssemblyRun()?->status)
                         ->badge()
                         ->placeholder('尚未运行'),
+                    TextEntry::make('assembly_source_words')
+                        ->label('场景合计字数')
+                        ->state(fn (): int => $this->chapter()->scenes->sum(
+                            fn (Scene $scene): int => app(DraftLengthPolicy::class)->count($scene->currentArtifact?->content),
+                        ))
+                        ->numeric(),
+                    TextEntry::make('assembly_target_words')
+                        ->label('章节目标字数')
+                        ->state(fn (): ?int => $this->chapter()->latestPlan?->target_words)
+                        ->numeric()
+                        ->placeholder('未建立'),
+                    TextEntry::make('assembly_acceptable_range')
+                        ->label('可接受范围')
+                        ->state(function (): ?string {
+                            $target = (int) $this->chapter()->latestPlan?->target_words;
+
+                            return $target <= 0 ? null : number_format(app(DraftLengthPolicy::class)->chapterMinimum($target))
+                                .'～'.number_format(app(DraftLengthPolicy::class)->chapterMaximum($target)).' 字';
+                        })
+                        ->placeholder('—'),
                 ]),
         ];
 
@@ -666,7 +787,10 @@ class ViewNovelChapter extends ViewRecord
                 ->badge('#'.$artifact->getKey())
                 ->schema([
                     Section::make('完整草稿')
-                        ->description('产物 v'.$artifact->version.' · '.$artifact->checksum)
+                        ->description(
+                            '产物 v'.$artifact->version.' · '.app(DraftLengthPolicy::class)->count($artifact->content)
+                            .' 字 / 目标 '.($this->chapter()->latestPlan?->target_words ?? '—').' 字 · '.$artifact->checksum,
+                        )
                         ->schema([
                             TextEntry::make('chapter_draft_'.$artifact->getKey())
                                 ->hiddenLabel()
@@ -814,6 +938,7 @@ class ViewNovelChapter extends ViewRecord
     {
         return $this->chapter()->generationRuns()
             ->where('stage', GenerationStage::ChapterAssembly)
+            ->where('id', '>', $this->currentPlanningRunId())
             ->latest('id')
             ->first();
     }
@@ -822,7 +947,9 @@ class ViewNovelChapter extends ViewRecord
     {
         return GenerationArtifact::query()
             ->where('type', ArtifactType::ChapterDraft)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $this->chapterId)
+                ->where('id', '>', $this->currentPlanningRunId()))
             ->orderByDesc('version')
             ->get();
     }
@@ -1303,6 +1430,7 @@ class ViewNovelChapter extends ViewRecord
     private function latestTimelineRun(GenerationStage $stage): ?GenerationRun
     {
         return $this->chapter()->generationRuns
+            ->where('id', '>=', $this->currentPlanningRunId())
             ->where('stage', $stage)
             ->sortByDesc('id')
             ->first();
@@ -1311,6 +1439,7 @@ class ViewNovelChapter extends ViewRecord
     private function latestTimelineArtifact(ArtifactType $type): ?GenerationArtifact
     {
         return $this->chapter()->generationRuns
+            ->where('id', '>=', $this->currentPlanningRunId())
             ->flatMap->artifacts
             ->where('type', $type)
             ->sortByDesc('version')
@@ -1364,5 +1493,25 @@ class ViewNovelChapter extends ViewRecord
             ->where('stage', GenerationStage::ChapterPlanning)
             ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
             ->exists();
+    }
+
+    private function currentDraftArtifact(): ?GenerationArtifact
+    {
+        return $this->chapter()->generationRuns
+            ->whereNull('scene_id')
+            ->where('id', '>', $this->currentPlanningRunId())
+            ->flatMap->artifacts
+            ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
+            ->sortByDesc('id')
+            ->first();
+    }
+
+    private function currentPlanningRunId(): int
+    {
+        return $this->cachedPlanningRunId ??= (int) $this->chapter()->generationRuns()
+            ->where('stage', GenerationStage::ChapterPlanning)
+            ->where('status', RunStatus::Succeeded)
+            ->latest('id')
+            ->value('id');
     }
 }

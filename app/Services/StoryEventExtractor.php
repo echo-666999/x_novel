@@ -62,8 +62,8 @@ class StoryEventExtractor
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel StoryEventExtractor. Identify only events that change later story state. Return structured JSON matching the schema. Every evidence quote must be copied verbatim from the supplied chapter draft. Ambiguous implications must use low confidence. Never mutate canonical story data.',
-                prompt: 'Extract Story Event Candidates from this chapter draft and authoritative context: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。固定字段与 event_type 枚举保持规定值；其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
                 responseSchema: $this->responseSchema(),

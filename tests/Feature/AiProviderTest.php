@@ -115,7 +115,8 @@ test('openai provider maps retryable and non retryable errors', function (int $s
     } catch (AiProviderException $exception) {
         expect($exception->errorCode)->toBe($code)
             ->and($exception->retryable)->toBe($retryable)
-            ->and($exception->statusCode)->toBe($status);
+            ->and($exception->statusCode)->toBe($status)
+            ->and($exception->getMessage())->toMatch('/[\x{4e00}-\x{9fff}]/u');
     }
 })->with([
     'authentication' => [401, 'provider_authentication_failed', false],

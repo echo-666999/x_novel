@@ -59,6 +59,9 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['source_review_id'])->toBe($fixture['review']->getKey())
         ->and($artifact->data['finding_hash'])->toHaveLength(64)
+        ->and($artifact->data['word_count'])->toBe(mb_strlen('修订后的章节正文'))
+        ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
+        ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.current_words'))->toBe(mb_strlen('原始章节正文'))
         ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
 });
 

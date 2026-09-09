@@ -1,10 +1,16 @@
 <?php
 
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
+use App\Enums\ArtifactType;
+use App\Enums\ChapterStatus;
+use App\Enums\GenerationStage;
+use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
+use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Scene;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -78,6 +84,28 @@ test('repeated sync updates planned scenes without creating duplicates and remov
         ->and($chapter->scenes()->sole()->sequence)->toBe(1);
 });
 
+test('sync uses the latest plan version instead of the relationship default order', function () {
+    $chapter = Chapter::factory()->create();
+    ChapterPlan::factory()->for($chapter)->create([
+        'version' => 1,
+        'scene_plans' => [
+            ['goal' => '旧场景一', 'conflict' => '旧冲突', 'turn' => '旧转折', 'outcome' => '旧结果'],
+            ['goal' => '旧场景二', 'conflict' => '旧冲突', 'turn' => '旧转折', 'outcome' => '旧结果'],
+        ],
+    ]);
+    ChapterPlan::factory()->for($chapter)->create([
+        'version' => 2,
+        'scene_plans' => [[
+            'goal' => '新场景', 'conflict' => '新冲突', 'turn' => '新转折', 'outcome' => '新结果',
+        ]],
+    ]);
+
+    $count = app(SyncScenesFromChapterPlanAction::class)->execute($chapter);
+
+    expect($count)->toBe(1)
+        ->and($chapter->scenes()->sole()->goal)->toBe('新场景');
+});
+
 test('sync refuses to overwrite scenes that entered generation', function () {
     $chapter = Chapter::factory()->create();
     ChapterPlan::factory()->for($chapter)->create();
@@ -91,6 +119,31 @@ test('sync refuses to overwrite scenes that entered generation', function () {
         ->toThrow(ValidationException::class);
 
     expect($scene->fresh()->goal)->toBe('已生成场景');
+});
+
+test('explicit replanning replaces generated scenes only for a void chapter and preserves artifacts', function () {
+    $chapter = Chapter::factory()->create(['status' => ChapterStatus::Void]);
+    ChapterPlan::factory()->for($chapter)->create(['scene_plans' => [[
+        'goal' => '新目标', 'conflict' => '新冲突', 'turn' => '新转折', 'outcome' => '新结果',
+    ]]]);
+    $first = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $surplus = Scene::factory()->for($chapter)->create(['sequence' => 2, 'status' => SceneStatus::Draft]);
+    $run = GenerationRun::factory()->for($chapter)->for($surplus)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::SceneDraft]);
+    $first->update(['current_artifact_id' => $artifact->getKey()]);
+
+    $count = app(SyncScenesFromChapterPlanAction::class)->execute($chapter, replaceGenerated: true);
+
+    expect($count)->toBe(1)
+        ->and($first->fresh()->status)->toBe(SceneStatus::Planned)
+        ->and($first->fresh()->current_artifact_id)->toBeNull()
+        ->and($first->fresh()->goal)->toBe('新目标')
+        ->and(Scene::query()->whereKey($surplus->getKey())->exists())->toBeFalse()
+        ->and($run->fresh()->scene_id)->toBeNull()
+        ->and($artifact->fresh())->not->toBeNull();
 });
 
 test('sync requires a chapter plan', function () {

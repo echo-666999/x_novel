@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
@@ -14,13 +15,16 @@ use App\Enums\SceneStatus;
 use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
+use App\Services\DraftLengthPolicy;
 use App\Services\SceneDraftPayload;
 use App\Services\SceneGenerator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
 
@@ -36,6 +40,7 @@ function sceneGenerationFixture(int $sceneCount = 2): array
     $plan = ChapterPlan::factory()->for($chapter)->create([
         'must_not_reveal' => ['终局真相'],
         'scene_plans' => [],
+        'target_words' => $sceneCount * 8,
     ]);
     $scenes = collect(range(1, $sceneCount))->map(fn (int $sequence): Scene => Scene::factory()
         ->for($chapter)
@@ -69,6 +74,15 @@ function sceneResponse(string $content, array $delta = []): AiResponse
         model: 'writer-test',
     );
 }
+
+test('scene allocation shares the chapter word budget across remaining scenes', function () {
+    $policy = app(DraftLengthPolicy::class);
+
+    expect($policy->sceneAllocation(3000, 0, 1)['scene_target_words'])->toBe(3000)
+        ->and($policy->sceneAllocation(3000, 0, 4)['scene_target_words'])->toBe(750)
+        ->and($policy->sceneAllocation(3000, 300, 1)['scene_target_words'])->toBe(2700)
+        ->and($policy->sceneAllocation(3000, 300, 1)['required_scene_words'])->toBe(2250);
+});
 
 test('scene draft schema keeps dynamic objects compatible with strict structured output', function () {
     $schema = SceneDraftPayload::schema();
@@ -106,6 +120,8 @@ test('scene generator persists an immutable draft artifact and temporary state d
     expect($artifact->type)->toBe(ArtifactType::SceneDraft)
         ->and($artifact->content)->toBe('雨幕中，林舟推开了门。')
         ->and(data_get($artifact->data, 'temporary_state_delta.characters.lin_zhou.location'))->toBe('灯塔')
+        ->and(data_get($artifact->data, 'word_count'))->toBe(11)
+        ->and(data_get($artifact->data, 'target_words'))->toBe(8)
         ->and($scene->status)->toBe(SceneStatus::Draft)
         ->and($scene->current_artifact_id)->toBe($artifact->getKey())
         ->and($run->status)->toBe(RunStatus::Succeeded)
@@ -114,6 +130,114 @@ test('scene generator persists an immutable draft artifact and temporary state d
     expect(data_get($run->context_snapshot, 'writing_constraints.scene_target_words'))->toBe($fixture['plan']->target_words)
         ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.primary_style'))->toBe('轻松幽默')
         ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.instructions.0'))->toContain('情境幽默');
+});
+
+test('a final scene budget shortfall is expanded once before the chapter is blocked', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse('过短场景'))
+        ->enqueue(sceneResponse('仍然过短'));
+    app()->instance(AiProvider::class, $fake);
+
+    (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
+
+    Queue::assertNothingPushed();
+    expect($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Failed)
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked)
+        ->and($fixture['scenes']->first()->generationRuns()->where('error_code', 'scene_budget_shortfall')->count())->toBe(1)
+        ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts')->count())->toBe(0);
+    expect($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->systemPrompt)->toContain('场景扩写器');
+});
+
+test('a successful length expansion becomes the scene draft', function () {
+    $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('短', 20)))
+        ->enqueue(sceneResponse(str_repeat('扩', 90)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact?->content)->toBe(str_repeat('扩', 90))
+        ->and($artifact?->data['word_count'])->toBe(90)
+        ->and($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->prompt)->toContain('终局真相');
+});
+
+test('cascade generation shifts an early scene shortfall to the next scene', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(2);
+    $fixture['plan']->update(['target_words' => 3000]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('短', 300)))
+        ->enqueue(sceneResponse(str_repeat('长', 2700)));
+    app()->instance(AiProvider::class, $fake);
+    $batchId = 'regenerate-batch-test';
+
+    (new GenerateSceneJob(
+        sceneId: $fixture['scenes']->first()->getKey(),
+        cascade: true,
+        regenerationBatchId: $batchId,
+    ))->handle(app(SceneGenerator::class));
+
+    $nextJob = Queue::pushed(GenerateSceneJob::class)->sole();
+    expect($nextJob->sceneId)->toBe($fixture['scenes']->last()->getKey())
+        ->and($nextJob->cascade)->toBeTrue()
+        ->and($nextJob->regenerationBatchId)->toBe($batchId);
+
+    $nextJob->handle(app(SceneGenerator::class));
+
+    $firstConstraints = $fixture['scenes']->first()->generationRuns()->sole()->context_snapshot['writing_constraints'];
+    $lastConstraints = $fixture['scenes']->last()->generationRuns()->sole()->context_snapshot['writing_constraints'];
+
+    expect($firstConstraints['scene_target_words'])->toBe(1500)
+        ->and($firstConstraints['required_scene_words'])->toBe(0)
+        ->and($lastConstraints['allocated_scene_words'])->toBe(300)
+        ->and($lastConstraints['remaining_scene_count'])->toBe(1)
+        ->and($lastConstraints['scene_target_words'])->toBe(2700)
+        ->and($lastConstraints['required_scene_words'])->toBe(2250)
+        ->and($fixture['scenes']->sum(fn (Scene $scene): int => mb_strlen($scene->fresh()->currentArtifact->content)))->toBe(3000)
+        ->and($fake->requests())->toHaveCount(2);
+});
+
+test('cascade regeneration resets the selected and later scenes while preserving history', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(3);
+    $artifactIds = $fixture['scenes']->map(function (Scene $scene) use ($fixture): int {
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->for($scene)->create([
+            'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft,
+            'content' => str_repeat((string) $scene->sequence, 10),
+        ]);
+        $scene->update(['status' => SceneStatus::Draft, 'current_artifact_id' => $artifact->getKey()]);
+
+        return $artifact->getKey();
+    });
+    $fixture['chapter']->update(['status' => ChapterStatus::Review]);
+
+    $count = app(RegenerateSceneSequenceAction::class)->handle($fixture['scenes'][1]);
+
+    expect($count)->toBe(2)
+        ->and($fixture['scenes'][0]->fresh()->current_artifact_id)->toBe($artifactIds[0])
+        ->and($fixture['scenes'][0]->fresh()->status)->toBe(SceneStatus::Draft)
+        ->and($fixture['scenes'][1]->fresh()->current_artifact_id)->toBeNull()
+        ->and($fixture['scenes'][1]->fresh()->status)->toBe(SceneStatus::Planned)
+        ->and($fixture['scenes'][2]->fresh()->current_artifact_id)->toBeNull()
+        ->and($fixture['scenes'][2]->fresh()->status)->toBe(SceneStatus::Planned)
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating)
+        ->and(GenerationArtifact::query()->whereKey($artifactIds)->count())->toBe(3);
+
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $fixture['scenes'][1]->getKey()
+        && $job->cascade
+        && $job->regenerationBatchId !== null);
 });
 
 test('scene two cannot execute before scene one succeeds', function () {
@@ -157,6 +281,48 @@ test('duplicate delivery reuses the successful scene artifact without another pr
     expect($second?->is($first))->toBeTrue()
         ->and($fake->requests())->toHaveCount(1)
         ->and(GenerationRun::query()->count())->toBe(1);
+});
+
+test('regenerating a scene preserves the previous artifact and returns the chapter to generation', function () {
+    $fixture = sceneGenerationFixture(1);
+    $scene = $fixture['scenes']->first();
+    $previousRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $previousArtifact = GenerationArtifact::factory()->for($previousRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => '旧场景草稿内容。',
+    ]);
+    $scene->update([
+        'status' => SceneStatus::Draft,
+        'current_artifact_id' => $previousArtifact->getKey(),
+    ]);
+    $fixture['chapter']->update(['status' => ChapterStatus::Review]);
+    $fake = (new FakeAiProvider)->enqueue(sceneResponse('重新生成后的场景正文。'));
+    app()->instance(AiProvider::class, $fake);
+
+    $newArtifact = app(SceneGenerator::class)->generate($scene->getKey(), true);
+
+    expect($newArtifact?->getKey())->not->toBe($previousArtifact->getKey())
+        ->and($scene->fresh()->current_artifact_id)->toBe($newArtifact?->getKey())
+        ->and($previousArtifact->fresh())->not->toBeNull()
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating)
+        ->and($scene->generationRuns()->count())->toBe(2)
+        ->and($fake->requests())->toHaveCount(1);
+});
+
+test('canonical chapter scenes cannot be regenerated directly', function () {
+    $fixture = sceneGenerationFixture(1);
+    $fixture['chapter']->update(['status' => ChapterStatus::Canonical]);
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey(), true))
+        ->toThrow(AiProviderException::class, '正式章节不能直接重新生成场景');
+
+    expect($fake->requests())->toHaveCount(0)
+        ->and(GenerationRun::query()->count())->toBe(0);
 });
 
 test('a stale running scene is marked interrupted and resumed with a new run', function () {

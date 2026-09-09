@@ -8,6 +8,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
@@ -15,6 +16,8 @@ use App\Enums\VolumeStatus;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Character;
+use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\StoryStateVersion;
@@ -113,10 +116,11 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v2')
+        ->and($run->prompt_version)->toBe('chapter-planner-v3')
         ->and($run->artifacts()->sole()->type)->toBe(ArtifactType::ChapterPlan)
         ->and($fake->requests())->toHaveCount(1)
-        ->and($fake->requests()[0]->prompt)->toContain('冷峻克制');
+        ->and($fake->requests()[0]->prompt)->toContain('冷峻克制')
+        ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []');
 });
 
 test('the planner receives closing restrictions and closure debt in completing mode', function () {
@@ -130,7 +134,7 @@ test('the planner receives closing restrictions and closure debt in completing m
     $request = $fake->requests()[0];
     $snapshot = $chapter->generationRuns()->sole()->context_snapshot;
 
-    expect($request->systemPrompt)->toContain('Closing restrictions are active')
+    expect($request->systemPrompt)->toContain('当前处于收束阶段')
         ->and(data_get($snapshot, 'closing_restrictions.active'))->toBeTrue()
         ->and(data_get($snapshot, 'closing_restrictions.forbidden_new_elements'))->toBe([
             'core_character',
@@ -173,6 +177,33 @@ test('explicit regeneration creates a new immutable artifact and plan version', 
         ->and($chapter->plans()->where('version', 2)->sole()->status)->toBe(PlanStatus::Ready)
         ->and($chapter->generationRuns()->count())->toBe(2)
         ->and($chapter->generationRuns()->latest('id')->first()->attempt)->toBe(2);
+});
+
+test('explicit regeneration safely replans a void chapter with generated scenes', function () {
+    [$chapter, $character] = plannerChapter();
+    $fake = (new FakeAiProvider)
+        ->enqueue(plannerResponse(plannerPayload($character->getKey())))
+        ->enqueue(plannerResponse(plannerPayload($character->getKey(), ['tone' => '压抑'])));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    $planner->generate($chapter->getKey());
+    $scene = $chapter->scenes()->sole();
+    $sceneRun = GenerationRun::factory()->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $oldArtifact = GenerationArtifact::factory()->for($sceneRun)->create(['type' => ArtifactType::SceneDraft]);
+    $scene->update(['status' => 'draft', 'current_artifact_id' => $oldArtifact->getKey()]);
+    $chapter->update(['status' => ChapterStatus::Void]);
+
+    $plan = $planner->generate($chapter->getKey(), true);
+
+    expect($plan?->version)->toBe(2)
+        ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
+        ->and($scene->fresh()->status->value)->toBe('planned')
+        ->and($scene->fresh()->current_artifact_id)->toBeNull()
+        ->and($oldArtifact->fresh())->not->toBeNull();
 });
 
 test('invalid structured output fails the run without writing a plan or artifact', function () {

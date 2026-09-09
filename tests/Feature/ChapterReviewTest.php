@@ -33,9 +33,9 @@ function reviewFixture(): array
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
-    ChapterPlan::factory()->for($chapter)->create();
-    $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
     $content = '林舟守住城门，也兑现了向同伴作出的承诺。';
+    ChapterPlan::factory()->for($chapter)->create(['target_words' => mb_strlen($content)]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
     $draft = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterDraft, 'content' => $content, 'checksum' => hash('sha256', $content)]);
 
     return compact('novel', 'chapter', 'draft');
@@ -68,7 +68,46 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($review->continuity_score)->toBe('90.00')
         ->and($review->artifact->type)->toBe(ArtifactType::ReviewResult)
         ->and($review->generationRun->status)->toBe(RunStatus::Succeeded)
-        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
+        ->and($fake->requests()[0]->systemPrompt)->toContain('message 与 evidence 必须使用简体中文')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('state_findings 为空表示确定性检查未发现问题')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('may_hint 是可选提示');
+});
+
+test('deterministic length check forces a short chapter into rewrite', function () {
+    $fixture = reviewFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+    $actualWords = mb_strlen($fixture['draft']->content);
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and($review->findings)->toContainEqual([
+            'code' => 'CHAPTER_LENGTH_TOO_SHORT',
+            'dimension' => 'pacing',
+            'severity' => 'error',
+            'message' => "当前草稿 {$actualWords} 字，目标 100 字，至少需要达到 85 字。",
+            'evidence' => '当前稿完成度为 '.$actualWords.'%。',
+            'source' => 'length_check',
+        ])
+        ->and(data_get($review->generationRun->context_snapshot, 'length_check.status'))->toBe('too_short')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不要重复报告其中的字数问题');
+});
+
+test('deterministic length check also rejects an excessively long chapter', function () {
+    $fixture = reviewFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 10]);
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse()));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and(collect($review->findings)->pluck('code'))->toContain('CHAPTER_LENGTH_TOO_LONG')
+        ->and(data_get($review->generationRun->context_snapshot, 'length_check.status'))->toBe('too_long');
 });
 
 test('deterministic hard state finding overrides narrative score with block', function () {

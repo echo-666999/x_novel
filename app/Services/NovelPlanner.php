@@ -20,7 +20,7 @@ use Throwable;
 
 class NovelPlanner
 {
-    public const PROMPT_VERSION = 'novel-planner-v2';
+    public const PROMPT_VERSION = 'novel-planner-v3';
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -92,8 +92,8 @@ class NovelPlanner
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel NovelPlanner. Return only JSON matching the schema. Produce a coherent Chinese long-form fiction blueprint. Reference volumes and arcs only by the requested local keys.',
-                prompt: 'Generate the initial novel bible, characters, world entities, volume plan, story arcs and foreshadowings from: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和本地引用键外，所有自然语言内容必须使用简体中文。分卷和故事线只能使用请求中规定的本地键相互引用。',
+                prompt: '请根据以下小说信息生成初始小说圣经、角色、世界实体、分卷规划、故事线和伏笔：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.5,
                 maxTokens: 8_000,
                 responseSchema: $this->schema(),

@@ -27,11 +27,11 @@ class ChapterRewriter
 {
     private const STALE_RUN_SECONDS = 120;
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
-        $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan'])->findOrFail($chapterId);
+        $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan', 'scenes.currentArtifact'])->findOrFail($chapterId);
         if ($chapter->novel->status === NovelStatus::Paused) {
             throw new AiProviderException('novel_paused', '小说已暂停，不能开始 Rewrite。', false);
         }
@@ -45,6 +45,11 @@ class ChapterRewriter
             return $completed;
         }
         $source = $sceneId === null ? $this->latestChapterDraft($chapter) : $this->sceneSource($chapter, $sceneId);
+        $chapterTargetWords = (int) $chapter->latestPlan->target_words;
+        $sceneAllocation = $sceneId === null ? null : $this->sceneAllocation($chapter, $sceneId, $chapterTargetWords);
+        $targetWords = $sceneAllocation['scene_target_words'] ?? $chapterTargetWords;
+        $minimumWords = $sceneAllocation['required_scene_words'] ?? $this->lengthPolicy->chapterMinimum($targetWords);
+        $maximumWords = $sceneAllocation['maximum_scene_words'] ?? $this->lengthPolicy->chapterMaximum($targetWords);
         $attempt = $this->attemptCount($chapter) + 1;
         if ($attempt > (int) config('generation.max_rewrite_attempts', 2)) {
             $this->markExhausted($chapter, $review);
@@ -65,6 +70,16 @@ class ChapterRewriter
             'current_state' => $chapter->novel->canonicalStateVersion->state,
             'locked_facts' => $chapter->novel->facts()->where('locked', true)->where('status', 'active')
                 ->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value'])->all(),
+            'length_requirement' => [
+                'target_words' => $targetWords,
+                'minimum_words' => $minimumWords,
+                'maximum_words' => $maximumWords,
+                'current_words' => $this->lengthPolicy->count($source->content),
+                ...($sceneAllocation === null ? [] : [
+                    'chapter_target_words' => $chapterTargetWords,
+                    'allocated_scene_words' => $sceneAllocation['allocated_scene_words'],
+                ]),
+            ],
             'content' => $source->content,
         ];
         $inputHash = hash('sha256', json_encode([$brief, $settings->model, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -76,8 +91,8 @@ class ChapterRewriter
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel Rewriter. Fix only the supplied findings. Preserve required plot outcomes and established facts. Do not invent major facts, abilities, world rules, or knowledge. Return only revised prose.',
-                prompt: 'Rewrite using this brief: '.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 章节重写器。只修复给定问题，保留计划要求的剧情结果和既定事实。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words，且不要超过 length_requirement.maximum_words。字数不足时，通过展开原有场景的动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。只返回修订后的简体中文正文。',
+                prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
                 promptVersion: $promptVersion,
@@ -134,6 +149,15 @@ class ChapterRewriter
         return $scene->currentArtifact;
     }
 
+    /** @return array<string, int> */
+    private function sceneAllocation(Chapter $chapter, int $sceneId, int $chapterTarget): array
+    {
+        $otherScenes = $chapter->scenes->where('id', '!=', $sceneId);
+        $allocatedWords = $otherScenes->sum(fn (Scene $scene): int => $this->lengthPolicy->count($scene->currentArtifact?->content));
+
+        return $this->lengthPolicy->sceneAllocation($chapterTarget, $allocatedWords, 1);
+    }
+
     private function attemptCount(Chapter $chapter): int
     {
         return GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)
@@ -182,7 +206,17 @@ class ChapterRewriter
             }
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::RewriteDraft, 'version' => $attempt, 'content' => $content,
-                'data' => ['scope' => $sceneId === null ? 'chapter' : 'scene', 'source_artifact_id' => $source->getKey(), 'source_review_id' => $review->getKey(), 'finding_hash' => $findingHash, 'attempt' => $attempt],
+                'data' => [
+                    'scope' => $sceneId === null ? 'chapter' : 'scene',
+                    'source_artifact_id' => $source->getKey(),
+                    'source_review_id' => $review->getKey(),
+                    'finding_hash' => $findingHash,
+                    'attempt' => $attempt,
+                    'word_count' => $this->lengthPolicy->count($content),
+                    'target_words' => (int) data_get($run->context_snapshot, 'length_requirement.target_words'),
+                    'minimum_words' => (int) data_get($run->context_snapshot, 'length_requirement.minimum_words'),
+                    'maximum_words' => (int) data_get($run->context_snapshot, 'length_requirement.maximum_words'),
+                ],
                 'checksum' => hash('sha256', $content),
             ]);
             if ($sceneId !== null) {

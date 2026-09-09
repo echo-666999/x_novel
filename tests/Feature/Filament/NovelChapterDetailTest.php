@@ -12,6 +12,7 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\ExtractStoryEventsJob;
+use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -72,10 +73,10 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
             '计划',
             '场景',
             '草稿',
-            '正式版本',
             '事件',
             '审校',
             '状态变化',
+            '正式版本',
             '运行记录',
         ])
         ->assertSee('迫使主角离开安全区')
@@ -164,6 +165,33 @@ test('chapter detail shows useful empty states before planning starts', function
         ->assertSee('尚无正式状态变化');
 });
 
+test('chapter overview shows the latest draft length instead of the stored canonical word count', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['word_count' => 1380]);
+    ChapterPlan::factory()->for($chapter)->create(['target_words' => 3000]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scene_id' => null,
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => str_repeat('章', 900),
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('当前稿字数')
+        ->assertSee('目标字数')
+        ->assertSee('字数完成度')
+        ->assertSee('900')
+        ->assertSee('3,000')
+        ->assertSee('30%');
+});
+
 test('chapter detail rejects a chapter from another novel', function () {
     $novel = Novel::factory()->create();
     $foreignChapter = Chapter::factory()->create();
@@ -191,12 +219,14 @@ test('the chapter list links each chapter to its detail workspace', function () 
 });
 
 test('scene workspace exposes generation actions and execution metrics', function () {
+    Queue::fake();
+
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
     ChapterPlan::factory()->for($chapter)->create();
-    $planned = Scene::factory()->for($chapter)->create(['sequence' => 1]);
+    $planned = Scene::factory()->for($chapter)->create(['sequence' => 2]);
     $completed = Scene::factory()->for($chapter)->create([
-        'sequence' => 2,
+        'sequence' => 1,
         'status' => SceneStatus::Draft,
     ]);
     Scene::factory()->for($chapter)->create([
@@ -227,11 +257,18 @@ test('scene workspace exposes generation actions and execution metrics', functio
     ])
         ->assertSee('生成')
         ->assertSee('重试')
+        ->assertActionDisabled('regeneratePlan')
+        ->assertActionExists(TestAction::make('regenerateScene'.$completed->getKey())->schemaComponent('scene-'.$completed->getKey(), 'content'))
+        ->callAction(TestAction::make('regenerateScene'.$completed->getKey())->schemaComponent('scene-'.$completed->getKey(), 'content'))
         ->assertSee('查看产物')
         ->assertSee('查看运行记录')
         ->assertSee('字数')
         ->assertSee('耗时')
         ->assertSee('USD 0.0123');
+
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $completed->getKey()
+        && $job->cascade
+        && $job->regenerationBatchId !== null);
 });
 
 test('draft workspace switches between artifact versions and source scenes', function () {

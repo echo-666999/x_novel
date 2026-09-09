@@ -68,7 +68,10 @@ class ChapterPlanner
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 systemPrompt: $this->systemPrompt($novel),
-                prompt: 'Create the next executable chapter plan from this authoritative context: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
+                    .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
+                    .'due_foreshadowings 只能使用 due_foreshadowings[].id，due_foreshadowings 为空时必须返回 []。上下文：'
+                    .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
                 maxTokens: 4_000,
                 responseSchema: ChapterPlanPayload::schema(),
@@ -91,7 +94,7 @@ class ChapterPlanner
             $candidate->setRelation('chapter', $chapter);
             $this->planValidator->validate($candidate)->assertCanGenerate();
 
-            return $this->complete($run, $chapter, $payload, $response->content, $context['state_version']);
+            return $this->complete($run, $chapter, $payload, $response->content, $context['state_version'], $regenerate);
         } catch (Throwable $exception) {
             $this->fail($run, $exception);
             throw $exception;
@@ -147,9 +150,9 @@ class ChapterPlanner
         });
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, array $payload, string $content, int $expectedStateVersion): ChapterPlan
+    private function complete(GenerationRun $run, Chapter $chapter, array $payload, string $content, int $expectedStateVersion, bool $regenerate): ChapterPlan
     {
-        return DB::transaction(function () use ($run, $chapter, $payload, $content, $expectedStateVersion): ChapterPlan {
+        return DB::transaction(function () use ($run, $chapter, $payload, $content, $expectedStateVersion, $regenerate): ChapterPlan {
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
 
@@ -171,8 +174,11 @@ class ChapterPlanner
                 'context_snapshot' => [...($run->context_snapshot ?? []), 'chapter_plan_id' => $plan->getKey()],
                 'finished_at' => now(),
             ]);
+            $this->syncScenes->execute(
+                $chapter,
+                replaceGenerated: $regenerate && $chapter->status === ChapterStatus::Void,
+            );
             $chapter->update(['status' => ChapterStatus::Generating]);
-            $this->syncScenes->execute($chapter);
 
             return $plan;
         });
@@ -237,10 +243,10 @@ class ChapterPlanner
 
     private function systemPrompt(Novel $novel): string
     {
-        $prompt = 'You are XNovel ChapterPlanner. Return only JSON matching the supplied schema. Do not invent entity IDs.';
+        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。';
 
         if ($novel->status->value === 'completing') {
-            $prompt .= ' Closing restrictions are active. Do not introduce a new core character, main story arc, hard world rule, or high-importance foreshadowing. The plan must advance the Ending Contract or reduce Closure Debt.';
+            $prompt .= ' 当前处于收束阶段：不得新增核心人物、主线、硬世界规则或高重要度伏笔；计划必须推进结局契约或降低收束债务。';
         }
 
         return $prompt;

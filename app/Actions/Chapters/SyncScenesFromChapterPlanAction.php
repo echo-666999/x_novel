@@ -2,6 +2,7 @@
 
 namespace App\Actions\Chapters;
 
+use App\Enums\ChapterStatus;
 use App\Enums\SceneStatus;
 use App\Models\Chapter;
 use Illuminate\Support\Facades\DB;
@@ -9,11 +10,11 @@ use Illuminate\Validation\ValidationException;
 
 class SyncScenesFromChapterPlanAction
 {
-    public function execute(Chapter $chapter): int
+    public function execute(Chapter $chapter, bool $replaceGenerated = false): int
     {
-        return DB::transaction(function () use ($chapter): int {
+        return DB::transaction(function () use ($chapter, $replaceGenerated): int {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
-            $plan = $chapter->plans()->orderByDesc('version')->first();
+            $plan = $chapter->plans()->reorder()->orderByDesc('version')->first();
 
             if ($plan === null) {
                 throw ValidationException::withMessages([
@@ -25,7 +26,9 @@ class SyncScenesFromChapterPlanAction
             $protectedScene = $existingScenes->first(fn ($scene): bool => $scene->status !== SceneStatus::Planned || $scene->current_artifact_id !== null
             );
 
-            if ($protectedScene !== null) {
+            $canReplaceGenerated = $replaceGenerated && $chapter->status === ChapterStatus::Void;
+
+            if ($protectedScene !== null && ! $canReplaceGenerated) {
                 throw ValidationException::withMessages([
                     'scenes' => "Scene {$protectedScene->sequence} 已进入生成流程，不能从 Plan 覆盖。",
                 ]);
@@ -50,7 +53,13 @@ class SyncScenesFromChapterPlanAction
                 );
             }
 
-            $chapter->scenes()->where('sequence', '>', count($scenePlans))->delete();
+            $surplusScenes = $chapter->scenes()->where('sequence', '>', count($scenePlans))->get();
+
+            if ($canReplaceGenerated && $surplusScenes->isNotEmpty()) {
+                $chapter->generationRuns()->whereIn('scene_id', $surplusScenes->modelKeys())->update(['scene_id' => null]);
+            }
+
+            $chapter->scenes()->whereKey($surplusScenes->modelKeys())->delete();
 
             return count($scenePlans);
         });

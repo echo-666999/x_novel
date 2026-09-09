@@ -273,7 +273,9 @@ test('retry requeues a supported failed stage and keeps the chapter link', funct
         ]), $run)
         ->callTableAction('retry', $run);
 
-    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $scene->getKey() && $job->regenerate);
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $scene->getKey()
+        && $job->cascade
+        && $job->regenerationBatchId !== null);
 });
 
 test('worker interruption offers resume from persisted state', function () {

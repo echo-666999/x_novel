@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\SceneStatus;
 use App\Models\Scene;
 use App\Services\AutoStopService;
 use App\Services\SceneGenerator;
@@ -24,15 +25,23 @@ class GenerateSceneJob implements ShouldQueue
     /** @var array<int> */
     public array $backoff = [10, 30];
 
-    public function __construct(public readonly int $sceneId, public readonly bool $regenerate = false)
-    {
+    public function __construct(
+        public readonly int $sceneId,
+        public readonly bool $regenerate = false,
+        public readonly bool $cascade = false,
+        public readonly ?string $regenerationBatchId = null,
+    ) {
         $this->onQueue('generation');
     }
 
     public function handle(SceneGenerator $generator): void
     {
         try {
-            $generator->generate($this->sceneId, $this->regenerate);
+            $artifact = $generator->generate($this->sceneId, $this->regenerate, $this->regenerationBatchId);
+
+            if ($this->cascade && $artifact !== null) {
+                $this->dispatchNextScene();
+            }
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if (! in_array($exception->errorCode, ['novel_paused', 'previous_scene_incomplete'], true)) {
@@ -45,6 +54,25 @@ class GenerateSceneJob implements ShouldQueue
             }
 
             throw $exception;
+        }
+    }
+
+    private function dispatchNextScene(): void
+    {
+        $scene = Scene::query()->findOrFail($this->sceneId);
+        $nextSceneId = $scene->chapter->scenes()
+            ->where('sequence', '>', $scene->sequence)
+            ->where('status', SceneStatus::Planned)
+            ->whereNull('current_artifact_id')
+            ->orderBy('sequence')
+            ->value('id');
+
+        if ($nextSceneId !== null) {
+            GenerateSceneJob::dispatch(
+                sceneId: (int) $nextSceneId,
+                cascade: true,
+                regenerationBatchId: $this->regenerationBatchId,
+            )->afterCommit();
         }
     }
 

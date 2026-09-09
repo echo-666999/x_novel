@@ -92,6 +92,10 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->context_snapshot['ordered_scene_checksums'])->toHaveCount(3)
         ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
+        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'))->toBe(2550)
+        ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_maximum_words'))->toBe(3450)
+        ->and($artifact->data['word_count'])->toBe(mb_strlen('第一幕。第二幕。第三幕。'))
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得把正文压缩成摘要')
         ->and(mb_strpos($prompt, 'Scene 1 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 2 正文'))
         ->and(mb_strpos($prompt, 'Scene 2 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 3 正文'));
 });

@@ -30,7 +30,7 @@ class ChapterReviewer
 
     private const WEIGHTS = ['continuity' => .25, 'plan' => .15, 'character' => .15, 'progress' => .15, 'repetition' => .10, 'pacing' => .10, 'style' => .10];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy) {}
 
     public function review(int $chapterId, bool $regenerate = false): ?Review
     {
@@ -41,10 +41,12 @@ class ChapterReviewer
 
         $draft = $this->latestDraft($chapter);
         $stateValidation = $this->stateValidator->validate($chapterId);
+        $lengthCheck = $this->lengthCheck($draft->content, (int) $chapter->latestPlan?->target_words);
         $context = [
             'chapter_id' => $chapter->getKey(),
             'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum, 'content' => $draft->content],
-            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'must_reveal', 'may_hint', 'must_not_reveal']),
+            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal']),
+            'length_check' => $lengthCheck,
             'state_version' => $chapter->novel->canonicalStateVersion?->version,
             'state_findings' => array_map(fn ($finding) => $finding->toArray(), $stateValidation->findings),
         ];
@@ -63,8 +65,8 @@ class ChapterReviewer
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel Narrative Reviewer. Score the draft from 0 to 100 on exactly seven dimensions. Findings must be concrete and traceable. Recommend PASS, REWRITE, NEEDS_ATTENTION, or BLOCK, but Laravel makes the final workflow decision. Return only structured JSON matching the schema.',
-                prompt: 'Review this chapter draft against its plan and deterministic state findings: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 叙事审校器。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。所有 finding 的 message 与 evidence 必须使用简体中文。只报告有明确文本证据、可以执行修复且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。可以建议 PASS、REWRITE、NEEDS_ATTENTION 或 BLOCK，但最终流程决策由 Laravel 作出。',
+                prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: (int) config('generation.review_max_output_tokens', 4000), responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
             ));
@@ -73,7 +75,7 @@ class ChapterReviewer
             }
             $payload = $this->validate($response->structuredData);
 
-            $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $stateValidation->isBlocked(), $context['state_version']);
+            $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $lengthCheck, $stateValidation->isBlocked(), $context['state_version']);
             $this->autoStop->stopForReview($chapter, $review->decision, $stateValidation->isBlocked());
 
             return $review;
@@ -165,9 +167,9 @@ class ChapterReviewer
         });
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $payload, array $stateFindings, bool $blocked, int $expectedVersion): Review
+    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $payload, array $stateFindings, array $lengthCheck, bool $blocked, int $expectedVersion): Review
     {
-        return DB::transaction(function () use ($run, $chapter, $draft, $payload, $stateFindings, $blocked, $expectedVersion) {
+        return DB::transaction(function () use ($run, $chapter, $draft, $payload, $stateFindings, $lengthCheck, $blocked, $expectedVersion) {
             $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
             if ($chapter->novel->canonicalStateVersion?->version !== $expectedVersion) {
                 throw new AiProviderException('state_version_conflict', 'Review 期间 Canonical Story State 已变化。', false);
@@ -175,8 +177,19 @@ class ChapterReviewer
             $scores = $payload['scores'];
             $total = round(collect(self::WEIGHTS)->sum(fn ($weight, $dimension) => $scores[$dimension] * $weight), 2);
             $recommended = ReviewDecision::from($payload['recommended_decision']);
-            $decision = $blocked ? ReviewDecision::Block : (($recommended === ReviewDecision::NeedsAttention || $recommended === ReviewDecision::Block) ? ReviewDecision::NeedsAttention : (($recommended === ReviewDecision::Rewrite || $total < config('generation.review_pass_score', 80)) ? ReviewDecision::Rewrite : ReviewDecision::Pass));
-            $findings = [...$stateFindings, ...array_map(fn ($f) => [...$f, 'source' => 'narrative_review'], $payload['findings'])];
+            $lengthFinding = $this->lengthFinding($lengthCheck);
+            $decision = $blocked
+                ? ReviewDecision::Block
+                : (($recommended === ReviewDecision::NeedsAttention || $recommended === ReviewDecision::Block)
+                    ? ReviewDecision::NeedsAttention
+                    : (($lengthFinding !== null || $recommended === ReviewDecision::Rewrite || $total < config('generation.review_pass_score', 80))
+                        ? ReviewDecision::Rewrite
+                        : ReviewDecision::Pass));
+            $findings = [
+                ...$stateFindings,
+                ...($lengthFinding === null ? [] : [$lengthFinding]),
+                ...array_map(fn ($f) => [...$f, 'source' => 'narrative_review'], $payload['findings']),
+            ];
             $data = ['decision' => $decision->value, 'recommended_decision' => $recommended->value, 'score' => $total, 'scores' => $scores, 'findings' => $findings, 'source_artifact_id' => $draft->getKey()];
             $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->max('version');
             $artifact = $run->artifacts()->create(['type' => ArtifactType::ReviewResult, 'version' => (int) $version + 1, 'content' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'data' => $data, 'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))]);
@@ -188,6 +201,47 @@ class ChapterReviewer
 
             return $review;
         });
+    }
+
+    /** @return array{target_words: int, actual_words: int, minimum_words: int, maximum_words: int, completion_percentage: float, status: string} */
+    private function lengthCheck(string $content, int $targetWords): array
+    {
+        $actualWords = $this->lengthPolicy->count($content);
+        $minimumWords = $this->lengthPolicy->chapterMinimum($targetWords);
+        $maximumWords = $this->lengthPolicy->chapterMaximum($targetWords);
+
+        return [
+            'target_words' => $targetWords,
+            'actual_words' => $actualWords,
+            'minimum_words' => $minimumWords,
+            'maximum_words' => $maximumWords,
+            'completion_percentage' => $this->lengthPolicy->completionPercentage($actualWords, $targetWords),
+            'status' => $actualWords < $minimumWords ? 'too_short' : ($actualWords > $maximumWords ? 'too_long' : 'within_range'),
+        ];
+    }
+
+    /** @param array<string, mixed> $lengthCheck
+     * @return array<string, mixed>|null
+     */
+    private function lengthFinding(array $lengthCheck): ?array
+    {
+        if ($lengthCheck['status'] === 'within_range') {
+            return null;
+        }
+
+        $tooShort = $lengthCheck['status'] === 'too_short';
+        $limit = $tooShort ? $lengthCheck['minimum_words'] : $lengthCheck['maximum_words'];
+
+        return [
+            'code' => $tooShort ? 'CHAPTER_LENGTH_TOO_SHORT' : 'CHAPTER_LENGTH_TOO_LONG',
+            'dimension' => 'pacing',
+            'severity' => 'error',
+            'message' => $tooShort
+                ? "当前草稿 {$lengthCheck['actual_words']} 字，目标 {$lengthCheck['target_words']} 字，至少需要达到 {$limit} 字。"
+                : "当前草稿 {$lengthCheck['actual_words']} 字，目标 {$lengthCheck['target_words']} 字，最多建议控制在 {$limit} 字。",
+            'evidence' => "当前稿完成度为 {$lengthCheck['completion_percentage']}%。",
+            'source' => 'length_check',
+        ];
     }
 
     private function failRun(GenerationRun $run, Throwable $e): void

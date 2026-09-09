@@ -30,6 +30,7 @@ class ChapterAssembler
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly DraftLengthPolicy $lengthPolicy,
     ) {}
 
     public function assemble(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -73,8 +74,8 @@ class ChapterAssembler
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: 'You are XNovel ChapterAssembler. Assemble the supplied scenes into one polished chapter in the required narrative style and keep the result close to chapter_target_words. Preserve scene order and outcomes. Improve transitions, consistency, and repetition only. Do not introduce major facts, abilities, world rules, or knowledge.',
-                prompt: 'Return only the complete chapter prose assembled from this input: '.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文，遵守指定文风。必须保留各场景中有效的动作、对话、环境和人物反应，不得把正文压缩成摘要。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不要超过 chapter_maximum_words。可以补足场景衔接和既定情节的表现细节，但不得用无意义重复凑字，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，只返回完整章节正文。',
+                prompt: '请组装以下场景并只返回完整的简体中文章节正文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.3,
                 maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
                 promptVersion: $promptVersion,
@@ -142,6 +143,8 @@ class ChapterAssembler
             throw new AiProviderException('assembly_context_incomplete', 'Chapter Assembly 缺少 Story State。', false);
         }
 
+        $targetWords = (int) $chapter->latestPlan->target_words;
+
         return [
             'chapter_id' => $chapter->getKey(),
             'state_version' => $stateVersion,
@@ -151,7 +154,10 @@ class ChapterAssembler
             ]),
             'style_constraints' => $chapter->novel->currentBible?->only(['tone', 'pov', 'tense', 'taboos', 'hard_constraints']) ?? [],
             'writing_constraints' => [
-                'chapter_target_words' => $chapter->latestPlan->target_words,
+                'chapter_target_words' => $targetWords,
+                'chapter_minimum_words' => $this->lengthPolicy->chapterMinimum($targetWords),
+                'chapter_maximum_words' => $this->lengthPolicy->chapterMaximum($targetWords),
+                'source_scene_words' => $artifacts->sum(fn (GenerationArtifact $artifact): int => $this->lengthPolicy->count($artifact->content)),
                 'style_profile' => $this->narrativeStyleProfile->forNovel($chapter->novel),
             ],
             'ordered_scene_checksums' => $artifacts->pluck('checksum')->all(),
@@ -237,7 +243,13 @@ class ChapterAssembler
                 'type' => ArtifactType::ChapterDraft,
                 'version' => ((int) $version) + 1,
                 'content' => $content,
-                'data' => ['ordered_scene_checksums' => $expectedChecksums],
+                'data' => [
+                    'ordered_scene_checksums' => $expectedChecksums,
+                    'word_count' => $this->lengthPolicy->count($content),
+                    'target_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'),
+                    'minimum_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'),
+                    'maximum_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_maximum_words'),
+                ],
                 'checksum' => hash('sha256', $content),
             ]);
             $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
