@@ -1533,7 +1533,9 @@ class ViewNovelChapter extends ViewRecord
 
                             Notification::make()
                                 ->title('故事事件提取已加入队列')
-                                ->body('候选事件不会修改正式故事状态。')
+                                ->body($artifact === null
+                                    ? '完成后将自动生成状态补丁并执行审校；正式故事状态只会在提交正式版本时更新。'
+                                    : '完成后将自动重建状态补丁并重新审校；正式故事状态只会在提交正式版本时更新。')
                                 ->success()
                                 ->send();
                         }),
@@ -1592,58 +1594,83 @@ class ViewNovelChapter extends ViewRecord
     /** @return array<int, mixed> */
     private function stateChangesSchema(): array
     {
-        $artifact = $this->latestStatePatchArtifact();
         $candidate = $this->latestEventCandidateArtifact();
+        $artifact = $this->latestStatePatchArtifact();
         $validation = $artifact === null ? null : app(StateValidator::class)->validate($this->chapterId);
+        $chapterState = $this->chapter()->latestStateVersion;
+        $canonicalState = $chapterState ?? $this->getRecord()->canonicalStateVersion()->first();
+        $isApplied = $this->chapter()->status === ChapterStatus::Canonical && $chapterState !== null;
 
         return [
-            Section::make('状态补丁预览')
+            Section::make($isApplied ? '已生效状态变化' : '待提交状态变化')
                 ->key('state-patch-preview')
-                ->description('根据候选事件确定性计算预期状态变化；此操作不会修改正式故事状态。')
+                ->description(match (true) {
+                    $isApplied => '本章状态补丁已经通过正式提交写入故事状态。',
+                    $artifact !== null => '当前为只读候选预览；审校通过并提交正式版本后，才会写入正式故事状态。',
+                    $candidate !== null => '当前事件候选尚无匹配的状态补丁，请使用恢复操作补建。',
+                    default => '事件提取完成后会自动生成状态补丁；正式故事状态只会在提交正式版本时更新。',
+                })
                 ->icon('heroicon-o-arrows-right-left')
                 ->headerActions([
                     Action::make('buildStatePatch')
-                        ->label($artifact === null ? '生成状态补丁' : '重新生成状态补丁')
+                        ->label('补建状态补丁')
                         ->icon('heroicon-o-wrench-screwdriver')
-                        ->disabled($candidate === null || $this->generationWorkPending())
-                        ->tooltip(match (true) {
-                            $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
-                            $candidate === null => '请先生成故事事件候选。',
-                            default => null,
-                        })
+                        ->visible($candidate !== null && $artifact === null)
+                        ->disabled($this->generationWorkPending())
+                        ->tooltip($this->generationWorkPending() ? '当前生成任务尚未完成，请等待。' : '为当前最新事件候选补建缺失的状态补丁。')
                         ->action(function (): void {
                             $artifact = app(StatePatchBuilder::class)->build($this->chapterId);
+                            $reused = ! $artifact->wasRecentlyCreated;
+                            $canonicalVersion = $this->getRecord()->canonicalStateVersion()->value('version');
+
+                            $this->cachedChapter = null;
                             $this->cacheSchema('content', null);
 
                             Notification::make()
-                                ->title('状态补丁已生成')
-                                ->body('产物 v'.$artifact->version.'，正式故事状态未被修改。')
+                                ->title($reused ? '状态补丁无需更新' : '状态补丁已补建')
+                                ->body($reused
+                                    ? '当前事件候选的计算结果没有变化，已复用状态补丁 v'.$artifact->version.'。'
+                                    : '待提交预览 v'.$artifact->version.' 已准备；当前正式故事状态仍为 v'.$canonicalVersion.'，提交正式版本后生效。')
                                 ->success()
                                 ->send();
                         }),
                 ])
-                ->columns(['default' => 1, 'md' => 4])
+                ->columns(['default' => 1, 'md' => 2, 'xl' => 5])
                 ->schema([
                     TextEntry::make('patch_status')
                         ->label('状态')
-                        ->state(fn (): string => $artifact === null ? '尚未生成' : '候选')
+                        ->state(match (true) {
+                            $isApplied => '已生效',
+                            $artifact !== null => '候选，尚未生效',
+                            $candidate !== null => '等待补建',
+                            default => '等待事件提取',
+                        })
                         ->badge()
-                        ->color(fn (): string => $artifact === null ? 'gray' : 'warning'),
+                        ->color(match (true) {
+                            $isApplied => 'success',
+                            $artifact !== null => 'warning',
+                            default => 'gray',
+                        }),
                     TextEntry::make('patch_version')
-                        ->label('产物')
+                        ->label('状态补丁')
                         ->state(fn (): ?string => $artifact === null ? null : 'v'.$artifact->version)
                         ->placeholder('—'),
-                    TextEntry::make('expected_state_version')
-                        ->label('预期状态版本')
-                        ->state(fn (): ?string => $artifact === null ? null : 'v'.data_get($artifact->data, 'expected_state_version'))
+                    TextEntry::make('canonical_state_version')
+                        ->label($isApplied ? '正式状态版本' : '当前正式状态')
+                        ->state($canonicalState === null ? null : 'v'.$canonicalState->version)
                         ->placeholder('—'),
-                    TextEntry::make('source_event_artifact')
-                        ->label('来源事件')
-                        ->state(fn (): ?string => $artifact === null ? null : '#'.data_get($artifact->data, 'source_artifact_id'))
+                    TextEntry::make('artifact_chain')
+                        ->label('当前产物链')
+                        ->state($candidate === null ? null : '正文 #'.data_get($candidate->data, 'source_artifact_id').
+                            ' → 事件 #'.$candidate->getKey().
+                            ($artifact === null ? ' → 状态补丁待补建' : ' → 状态补丁 #'.$artifact->getKey()))
                         ->placeholder('—'),
+                    TextEntry::make('activation_condition')
+                        ->label('生效条件')
+                        ->state($isApplied ? '已提交正式版本' : '审校 PASS 后提交正式版本'),
                 ]),
-            Section::make('尚无正式状态变化')
-                ->description($candidate === null ? '请先生成故事事件候选。' : '点击“生成状态补丁”查看本章提交后会改变什么。')
+            Section::make($candidate === null ? '尚无事件候选' : '当前事件候选尚无状态补丁')
+                ->description($candidate === null ? '请先提取故事事件；完成后系统会自动生成状态补丁。' : '没有找到来源于当前事件候选 #'.$candidate->getKey().' 的状态补丁，请点击“补建状态补丁”。')
                 ->icon('heroicon-o-document-magnifying-glass')
                 ->visible($artifact === null),
             Section::make('预期状态变化')
@@ -1738,7 +1765,19 @@ class ViewNovelChapter extends ViewRecord
 
     private function latestStatePatchArtifact(): ?GenerationArtifact
     {
-        return $this->latestTimelineArtifact(ArtifactType::StatePatch);
+        $candidate = $this->latestEventCandidateArtifact();
+
+        if ($candidate === null) {
+            return null;
+        }
+
+        return $this->chapter()->generationRuns
+            ->where('id', '>=', $this->currentPlanningRunId())
+            ->flatMap->artifacts
+            ->where('type', ArtifactType::StatePatch)
+            ->filter(fn (GenerationArtifact $artifact): bool => (int) data_get($artifact->data, 'source_artifact_id') === $candidate->getKey())
+            ->sortByDesc('version')
+            ->first();
     }
 
     private function hasRecoverableReviewPrerequisiteFinding(): bool

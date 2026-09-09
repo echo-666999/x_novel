@@ -175,7 +175,7 @@ test('chapter detail shows useful empty states before planning starts', function
         ->assertOk()
         ->assertSee('尚未建立章节计划')
         ->assertSee('尚未同步场景')
-        ->assertSee('尚无正式状态变化');
+        ->assertSee('尚无事件候选');
 });
 
 test('chapter overview shows the latest draft length instead of the stored canonical word count', function () {
@@ -852,8 +852,8 @@ test('state changes workspace builds and displays a candidate patch preview', fu
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
-        ->assertSee('状态补丁预览')
-        ->assertSee('尚未生成')
+        ->assertSee('待提交状态变化')
+        ->assertSee('等待补建')
         ->assertActionExists(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'))
         ->callAction(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'));
 
@@ -863,12 +863,67 @@ test('state changes workspace builds and displays a candidate patch preview', fu
     ]);
 
     $page
-        ->assertSee('候选')
+        ->assertSee('候选，尚未生效')
+        ->assertSee('审校 PASS 后提交正式版本')
+        ->assertSee('正文 #99 → 事件 #'.$eventRun->artifacts()->where('type', ArtifactType::EventCandidate)->value('id').' → 状态补丁 #')
         ->assertSee('characters.12.location')
         ->assertSee('洛阳')
-        ->assertSee('character_moved');
+        ->assertSee('character_moved')
+        ->assertActionDoesNotExist(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'));
 
     expect($novel->fresh()->storyStateVersions()->count())->toBe(1);
+});
+
+test('state changes workspace never presents an older candidate patch as current', function () {
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create();
+    $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $oldCandidate = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'version' => 1,
+        'data' => ['status' => 'candidate', 'source_artifact_id' => 99, 'events' => []],
+    ]);
+    GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::StatePatch,
+        'version' => 1,
+        'data' => [
+            'status' => 'candidate',
+            'source_artifact_id' => $oldCandidate->getKey(),
+            'expected_state_version' => 0,
+            'operations' => [],
+            'changes' => [[
+                'path' => 'characters.12.location',
+                'operation' => 'set',
+                'before' => '长安',
+                'after' => '洛阳',
+                'before_missing' => false,
+                'after_missing' => false,
+                'source_event_index' => 0,
+                'source_event_type' => 'character_moved',
+                'source_subject_type' => 'character',
+                'source_subject_id' => '12',
+            ]],
+        ],
+    ]);
+    $currentCandidate = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'version' => 2,
+        'data' => ['status' => 'candidate', 'source_artifact_id' => 99, 'events' => []],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('当前事件候选尚无状态补丁')
+        ->assertSee('事件 #'.$currentCandidate->getKey().' → 状态补丁待补建')
+        ->assertDontSee('characters.12.location')
+        ->assertActionVisible(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'));
 });
 
 test('state findings panel clearly blocks a golden locked fact conflict', function () {

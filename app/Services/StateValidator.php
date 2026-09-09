@@ -26,24 +26,21 @@ class StateValidator
     public function validate(int $chapterId): StateValidationResult
     {
         $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan'])->findOrFail($chapterId);
-        $patchArtifact = $this->latestArtifact($chapter, ArtifactType::StatePatch);
-
-        if ($patchArtifact === null) {
-            return new StateValidationResult([$this->hard('INVALID_STATE_PATCH', '本章尚未生成 State Patch。')]);
-        }
-
-        $candidateArtifact = GenerationArtifact::query()
-            ->whereKey(data_get($patchArtifact->data, 'source_artifact_id'))
-            ->where('type', ArtifactType::EventCandidate)
-            ->first();
+        $candidateArtifact = $this->latestArtifact($chapter, ArtifactType::EventCandidate);
 
         if ($candidateArtifact === null) {
-            return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', 'State Patch 引用的 Event Candidate Artifact 不存在。')]);
+            return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', '本章尚未生成 Event Candidate。')]);
         }
 
         $latestDraft = $this->latestDraft($chapter);
         if ($latestDraft !== null && (int) data_get($candidateArtifact->data, 'source_artifact_id') !== $latestDraft->getKey()) {
-            return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', 'State Patch 对应的事件候选不是从当前最新章节草稿提取的。')]);
+            return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', '当前最新事件候选不是从当前最新章节草稿提取的。')]);
+        }
+
+        $patchArtifact = $this->latestPatchForCandidate($chapter, $candidateArtifact);
+
+        if ($patchArtifact === null) {
+            return new StateValidationResult([$this->hard('INVALID_STATE_PATCH', '当前最新事件候选尚未生成匹配的 State Patch。')]);
         }
 
         $stateVersion = $chapter->novel->canonicalStateVersion;
@@ -333,6 +330,17 @@ class StateValidator
             ->latest('version')
             ->latest('id')
             ->first();
+    }
+
+    private function latestPatchForCandidate(Chapter $chapter, GenerationArtifact $candidate): ?GenerationArtifact
+    {
+        return GenerationArtifact::query()
+            ->where('type', ArtifactType::StatePatch)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+            ->latest('version')
+            ->latest('id')
+            ->get()
+            ->first(fn (GenerationArtifact $artifact): bool => (int) data_get($artifact->data, 'source_artifact_id') === $candidate->getKey());
     }
 
     private function hard(string $code, string $message, ?StoryEventCandidate $event = null, ?int $relatedFactId = null, ?string $relatedStatePath = null, array $metadata = []): StateFinding

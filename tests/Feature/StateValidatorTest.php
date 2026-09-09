@@ -160,3 +160,18 @@ test('a valid patch passes deterministic validation', function () {
         ->and($result->decision())->toBe('PASS')
         ->and($result->findings)->toBe([]);
 });
+
+test('an older patch cannot validate a newer event candidate', function () {
+    $fixture = validatorFixture([], [], []);
+    GenerationArtifact::factory()->for($fixture['candidate']->generationRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'version' => 2,
+        'data' => ['status' => 'candidate', 'events' => []],
+    ]);
+
+    $result = app(StateValidator::class)->validate($fixture['chapter']->getKey());
+
+    expect($result->decision())->toBe('BLOCK')
+        ->and(array_column($result->findings, 'code'))->toBe(['INVALID_STATE_PATCH'])
+        ->and($result->findings[0]->message)->toBe('当前最新事件候选尚未生成匹配的 State Patch。');
+});

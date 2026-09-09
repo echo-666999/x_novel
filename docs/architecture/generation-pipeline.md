@@ -301,6 +301,8 @@ events:{draft_checksum}:{state_version}:{prompt_version}
 
 人工重新提取事件也必须继续执行 State Patch 和 Review。Review 开始前若缺少当前草稿对应的 Event Candidate 或 State Patch，流程以 `review_prerequisite_missing` 终止，不调用模型，也不创建错误的 BLOCK Review。历史上由缺失补丁造成的 BLOCK 在章节工作台提供“补建状态补丁并重新审校”恢复入口，原 Review 保持不可变。
 
+章节工作台中的“状态变化”页签用于展示当前 Draft → Event Candidate → State Patch 的只读待提交预览。正常事件提取完成后自动构建 State Patch；只有当前最新 Event Candidate 缺少匹配 Patch 时才显示“补建状态补丁”。页面和 `StateValidator` 不得把旧 Event Candidate 对应的 Patch 显示或校验为当前补丁。State Patch 不修改 Canonical Story State，只有 Review PASS 后的 Canonical Commit 才使其生效。
+
 ## 12. ReviewChapterJob
 
 Review 汇总：

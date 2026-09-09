@@ -29,10 +29,6 @@ Story Engine 只回答两个核心问题：
 ```text
 Chapter Draft
     ↓
-Review
-    ↓
-PASS
-    ↓
 Event Extraction
     ↓
 StoryEventCandidate[]
@@ -40,6 +36,10 @@ StoryEventCandidate[]
 State Patch
     ↓
 State Validator
+    ↓
+Review
+    ↓
+PASS
     ↓
 Canonical Commit
     ↓

@@ -14,6 +14,7 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Jobs\ExtractStoryEventsJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -23,6 +24,7 @@ use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Services\StoryEventExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
@@ -149,6 +151,23 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and(data_get($run->context_snapshot, 'event_subject_type_rules.promise_made'))->toBe(['relationship'])
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
+});
+
+test('the event workflow automatically builds the matching state patch before review', function () {
+    Queue::fake();
+    $fixture = eventExtractionFixture();
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture)));
+
+    (new ExtractStoryEventsJob($fixture['chapter']->getKey(), continueRewrite: true))
+        ->handle(app(StoryEventExtractor::class));
+
+    $candidate = GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->sole();
+    $patch = GenerationArtifact::query()->where('type', ArtifactType::StatePatch)->sole();
+
+    expect((int) data_get($patch->data, 'source_artifact_id'))->toBe($candidate->getKey())
+        ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
+        ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && $job->regenerate);
 });
 
 test('extractor binds evidence to the authoritative chapter draft instead of trusting a model artifact id', function () {
