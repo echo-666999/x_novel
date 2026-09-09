@@ -8,7 +8,6 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Models\GenerationRun;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -29,6 +28,7 @@ class StalledRunRecoveryService
     public function __construct(
         private readonly PauseGenerationAction $pauseGeneration,
         private readonly ResumeResolver $resumeResolver,
+        private readonly GenerationRunLease $runLease,
     ) {}
 
     public function markStalledRuns(): int
@@ -36,7 +36,7 @@ class StalledRunRecoveryService
         return GenerationRun::query()
             ->where('status', RunStatus::Running)
             ->whereIn('stage', self::RECOVERABLE_STAGES)
-            ->where('updated_at', '<=', $this->cutoff())
+            ->where('updated_at', '<=', $this->runLease->cutoff())
             ->update([
                 'status' => RunStatus::Failed,
                 'error_code' => self::ERROR_CODE,
@@ -48,8 +48,7 @@ class StalledRunRecoveryService
     public function isStalled(GenerationRun $run): bool
     {
         return $run->status === RunStatus::Running
-            && $run->updated_at !== null
-            && $run->updated_at->lte($this->cutoff());
+            && $this->runLease->isExpired($run);
     }
 
     public function recover(GenerationRun $run): ResumePoint
@@ -127,10 +126,5 @@ class StalledRunRecoveryService
             unset($snapshot['recovery']);
         }
         $run->update(['context_snapshot' => $snapshot]);
-    }
-
-    private function cutoff(): Carbon
-    {
-        return now()->subSeconds((int) config('generation.stalled_run_after_seconds', 300));
     }
 }

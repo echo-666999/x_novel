@@ -24,8 +24,6 @@ use Throwable;
 
 class SceneGenerator
 {
-    private const STALE_RUN_SECONDS = 120;
-
     public function __construct(
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
@@ -33,6 +31,7 @@ class SceneGenerator
         private readonly ContextBuilder $contextBuilder,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
         private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly GenerationRunLease $runLease,
     ) {}
 
     public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null): ?GenerationArtifact
@@ -218,7 +217,7 @@ class SceneGenerator
             $runs = $scene->generationRuns()->where('stage', GenerationStage::SceneGeneration);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
 
-            if ($active !== null && $active->updated_at->gt(now()->subSeconds(self::STALE_RUN_SECONDS))) {
+            if ($this->runLease->isFresh($active)) {
                 return [$active, true];
             }
 

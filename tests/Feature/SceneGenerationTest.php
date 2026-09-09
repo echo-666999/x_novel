@@ -384,7 +384,7 @@ test('a stale running scene is marked interrupted and resumed with a new run', f
         'stage' => GenerationStage::SceneGeneration,
         'status' => RunStatus::Running,
         'attempt' => 1,
-        'updated_at' => now()->subMinutes(3),
+        'updated_at' => now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1),
     ]);
     $fake = (new FakeAiProvider)->enqueue(sceneResponse('恢复后生成成功。'));
     app()->instance(AiProvider::class, $fake);

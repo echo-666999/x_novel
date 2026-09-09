@@ -17,7 +17,7 @@ class GenerateEmbeddingJob implements ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 60;
+    public int $timeout = 90;
 
     /** @var array<int> */
     public array $backoff = [10, 30];

@@ -325,10 +325,10 @@ test('a stale running planner run is failed and recovered as a new attempt', fun
         'attempt' => 1,
         'idempotency_key' => 'stale-planner-run',
         'input_hash' => hash('sha256', 'stale'),
-        'started_at' => now()->subMinutes(3),
+        'started_at' => now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1),
     ]);
     $stale->timestamps = false;
-    $stale->updated_at = now()->subMinutes(3);
+    $stale->updated_at = now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1);
     $stale->saveQuietly();
 
     app(ChapterPlanner::class)->generate($chapter->getKey());

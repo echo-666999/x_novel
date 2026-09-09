@@ -215,7 +215,7 @@ test('a stale assembly run is marked interrupted before recovery', function () {
         'scene_id' => null,
         'stage' => GenerationStage::ChapterAssembly,
         'status' => RunStatus::Running,
-        'updated_at' => now()->subMinutes(3),
+        'updated_at' => now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1),
     ]);
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse()));
 

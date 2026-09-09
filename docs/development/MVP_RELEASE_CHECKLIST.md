@@ -45,6 +45,18 @@ php artisan horizon:status
 
 `horizon:terminate` 依赖 Supervisor 或其他进程管理器自动重启 Horizon。确认 Horizon 同时监听 `generation` 和 `default` Queue。
 
+macOS + Herd 本地环境使用项目内的 launchd 配置常驻 Horizon：
+
+```bash
+mkdir -p "$HOME/Library/LaunchAgents"
+cp ops/launchd/com.xnovel.horizon.plist "$HOME/Library/LaunchAgents/com.xnovel.horizon.plist"
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.xnovel.horizon.plist"
+launchctl enable "gui/$(id -u)/com.xnovel.horizon"
+launchctl kickstart -k "gui/$(id -u)/com.xnovel.horizon"
+```
+
+该 LaunchAgent 使用 `RunAtLoad + KeepAlive`，登录后自动启动，异常退出或执行 `horizon:terminate` 后自动恢复。安装后不要再在终端手工启动第二个 Horizon Master。配置中的项目路径和 Herd PHP 路径是本机绝对路径，移动项目或切换用户后必须同步修改。
+
 ## 5. State 与 Memory 恢复
 
 先校验 Story State：

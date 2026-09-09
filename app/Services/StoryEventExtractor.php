@@ -24,12 +24,11 @@ use Throwable;
 
 class StoryEventExtractor
 {
-    private const STALE_RUN_SECONDS = 120;
-
     public function __construct(
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
+        private readonly GenerationRunLease $runLease,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -167,7 +166,7 @@ class StoryEventExtractor
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::EventExtraction);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
 
-            if ($active !== null && $active->updated_at->gt(now()->subSeconds(self::STALE_RUN_SECONDS))) {
+            if ($this->runLease->isFresh($active)) {
                 return [$active, true];
             }
 

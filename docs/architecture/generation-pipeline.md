@@ -522,6 +522,25 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 统一配置 planning、scene_generation、assembly、event_extraction、review、rewrite、embedding timeout。
 
+默认超时链：
+
+```text
+Provider request timeout = 60s
+单次 Provider 调用 Job = 90s
+可能执行一次字数修复的 Scene / Assembly / Rewrite Job = 180s
+Horizon worker timeout = 210s
+Redis retry_after = 240s
+Generation Run stalled threshold = 300s
+```
+
+必须始终满足：
+
+```text
+Provider 调用预算 < Job timeout < Horizon worker timeout < Redis retry_after < stalled threshold
+```
+
+本地 Horizon 为 `generation` 与 `default` 各保留一个 Worker，总进程数固定为两个，避免短任务结束后频繁缩容产生无业务失败含义的 `Worker STOPPED Interrupted`。生产环境可以继续自动扩缩容。
+
 同时限制：
 
 ```text

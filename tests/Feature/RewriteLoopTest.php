@@ -201,7 +201,7 @@ test('stale rewrite run is marked interrupted before recovery', function () {
     $stale = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
         'scope_type' => 'chapter', 'scope_id' => $fixture['chapter']->getKey(),
         'stage' => GenerationStage::Rewrite, 'status' => RunStatus::Running,
-        'updated_at' => now()->subMinutes(3),
+        'updated_at' => now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1),
     ]);
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(rewriteResponse()));
 

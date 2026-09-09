@@ -24,8 +24,6 @@ use Throwable;
 
 class ChapterPlanner
 {
-    private const STALE_RUN_SECONDS = 120;
-
     public function __construct(
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
@@ -35,6 +33,7 @@ class ChapterPlanner
         private readonly SyncScenesFromChapterPlanAction $syncScenes,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
         private readonly PreviousChapterEnding $previousChapterEnding,
+        private readonly GenerationRunLease $runLease,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -112,7 +111,7 @@ class ChapterPlanner
 
             $activeRun = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
 
-            if ($activeRun !== null && $activeRun->updated_at->gt(now()->subSeconds(self::STALE_RUN_SECONDS))) {
+            if ($this->runLease->isFresh($activeRun)) {
                 return [$activeRun, true];
             }
 

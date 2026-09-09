@@ -202,6 +202,7 @@ return [
             'queue' => ['generation', 'default'],
             'balance' => 'auto',
             'autoScalingStrategy' => 'time',
+            'minProcesses' => 1,
             'maxProcesses' => 1,
             'maxTime' => 0,
             'maxJobs' => 0,
@@ -223,7 +224,9 @@ return [
 
         'local' => [
             'supervisor-1' => [
-                'maxProcesses' => 3,
+                // One baseline worker per queue avoids creating and immediately
+                // terminating a third process after short local workloads.
+                'maxProcesses' => 2,
             ],
         ],
     ],

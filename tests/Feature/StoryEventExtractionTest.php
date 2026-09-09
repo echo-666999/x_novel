@@ -280,7 +280,7 @@ test('stale event extraction run is marked interrupted before recovery', functio
         'scope_id' => $fixture['chapter']->getKey(),
         'stage' => GenerationStage::EventExtraction,
         'status' => RunStatus::Running,
-        'updated_at' => now()->subMinutes(3),
+        'updated_at' => now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1),
     ]);
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture)));
 
