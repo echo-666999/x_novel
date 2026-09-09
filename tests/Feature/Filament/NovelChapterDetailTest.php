@@ -11,6 +11,7 @@ use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
+use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\ReviewChapterJob;
@@ -27,6 +28,7 @@ use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\User;
+use App\Services\GenerationJobDispatcher;
 use Filament\Actions\Testing\TestAction;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -463,6 +465,31 @@ test('scene workspace exposes generation actions and execution metrics', functio
         && $job->regenerationBatchId !== null);
 });
 
+test('scene generation is disabled immediately after it is queued', function () {
+    Queue::fake();
+
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1]);
+    $action = TestAction::make('generateScene'.$scene->getKey())->schemaComponent('scene-'.$scene->getKey(), 'content');
+
+    $page = Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ]);
+
+    $page->assertActionEnabled($action)
+        ->callAction($action)
+        ->assertActionDisabled($action);
+
+    Queue::assertPushed(GenerateSceneJob::class, 1);
+
+    app(GenerationJobDispatcher::class)->release(new GenerateSceneJob($scene->getKey()));
+
+    $page->call('$refresh')->assertActionEnabled($action);
+});
+
 test('scene workspace distinguishes current and historical artifact versions', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
@@ -585,6 +612,33 @@ test('draft workspace switches between artifact versions and source scenes', fun
         ->assertSee('第 1 幕正文');
 });
 
+test('chapter assembly is disabled immediately after it is queued', function () {
+    Queue::fake();
+
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::SceneDraft]);
+    $scene->update(['current_artifact_id' => $artifact->getKey()]);
+    $action = TestAction::make('assembleChapter')->schemaComponent('chapter-assembly', 'content');
+
+    $page = Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ]);
+
+    $page->assertActionEnabled($action)
+        ->callAction($action)
+        ->assertActionDisabled($action);
+
+    Queue::assertPushed(AssembleChapterJob::class, 1);
+});
+
 test('pipeline timeline identifies the blocked stage and exposes its run details', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
@@ -697,11 +751,14 @@ test('events workspace shows candidates and can dispatch extraction', function (
         ->assertSee('95.0%')
         ->assertSee('林舟抵达洛阳。')
         ->assertActionExists(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'))
-        ->callAction(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'));
+        ->callAction(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'))
+        ->assertActionDisabled(TestAction::make('extractStoryEvents')->schemaComponent('story-event-candidates', 'content'))
+        ->assertActionDisabled(TestAction::make('buildStatePatch')->schemaComponent('state-patch-preview', 'content'));
 
     Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $chapter->getKey()
         && $job->regenerate
         && $job->continueRewrite);
+    Queue::assertPushed(ExtractStoryEventsJob::class, 1);
 });
 
 test('a false block caused by a missing state patch exposes one click recovery', function () {

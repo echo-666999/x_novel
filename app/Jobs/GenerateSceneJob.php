@@ -4,19 +4,21 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\SceneStatus;
+use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\Scene;
 use App\Services\AutoStopService;
 use App\Services\SceneGenerator;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-class GenerateSceneJob implements ShouldQueue
+class GenerateSceneJob implements ShouldBeUnique, ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
     public int $tries = 3;
 
@@ -34,6 +36,11 @@ class GenerateSceneJob implements ShouldQueue
         $this->onQueue('generation');
     }
 
+    public function uniqueId(): string
+    {
+        return 'scene:'.$this->sceneId;
+    }
+
     public function handle(SceneGenerator $generator): void
     {
         try {
@@ -42,12 +49,15 @@ class GenerateSceneJob implements ShouldQueue
             if ($this->cascade && $artifact !== null) {
                 $this->dispatchNextScene();
             }
+
+            $this->releaseGenerationDispatch();
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if (! in_array($exception->errorCode, ['novel_paused', 'previous_scene_incomplete'], true)) {
                     $generator->markTerminalFailure($this->sceneId, $exception);
                 }
 
+                $this->releaseGenerationDispatch();
                 $this->fail($exception);
 
                 return;
@@ -68,16 +78,19 @@ class GenerateSceneJob implements ShouldQueue
             ->value('id');
 
         if ($nextSceneId !== null) {
-            GenerateSceneJob::dispatch(
+            $job = new GenerateSceneJob(
                 sceneId: (int) $nextSceneId,
                 cascade: true,
                 regenerationBatchId: $this->regenerationBatchId,
-            )->afterCommit();
+            );
+            $job->afterCommit();
+            $this->dispatchGenerationJob($job);
         }
     }
 
     public function failed(?Throwable $exception): void
     {
+        $this->releaseGenerationDispatch();
         $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
         if ($chapterId !== null) {
             app(AutoStopService::class)->stopForFailure((int) $chapterId, $exception);

@@ -4,10 +4,12 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\ReviewDecision;
+use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
 use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -15,9 +17,9 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
-class ReviewChapterJob implements ShouldQueue
+class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
     public int $tries = 3;
 
@@ -28,6 +30,11 @@ class ReviewChapterJob implements ShouldQueue
     public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false)
     {
         $this->onQueue('generation');
+    }
+
+    public function uniqueId(): string
+    {
+        return 'chapter:'.$this->chapterId;
     }
 
     public function handle(ChapterReviewer $reviewer): void
@@ -42,22 +49,32 @@ class ReviewChapterJob implements ShouldQueue
                     fn () => CommitChapterJob::dispatch($this->chapterId, $review->getKey()),
                 );
             }
+
+            $this->releaseGenerationDispatch();
         } catch (AiProviderException $e) {
             if (! $e->retryable) {
                 if (! in_array($e->errorCode, ['novel_paused', 'review_prerequisite_missing'], true)) {
                     $reviewer->markTerminalFailure($this->chapterId);
-                } $this->fail($e);
+                }
+                $this->releaseGenerationDispatch();
+                $this->fail($e);
 
                 return;
-            } throw $e;
+            }
+
+            throw $e;
         } catch (ValidationException $e) {
             $reviewer->markTerminalFailure($this->chapterId);
+            $this->releaseGenerationDispatch();
             $this->fail($e);
+
+            return;
         }
     }
 
     public function failed(?Throwable $e): void
     {
+        $this->releaseGenerationDispatch();
         if ($e instanceof AiProviderException && in_array($e->errorCode, ['novel_paused', 'review_prerequisite_missing'], true)) {
             return;
         }

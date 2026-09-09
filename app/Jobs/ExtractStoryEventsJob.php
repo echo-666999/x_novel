@@ -3,11 +3,13 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\GenerationStageGate;
 use App\Services\StatePatchBuilder;
 use App\Services\StoryEventExtractor;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -15,9 +17,9 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
-class ExtractStoryEventsJob implements ShouldQueue
+class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
     public int $tries = 3;
 
@@ -31,6 +33,11 @@ class ExtractStoryEventsJob implements ShouldQueue
         $this->onQueue('generation');
     }
 
+    public function uniqueId(): string
+    {
+        return 'chapter:'.$this->chapterId;
+    }
+
     public function handle(StoryEventExtractor $extractor): void
     {
         try {
@@ -38,15 +45,18 @@ class ExtractStoryEventsJob implements ShouldQueue
             if ($artifact !== null && $this->continueRewrite) {
                 app(GenerationStageGate::class)->dispatchForChapter($this->chapterId, function (): void {
                     app(StatePatchBuilder::class)->build($this->chapterId);
-                    ReviewChapterJob::dispatch($this->chapterId, true);
+                    $this->dispatchGenerationJob(new ReviewChapterJob($this->chapterId, true));
                 });
             }
+
+            $this->releaseGenerationDispatch();
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if ($exception->errorCode !== 'novel_paused') {
                     $extractor->markTerminalFailure($this->chapterId);
                 }
 
+                $this->releaseGenerationDispatch();
                 $this->fail($exception);
 
                 return;
@@ -55,12 +65,16 @@ class ExtractStoryEventsJob implements ShouldQueue
             throw $exception;
         } catch (ValidationException $exception) {
             $extractor->markTerminalFailure($this->chapterId);
+            $this->releaseGenerationDispatch();
             $this->fail($exception);
+
+            return;
         }
     }
 
     public function failed(?Throwable $exception): void
     {
+        $this->releaseGenerationDispatch();
         app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
         app(StoryEventExtractor::class)->markTerminalFailure($this->chapterId);
     }

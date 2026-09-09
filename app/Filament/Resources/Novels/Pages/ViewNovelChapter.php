@@ -31,6 +31,7 @@ use App\Models\UsageRecord;
 use App\Services\CanonicalCommitService;
 use App\Services\DraftLengthPolicy;
 use App\Services\DraftRewriteDiff;
+use App\Services\GenerationJobDispatcher;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
@@ -48,6 +49,8 @@ use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 
@@ -62,6 +65,8 @@ class ViewNovelChapter extends ViewRecord
     protected ?Chapter $cachedChapter = null;
 
     protected ?int $cachedPlanningRunId = null;
+
+    protected ?bool $cachedGenerationWorkPending = null;
 
     public function mount(int|string $record, int|string|null $chapter = null): void
     {
@@ -95,10 +100,12 @@ class ViewNovelChapter extends ViewRecord
                 ->label('AI 生成章节计划')
                 ->icon('heroicon-o-sparkles')
                 ->visible(fn (): bool => $this->chapter()->latestPlan === null)
-                ->disabled(fn (): bool => $this->hasActivePlanningRun())
-                ->tooltip(fn (): ?string => $this->hasActivePlanningRun() ? '章节规划正在运行。' : null)
+                ->disabled(fn (): bool => $this->generationWorkPending())
+                ->tooltip(fn (): ?string => $this->generationWorkPending() ? '当前生成任务尚未完成，请等待。' : null)
                 ->action(function (): void {
-                    PlanChapterJob::dispatch($this->chapterId);
+                    if (! $this->dispatchGenerationJob(new PlanChapterJob($this->chapterId))) {
+                        return;
+                    }
 
                     Notification::make()
                         ->title('章节计划已加入生成队列')
@@ -111,16 +118,18 @@ class ViewNovelChapter extends ViewRecord
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
                 ->visible(fn (): bool => $this->chapter()->latestPlan !== null)
-                ->disabled(fn (): bool => $this->hasActivePlanningRun() || ! $this->canRegeneratePlan())
+                ->disabled(fn (): bool => $this->generationWorkPending() || ! $this->canRegeneratePlan())
                 ->tooltip(fn (): ?string => match (true) {
-                    $this->hasActivePlanningRun() => '章节规划正在运行。',
+                    $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                     ! $this->canRegeneratePlan() => '场景已进入生成流程，请在“场景”页签重新生成单个场景。仅已废弃章节可整体重新规划。',
                     default => null,
                 })
                 ->requiresConfirmation()
                 ->modalDescription('将生成新的计划版本；当前版本与产物会保留用于追踪。')
                 ->action(function (): void {
-                    PlanChapterJob::dispatch($this->chapterId, true);
+                    if (! $this->dispatchGenerationJob(new PlanChapterJob($this->chapterId, true))) {
+                        return;
+                    }
 
                     Notification::make()
                         ->title('章节计划重新生成已排队')
@@ -143,8 +152,8 @@ class ViewNovelChapter extends ViewRecord
                 ->visible(fn (): bool => $this->chapter()->status === ChapterStatus::Review
                     && $this->latestReview()?->decision === ReviewDecision::Pass
                     && $this->chapter()->canonical_artifact_id === null)
-                ->disabled(fn (): bool => $this->canonicalCommitContext() === null)
-                ->tooltip(fn (): ?string => $this->canonicalCommitContext() === null ? '请先完成事件提取、状态补丁与状态校验。' : null)
+                ->disabled(fn (): bool => $this->generationWorkPending() || $this->canonicalCommitContext() === null)
+                ->tooltip(fn (): ?string => $this->generationWorkPending() ? '当前生成任务尚未完成，请等待。' : ($this->canonicalCommitContext() === null ? '请先完成事件提取、状态补丁与状态校验。' : null))
                 ->modalHeading('提交正式章节')
                 ->modalDescription('该操作会原子写入正式事件、事实变化和新的故事状态版本。')
                 ->modalSubmitActionLabel('确认提交')
@@ -219,6 +228,7 @@ class ViewNovelChapter extends ViewRecord
         return $schema->components([
             Tabs::make('章节工作台')
                 ->persistTabInQueryString()
+                ->poll(fn (): ?string => $this->generationWorkPending() ? '3s' : null)
                 ->tabs([
                     Tab::make('概览')
                         ->icon('heroicon-o-squares-2x2')
@@ -277,12 +287,17 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-arrow-path-rounded-square')
                         ->color('warning')
                         ->visible(fn (): bool => $this->hasRecoverableReviewPrerequisiteFinding())
-                        ->disabled(fn (): bool => $this->latestEventCandidateArtifact() === null
-                            || $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
-                        ->tooltip(fn (): ?string => $this->latestEventCandidateArtifact() === null ? '请先重新提取故事事件。' : null)
+                        ->disabled(fn (): bool => $this->latestEventCandidateArtifact() === null || $this->generationWorkPending())
+                        ->tooltip(fn (): ?string => match (true) {
+                            $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
+                            $this->latestEventCandidateArtifact() === null => '请先重新提取故事事件。',
+                            default => null,
+                        })
                         ->action(function (): void {
                             $artifact = app(StatePatchBuilder::class)->build($this->chapterId);
-                            ReviewChapterJob::dispatch($this->chapterId, true);
+                            if (! $this->dispatchGenerationJob(new ReviewChapterJob($this->chapterId, true))) {
+                                return;
+                            }
                             $this->cacheSchema('content', null);
 
                             Notification::make()
@@ -429,13 +444,16 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-arrow-path')
                         ->color('warning')
                         ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
-                        ->disabled(fn (): bool => $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->disabled(fn (): bool => $this->generationWorkPending()
+                            || $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
                         ->tooltip(fn (): string => $this->rewriteActionTooltip('scene'))
                         ->schema([
                             Select::make('scene_id')->label('场景')->required()->options(fn (): array => $this->chapter()->scenes->mapWithKeys(fn (Scene $scene): array => [$scene->getKey() => '场景 '.$scene->sequence.' · '.$scene->goal])->all()),
                         ])
                         ->action(function (array $data): void {
-                            RewriteChapterJob::dispatch($this->chapterId, (int) $data['scene_id']);
+                            if (! $this->dispatchGenerationJob(new RewriteChapterJob($this->chapterId, (int) $data['scene_id']))) {
+                                return;
+                            }
                             Notification::make()
                                 ->title('场景重写已加入队列')
                                 ->body('完成后将自动重新组装章节、提取事件、重建状态补丁并重新审校。')
@@ -448,11 +466,14 @@ class ViewNovelChapter extends ViewRecord
                         ->color('warning')
                         ->requiresConfirmation()
                         ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
-                        ->disabled(fn (): bool => $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->disabled(fn (): bool => $this->generationWorkPending()
+                            || $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
                         ->tooltip(fn (): string => $this->rewriteActionTooltip('chapter'))
                         ->modalDescription('将基于最新审校问题生成新的不可变重写稿。完成后系统会自动重新提取事件、重建状态补丁并重新审校。')
                         ->action(function (): void {
-                            RewriteChapterJob::dispatch($this->chapterId);
+                            if (! $this->dispatchGenerationJob(new RewriteChapterJob($this->chapterId))) {
+                                return;
+                            }
                             Notification::make()
                                 ->title('章节重写已加入队列')
                                 ->body('完成后将自动提取事件、重建状态补丁并重新审校，无需再点“强制重新审校”。')
@@ -469,10 +490,11 @@ class ViewNovelChapter extends ViewRecord
                             $this->latestReview() !== null => '仅用于在正文未变化时再次执行审校；正常重写完成后系统会自动重新审校。',
                             default => null,
                         })
-                        ->disabled(fn (): bool => ! $this->reviewPrerequisitesReady()
-                            || $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
+                        ->disabled(fn (): bool => ! $this->reviewPrerequisitesReady() || $this->generationWorkPending())
                         ->action(function (): void {
-                            ReviewChapterJob::dispatch($this->chapterId, $this->latestReview() !== null);
+                            if (! $this->dispatchGenerationJob(new ReviewChapterJob($this->chapterId, $this->latestReview() !== null))) {
+                                return;
+                            }
                             Notification::make()->title('叙事审校已加入生成队列')->success()->send();
                         }),
                 ])
@@ -969,16 +991,24 @@ class ViewNovelChapter extends ViewRecord
                     ->label('生成')
                     ->icon('heroicon-o-play')
                     ->visible($scene->status === SceneStatus::Planned)
-                    ->disabled(! $this->canGenerateScene($scene))
-                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
+                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene))
+                    ->tooltip(match (true) {
+                        $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
+                        ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
+                        default => null,
+                    })
                     ->action(fn () => $this->dispatchScene($scene)),
                 Action::make('retryScene'.$scene->getKey())
                     ->label('重试')
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
                     ->visible($scene->status === SceneStatus::Failed)
-                    ->disabled(! $this->canGenerateScene($scene))
-                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
+                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene))
+                    ->tooltip(match (true) {
+                        $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
+                        ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
+                        default => null,
+                    })
                     ->requiresConfirmation()
                     ->modalHeading('重试场景 '.$scene->sequence)
                     ->modalDescription('将重置当前场景及其后续场景并按顺序重新生成。历史产物会保留。')
@@ -991,8 +1021,12 @@ class ViewNovelChapter extends ViewRecord
                     ->visible($artifact !== null
                         && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true)
                         && $this->chapter()->status !== ChapterStatus::Canonical)
-                    ->disabled(! $this->canGenerateScene($scene))
-                    ->tooltip(! $this->canGenerateScene($scene) ? '请等待前序场景生成成功。' : null)
+                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene))
+                    ->tooltip(match (true) {
+                        $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
+                        ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
+                        default => null,
+                    })
                     ->requiresConfirmation()
                     ->modalHeading('重新生成场景 '.$scene->sequence)
                     ->modalDescription('将重置当前场景及其后续场景并按顺序重新生成。历史产物会保留；完成后需要重新组装章节并重新审校。')
@@ -1109,7 +1143,9 @@ class ViewNovelChapter extends ViewRecord
 
     private function dispatchScene(Scene $scene): void
     {
-        GenerateSceneJob::dispatch($scene->getKey());
+        if (! $this->dispatchGenerationJob(new GenerateSceneJob($scene->getKey()))) {
+            return;
+        }
 
         Notification::make()
             ->title('场景已加入生成队列')
@@ -1120,8 +1156,26 @@ class ViewNovelChapter extends ViewRecord
 
     private function regenerateSceneSequence(Scene $scene, RegenerateSceneSequenceAction $regenerate): void
     {
-        $count = $regenerate->handle($scene);
+        $job = new GenerateSceneJob($scene->getKey(), cascade: true);
+        $dispatcher = app(GenerationJobDispatcher::class);
+
+        if (! $dispatcher->reserve($job)) {
+            $this->sendGenerationAlreadyPendingNotification();
+
+            return;
+        }
+
+        try {
+            $count = $regenerate->handle($scene);
+        } catch (\Throwable $exception) {
+            $dispatcher->release($job);
+
+            throw $exception;
+        }
+
+        $this->cachedGenerationWorkPending = null;
         $this->cachedChapter = null;
+        $this->cacheSchema('content', null);
 
         Notification::make()
             ->title('场景级联重新生成已加入队列')
@@ -1162,19 +1216,22 @@ class ViewNovelChapter extends ViewRecord
         $artifacts = $this->chapterDraftArtifacts();
         $sections = [
             Section::make('章节组装')
+                ->key('chapter-assembly')
                 ->description('按场景顺序组装完整章节；每次结果保存为新的不可变产物版本。')
                 ->headerActions([
                     Action::make('assembleChapter')
                         ->label('组装章节')
                         ->icon('heroicon-o-document-plus')
-                        ->disabled(! $this->canAssembleChapter() || $this->hasActiveAssemblyRun())
+                        ->disabled(! $this->canAssembleChapter() || $this->generationWorkPending())
                         ->tooltip(match (true) {
-                            $this->hasActiveAssemblyRun() => '章节组装正在运行。',
+                            $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                             ! $this->canAssembleChapter() => '所有 Scene 成功后才能组装 Chapter。',
                             default => null,
                         })
                         ->action(function (): void {
-                            AssembleChapterJob::dispatch($this->chapterId);
+                            if (! $this->dispatchGenerationJob(new AssembleChapterJob($this->chapterId))) {
+                                return;
+                            }
 
                             Notification::make()
                                 ->title('章节组装已加入队列')
@@ -1410,14 +1467,6 @@ class ViewNovelChapter extends ViewRecord
             && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true);
     }
 
-    private function hasActiveAssemblyRun(): bool
-    {
-        return $this->chapter()->generationRuns()
-            ->where('stage', GenerationStage::ChapterAssembly)
-            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
-            ->exists();
-    }
-
     private function latestAssemblyRun()
     {
         return $this->chapter()->generationRuns()
@@ -1469,16 +1518,18 @@ class ViewNovelChapter extends ViewRecord
                     Action::make('extractStoryEvents')
                         ->label($artifact === null ? '提取事件' : '重新提取事件')
                         ->icon('heroicon-o-sparkles')
-                        ->disabled($this->chapterDraftArtifacts()->isEmpty() || $this->hasActiveEventExtractionRun())
+                        ->disabled($this->chapterDraftArtifacts()->isEmpty() || $this->generationWorkPending())
                         ->tooltip(match (true) {
+                            $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                             $this->chapterDraftArtifacts()->isEmpty() => '需要先完成章节组装。',
-                            $this->hasActiveEventExtractionRun() => '故事事件提取正在运行。',
                             default => null,
                         })
                         ->requiresConfirmation($artifact !== null)
                         ->modalDescription($artifact === null ? null : '将创建新的不可变候选产物版本，现有候选不会被覆盖。')
                         ->action(function () use ($artifact): void {
-                            ExtractStoryEventsJob::dispatch($this->chapterId, $artifact !== null, true);
+                            if (! $this->dispatchGenerationJob(new ExtractStoryEventsJob($this->chapterId, $artifact !== null, true))) {
+                                return;
+                            }
 
                             Notification::make()
                                 ->title('故事事件提取已加入队列')
@@ -1533,14 +1584,6 @@ class ViewNovelChapter extends ViewRecord
         return $this->latestTimelineArtifact(ArtifactType::EventCandidate);
     }
 
-    private function hasActiveEventExtractionRun(): bool
-    {
-        return $this->chapter()->generationRuns
-            ->where('stage', GenerationStage::EventExtraction)
-            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
-            ->isNotEmpty();
-    }
-
     private function formatTimelineJson(mixed $value): string
     {
         return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
@@ -1562,8 +1605,12 @@ class ViewNovelChapter extends ViewRecord
                     Action::make('buildStatePatch')
                         ->label($artifact === null ? '生成状态补丁' : '重新生成状态补丁')
                         ->icon('heroicon-o-wrench-screwdriver')
-                        ->disabled($candidate === null)
-                        ->tooltip($candidate === null ? '请先生成故事事件候选。' : null)
+                        ->disabled($candidate === null || $this->generationWorkPending())
+                        ->tooltip(match (true) {
+                            $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
+                            $candidate === null => '请先生成故事事件候选。',
+                            default => null,
+                        })
                         ->action(function (): void {
                             $artifact = app(StatePatchBuilder::class)->build($this->chapterId);
                             $this->cacheSchema('content', null);
@@ -1991,12 +2038,61 @@ class ViewNovelChapter extends ViewRecord
             ->firstOrFail();
     }
 
-    private function hasActivePlanningRun(): bool
+    private function dispatchGenerationJob(ShouldQueue&ShouldBeUnique $job): bool
     {
-        return $this->chapter()->generationRuns()
-            ->where('stage', GenerationStage::ChapterPlanning)
+        if (! app(GenerationJobDispatcher::class)->dispatch($job)) {
+            $this->sendGenerationAlreadyPendingNotification();
+
+            return false;
+        }
+
+        $this->cachedGenerationWorkPending = null;
+        $this->cachedChapter = null;
+        $this->cacheSchema('content', null);
+
+        return true;
+    }
+
+    private function sendGenerationAlreadyPendingNotification(): void
+    {
+        Notification::make()
+            ->title('任务已经在队列中')
+            ->body('请等待当前生成任务完成后再操作。')
+            ->warning()
+            ->send();
+    }
+
+    private function generationWorkPending(): bool
+    {
+        return $this->cachedGenerationWorkPending ??= GenerationRun::query()
+            ->where('chapter_id', $this->chapterId)
+            ->whereIn('stage', [
+                GenerationStage::ChapterPlanning,
+                GenerationStage::SceneGeneration,
+                GenerationStage::ChapterAssembly,
+                GenerationStage::EventExtraction,
+                GenerationStage::Review,
+                GenerationStage::Rewrite,
+                GenerationStage::Commit,
+            ])
             ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
-            ->exists();
+            ->exists()
+            || collect($this->pendingGenerationJobs())->contains(
+                fn (ShouldQueue&ShouldBeUnique $job): bool => app(GenerationJobDispatcher::class)->isPending($job),
+            );
+    }
+
+    /** @return array<int, ShouldQueue&ShouldBeUnique> */
+    private function pendingGenerationJobs(): array
+    {
+        return [
+            new PlanChapterJob($this->chapterId),
+            ...$this->chapter()->scenes->map(fn (Scene $scene): GenerateSceneJob => new GenerateSceneJob($scene->getKey()))->all(),
+            new AssembleChapterJob($this->chapterId),
+            new ExtractStoryEventsJob($this->chapterId),
+            new ReviewChapterJob($this->chapterId),
+            new RewriteChapterJob($this->chapterId),
+        ];
     }
 
     private function currentDraftArtifact(): ?GenerationArtifact

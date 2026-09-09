@@ -3,19 +3,21 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterAssembler;
 use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-class AssembleChapterJob implements ShouldQueue
+class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
     public int $tries = 3;
 
@@ -29,6 +31,11 @@ class AssembleChapterJob implements ShouldQueue
         $this->onQueue('generation');
     }
 
+    public function uniqueId(): string
+    {
+        return 'chapter:'.$this->chapterId;
+    }
+
     public function handle(ChapterAssembler $assembler): void
     {
         try {
@@ -36,9 +43,11 @@ class AssembleChapterJob implements ShouldQueue
             if ($artifact !== null && $this->continueRewrite) {
                 app(GenerationStageGate::class)->dispatchForChapter(
                     $this->chapterId,
-                    fn () => ExtractStoryEventsJob::dispatch($this->chapterId, true, true),
+                    fn () => $this->dispatchGenerationJob(new ExtractStoryEventsJob($this->chapterId, true, true)),
                 );
             }
+
+            $this->releaseGenerationDispatch();
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if (! in_array($exception->errorCode, [
@@ -50,6 +59,7 @@ class AssembleChapterJob implements ShouldQueue
                     $assembler->markTerminalFailure($this->chapterId);
                 }
 
+                $this->releaseGenerationDispatch();
                 $this->fail($exception);
 
                 return;
@@ -61,6 +71,7 @@ class AssembleChapterJob implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        $this->releaseGenerationDispatch();
         app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
         app(ChapterAssembler::class)->markTerminalFailure($this->chapterId);
     }

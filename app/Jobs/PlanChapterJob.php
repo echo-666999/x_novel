@@ -3,9 +3,11 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterPlanner;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -13,9 +15,9 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
-class PlanChapterJob implements ShouldQueue
+class PlanChapterJob implements ShouldBeUnique, ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
     public int $tries = 3;
 
@@ -29,12 +31,18 @@ class PlanChapterJob implements ShouldQueue
         $this->onQueue('generation');
     }
 
+    public function uniqueId(): string
+    {
+        return 'chapter:'.$this->chapterId;
+    }
+
     public function handle(ChapterPlanner $planner): void
     {
         try {
             $planner->generate($this->chapterId, $this->regenerate);
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
+                $this->releaseGenerationDispatch();
                 $this->fail($exception);
 
                 return;
@@ -42,12 +50,18 @@ class PlanChapterJob implements ShouldQueue
 
             throw $exception;
         } catch (ValidationException $exception) {
+            $this->releaseGenerationDispatch();
             $this->fail($exception);
+
+            return;
         }
+
+        $this->releaseGenerationDispatch();
     }
 
     public function failed(?Throwable $exception): void
     {
+        $this->releaseGenerationDispatch();
         app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
     }
 }
