@@ -133,6 +133,33 @@ test('low score requests rewrite and ambiguous model block requires attention', 
     ['BLOCK', 95, ReviewDecision::NeedsAttention],
 ]);
 
+test('the review after the final rewrite moves unresolved findings to needs attention', function () {
+    $fixture = reviewFixture();
+    foreach ([1, 2] as $attempt) {
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scope_type' => 'chapter',
+            'scope_id' => $fixture['chapter']->getKey(),
+            'stage' => GenerationStage::Rewrite,
+            'status' => RunStatus::Succeeded,
+            'attempt' => $attempt,
+        ]);
+        GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::RewriteDraft,
+            'version' => $attempt,
+            'content' => $fixture['draft']->content,
+            'checksum' => $fixture['draft']->checksum,
+        ]);
+    }
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse('REWRITE', 90)));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(collect($review->findings)->pluck('code'))->toContain('REWRITE_EXHAUSTED')
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
+});
+
 test('duplicate review delivery reuses the successful review', function () {
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));

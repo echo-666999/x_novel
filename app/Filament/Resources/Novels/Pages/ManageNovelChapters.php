@@ -57,7 +57,7 @@ class ManageNovelChapters extends ManageRelatedRecords
             ->columns(1)
             ->components([
                 Section::make('计划章节')
-                    ->description('这里只建立章节槽位；完整 Chapter Plan 在后续步骤中维护。')
+                    ->description('这里只建立章节槽位；完整章节计划在后续步骤中维护。')
                     ->columns([
                         'default' => 1,
                         'md' => 3,
@@ -168,7 +168,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                         'chapter' => $record,
                     ])),
                 Action::make('managePlan')
-                    ->label(fn (Chapter $record): string => $record->latestPlan === null ? '建立 Plan' : '编辑 Plan')
+                    ->label(fn (Chapter $record): string => $record->latestPlan === null ? '建立计划' : '编辑计划')
                     ->icon('heroicon-o-clipboard-document-list')
                     ->modalHeading(fn (Chapter $record): string => "第 {$record->sequence} 章 · Chapter Plan")
                     ->modalDescription(fn (Chapter $record): string => $record->latestPlan === null
@@ -194,7 +194,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                             ->send();
                     }),
                 Action::make('syncScenes')
-                    ->label('同步 Scenes')
+                    ->label('同步场景')
                     ->icon('heroicon-o-arrow-path')
                     ->color('gray')
                     ->visible(fn (Chapter $record): bool => $record->latestPlan !== null)
@@ -218,7 +218,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                         'chapter' => $record,
                     ])),
                 Action::make('viewScenes')
-                    ->label('查看 Scenes')
+                    ->label('查看场景')
                     ->icon('heroicon-o-list-bullet')
                     ->visible(fn (Chapter $record): bool => $record->scenes()->exists())
                     ->modalHeading(fn (Chapter $record): string => "第 {$record->sequence} 章 · Scenes")

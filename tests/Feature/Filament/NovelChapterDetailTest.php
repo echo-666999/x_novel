@@ -99,7 +99,7 @@ test('canonical chapter viewer separates the formal text from drafts and shows i
     $canonicalArtifact = GenerationArtifact::factory()->for($draftRun)->create([
         'type' => ArtifactType::ChapterDraft,
         'version' => 2,
-        'content' => '这是已经提交的正式章节正文。',
+        'content' => "这是已经提交的正式章节正文。\n\n这是第二个自然段。",
     ]);
     $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'stage' => GenerationStage::Review,
@@ -148,7 +148,17 @@ test('canonical chapter viewer separates the formal text from drafts and shows i
         ->assertSee('USD 0.0123')
         ->assertSee('已创建记忆：1')
         ->assertSee('/x/memory')
-        ->assertSee('这是已经提交的正式章节正文。');
+        ->assertSee('这是已经提交的正式章节正文。')
+        ->assertSee('这是第二个自然段。')
+        ->assertSee('复制')
+        ->assertSee('复制中…')
+        ->assertSee('已复制')
+        ->assertSee('复制失败')
+        ->assertDontSee('复制全部正文')
+        ->assertSeeHtml('rows="24"')
+        ->assertSeeHtml('aria-label="正式正文"')
+        ->assertSeeHtml('id="canonical-chapter-content"')
+        ->assertSeeHtml('readonly');
 });
 
 test('chapter detail shows useful empty states before planning starts', function () {
@@ -190,6 +200,146 @@ test('chapter overview shows the latest draft length instead of the stored canon
         ->assertSee('900')
         ->assertSee('3,000')
         ->assertSee('30%');
+});
+
+test('review workspace explains the automatic rewrite loop and links each rewrite to its re-review', function () {
+    $novel = Novel::factory()->create(['settings' => ['auto_commit' => false]]);
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Rewrite]);
+    ChapterPlan::factory()->for($chapter)->create(['target_words' => 3000]);
+
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 3,
+        'content' => str_repeat('原', 3748),
+        'data' => ['word_count' => 3748],
+    ]);
+    $sourceReviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $sourceReviewArtifact = GenerationArtifact::factory()->for($sourceReviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'version' => 7,
+        'data' => ['source_artifact_id' => $draft->getKey()],
+    ]);
+    $sourceReview = Review::factory()->for($sourceReviewRun)->create([
+        'artifact_id' => $sourceReviewArtifact->getKey(),
+        'decision' => ReviewDecision::Rewrite,
+        'score' => 94.80,
+        'findings' => [['code' => 'CHAPTER_LENGTH_TOO_LONG', 'message' => '章节过长。']],
+    ]);
+
+    $rewriteRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Rewrite,
+        'status' => RunStatus::Succeeded,
+        'attempt' => 1,
+    ]);
+    $rewrite = GenerationArtifact::factory()->for($rewriteRun)->create([
+        'type' => ArtifactType::RewriteDraft,
+        'version' => 1,
+        'content' => str_repeat('改', 3686),
+        'data' => [
+            'scope' => 'chapter',
+            'source_artifact_id' => $draft->getKey(),
+            'source_review_id' => $sourceReview->getKey(),
+            'word_count' => 3686,
+        ],
+    ]);
+    $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $event = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'version' => 5,
+        'data' => ['source_artifact_id' => $rewrite->getKey(), 'events' => []],
+    ]);
+    $afterReviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $afterReviewArtifact = GenerationArtifact::factory()->for($afterReviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'version' => 8,
+        'data' => ['source_artifact_id' => $rewrite->getKey()],
+    ]);
+    Review::factory()->for($afterReviewRun)->create([
+        'artifact_id' => $afterReviewArtifact->getKey(),
+        'decision' => ReviewDecision::Rewrite,
+        'score' => 93.45,
+        'findings' => [['code' => 'CHAPTER_LENGTH_TOO_LONG', 'message' => '重写稿仍然过长。']],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('当前下一步')
+        ->assertSee('第 2 / 2 次重写章节')
+        ->assertSee('已使用 1 / 2 次')
+        ->assertSee('无需再次手动发起审校')
+        ->assertSee('强制重新审校')
+        ->assertSee('重写与复审历程')
+        ->assertSee('重写前 · 章节草稿 v3')
+        ->assertSee('第 1 次重写 · v1')
+        ->assertSee('第 1 轮')
+        ->assertSee('审校 v7')
+        ->assertSee('需要重写 · 93.45')
+        ->assertSee("章节重写稿 v1（Artifact #{$rewrite->getKey()}，3686 字）")
+        ->assertSee("事件候选 v5（Artifact #{$event->getKey()}）")
+        ->assertSee("审校 v8（Artifact #{$afterReviewArtifact->getKey()}）")
+        ->assertSee('重写稿仍然过长。');
+});
+
+test('needs attention review exposes manual edit and override actions instead of force review', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
+    ChapterPlan::factory()->for($chapter)->create();
+    $originalRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $original = GenerationArtifact::factory()->for($originalRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '重写前正文。',
+    ]);
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Rewrite,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create([
+        'type' => ArtifactType::RewriteDraft,
+        'version' => 2,
+        'content' => '等待人工处理的正文。',
+        'data' => ['source_artifact_id' => $original->getKey()],
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => ['source_artifact_id' => $draft->getKey()],
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::NeedsAttention,
+        'findings' => [['severity' => 'warning', 'message' => '需要人工判断。']],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('人工修改正文')
+        ->assertSee('人工通过（Override）')
+        ->assertDontSee('强制重新审校');
 });
 
 test('chapter detail rejects a chapter from another novel', function () {
@@ -260,7 +410,7 @@ test('scene workspace exposes generation actions and execution metrics', functio
         ->assertActionDisabled('regeneratePlan')
         ->assertActionExists(TestAction::make('regenerateScene'.$completed->getKey())->schemaComponent('scene-'.$completed->getKey(), 'content'))
         ->callAction(TestAction::make('regenerateScene'.$completed->getKey())->schemaComponent('scene-'.$completed->getKey(), 'content'))
-        ->assertSee('查看产物')
+        ->assertSee('查看版本（1）')
         ->assertSee('查看运行记录')
         ->assertSee('字数')
         ->assertSee('耗时')
@@ -269,6 +419,80 @@ test('scene workspace exposes generation actions and execution metrics', functio
     Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $completed->getKey()
         && $job->cascade
         && $job->regenerationBatchId !== null);
+});
+
+test('scene workspace distinguishes current and historical artifact versions', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $scene = Scene::factory()->for($chapter)->create([
+        'sequence' => 1,
+        'status' => SceneStatus::Draft,
+    ]);
+    $firstRun = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+        'attempt' => 1,
+        'model_policy' => 'first-model',
+        'prompt_version' => 'scene-writer-v1',
+    ]);
+    $firstArtifact = GenerationArtifact::factory()->for($firstRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'version' => 1,
+        'content' => '第一次生成的场景正文。',
+    ]);
+    $secondRun = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+        'attempt' => 4,
+        'model_policy' => 'retry-model',
+        'prompt_version' => 'scene-writer-v2',
+    ]);
+    $secondArtifact = GenerationArtifact::factory()->for($secondRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'version' => 2,
+        'content' => '重试后生成的场景正文。',
+    ]);
+    $scene->update(['current_artifact_id' => $secondArtifact->getKey()]);
+
+    $component = Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ]);
+
+    $component
+        ->assertSee('当前版本')
+        ->assertSee('v2')
+        ->assertSee('查看版本（2）')
+        ->assertActionExists(TestAction::make('viewSceneArtifact'.$scene->getKey())->schemaComponent('scene-'.$scene->getKey(), 'content'))
+        ->mountAction(TestAction::make('viewSceneArtifact'.$scene->getKey())->schemaComponent('scene-'.$scene->getKey(), 'content'))
+        ->assertActionMounted(TestAction::make('viewSceneArtifact'.$scene->getKey())->schemaComponent('scene-'.$scene->getKey(), 'content'));
+
+    expect($component->instance()->getMountedAction())->not->toBeNull()
+        ->and($component->instance()->mountedActionHasSchema())->toBeTrue()
+        ->and($component->instance()->mountedActionShouldOpenModal())->toBeTrue();
+
+    $component
+        ->assertSchemaComponentExists(
+            'scene_artifact_status_'.$secondArtifact->getKey(),
+            checkComponentUsing: fn ($entry): bool => $entry->getState() === '当前',
+        )
+        ->assertSchemaComponentExists(
+            'scene_artifact_run_'.$secondArtifact->getKey(),
+            checkComponentUsing: fn ($entry): bool => $entry->getState() === '#'.$secondRun->getKey().' · 第 4 次尝试',
+        )
+        ->assertSchemaComponentExists(
+            'scene_artifact_content_'.$secondArtifact->getKey(),
+            checkComponentUsing: fn ($entry): bool => $entry->getState() === '重试后生成的场景正文。',
+        )
+        ->assertSchemaComponentExists(
+            'scene_artifact_status_'.$firstArtifact->getKey(),
+            checkComponentUsing: fn ($entry): bool => $entry->getState() === '历史',
+        )
+        ->assertSchemaComponentExists(
+            'scene_artifact_content_'.$firstArtifact->getKey(),
+            checkComponentUsing: fn ($entry): bool => $entry->getState() === '第一次生成的场景正文。',
+        );
 });
 
 test('draft workspace switches between artifact versions and source scenes', function () {

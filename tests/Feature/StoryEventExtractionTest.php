@@ -177,6 +177,17 @@ test('duplicate extraction reuses the successful candidate artifact', function (
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->count())->toBe(1);
 });
 
+test('retrying extraction recovers a blocked chapter before starting a new run', function () {
+    $fixture = eventExtractionFixture();
+    $fixture['chapter']->update(['status' => ChapterStatus::Blocked]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture)));
+
+    app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey(), true);
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->status)->toBe(RunStatus::Succeeded);
+});
+
 test('invalid event evidence is rejected before artifact persistence', function () {
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [

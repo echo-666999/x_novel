@@ -10,6 +10,7 @@ use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\OpenAiProvider;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 test('ai request resolves system messages and a prompt in order', function () {
     $request = new AiRequest(
@@ -75,7 +76,95 @@ test('openai provider maps a successful response to the provider dto', function 
 
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://llm.example/v1/chat/completions'
         && $request->hasHeader('Authorization', 'Bearer test-key')
+        && $request['max_completion_tokens'] === 8
+        && ! isset($request['max_tokens'])
         && $request['response_format']['type'] === 'json_schema');
+});
+
+test('openai provider logs the complete prompt and response with request metadata', function () {
+    config()->set('ai.providers.openai.api_key', 'secret-test-key');
+    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+
+    Http::fake([
+        'llm.example/*' => Http::response([
+            'id' => 'request-log-123',
+            'model' => 'current-model-2026-09-01',
+            'choices' => [['message' => ['content' => '{"answer":"完整响应"}']]],
+            'usage' => ['prompt_tokens' => 12, 'completion_tokens' => 4],
+        ], 200, ['x-request-id' => 'header-request-123']),
+    ]);
+
+    $records = [];
+    Log::shouldReceive('debug')
+        ->twice()
+        ->andReturnUsing(function (string $message, array $context) use (&$records): void {
+            $records[$message] = $context;
+        });
+
+    app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'current-model',
+        systemPrompt: '完整系统提示词',
+        prompt: '完整用户提示词',
+        temperature: 0,
+        maxTokens: 64,
+        responseSchema: [
+            'type' => 'object',
+            'properties' => ['answer' => ['type' => 'string']],
+            'required' => ['answer'],
+            'additionalProperties' => false,
+        ],
+        promptVersion: 'scene-writer-test',
+        metadata: [
+            'generation_run_id' => 51,
+            'scene_id' => 1,
+            'stage' => 'writer',
+        ],
+    ));
+
+    $requestLog = $records['AI Provider 完整请求。'];
+    $responseLog = $records['AI Provider 完整响应。'];
+
+    expect($requestLog['ai_request_log_id'])->toBe($responseLog['ai_request_log_id'])
+        ->and($requestLog['prompt_version'])->toBe('scene-writer-test')
+        ->and($requestLog['metadata'])->toBe([
+            'generation_run_id' => 51,
+            'scene_id' => 1,
+            'stage' => 'writer',
+        ])
+        ->and($requestLog['payload']['messages'])->toBe([
+            ['role' => 'system', 'content' => '完整系统提示词'],
+            ['role' => 'user', 'content' => '完整用户提示词'],
+        ])
+        ->and($requestLog['payload']['response_format']['json_schema']['schema']['required'])->toBe(['answer'])
+        ->and(json_encode($requestLog, JSON_THROW_ON_ERROR))->not->toContain('secret-test-key')
+        ->and($responseLog['status'])->toBe(200)
+        ->and($responseLog['provider_request_id'])->toBe('header-request-123')
+        ->and(json_decode($responseLog['body'], true, flags: JSON_THROW_ON_ERROR)['choices'][0]['message']['content'])
+        ->toBe('{"answer":"完整响应"}');
+});
+
+test('openai provider uses the default temperature for gpt 5.6 models', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+
+    Http::fake([
+        'llm.example/*' => Http::response([
+            'id' => 'request-gpt-5-6',
+            'model' => 'gpt-5.6-luna',
+            'choices' => [['message' => ['content' => 'OK']]],
+            'usage' => [],
+        ]),
+    ]);
+
+    app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'gpt-5.6-luna',
+        prompt: 'Ping',
+        temperature: 0.7,
+    ));
+
+    Http::assertSent(fn (Request $request): bool => $request['model'] === 'gpt-5.6-luna'
+        && ! isset($request['temperature'])
+        && $request['max_completion_tokens'] === 2_000);
 });
 
 test('openai provider maps a fixed dimension embedding response', function () {
@@ -123,6 +212,52 @@ test('openai provider maps retryable and non retryable errors', function (int $s
     'rate limit' => [429, 'provider_rate_limited', true],
     'server error' => [503, 'provider_request_failed', true],
 ]);
+
+test('openai provider logs the complete rejected response body', function () {
+    config()->set('ai.providers.openai.api_key', 'secret-test-key');
+    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+
+    Http::fake([
+        'llm.example/*' => Http::response([
+            'error' => [
+                'message' => 'Unsupported parameter: max_tokens',
+                'type' => 'invalid_request_error',
+                'param' => 'max_tokens',
+                'code' => 'unsupported_parameter',
+            ],
+        ], 400, ['x-request-id' => 'failed-request-400']),
+    ]);
+
+    $records = [];
+    Log::shouldReceive('debug')
+        ->twice()
+        ->andReturnUsing(function (string $message, array $context) use (&$records): void {
+            $records[$message] = $context;
+        });
+
+    try {
+        app(OpenAiProvider::class)->generate(new AiRequest(
+            model: 'current-model',
+            prompt: '需要排查的完整提示词',
+            metadata: ['generation_run_id' => 51, 'scene_id' => 1],
+        ));
+        $this->fail('Expected AiProviderException was not thrown.');
+    } catch (AiProviderException $exception) {
+        $responseLog = $records['AI Provider 完整响应。'];
+        $body = json_decode($responseLog['body'], true, flags: JSON_THROW_ON_ERROR);
+
+        expect($exception->errorCode)->toBe('provider_request_failed')
+            ->and($responseLog['status'])->toBe(400)
+            ->and($responseLog['provider_request_id'])->toBe('failed-request-400')
+            ->and($responseLog['metadata'])->toBe(['generation_run_id' => 51, 'scene_id' => 1])
+            ->and($body['error'])->toBe([
+                'message' => 'Unsupported parameter: max_tokens',
+                'type' => 'invalid_request_error',
+                'param' => 'max_tokens',
+                'code' => 'unsupported_parameter',
+            ]);
+    }
+});
 
 test('openai provider rejects missing credentials before sending a request', function () {
     config()->set('ai.providers.openai.api_key', null);

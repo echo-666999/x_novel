@@ -305,6 +305,8 @@ test('regenerating a scene preserves the previous artifact and returns the chapt
     $newArtifact = app(SceneGenerator::class)->generate($scene->getKey(), true);
 
     expect($newArtifact?->getKey())->not->toBe($previousArtifact->getKey())
+        ->and($previousArtifact->version)->toBe(1)
+        ->and($newArtifact?->version)->toBe(2)
         ->and($scene->fresh()->current_artifact_id)->toBe($newArtifact?->getKey())
         ->and($previousArtifact->fresh())->not->toBeNull()
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating)

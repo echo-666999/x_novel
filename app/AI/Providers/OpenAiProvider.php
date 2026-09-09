@@ -14,6 +14,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use JsonException;
 
 class OpenAiProvider implements AiProvider, EmbeddingProvider
@@ -21,12 +22,30 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
     public function generate(AiRequest $request): AiResponse
     {
         $startedAt = hrtime(true);
+        $requestLogId = (string) Str::uuid();
+        $payload = $this->payload($request);
+
+        Log::debug('AI Provider 完整请求。', [
+            'ai_request_log_id' => $requestLogId,
+            'endpoint' => '/chat/completions',
+            'prompt_version' => $request->promptVersion,
+            'metadata' => $request->metadata,
+            'payload' => $payload,
+        ]);
 
         try {
-            $response = $this->client()->post('/chat/completions', $this->payload($request));
+            $response = $this->client()->post('/chat/completions', $payload);
         } catch (ConnectionException $exception) {
             $timedOut = str_contains(strtolower($exception->getMessage()), 'timed out')
                 || str_contains(strtolower($exception->getMessage()), 'timeout');
+
+            Log::warning('AI Provider 请求未收到响应。', [
+                'ai_request_log_id' => $requestLogId,
+                'endpoint' => '/chat/completions',
+                'prompt_version' => $request->promptVersion,
+                'metadata' => $request->metadata,
+                'exception' => $exception->getMessage(),
+            ]);
 
             throw new AiProviderException(
                 errorCode: $timedOut ? 'provider_timeout' : 'provider_connection_failed',
@@ -37,6 +56,17 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         }
 
         $latencyMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
+
+        Log::debug('AI Provider 完整响应。', [
+            'ai_request_log_id' => $requestLogId,
+            'endpoint' => '/chat/completions',
+            'prompt_version' => $request->promptVersion,
+            'metadata' => $request->metadata,
+            'status' => $response->status(),
+            'latency_ms' => $latencyMs,
+            'provider_request_id' => $response->header('x-request-id') ?? $response->json('id'),
+            'body' => $response->body(),
+        ]);
 
         if ($response->failed()) {
             throw $this->mapFailedResponse($response);
@@ -112,9 +142,12 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $payload = [
             'model' => $request->model,
             'messages' => $request->resolvedMessages(),
-            'temperature' => $request->temperature,
-            'max_tokens' => $request->maxTokens,
+            'max_completion_tokens' => $request->maxTokens,
         ];
+
+        if (! str_starts_with($request->model, 'gpt-5.6')) {
+            $payload['temperature'] = $request->temperature;
+        }
 
         if ($request->responseSchema !== null) {
             $payload['response_format'] = [
@@ -170,12 +203,6 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
     private function mapFailedResponse(Response $response): AiProviderException
     {
         $status = $response->status();
-        $providerMessage = $response->json('error.message');
-
-        Log::warning('AI Provider 请求失败。', [
-            'status' => $status,
-            'provider_message' => is_string($providerMessage) ? $providerMessage : null,
-        ]);
 
         return match ($status) {
             401, 403 => new AiProviderException(

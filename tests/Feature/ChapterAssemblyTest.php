@@ -144,6 +144,17 @@ test('regeneration creates a new immutable chapter draft version', function () {
         ->and($second->content)->toBe('Draft v2');
 });
 
+test('retrying assembly recovers a blocked chapter before starting a new run', function () {
+    $fixture = chapterAssemblyFixture();
+    $fixture['chapter']->update(['status' => ChapterStatus::Blocked]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse('恢复后的章节正文')));
+
+    app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey(), true);
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::ChapterAssembly)->sole()->status)->toBe(RunStatus::Succeeded);
+});
+
 test('retryable assembly failures are recorded and retry from assembly only', function () {
     $fixture = chapterAssemblyFixture();
     $fake = (new FakeAiProvider)

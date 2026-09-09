@@ -273,9 +273,16 @@ class SceneGenerator
                 throw new AiProviderException('state_version_conflict', 'Scene 生成期间 Canonical Story State 已变化。', false);
             }
 
+            $version = GenerationArtifact::query()
+                ->where('type', ArtifactType::SceneDraft)
+                ->whereHas('generationRun', fn ($query) => $query
+                    ->where('scene_id', $scene->getKey())
+                    ->where('stage', GenerationStage::SceneGeneration))
+                ->max('version');
+
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::SceneDraft,
-                'version' => 1,
+                'version' => ((int) $version) + 1,
                 'content' => $payload['content'],
                 'data' => [
                     ...collect($payload)->except('content')->all(),

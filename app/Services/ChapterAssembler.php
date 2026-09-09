@@ -198,6 +198,10 @@ class ChapterAssembler
             $attempt = ((int) $runs->clone()->max('attempt')) + 1;
             $key = $attempt === 1 ? $baseKey : $baseKey.':attempt:'.$attempt;
 
+            if ($chapter->status === ChapterStatus::Blocked) {
+                $chapter->update(['status' => ChapterStatus::Generating]);
+            }
+
             return [GenerationRun::query()->create([
                 'novel_id' => $chapter->novel_id,
                 'chapter_id' => $chapter->getKey(),

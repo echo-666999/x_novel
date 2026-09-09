@@ -2,6 +2,8 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\ManuallyReviseChapterAction;
+use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
@@ -45,6 +47,7 @@ use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
+use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 
 class ViewNovelChapter extends ViewRecord
@@ -260,7 +263,105 @@ class ViewNovelChapter extends ViewRecord
     /** @return array<int, mixed> */
     private function reviewSchema(): array
     {
+        $nextStep = $this->reviewNextStep();
+
         return [
+            Section::make('当前下一步')
+                ->description('重写完成后会自动继续事件提取、状态补丁和重新审校，无需再次手动发起审校。')
+                ->icon('heroicon-o-map')
+                ->headerActions([
+                    Action::make('manuallyReviseChapter')
+                        ->label('人工修改正文')
+                        ->icon('heroicon-o-pencil-square')
+                        ->color('warning')
+                        ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::NeedsAttention, ReviewDecision::Block], true))
+                        ->modalHeading('人工修改当前章节正文')
+                        ->modalDescription('保存后会创建新的不可变人工修订稿，并自动重新提取事件、重建状态补丁和重新审校。')
+                        ->modalSubmitActionLabel('保存并重新审校')
+                        ->fillForm(fn (): array => [
+                            'content' => $this->currentReviewDraft()?->content,
+                            'reason' => null,
+                        ])
+                        ->schema([
+                            Textarea::make('content')
+                                ->label('章节正文')
+                                ->rows(24)
+                                ->required()
+                                ->columnSpanFull(),
+                            Textarea::make('reason')
+                                ->label('修改原因')
+                                ->helperText('原因会写入人工修订 Run 和 Artifact，供后续追踪。')
+                                ->rows(3)
+                                ->maxLength(2000)
+                                ->required(),
+                        ])
+                        ->action(function (array $data, ManuallyReviseChapterAction $revise): void {
+                            $artifact = $revise->execute(
+                                $this->chapter(),
+                                $data['content'],
+                                $data['reason'],
+                                auth()->id(),
+                            );
+                            $this->cachedChapter = null;
+
+                            Notification::make()
+                                ->title('人工修订稿已保存')
+                                ->body("已创建重写稿 v{$artifact->version}，事件提取和重新审校已加入队列。")
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('overrideReview')
+                        ->label('人工通过（Override）')
+                        ->icon('heroicon-o-shield-check')
+                        ->color('danger')
+                        ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::NeedsAttention)
+                        ->disabled(fn (): bool => $this->hasHardReviewFinding())
+                        ->tooltip(fn (): ?string => $this->hasHardReviewFinding() ? '当前 Review 存在硬冲突，不能人工通过。' : '保留原 Review 和 Findings，并创建一条带原因的人工 PASS Review。')
+                        ->requiresConfirmation()
+                        ->modalHeading('人工 Override 为通过')
+                        ->modalDescription('该操作不会删除原审校问题。系统会创建新的 PASS Review 并记录操作原因，之后才可提交正式章节。')
+                        ->modalSubmitActionLabel('确认人工通过')
+                        ->schema([
+                            Textarea::make('reason')
+                                ->label('Override 原因')
+                                ->helperText('请说明为什么可以接受当前问题并提交该版本。')
+                                ->rows(4)
+                                ->maxLength(2000)
+                                ->required(),
+                        ])
+                        ->action(function (array $data, OverrideChapterReviewAction $override): void {
+                            $review = $override->execute($this->chapter(), $data['reason'], auth()->id());
+                            $this->cachedChapter = null;
+
+                            Notification::make()
+                                ->title('章节审校已人工通过')
+                                ->body("已创建 Review v{$review->artifact->version}，现在可以提交正式章节。")
+                                ->warning()
+                                ->send();
+                        }),
+                ])
+                ->columns(['default' => 1, 'md' => 3])
+                ->schema([
+                    TextEntry::make('review_next_action')
+                        ->label('建议操作')
+                        ->state($nextStep['action'])
+                        ->badge()
+                        ->color($nextStep['color']),
+                    TextEntry::make('review_rewrite_budget')
+                        ->label('重写次数')
+                        ->state($nextStep['budget']),
+                    TextEntry::make('review_next_result')
+                        ->label('通过后')
+                        ->state($nextStep['after_pass']),
+                    TextEntry::make('review_next_explanation')
+                        ->label('处理说明')
+                        ->state($nextStep['explanation'])
+                        ->columnSpanFull(),
+                    TextEntry::make('review_automatic_flow')
+                        ->label('自动流程')
+                        ->state($nextStep['flow'])
+                        ->columnSpanFull(),
+                ]),
             Section::make('叙事审校')
                 ->description('七维评分结合确定性状态检查结果形成最终审校决策。')
                 ->headerActions([
@@ -269,13 +370,18 @@ class ViewNovelChapter extends ViewRecord
                         ->icon('heroicon-o-arrow-path')
                         ->color('warning')
                         ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
-                        ->disabled(fn (): bool => $this->rewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->disabled(fn (): bool => $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->tooltip(fn (): string => $this->rewriteActionTooltip('scene'))
                         ->schema([
                             Select::make('scene_id')->label('场景')->required()->options(fn (): array => $this->chapter()->scenes->mapWithKeys(fn (Scene $scene): array => [$scene->getKey() => '场景 '.$scene->sequence.' · '.$scene->goal])->all()),
                         ])
                         ->action(function (array $data): void {
                             RewriteChapterJob::dispatch($this->chapterId, (int) $data['scene_id']);
-                            Notification::make()->title('场景重写已加入队列')->success()->send();
+                            Notification::make()
+                                ->title('场景重写已加入队列')
+                                ->body('完成后将自动重新组装章节、提取事件、重建状态补丁并重新审校。')
+                                ->success()
+                                ->send();
                         }),
                     Action::make('rewriteChapter')
                         ->label('重写章节')
@@ -283,14 +389,23 @@ class ViewNovelChapter extends ViewRecord
                         ->color('warning')
                         ->requiresConfirmation()
                         ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
-                        ->disabled(fn (): bool => $this->rewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->disabled(fn (): bool => $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
+                        ->tooltip(fn (): string => $this->rewriteActionTooltip('chapter'))
+                        ->modalDescription('将基于最新审校问题生成新的不可变重写稿。完成后系统会自动重新提取事件、重建状态补丁并重新审校。')
                         ->action(function (): void {
                             RewriteChapterJob::dispatch($this->chapterId);
-                            Notification::make()->title('章节重写已加入队列')->success()->send();
+                            Notification::make()
+                                ->title('章节重写已加入队列')
+                                ->body('完成后将自动提取事件、重建状态补丁并重新审校，无需再点“强制重新审校”。')
+                                ->success()
+                                ->send();
                         }),
                     Action::make('runReview')
-                        ->label(fn (): string => $this->latestReview() ? '重新审校' : '开始审校')
+                        ->label(fn (): string => $this->latestReview() ? '强制重新审校' : '开始审校')
                         ->icon('heroicon-o-shield-check')
+                        ->color(fn (): string => $this->latestReview() ? 'gray' : 'primary')
+                        ->visible(fn (): bool => ! in_array($this->latestReview()?->decision, [ReviewDecision::NeedsAttention, ReviewDecision::Block], true))
+                        ->tooltip(fn (): ?string => $this->latestReview() ? '仅用于在正文未变化时再次执行审校；正常重写完成后系统会自动重新审校。' : null)
                         ->disabled(fn (): bool => $this->chapter()->generationRuns()->where('stage', GenerationStage::Review)->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists())
                         ->action(function (): void {
                             ReviewChapterJob::dispatch($this->chapterId, $this->latestReview() !== null);
@@ -330,6 +445,20 @@ class ViewNovelChapter extends ViewRecord
                         TextEntry::make('content')->label('正文')->prose()->columnSpanFull(),
                     ])->columns(2),
                 ]),
+            Section::make('重写与复审历程')
+                ->description('每一轮都关联触发审校、重写稿、重新提取的事件和重写后的审校结果。')
+                ->visible(fn (): bool => $this->rewriteArtifacts()->isNotEmpty())
+                ->schema([
+                    RepeatableEntry::make('rewrite_journey')->hiddenLabel()->state(fn (): array => $this->rewriteJourneyRows())->schema([
+                        TextEntry::make('round')->label('轮次')->badge()->color('warning'),
+                        TextEntry::make('scope')->label('重写范围'),
+                        TextEntry::make('trigger')->label('触发审校'),
+                        TextEntry::make('result')->label('复审结果')->badge(),
+                        TextEntry::make('pipeline')->label('产物链路')->columnSpanFull(),
+                        TextEntry::make('findings')->label('复审剩余问题')->columnSpanFull(),
+                        TextEntry::make('completed_at')->label('完成时间')->placeholder('处理中'),
+                    ])->columns(['default' => 1, 'md' => 4]),
+                ]),
             Section::make('草稿 / 重写差异')
                 ->description('对照重写前后正文，并根据后续审校标记问题是否已解决。')
                 ->visible(fn (): bool => $this->rewriteArtifacts()->isNotEmpty())
@@ -340,6 +469,132 @@ class ViewNovelChapter extends ViewRecord
         ];
     }
 
+    /** @return array{action: string, color: string, budget: string, after_pass: string, explanation: string, flow: string} */
+    private function reviewNextStep(): array
+    {
+        $review = $this->latestReview();
+        $used = $this->automaticRewriteArtifacts()->count();
+        $maximum = (int) config('generation.max_rewrite_attempts', 2);
+        $budget = "已使用 {$used} / {$maximum} 次";
+        $afterPass = (bool) data_get($this->getRecord()->settings, 'auto_commit', false)
+            ? '自动提交正式章节'
+            : '页面顶部提交正式章节';
+        $flow = '重写场景 → 重新组装章节 → 重新提取事件 → 重建状态补丁 → 重新审校；重写章节从“重新提取事件”继续。';
+
+        if ($review === null) {
+            return [
+                'action' => '开始审校', 'color' => 'primary', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '当前稿尚未形成审校结论。', 'flow' => '审校 → 根据结论进入提交、重写或人工处理。',
+            ];
+        }
+
+        if ($review->decision === ReviewDecision::Pass) {
+            return [
+                'action' => '提交正式章节', 'color' => 'success', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '当前 Review 已通过。系统不会额外显示“通过”按钮；PASS 是审校结论，下一步是正式提交。', 'flow' => 'PASS → Canonical Commit → 正式事件与故事状态更新。',
+            ];
+        }
+
+        if ($review->decision === ReviewDecision::Rewrite && $used < $maximum) {
+            $nextAttempt = $used + 1;
+            $hasChapterFinding = collect($review->findings)->contains(fn (array $finding): bool => str_starts_with((string) data_get($finding, 'code'), 'CHAPTER_LENGTH_')
+                || data_get($finding, 'scene_id') === null
+            );
+            $scope = $hasChapterFinding ? '重写章节' : '重写场景';
+
+            return [
+                'action' => "第 {$nextAttempt} / {$maximum} 次{$scope}", 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '点击重写一次即可。队列完成整条复审链路后刷新页面查看新结论，不需要手动点击“强制重新审校”。', 'flow' => $flow,
+            ];
+        }
+
+        if ($review->decision === ReviewDecision::NeedsAttention || $used >= $maximum) {
+            return [
+                'action' => '需要人工处理', 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '自动重写次数已耗尽或审校存在歧义，需要人工修改正文或处理相关事实后再审校。', 'flow' => '人工处理 → 重新提取事件 → 重建状态补丁 → 重新审校。',
+            ];
+        }
+
+        return [
+            'action' => '处理阻塞问题', 'color' => 'danger', 'budget' => $budget, 'after_pass' => $afterPass,
+            'explanation' => '当前存在不可直接提交的硬冲突，请先处理锁定事实、故事状态或计划冲突。', 'flow' => '处理硬冲突 → 重新生成或重新审校。',
+        ];
+    }
+
+    private function rewriteActionTooltip(string $scope): string
+    {
+        $used = $this->automaticRewriteArtifacts()->count();
+        $maximum = (int) config('generation.max_rewrite_attempts', 2);
+
+        if ($used >= $maximum) {
+            return "已达到最大 {$maximum} 次自动重写，需要人工处理。";
+        }
+
+        return $scope === 'scene'
+            ? '适合问题明确落在单个场景时使用；完成后会自动重新组装和复审。'
+            : '适合字数、节奏或跨场景问题；完成后会自动重新提取事件和复审。';
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function rewriteJourneyRows(): array
+    {
+        return $this->rewriteArtifacts()->values()->map(function (GenerationArtifact $rewrite, int $index): array {
+            $sourceReview = Review::query()->with('artifact')->find(data_get($rewrite->data, 'source_review_id'));
+            $reviewedDraft = data_get($rewrite->data, 'scope') === 'scene'
+                ? GenerationArtifact::query()
+                    ->where('type', ArtifactType::ChapterDraft)
+                    ->whereHas('generationRun', fn ($query) => $query
+                        ->where('chapter_id', $this->chapterId)
+                        ->where('id', '>', $rewrite->generation_run_id))
+                    ->oldest('id')->first()
+                : $rewrite;
+            $eventCandidate = $reviewedDraft === null ? null : GenerationArtifact::query()
+                ->where('type', ArtifactType::EventCandidate)
+                ->where('data->source_artifact_id', $reviewedDraft->getKey())
+                ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+                ->oldest('id')->first();
+            $afterReview = $reviewedDraft === null ? null : Review::query()
+                ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+                ->whereHas('artifact', fn ($query) => $query->where('data->source_artifact_id', $reviewedDraft->getKey()))
+                ->oldest('id')->first();
+            $wordCount = (int) data_get($rewrite->data, 'word_count', 0);
+            $scope = data_get($rewrite->data, 'scope') === 'scene'
+                ? '场景 '.($rewrite->generationRun?->scene_id ?? '—')
+                : '整章';
+            $draftLabel = data_get($rewrite->data, 'scope') === 'scene'
+                ? "场景重写稿 v{$rewrite->version}（Artifact #{$rewrite->id}）"
+                : "章节重写稿 v{$rewrite->version}（Artifact #{$rewrite->id}，{$wordCount} 字）";
+            $pipeline = $draftLabel;
+            if ($reviewedDraft !== null && ! $reviewedDraft->is($rewrite)) {
+                $pipeline .= " → 章节草稿 v{$reviewedDraft->version}（Artifact #{$reviewedDraft->id}）";
+            }
+            $pipeline .= $eventCandidate === null
+                ? ' → 等待事件提取'
+                : " → 事件候选 v{$eventCandidate->version}（Artifact #{$eventCandidate->id}）";
+            $pipeline .= $afterReview === null
+                ? ' → 等待重新审校'
+                : " → 审校 v{$afterReview->artifact?->version}（Artifact #{$afterReview->artifact_id}）";
+
+            return [
+                'round' => data_get($rewrite->data, 'manual_edit')
+                    ? '人工修订'
+                    : '第 '.($index + 1).' 轮',
+                'scope' => $scope,
+                'trigger' => $sourceReview === null
+                    ? '—'
+                    : "审校 v{$sourceReview->artifact?->version} · {$sourceReview->decision->getLabel()} · {$sourceReview->score}",
+                'result' => $afterReview === null
+                    ? '处理中'
+                    : "{$afterReview->decision->getLabel()} · {$afterReview->score}",
+                'pipeline' => $pipeline,
+                'findings' => $afterReview === null
+                    ? '等待重新审校。'
+                    : (collect($afterReview->findings)->pluck('message')->filter()->implode("\n") ?: '没有剩余问题。'),
+                'completed_at' => $afterReview?->created_at?->format('Y-m-d H:i:s'),
+            ];
+        })->all();
+    }
+
     private function latestReview(): ?Review
     {
         return Review::query()
@@ -347,6 +602,19 @@ class ViewNovelChapter extends ViewRecord
                 ->where('chapter_id', $this->chapterId)
                 ->where('id', '>', $this->currentPlanningRunId()))
             ->with('artifact')->latest('id')->first();
+    }
+
+    private function currentReviewDraft(): ?GenerationArtifact
+    {
+        $artifactId = (int) data_get($this->latestReview()?->artifact?->data, 'source_artifact_id');
+
+        return $artifactId > 0 ? GenerationArtifact::query()->find($artifactId) : null;
+    }
+
+    private function hasHardReviewFinding(): bool
+    {
+        return collect($this->latestReview()?->findings)
+            ->contains(fn (array $finding): bool => data_get($finding, 'severity') === 'hard');
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -432,17 +700,42 @@ class ViewNovelChapter extends ViewRecord
             ->orderBy('id')->get();
     }
 
+    private function automaticRewriteArtifacts()
+    {
+        return $this->rewriteArtifacts()
+            ->reject(fn (GenerationArtifact $artifact): bool => (bool) data_get($artifact->data, 'manual_edit'));
+    }
+
     /** @return array<int, array<string, mixed>> */
     private function rewriteVersionRows(): array
     {
-        $original = GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('chapter_id', $this->chapterId)
-                ->where('id', '>', $this->currentPlanningRunId()))
-            ->oldest('id')->first();
-        $rows = $original === null ? [] : [['label' => 'Original', 'scope' => '整章', 'content' => $original->content]];
-        foreach ($this->rewriteArtifacts() as $index => $artifact) {
-            $rows[] = ['label' => 'Rewrite #'.($index + 1), 'scope' => data_get($artifact->data, 'scope') === 'scene' ? 'Scene' : '整章', 'content' => $artifact->content];
+        $rewrites = $this->rewriteArtifacts();
+        $firstRewrite = $rewrites->first();
+        $original = $firstRewrite === null
+            ? GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)
+                ->whereHas('generationRun', fn ($query) => $query
+                    ->where('chapter_id', $this->chapterId)
+                    ->where('id', '>', $this->currentPlanningRunId()))
+                ->latest('id')->first()
+            : GenerationArtifact::query()->find(data_get($firstRewrite->data, 'source_artifact_id'));
+        $originalScope = $original?->generationRun?->scene_id === null
+            ? '整章'
+            : '场景 '.$original->generationRun->scene_id;
+        $originalType = $original?->type === ArtifactType::SceneDraft ? '场景草稿' : '章节草稿';
+        $rows = $original === null ? [] : [[
+            'label' => "重写前 · {$originalType} v{$original->version}",
+            'scope' => $originalScope,
+            'content' => $original->content,
+        ]];
+        foreach ($rewrites as $index => $artifact) {
+            $label = data_get($artifact->data, 'manual_edit')
+                ? '人工修订 · v'.$artifact->version
+                : '第 '.($index + 1).' 次重写 · v'.$artifact->version;
+            $rows[] = [
+                'label' => $label,
+                'scope' => data_get($artifact->data, 'scope') === 'scene' ? '场景 '.$artifact->generationRun?->scene_id : '整章',
+                'content' => $artifact->content,
+            ];
         }
 
         return $rows;
@@ -575,6 +868,7 @@ class ViewNovelChapter extends ViewRecord
     {
         $run = $scene->generationRuns->sortByDesc('id')->first();
         $artifact = $scene->currentArtifact;
+        $artifacts = $this->sceneArtifacts($scene);
 
         return Section::make('场景 '.$scene->sequence)
             ->key('scene-'.$scene->getKey())
@@ -614,27 +908,70 @@ class ViewNovelChapter extends ViewRecord
                     ->modalSubmitActionLabel('确认重新生成')
                     ->action(fn (RegenerateSceneSequenceAction $regenerate) => $this->regenerateSceneSequence($scene, $regenerate)),
                 Action::make('viewSceneArtifact'.$scene->getKey())
-                    ->label('查看产物')
+                    ->label('查看版本（'.$artifacts->count().'）')
                     ->icon('heroicon-o-document-text')
                     ->color('gray')
-                    ->visible($artifact !== null)
-                    ->modalHeading('场景 '.$scene->sequence.' · 草稿产物')
+                    ->visible($artifacts->isNotEmpty())
+                    ->slideOver()
+                    ->modalHeading('场景 '.$scene->sequence.' · 草稿版本')
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('关闭')
                     ->infolist([
-                        TextEntry::make('scene_artifact_content_'.$scene->getKey())
-                            ->label('正文')
-                            ->state($artifact?->content)
-                            ->prose()
-                            ->copyable(),
-                        TextEntry::make('scene_artifact_delta_'.$scene->getKey())
-                            ->label('临时状态变化')
-                            ->state(fn (): string => json_encode(
-                                data_get($artifact?->data, 'temporary_state_delta', []),
-                                JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
-                            ) ?: '{}')
-                            ->fontFamily('mono')
-                            ->copyable(),
+                        Tabs::make('Scene Artifact Versions '.$scene->getKey())
+                            ->tabs($artifacts->map(function (GenerationArtifact $versionArtifact) use ($artifact): Tab {
+                                $isCurrent = $artifact?->is($versionArtifact) ?? false;
+                                $versionRun = $versionArtifact->generationRun;
+
+                                return Tab::make('v'.$versionArtifact->version.' · '.($isCurrent ? '当前' : '历史'))
+                                    ->badge('#'.$versionArtifact->getKey())
+                                    ->schema([
+                                        Section::make('场景草稿 v'.$versionArtifact->version)
+                                            ->description($isCurrent ? '当前场景生成使用的版本。' : '重试或重新生成前保留的历史版本。')
+                                            ->columns(['default' => 1, 'md' => 3])
+                                            ->schema([
+                                                TextEntry::make('scene_artifact_status_'.$versionArtifact->getKey())
+                                                    ->label('版本状态')
+                                                    ->state($isCurrent ? '当前' : '历史')
+                                                    ->badge()
+                                                    ->color($isCurrent ? 'success' : 'gray'),
+                                                TextEntry::make('scene_artifact_run_'.$versionArtifact->getKey())
+                                                    ->label('生成运行记录')
+                                                    ->state($versionRun === null ? null : '#'.$versionRun->getKey().' · 第 '.$versionRun->attempt.' 次尝试')
+                                                    ->placeholder('—'),
+                                                TextEntry::make('scene_artifact_created_'.$versionArtifact->getKey())
+                                                    ->label('生成时间')
+                                                    ->state($versionArtifact->created_at)
+                                                    ->dateTime(),
+                                                TextEntry::make('scene_artifact_model_'.$versionArtifact->getKey())
+                                                    ->label('模型')
+                                                    ->state($versionRun?->model_policy)
+                                                    ->placeholder('—'),
+                                                TextEntry::make('scene_artifact_prompt_'.$versionArtifact->getKey())
+                                                    ->label('提示词版本')
+                                                    ->state($versionRun?->prompt_version)
+                                                    ->placeholder('—'),
+                                                TextEntry::make('scene_artifact_words_'.$versionArtifact->getKey())
+                                                    ->label('字数')
+                                                    ->state(app(DraftLengthPolicy::class)->count($versionArtifact->content))
+                                                    ->numeric(),
+                                                TextEntry::make('scene_artifact_content_'.$versionArtifact->getKey())
+                                                    ->label('正文')
+                                                    ->state($versionArtifact->content)
+                                                    ->prose()
+                                                    ->copyable()
+                                                    ->columnSpanFull(),
+                                                TextEntry::make('scene_artifact_delta_'.$versionArtifact->getKey())
+                                                    ->label('临时状态变化')
+                                                    ->state(fn (): string => json_encode(
+                                                        data_get($versionArtifact->data, 'temporary_state_delta', []),
+                                                        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+                                                    ) ?: '{}')
+                                                    ->fontFamily('mono')
+                                                    ->copyable()
+                                                    ->columnSpanFull(),
+                                            ]),
+                                    ]);
+                            })->all()),
                     ]),
                 Action::make('viewSceneRun'.$scene->getKey())
                     ->label('查看运行记录')
@@ -654,9 +991,15 @@ class ViewNovelChapter extends ViewRecord
                             ->placeholder('—'),
                     ]),
             ])
-            ->columns(['default' => 2, 'md' => 4, 'xl' => 8])
+            ->columns(['default' => 2, 'md' => 4, 'xl' => 9])
             ->schema([
                 TextEntry::make('scene_status_'.$scene->getKey())->label('状态')->state($scene->status)->badge(),
+                TextEntry::make('scene_version_'.$scene->getKey())
+                    ->label('当前版本')
+                    ->state($artifact === null ? null : 'v'.$artifact->version)
+                    ->badge()
+                    ->color('success')
+                    ->placeholder('—'),
                 TextEntry::make('scene_words_'.$scene->getKey())->label('字数')->state(mb_strlen($artifact?->content ?? ''))->numeric(),
                 TextEntry::make('scene_duration_'.$scene->getKey())
                     ->label('耗时')
@@ -702,6 +1045,17 @@ class ViewNovelChapter extends ViewRecord
             ->where('sequence', '<', $scene->sequence)
             ->every(fn (Scene $previous): bool => $previous->current_artifact_id !== null
                 && in_array($previous->status, [SceneStatus::Draft, SceneStatus::Accepted], true));
+    }
+
+    private function sceneArtifacts(Scene $scene)
+    {
+        return $scene->generationRuns
+            ->flatMap(fn (GenerationRun $run) => $run->artifacts->map(
+                fn (GenerationArtifact $artifact): GenerationArtifact => $artifact->setRelation('generationRun', $run),
+            ))
+            ->where('type', ArtifactType::SceneDraft)
+            ->sortByDesc('version')
+            ->values();
     }
 
     private function canRegeneratePlan(): bool
@@ -880,12 +1234,51 @@ class ViewNovelChapter extends ViewRecord
                         ])),
                 ]),
             Section::make('正式正文')
+                ->headerActions([
+                    Action::make('copyCanonicalContent')
+                        ->label(new HtmlString('<span aria-live="polite" x-text="{ idle: \'复制\', copying: \'复制中…\', copied: \'已复制\', failed: \'复制失败\' }[copyState]">复制</span>'))
+                        ->icon('heroicon-o-clipboard-document')
+                        ->color('gray')
+                        ->extraAttributes([
+                            'x-data' => "{ copyState: 'idle', resetTimer: null }",
+                            'x-bind:aria-label' => "{ idle: '复制', copying: '复制中', copied: '已复制', failed: '复制失败' }[copyState]",
+                        ])
+                        ->alpineClickHandler(<<<'JS'
+                            (async () => {
+                                const textarea = document.getElementById('canonical-chapter-content')
+                                copyState = 'copying'
+
+                                try {
+                                    if (! window.navigator.clipboard?.writeText) {
+                                        throw new Error('Clipboard API unavailable')
+                                    }
+
+                                    await window.navigator.clipboard.writeText(textarea.value)
+                                    copyState = 'copied'
+                                } catch (error) {
+                                    let copiedWithFallback = false
+
+                                    try {
+                                        textarea.focus()
+                                        textarea.select()
+                                        copiedWithFallback = document.execCommand('copy')
+                                        textarea.setSelectionRange(0, 0)
+                                        textarea.blur()
+                                    } catch (fallbackError) {
+                                        copiedWithFallback = false
+                                    }
+
+                                    copyState = copiedWithFallback ? 'copied' : 'failed'
+                                }
+
+                                window.clearTimeout(resetTimer)
+                                resetTimer = window.setTimeout(() => copyState = 'idle', 2000)
+                            })()
+                            JS),
+                ])
                 ->schema([
-                    TextEntry::make('canonical_content')
-                        ->hiddenLabel()
-                        ->state($artifact->content)
-                        ->prose()
-                        ->copyable(),
+                    View::make('filament.components.read-only-chapter-content')
+                        ->viewData(['content' => $artifact->content]),
                 ]),
         ];
     }

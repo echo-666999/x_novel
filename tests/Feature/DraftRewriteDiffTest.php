@@ -107,7 +107,7 @@ test('chapter review renders before after diff and finding status', function () 
 
     Livewire::test(ViewNovelChapter::class, ['record' => $novel->getRouteKey(), 'chapter' => $chapter->getKey()])
         ->assertOk()
-        ->assertSee('Draft / Rewrite Diff')
+        ->assertSee('重写与复审历程')
         ->assertSee('Before')
         ->assertSee('After')
         ->assertSee('旧结尾。')

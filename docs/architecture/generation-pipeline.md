@@ -260,6 +260,8 @@ Provider Retry 默认 2~3 次，指数退避 + jitter，并尊重 Retry-After。
 
 人工重试或重新生成某个 Scene 时，从该 Scene 开始清空当前产物指针并将它及后续 Scene 重置为 `planned`；历史 Artifact 保留。系统使用同一个重生成批次标识按顺序投递这些 Scene，后续 Scene 根据前面实际完成字数承接章节剩余预算。同一批次重复投递时复用成功 Artifact。
 
+同一 Scene 每次成功生成的 `scene_draft` Artifact 按生成顺序递增 `version`。Scene 只通过 `current_artifact_id` 指向当前版本，历史版本保持不可变；章节工作台必须同时标明当前版本与历史版本，并显示关联 Run 和生成时间。
+
 MVP 不做 Scene Parallel。
 
 ## 10. AssembleChapterJob
@@ -327,6 +329,10 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
 
 优先 Scene Rewrite，再 Whole Chapter Rewrite。默认 `max_rewrite_attempts = 2`。
+
+最后一次 Rewrite 后若重新审校仍应为 `REWRITE`，Laravel 必须在该次 Review 中直接将最终决策转为 `NEEDS_ATTENTION`，不得等待一次无法从 UI 发起的额外 Rewrite 才标记耗尽。
+
+`NEEDS_ATTENTION` 必须提供明确的人工处理入口：人工修改正文时创建新的不可变 `rewrite_draft`，记录修改原因，并重新执行事件提取、状态补丁和 Review；没有 Hard Conflict 时允许填写原因后人工 Override，创建新的 PASS Review，同时保留原 Review、Findings 和操作原因。
 
 Rewrite 后必须重新：
 

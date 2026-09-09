@@ -58,9 +58,8 @@ class ViewNovelPlanningPreview extends ViewRecord
                 ->label('返回章节工作台')
                 ->icon('heroicon-o-arrow-left')
                 ->color('gray')
-                ->url(fn (): string => NovelResource::getUrl('chapter', [
+                ->url(fn (): string => NovelResource::getUrl('chapters', [
                     'record' => $this->getRecord(),
-                    'chapter' => $this->chapterId,
                 ])),
         ];
     }

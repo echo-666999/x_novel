@@ -185,10 +185,25 @@ class ChapterReviewer
                     : (($lengthFinding !== null || $recommended === ReviewDecision::Rewrite || $total < config('generation.review_pass_score', 80))
                         ? ReviewDecision::Rewrite
                         : ReviewDecision::Pass));
+            $rewriteAttempts = GenerationArtifact::query()
+                ->where('type', ArtifactType::RewriteDraft)
+                ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+                ->count();
+            $rewriteExhausted = $decision === ReviewDecision::Rewrite
+                && $rewriteAttempts >= (int) config('generation.max_rewrite_attempts', 2);
+            if ($rewriteExhausted) {
+                $decision = ReviewDecision::NeedsAttention;
+            }
             $findings = [
                 ...$stateFindings,
                 ...($lengthFinding === null ? [] : [$lengthFinding]),
                 ...array_map(fn ($f) => [...$f, 'source' => 'narrative_review'], $payload['findings']),
+                ...($rewriteExhausted ? [[
+                    'code' => 'REWRITE_EXHAUSTED',
+                    'severity' => 'ambiguous',
+                    'message' => '自动 Rewrite 已达到最大 '.config('generation.max_rewrite_attempts', 2).' 次，需要人工处理。',
+                    'source' => 'rewrite_loop',
+                ]] : []),
             ];
             $data = ['decision' => $decision->value, 'recommended_decision' => $recommended->value, 'score' => $total, 'scores' => $scores, 'findings' => $findings, 'source_artifact_id' => $draft->getKey()];
             $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->max('version');
