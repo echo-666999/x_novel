@@ -67,10 +67,14 @@ class ManageNovelBible extends ViewRecord
                                 ->label('主题')
                                 ->required()
                                 ->columnSpanFull(),
-                            TextInput::make('style_profile.subgenre')
+                            Select::make('style_profile.subgenre')
                                 ->label('子题材')
-                                ->maxLength(100)
-                                ->placeholder('例如：东方玄幻、刑侦、民俗灵异')
+                                ->options(fn (Select $component): array => $this->narrativeValueOptions('subgenres', 'style_profile.subgenre', $component->getState()))
+                                ->searchable()
+                                ->placeholder('请选择子题材')
+                                ->createOptionForm(self::customValueForm('子题材', 100))
+                                ->createOptionModalHeading('添加自定义子题材')
+                                ->createOptionUsing(fn (array $data): string => trim($data['value']))
                                 ->validationMessages([
                                     'max' => '子题材不能超过 100 个字符。',
                                 ]),
@@ -90,18 +94,30 @@ class ManageNovelBible extends ViewRecord
                             'md' => 3,
                         ])
                         ->schema([
-                            TextInput::make('tone')
+                            Select::make('tone')
                                 ->label('基调')
+                                ->options(fn (Select $component): array => $this->narrativeValueOptions('tones', 'tone', $component->getState()))
+                                ->searchable()
                                 ->required()
-                                ->maxLength(255),
-                            TextInput::make('pov')
+                                ->createOptionForm(self::customValueForm('基调'))
+                                ->createOptionModalHeading('添加自定义基调')
+                                ->createOptionUsing(fn (array $data): string => trim($data['value'])),
+                            Select::make('pov')
                                 ->label('视角')
+                                ->options(fn (Select $component): array => $this->narrativeValueOptions('povs', 'pov', $component->getState()))
+                                ->searchable()
                                 ->required()
-                                ->maxLength(255),
-                            TextInput::make('tense')
+                                ->createOptionForm(self::customValueForm('视角'))
+                                ->createOptionModalHeading('添加自定义视角')
+                                ->createOptionUsing(fn (array $data): string => trim($data['value'])),
+                            Select::make('tense')
                                 ->label('时态')
+                                ->options(fn (Select $component): array => $this->narrativeValueOptions('tenses', 'tense', $component->getState()))
+                                ->searchable()
                                 ->required()
-                                ->maxLength(255),
+                                ->createOptionForm(self::customValueForm('时态'))
+                                ->createOptionModalHeading('添加自定义时态')
+                                ->createOptionUsing(fn (array $data): string => trim($data['value'])),
                             Select::make('style_profile.primary_style')
                                 ->label('主文风')
                                 ->options(self::styleOptions())
@@ -253,6 +269,34 @@ class ManageNovelBible extends ViewRecord
         return collect(config('narrative.styles', []))
             ->mapWithKeys(fn (array $style, string $code): array => [$code => $style['name']])
             ->all();
+    }
+
+    /** @return array<string, string> */
+    private function narrativeValueOptions(string $configKey, string $biblePath, mixed $selectedValue = null): array
+    {
+        $values = [
+            ...array_values(config("narrative.{$configKey}", [])),
+            ...$this->getRecord()->bibles
+                ->map(fn (NovelBible $bible): mixed => data_get($bible, $biblePath))
+                ->all(),
+            $selectedValue,
+        ];
+
+        return collect($values)
+            ->filter(fn (mixed $value): bool => is_string($value) && filled($value))
+            ->mapWithKeys(fn (string $value): array => [$value => $value])
+            ->all();
+    }
+
+    /** @return array<int, TextInput> */
+    private static function customValueForm(string $label, int $maxLength = 255): array
+    {
+        return [
+            TextInput::make('value')
+                ->label($label)
+                ->required()
+                ->maxLength($maxLength),
+        ];
     }
 
     /** @return array<int, Select> */

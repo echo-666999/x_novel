@@ -6,6 +6,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelBible;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\User;
+use Filament\Forms\Components\Select;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -183,6 +184,49 @@ test('the new bible version form prefills the current style profile', function (
                 'parameters' => ['psychology_density' => 5],
             ]),
         ]);
+});
+
+test('the highlighted narrative fields use searchable selects and preserve existing bible values', function () {
+    $novel = Novel::factory()->create();
+    NovelBible::factory()->for($novel)->create([
+        'version' => 1,
+        'status' => BibleStatus::Superseded,
+        'tone' => '严肃且充满希望',
+        'pov' => '第三人称有限视角',
+        'tense' => '过去时',
+        'style_profile' => biblePageStyleProfile(['subgenre' => '赛博修仙']),
+    ]);
+    NovelBible::factory()->for($novel)->create([
+        'version' => 2,
+        'status' => BibleStatus::Current,
+        'tone' => '热血',
+        'pov' => '第一人称',
+        'tense' => '过去时',
+        'style_profile' => biblePageStyleProfile(),
+    ]);
+
+    Livewire::test(ManageNovelBible::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('createBibleVersion')
+        ->assertSchemaComponentExists('style_profile.subgenre', null, fn ($component): bool => $component instanceof Select
+            && $component->isSearchable()
+            && $component->hasCreateOptionActionFormSchema()
+            && array_key_exists('东方玄幻', $component->getOptions())
+            && array_key_exists('赛博修仙', $component->getOptions()))
+        ->assertSchemaComponentExists('tone', null, fn ($component): bool => $component instanceof Select
+            && $component->isSearchable()
+            && $component->hasCreateOptionActionFormSchema()
+            && array_key_exists('热血', $component->getOptions())
+            && array_key_exists('严肃且充满希望', $component->getOptions()))
+        ->assertSchemaComponentExists('pov', null, fn ($component): bool => $component instanceof Select
+            && $component->isSearchable()
+            && $component->hasCreateOptionActionFormSchema()
+            && array_key_exists('第一人称', $component->getOptions())
+            && array_key_exists('第三人称有限视角', $component->getOptions()))
+        ->assertSchemaComponentExists('tense', null, fn ($component): bool => $component instanceof Select
+            && $component->isSearchable()
+            && $component->hasCreateOptionActionFormSchema()
+            && array_key_exists('过去时', $component->getOptions())
+            && array_key_exists('现在时', $component->getOptions()));
 });
 
 test('the bible form rejects conflicting styles and incomplete parameters with chinese errors', function () {

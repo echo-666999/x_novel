@@ -293,11 +293,12 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 
 - 完成日期：2026-09-10。
 - Bible UI：新版本表单按作品定位、叙事与文风基线、文风高级设置、写作边界、结局契约分区；预填 Current Bible 的完整 `style_profile`，历史 `null` 只在新表单中使用明确默认值，不回填旧版本。
+- Bible UI 补充：子题材、基调、视角和时态改为可搜索下拉选择；标准选项来自 `config/narrative.php`，当前及历史 Bible 的已有值会继续显示，并允许添加自定义值，保存格式保持不变。
 - Bible 展示：当前版本与版本历史均展示主文风、辅助文风、语言时代感、故事节奏、子题材、目标平台和六项高级参数；未知或历史缺失值显示为原 code 或“尚未记录”。
 - Blueprint：`novel-planner-v4` 的响应 Schema 和 Laravel 校验都要求完整 `style_profile`；采用前预览完整叙事与文风设置；采用时继续通过 `CreateBibleVersionAction` 创建不可变版本。
 - 创建规则：`CreateBibleVersionAction` 已移除 CGO-002 的临时可省略行为；新 Bible Version 必须提供完整合法对象，历史 `null` 不受影响。
-- 已验证：Pint；CGO-003 相关 37 个测试中 36 个通过、197 个断言、1 个 PostgreSQL 专属用例在 SQLite 测试环境跳过；本地 Herd 页面已只读核验完整展示、五段表单、预填值和中文文案。
-- 完整套件：共运行 622 个测试，594 个通过、21 个跳过；新增的 6 个 CGO-003 用例全部通过。其余仍是 CGO-002 已记录的 6 个范围外 Filament 旧断言失败和 1 个 Embedding Provider 连接错误，失败数量没有增加。
+- 已验证：Pint；CGO-003 相关 38 个测试中 37 个通过、209 个断言、1 个 PostgreSQL 专属用例在 SQLite 测试环境跳过；本地 Herd 页面已只读核验完整展示、五段表单、四个下拉字段、预填值和中文文案。
+- 完整套件：共运行 623 个测试，595 个通过、21 个跳过；本次新增的下拉字段用例通过。其余仍是 CGO-002 已记录的 6 个范围外 Filament 旧断言失败和 1 个 Embedding Provider 连接错误，失败数量没有增加。
 - 未修改：Novel 表单旧 Editorial 入口、现有 Editorial 数据、章节生成运行时来源与任何现有小说数据。
 
 ## CGO-004 — 旧 Editorial 迁移助手与冲突处理
