@@ -33,6 +33,22 @@ class NovelBibleFactory extends Factory
                 'character_arc_requirements' => ['主角完成从逃避到承担的转变'],
                 'allowed_open_endings' => ['次要角色的远行可以保留开放性'],
             ],
+            'style_profile' => [
+                'subgenre' => null,
+                'target_platform' => 'general',
+                'primary_style' => 'accessible_brisk',
+                'secondary_styles' => [],
+                'language_era' => 'modern_spoken',
+                'pacing' => 'balanced',
+                'parameters' => [
+                    'ornateness' => 2,
+                    'dialogue_ratio' => 4,
+                    'description_density' => 2,
+                    'psychology_density' => 2,
+                    'humor_level' => 2,
+                    'literary_level' => 1,
+                ],
+            ],
             'status' => BibleStatus::Current,
         ];
     }

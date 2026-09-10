@@ -6,7 +6,7 @@
 
 ## 1. 目标
 
-将 Chapter Plan 稳定转换为通过 Review 和 Canonical Commit 的正式章节。流水线必须可追踪、可重试、可恢复、可暂停，且 Draft 永不修改 Canonical State。
+将 Chapter Plan 稳定转换为通过 Review 的章节候选，并在用户确认后通过 Canonical Commit 成为正式章节。自动流水线到 Review PASS 停止；整个流程必须可追踪、可重试、可恢复、可暂停，且 Draft 永不修改 Canonical State。
 
 Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、Event Extraction、Summary。不同 Novel 可并行；同一 Novel 的章节 MVP 串行。
 
@@ -18,13 +18,13 @@ Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、E
 Novel.status = draft
 → NovelPlanner 生成结构化 Blueprint Artifact
 → 用户预览并采用
-→ 写入 Bible / Character / World / Volume / Arc / Foreshadowing
+→ 写入包含完整叙事与文风设置的 Bible / Character / World / Volume / Arc / Foreshadowing
 → 初始化 Story State
 → Planning Readiness Check
 → Novel.status = generating
 ```
 
-Blueprint 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。
+Blueprint 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。首次 Blueprint 生成发生在 Current Bible 创建前，是唯一不能读取 Current Bible 的生成入口；采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源。
 
 进入 `generating` 后执行章节流水线：
 
@@ -39,12 +39,17 @@ GenerateNextChapterAction
 → StateValidator
 → ReviewChapterJob
 → ReviewGate
-   ├ PASS → CommitChapterJob → CanonicalCommitService
-   │        → UpdateMemoryJob → GenerateEmbeddingJob → RollupSummaryJob
-   │        → CheckNextAction
+   ├ PASS → Stop，等待用户确认“提交正式章节”
    ├ REWRITE → RewriteChapterJob → Extract/Validate/Review
    └ NEEDS_ATTENTION/BLOCK → Stop
+
+用户确认提交
+→ CommitChapterJob → CanonicalCommitService
+→ UpdateMemoryJob → GenerateEmbeddingJob → RollupSummaryJob
+→ CheckNextAction
 ```
+
+`PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 不得因为 `auto_commit` 设置自动派发 Commit；只有用户确认动作可以启动 Canonical Commit。
 
 ## 3. Queue
 
@@ -80,6 +85,8 @@ Novel.status ∈ generating/completing
 Novel 未暂停
 Current Story State 存在
 Current Volume 存在
+Current Bible 存在且叙事与文风资料完整
+当前小说已完成旧 Editorial 迁移
 无 Blocking Review
 无同 Novel 的另一个活跃 Chapter Workflow
 Budget 未达到 Hard Limit
@@ -199,7 +206,7 @@ scene_plans
 
 `scene_plans[*].transition_from_previous` 明确记录衔接安排。存在上一章正式版本时，第一场景必须说明如何承接上一章结尾；发生时间、地点或行动跳跃时，正文必须呈现必要的抵达、安置或时间流逝过程，不能直接从上一章行动跳到次日新地点。
 
-小说级 `Style Profile` 由主文风 Preset、最多两种辅助文风、语言时代感、故事节奏、叙事视角及六项可选参数组成。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
+小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
 
 字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene、Assembler 和 Rewrite 输出超出当前上下限时最多进行一次定向扩写或压缩，修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
 
@@ -226,12 +233,13 @@ Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推�
 10 Recent Chapter Summaries
 11 Previous Accepted Scene Tail
 12 Long-term Memory
-13 Scene Task
+13 L4 Style Contract（Current Bible Version）
+14 Scene Task
 ```
 
 Token 不足时先缩减 Long-term Memory、较旧 Summary、Style Example；不得删除 Hard Constraints、Current State、Required/Forbidden Facts、Ending Constraints。
 
-Snapshot 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Chapters、Previous Artifact、Prompt/Model 和 Token Budget。
+Snapshot 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Chapters、Previous Artifact、Prompt/Model、Token Budget，以及 Current Bible Version 和 Style Contract checksum。同一 Chapter Pipeline 冻结一个 Bible Version，不在中途静默切换。
 
 ## 8. Temporary Chapter State
 
@@ -338,6 +346,8 @@ NEEDS_ATTENTION  Rewrite 耗尽、重大歧义、Ending 冲突或需人工决策
 BLOCK            Locked Fact 或其他不可接受硬冲突
 ```
 
+普通 warning 按可执行性分流：可自动修复则 REWRITE；不影响发布且无需修复可 PASS；真正需要用户选择或 Rewrite 耗尽才 NEEDS_ATTENTION。Hard Conflict 必须 BLOCK，模型顶层建议不能覆盖 Laravel 的确定性决策。
+
 ## 13. RewriteChapterJob
 
 输入 Source Artifact、Review Findings、Plan、Current State、Locked Facts；输出 `rewrite_draft`。
@@ -369,6 +379,8 @@ rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
 ## 14. CommitChapterJob
 
 只加载冻结 Commit Inputs 并调用 `CanonicalCommitService`，不调用 Writer、Reviewer、Extractor。
+
+该 Job 只由用户在 PASS 后确认“提交正式章节”时派发；Review PASS、自动生成开关或 Resume 本身都不得自动派发 Commit。
 
 前置：
 
@@ -461,6 +473,8 @@ summary:{canonical_artifact_checksum}:{summary_prompt_version}
 
 Auto Generate 不能预先 Queue 100 章。
 
+Auto Generate 只自动推进当前章到 Review PASS，不自动 Canonical Commit。用户手动提交 Chapter N 后，才执行 Post-Commit 并启动 Chapter N+1。
+
 ```text
 Chapter N Commit
 → Post-Commit
@@ -496,7 +510,7 @@ Resume 通过数据库状态和 Artifact 判断恢复点：
 
 ```text
 Chapter canonical → Post-Commit / Next Action
-Review PASS、Commit 未完成 → Commit
+Review PASS、Commit 未完成 → 停止并等待用户手动 Commit
 Review = REWRITE → Rewrite
 Draft 存在、无有效 Review → Extract/Validate/Review
 Scenes 全部完成、无 Chapter Draft → Assemble
@@ -618,7 +632,8 @@ Workflow：
 ```text
 normal full chapter
 multiple scenes sequential
-review pass
+review pass then stop without commit
+manual commit after pass
 rewrite then pass
 rewrite exhausted
 needs attention
@@ -643,7 +658,7 @@ Scene 3 timeout after Scene 1/2 success
 worker crash after artifact persisted
 pause during provider call
 resume from assembled draft
-resume from PASS before commit
+resume from PASS waits for manual commit
 state version conflict before commit
 ```
 
@@ -731,7 +746,8 @@ docs/architecture/generation-pipeline.md
 完整 Generation Pipeline 完成时必须满足：
 
 ```text
-一章可从 Plan 自动运行到 Canonical Commit
+一章可从 Plan 自动运行到 Review PASS
+PASS 后只有用户确认才能启动 Canonical Commit
 Scene 可从中断点恢复
 成功 Artifact 可复用
 Provider Retry 与 Rewrite 分离
@@ -759,7 +775,7 @@ Hard Stop 条件可靠
 9. Canonical Commit is atomic and idempotent.
 10. Post-commit derived failures never rollback canonical text.
 11. Resume is determined from persisted state, not queue presence.
-12. Auto generation stops on hard errors and advances only after commit.
+12. Auto generation stops on hard errors and advances only after a user-confirmed commit.
 ```
 
 # END OF generation-pipeline.md

@@ -20,7 +20,7 @@ use Throwable;
 
 class NovelPlanner
 {
-    public const PROMPT_VERSION = 'novel-planner-v3';
+    public const PROMPT_VERSION = 'novel-planner-v4';
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -92,7 +92,7 @@ class NovelPlanner
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和本地引用键外，所有自然语言内容必须使用简体中文。分卷和故事线只能使用请求中规定的本地键相互引用。',
+                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和本地引用键外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。分卷和故事线只能使用请求中规定的本地键相互引用。',
                 prompt: '请根据以下小说信息生成初始小说圣经、角色、世界实体、分卷规划、故事线和伏笔：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.5,
                 maxTokens: 8_000,
@@ -136,7 +136,7 @@ class NovelPlanner
     /** @param array<string, mixed> $data @return array<string, mixed> */
     private function validate(array $data, int $volumeCount): array
     {
-        $valid = Validator::make($data, [
+        $rules = [
             'bible' => ['required', 'array'],
             'bible.logline' => ['required', 'string'],
             'bible.themes' => ['required', 'array', 'min:1'],
@@ -147,6 +147,15 @@ class NovelPlanner
             'bible.taboos' => ['array'],
             'bible.hard_constraints' => ['array'],
             'bible.ending_contract' => ['required', 'array'],
+            'bible.style_profile' => ['required', 'array:subgenre,target_platform,primary_style,secondary_styles,language_era,pacing,parameters'],
+            'bible.style_profile.subgenre' => ['present', 'nullable', 'string', 'max:100'],
+            'bible.style_profile.target_platform' => ['required', 'string', Rule::in(array_keys(config('narrative.platforms', [])))],
+            'bible.style_profile.primary_style' => ['required', 'string', Rule::in(array_keys(config('narrative.styles', [])))],
+            'bible.style_profile.secondary_styles' => ['present', 'array', 'max:2'],
+            'bible.style_profile.secondary_styles.*' => ['string', 'distinct:strict', Rule::in(array_keys(config('narrative.styles', [])))],
+            'bible.style_profile.language_era' => ['required', 'string', Rule::in(array_keys(config('narrative.language_eras', [])))],
+            'bible.style_profile.pacing' => ['required', 'string', Rule::in(array_keys(config('narrative.paces', [])))],
+            'bible.style_profile.parameters' => ['required', 'array:'.implode(',', config('narrative.parameter_keys', []))],
             'characters' => ['required', 'array', 'min:1'],
             'characters.*.name' => ['required', 'string'],
             'characters.*.role' => ['required', Rule::in(['主角', '配角', '反派'])],
@@ -186,7 +195,44 @@ class NovelPlanner
             'foreshadowings.*.due_to_chapter' => ['required', 'integer', 'min:1'],
             'foreshadowings.*.importance' => ['required', Rule::in(['low', 'medium', 'high', 'critical'])],
             'foreshadowings.*.owner_arc_key' => ['nullable', 'string'],
-        ])->validate();
+        ];
+
+        foreach (config('narrative.parameter_keys', []) as $parameterKey) {
+            $rules["bible.style_profile.parameters.{$parameterKey}"] = ['required', 'integer', 'between:1,5'];
+        }
+
+        $validator = Validator::make($data, $rules, [
+            'bible.style_profile.required' => 'AI 小说规划缺少完整文风设置。',
+            'bible.style_profile.array' => 'AI 小说规划的文风设置必须是 JSON object。',
+            'bible.style_profile.subgenre.present' => 'AI 小说规划的文风设置缺少子题材字段。',
+            'bible.style_profile.target_platform.required' => 'AI 小说规划缺少目标平台。',
+            'bible.style_profile.target_platform.in' => 'AI 小说规划包含不受支持的目标平台。',
+            'bible.style_profile.primary_style.required' => 'AI 小说规划缺少主文风。',
+            'bible.style_profile.primary_style.in' => 'AI 小说规划包含不受支持的主文风。',
+            'bible.style_profile.secondary_styles.present' => 'AI 小说规划缺少辅助文风字段。',
+            'bible.style_profile.secondary_styles.max' => 'AI 小说规划的辅助文风最多允许两项。',
+            'bible.style_profile.secondary_styles.*.distinct' => 'AI 小说规划的辅助文风不能重复。',
+            'bible.style_profile.secondary_styles.*.in' => 'AI 小说规划包含不受支持的辅助文风。',
+            'bible.style_profile.language_era.required' => 'AI 小说规划缺少语言时代感。',
+            'bible.style_profile.language_era.in' => 'AI 小说规划包含不受支持的语言时代感。',
+            'bible.style_profile.pacing.required' => 'AI 小说规划缺少故事节奏。',
+            'bible.style_profile.pacing.in' => 'AI 小说规划包含不受支持的故事节奏。',
+            'bible.style_profile.parameters.required' => 'AI 小说规划缺少文风高级设置。',
+            'bible.style_profile.parameters.*.required' => 'AI 小说规划必须包含全部六项文风高级设置。',
+            'bible.style_profile.parameters.*.integer' => 'AI 小说规划的文风高级设置必须是整数。',
+            'bible.style_profile.parameters.*.between' => 'AI 小说规划的文风高级设置必须是 1 至 5 的整数。',
+        ]);
+
+        $validator->after(function ($validator) use ($data): void {
+            $primaryStyle = data_get($data, 'bible.style_profile.primary_style');
+            $secondaryStyles = data_get($data, 'bible.style_profile.secondary_styles');
+
+            if (is_string($primaryStyle) && is_array($secondaryStyles) && in_array($primaryStyle, $secondaryStyles, true)) {
+                $validator->errors()->add('bible.style_profile.secondary_styles', 'AI 小说规划的辅助文风不能与主文风重复。');
+            }
+        });
+
+        $valid = $validator->validate();
 
         $volumeKeys = collect($valid['volumes'])->pluck('key');
         $arcKeys = collect($valid['story_arcs'])->pluck('key');
@@ -224,11 +270,12 @@ class NovelPlanner
             'additionalProperties' => false,
             'required' => ['bible', 'characters', 'world_entities', 'volumes', 'story_arcs', 'foreshadowings'],
             'properties' => [
-                'bible' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract'], 'properties' => [
+                'bible' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract', 'style_profile'], 'properties' => [
                     'logline' => ['type' => 'string'], 'themes' => $stringArray, 'tone' => ['type' => 'string'], 'pov' => ['type' => 'string'], 'tense' => ['type' => 'string'], 'taboos' => $stringArray, 'hard_constraints' => $stringArray,
                     'ending_contract' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['final_protagonist_state', 'main_conflict_resolution', 'theme_payoff', 'required_foreshadowing_payoff', 'character_arc_requirements', 'allowed_open_endings'], 'properties' => [
                         'final_protagonist_state' => ['type' => 'string'], 'main_conflict_resolution' => ['type' => 'string'], 'theme_payoff' => ['type' => 'string'], 'required_foreshadowing_payoff' => $stringArray, 'character_arc_requirements' => $stringArray, 'allowed_open_endings' => $stringArray,
                     ]],
+                    'style_profile' => $this->styleProfileSchema(),
                 ]],
                 'characters' => ['type' => 'array', 'items' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['name', 'role', 'motivation', 'profile', 'personality', 'abilities', 'knowledge', 'current_state'], 'properties' => [
                     'name' => ['type' => 'string'], 'role' => ['type' => 'string', 'enum' => ['主角', '配角', '反派']], 'motivation' => ['type' => 'string'], 'profile' => $stringArray, 'personality' => $stringArray, 'abilities' => $stringArray, 'knowledge' => $stringArray, 'current_state' => $currentState,
@@ -245,6 +292,43 @@ class NovelPlanner
                 'foreshadowings' => ['type' => 'array', 'items' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['title', 'description', 'promised_payoff', 'due_from_chapter', 'due_to_chapter', 'importance', 'owner_arc_key'], 'properties' => [
                     'title' => ['type' => 'string'], 'description' => ['type' => 'string'], 'promised_payoff' => ['type' => 'string'], 'due_from_chapter' => ['type' => 'integer'], 'due_to_chapter' => ['type' => 'integer'], 'importance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical']], 'owner_arc_key' => ['type' => ['string', 'null']],
                 ]]],
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function styleProfileSchema(): array
+    {
+        $parameterProperties = collect(config('narrative.parameter_keys', []))
+            ->mapWithKeys(fn (string $key): array => [$key => [
+                'type' => 'integer',
+                'minimum' => 1,
+                'maximum' => 5,
+            ]])
+            ->all();
+
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['subgenre', 'target_platform', 'primary_style', 'secondary_styles', 'language_era', 'pacing', 'parameters'],
+            'properties' => [
+                'subgenre' => ['type' => ['string', 'null']],
+                'target_platform' => ['type' => 'string', 'enum' => array_keys(config('narrative.platforms', []))],
+                'primary_style' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))],
+                'secondary_styles' => [
+                    'type' => 'array',
+                    'maxItems' => 2,
+                    'uniqueItems' => true,
+                    'items' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))],
+                ],
+                'language_era' => ['type' => 'string', 'enum' => array_keys(config('narrative.language_eras', []))],
+                'pacing' => ['type' => 'string', 'enum' => array_keys(config('narrative.paces', []))],
+                'parameters' => [
+                    'type' => 'object',
+                    'additionalProperties' => false,
+                    'required' => config('narrative.parameter_keys', []),
+                    'properties' => $parameterProperties,
+                ],
             ],
         ];
     }

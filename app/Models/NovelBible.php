@@ -21,6 +21,7 @@ use LogicException;
     'taboos',
     'hard_constraints',
     'ending_contract',
+    'style_profile',
     'status',
 ])]
 class NovelBible extends Model
@@ -39,6 +40,7 @@ class NovelBible extends Model
         'taboos',
         'hard_constraints',
         'ending_contract',
+        'style_profile',
     ];
 
     protected static function booted(): void
@@ -69,6 +71,7 @@ class NovelBible extends Model
             'taboos' => 'array',
             'hard_constraints' => 'array',
             'ending_contract' => 'array',
+            'style_profile' => 'array',
             'status' => BibleStatus::class,
         ];
     }

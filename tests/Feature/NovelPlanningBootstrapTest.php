@@ -29,6 +29,22 @@ function novelBlueprint(): array
             'tense' => '过去时',
             'taboos' => ['机械降神'],
             'hard_constraints' => ['死亡不可逆'],
+            'style_profile' => [
+                'subgenre' => '东方玄幻',
+                'target_platform' => 'qidian',
+                'primary_style' => 'passionate',
+                'secondary_styles' => ['accessible_brisk'],
+                'language_era' => 'modern_spoken',
+                'pacing' => 'fast',
+                'parameters' => [
+                    'ornateness' => 2,
+                    'dialogue_ratio' => 4,
+                    'description_density' => 3,
+                    'psychology_density' => 2,
+                    'humor_level' => 1,
+                    'literary_level' => 2,
+                ],
+            ],
             'ending_contract' => [
                 'final_protagonist_state' => '接受真实记忆',
                 'main_conflict_resolution' => '恢复太阳档案',
@@ -90,7 +106,11 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($novel->fresh()->status)->toBe(NovelStatus::Planning)
         ->and($novel->bibles()->count())->toBe(0)
         ->and($novel->generationRuns()->sole()->status)->toBe(RunStatus::Succeeded)
-        ->and($fake->requests())->toHaveCount(1);
+        ->and($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->promptVersion)->toBe('novel-planner-v4')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.required'))->toContain('style_profile')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.properties.style_profile.properties.primary_style.enum'))->toContain('passionate')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.properties.style_profile.properties.parameters.required'))->toBe(config('narrative.parameter_keys'));
 });
 
 test('adopting a blueprint creates coherent planning data and refreshes an early initial state', function () {
@@ -104,12 +124,71 @@ test('adopting a blueprint creates coherent planning data and refreshes an early
     $novel->refresh();
 
     expect($novel->bibles()->count())->toBe(1)
+        ->and($novel->currentBible->style_profile)->toBe(data_get(novelBlueprint(), 'bible.style_profile'))
         ->and($novel->characters()->count())->toBe(1)
         ->and($novel->worldEntities()->count())->toBe(1)
         ->and($novel->volumes()->count())->toBe(1)
         ->and($novel->storyArcs()->count())->toBe(1)
         ->and($novel->foreshadowings()->count())->toBe(1)
         ->and($novel->canonicalStateVersion->state['characters'])->not->toBeEmpty();
+});
+
+test('ai planning rejects a blueprint without a complete style profile', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $data = novelBlueprint();
+    unset($data['bible']['style_profile']);
+    $fake = (new FakeAiProvider)->enqueue(new AiResponse(
+        content: json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $data,
+        inputTokens: 100,
+        outputTokens: 500,
+        cachedTokens: 0,
+        latencyMs: 50,
+        providerRequestId: 'novel-plan-missing-style',
+        model: 'planner-test',
+    ));
+    app()->instance(AiProvider::class, $fake);
+
+    try {
+        app(NovelPlanner::class)->generate($novel, 1);
+        test()->fail('Expected blueprint style validation to fail.');
+    } catch (ValidationException $exception) {
+        expect($exception->errors())
+            ->toHaveKey('bible.style_profile')
+            ->and(collect($exception->errors())->flatten()->implode(' '))->toContain('缺少完整文风设置');
+    }
+
+    expect($novel->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
+        ->and($novel->generationRuns()->sole()->artifacts()->count())->toBe(0)
+        ->and($novel->bibles()->count())->toBe(0);
+});
+
+test('the blueprint preview shows complete narrative and style settings before adoption', function () {
+    $this->actingAs(User::factory()->create());
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = (new FakeAiProvider)->enqueue(novelBlueprintResponse());
+    app()->instance(AiProvider::class, $fake);
+    app(NovelPlanner::class)->generate($novel, 1);
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertActionVisible('previewNovelBlueprint')
+        ->mountAction('previewNovelBlueprint')
+        ->assertActionMounted('previewNovelBlueprint')
+        ->assertMountedActionModalSee([
+            '叙事与文风基线',
+            '克制而紧张',
+            '第三人称限知',
+            '过去时',
+            '东方玄幻',
+            '起点中文网',
+            '热血激昂',
+            '通俗爽快',
+            '现代口语',
+            '快节奏',
+            '文风高级设置',
+            '对白占比',
+            '4 / 5',
+        ]);
 });
 
 test('a ready plan can enter generation and an incomplete plan cannot', function () {

@@ -165,7 +165,7 @@ Chapter
 
 - ≥100 万中文字；
 - 数百到数千章；
-- 支持自动连续生成。
+- 支持单章一次启动自动运行到 Review PASS；用户确认 Canonical Commit 后，才继续下一章。
 
 ---
 
@@ -194,10 +194,13 @@ Chapter
 → 自动生成
 → 自动 Review
 → 自动重写
-→ 自动 Commit
+→ Review PASS
+→ 用户确认 Canonical Commit
 ```
 
-只有以下情况才进入人工处理：
+自动化边界固定在 Review PASS。PASS 只表示章节通过审校，尚未成为 Canonical Chapter，也不得更新 Story State、Story Events 或正式 Memory。每章必须由用户执行一次“提交正式章节”，系统不得因 `auto_commit` 设置跳过该确认。
+
+除固定的 PASS 后提交确认外，只有以下异常才提前进入人工处理：
 
 - 硬事实冲突；
 - 连续多次 Rewrite 失败；
@@ -311,6 +314,10 @@ Review
     ↓
 Rewrite（必要时）
     ↓
+Review PASS
+    ↓
+用户确认提交
+    ↓
 Canonical Commit
     ↓
 Story State Update
@@ -330,8 +337,10 @@ generating
 review
    ├── rewrite ──→ review
    ├── blocked
-   └── canonical
+   └── Review PASS ──→ 用户确认 Canonical Commit ──→ canonical
 ```
+
+`PASS` 是 Review Decision，不新增 Chapter 状态；Commit 前 Chapter 仍不是 Canonical。
 
 状态：
 
@@ -402,17 +411,14 @@ created_at
 updated_at
 ```
 
-`settings` 中的小说级创作偏好保持结构化并与题材分离：
+`settings` 只保存运行策略和技术设置，例如章节目标字数、预算、模型覆盖和自动生成开关。叙事与文风不再以 `settings` 为权威来源。
 
 ```text
 generation.chapter_target_words
-editorial.subgenre / target_platform / story_tone
-editorial.primary_style / secondary_styles
-editorial.language_era / pacing / narrative_pov
-editorial.style_parameters
+budget / model / automation settings
 ```
 
-主文风使用有限 Preset，辅助文风与 1～5 级参数用于微调；生成前展开为明确的 Style Profile 指令。
+迁移窗口内可以只读访问历史 `settings.editorial`，仅用于迁移预览、冲突对照和数据复制；章节生成不得以其作为 Style Profile 回退来源。
 
 ---
 
@@ -430,6 +436,7 @@ tense
 taboos JSONB
 hard_constraints JSONB
 ending_contract JSONB
+style_profile JSONB nullable
 status
 created_at
 updated_at
@@ -440,6 +447,10 @@ updated_at
 ```text
 unique(novel_id, version)
 ```
+
+Current Bible Version 是叙事与文风的唯一权威来源。它统一承载 `tone`、`pov`、`tense`、子题材、目标平台、主文风、最多两种辅助文风、语言时代感、节奏和六项高级文风参数。主文风使用有限 Preset，辅助文风与 1～5 级参数用于微调；生成前展开为明确的 Style Contract。
+
+`style_profile` 使用可空 JSONB：新创建的 Bible Version 必须保存通过结构校验的完整对象，历史版本允许为 `null`，不得通过默认值伪造旧文风。现有小说必须创建新 Bible Version 完成迁移。
 
 ---
 
@@ -1207,15 +1218,17 @@ chapter range
 
 ## L4 — Style
 
-MVP 可以存放于：
+权威来源固定为：
 
 ```text
-novel_bibles
+Current Novel Bible Version
 ```
 
-或者 Prompt Config。
+包含 tone、POV、tense、Narrative Voice、主/辅文风、语言时代感、节奏和高级文风参数。Prompt Config 只能把 Bible 中的稳定 code 展开成写作指令，不能保存另一套小说级权威值。
 
 暂不单独设计 Style Memory 表。
+
+首次 AI 小说蓝图生成发生在 Current Bible 创建前，是唯一不能读取 Current Bible 的生成入口。它只生成包含完整叙事与文风设置的 Bible 候选；用户采用并创建首个 Current Bible 后，章节相关阶段必须只读取该版本。
 
 ---
 
@@ -1315,6 +1328,8 @@ Scene
 
 不可提交。
 
+普通 warning 按可执行性分流：可自动修复则 REWRITE；不影响发布且无需修复可 PASS；真正需要用户选择或 Rewrite 耗尽才 NEEDS_ATTENTION。Hard Conflict 仍无条件 BLOCK。
+
 ---
 
 # 17. Rewrite 策略
@@ -1405,17 +1420,17 @@ AssembleChapterJob
         ↓
 ReviewChapterJob
         ↓
-   ┌ PASS
-   │
-   │       Rewrite
-   │          ↓
-   │      Review
-   │
-CommitChapterJob
-        ↓
-UpdateMemoryJob
-        ↓
-RollupSummaryJob
+   ├ REWRITE → RewriteChapterJob → Review
+   ├ NEEDS_ATTENTION / BLOCK → 停止
+   └ PASS → 停止并等待用户确认
+              ↓
+          用户确认“提交正式章节”
+              ↓
+         CommitChapterJob
+              ↓
+         UpdateMemoryJob
+              ↓
+         RollupSummaryJob
 ```
 
 Context Builder MVP 可以作为 Service：

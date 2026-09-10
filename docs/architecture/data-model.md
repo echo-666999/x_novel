@@ -1172,6 +1172,29 @@ docs/architecture/data-model.md
 
 为准。
 
+### 40.1 Novel Bible 的叙事与文风归属
+
+Current Novel Bible Version 是章节叙事与文风的唯一权威来源。一个版本在语义上必须统一承载：
+
+```text
+tone
+pov
+tense
+subgenre
+target_platform
+primary_style
+secondary_styles
+language_era
+pacing
+style_parameters
+```
+
+其中 `tone`、`pov`、`tense` 继续作为现有叙事基线；其余内容由 Bible 的可空 JSONB `style_profile` 承载。新创建的 Bible Version 必须保存通过结构校验的完整对象；历史版本允许为 `null`，不得用当前默认值伪造历史设置。
+
+叙事与文风发生变化时必须创建新 Bible Version，不得原地修改历史版本。`novels.settings.editorial` 只允许在迁移窗口中用于迁移预览、冲突对照和数据复制；章节生成不得把它作为回退来源。迁移完成后应清理旧来源，但不得改写历史 Run、Artifact 或 Context Snapshot。
+
+首次 AI 小说蓝图生成发生在 Current Bible 创建前，可以生成完整 Bible 候选；用户采用并创建 Current Bible 后，Planner、Writer、Assembler、Reviewer、Rewriter 和长度修复必须读取同一个冻结 Bible Version。
+
 ---
 
 ## 41. Data Model Batches

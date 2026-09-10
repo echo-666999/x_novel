@@ -8,6 +8,8 @@ use App\Filament\Resources\Novels\Schemas\NovelBibleDetails;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use Filament\Actions\Action;
+use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -50,10 +52,10 @@ class ManageNovelBible extends ViewRecord
                 ->modalWidth('5xl')
                 ->fillForm(fn (): array => $this->currentBibleFormData())
                 ->schema([
-                    Section::make('核心定位')
+                    Section::make('作品定位')
                         ->columns([
                             'default' => 1,
-                            'md' => 3,
+                            'md' => 2,
                         ])
                         ->schema([
                             Textarea::make('logline')
@@ -65,6 +67,29 @@ class ManageNovelBible extends ViewRecord
                                 ->label('主题')
                                 ->required()
                                 ->columnSpanFull(),
+                            TextInput::make('style_profile.subgenre')
+                                ->label('子题材')
+                                ->maxLength(100)
+                                ->placeholder('例如：东方玄幻、刑侦、民俗灵异')
+                                ->validationMessages([
+                                    'max' => '子题材不能超过 100 个字符。',
+                                ]),
+                            Select::make('style_profile.target_platform')
+                                ->label('目标平台')
+                                ->options(config('narrative.platforms'))
+                                ->required()
+                                ->validationMessages([
+                                    'required' => '请选择目标平台。',
+                                    'in' => '目标平台不是受支持的选项。',
+                                ]),
+                        ]),
+                    Section::make('叙事与文风基线')
+                        ->description('基调、视角、时态与文风设置会随 Bible Version 一起冻结。')
+                        ->columns([
+                            'default' => 1,
+                            'md' => 3,
+                        ])
+                        ->schema([
                             TextInput::make('tone')
                                 ->label('基调')
                                 ->required()
@@ -77,8 +102,54 @@ class ManageNovelBible extends ViewRecord
                                 ->label('时态')
                                 ->required()
                                 ->maxLength(255),
+                            Select::make('style_profile.primary_style')
+                                ->label('主文风')
+                                ->options(self::styleOptions())
+                                ->required()
+                                ->searchable()
+                                ->validationMessages([
+                                    'required' => '请选择主文风。',
+                                    'in' => '主文风不是受支持的选项。',
+                                ]),
+                            Select::make('style_profile.language_era')
+                                ->label('语言时代感')
+                                ->options(config('narrative.language_eras'))
+                                ->required()
+                                ->validationMessages([
+                                    'required' => '请选择语言时代感。',
+                                    'in' => '语言时代感不是受支持的选项。',
+                                ]),
+                            Select::make('style_profile.pacing')
+                                ->label('故事节奏')
+                                ->options(config('narrative.paces'))
+                                ->required()
+                                ->validationMessages([
+                                    'required' => '请选择故事节奏。',
+                                    'in' => '故事节奏不是受支持的选项。',
+                                ]),
+                            CheckboxList::make('style_profile.secondary_styles')
+                                ->label('辅助文风')
+                                ->options(self::styleOptions())
+                                ->helperText('最多选择两种，且不能与主文风重复。')
+                                ->maxItems(2)
+                                ->columns([
+                                    'default' => 2,
+                                    'lg' => 3,
+                                ])
+                                ->columnSpanFull()
+                                ->validationMessages([
+                                    'max' => '辅助文风最多选择两项。',
+                                ]),
                         ]),
-                    Section::make('写作约束')
+                    Section::make('文风高级设置')
+                        ->description('六项参数必须明确设置；1 表示最低，5 表示最高。')
+                        ->columns([
+                            'default' => 1,
+                            'md' => 3,
+                        ])
+                        ->schema(self::styleParameterFields()),
+                    Section::make('写作边界')
+                        ->description('这些内容会约束规划和正文生成。')
                         ->columns([
                             'default' => 1,
                             'lg' => 2,
@@ -148,6 +219,7 @@ class ManageNovelBible extends ViewRecord
                 'taboos' => [],
                 'hard_constraints' => [],
                 'ending_contract' => [],
+                'style_profile' => self::defaultStyleProfile(),
             ];
         }
 
@@ -160,7 +232,12 @@ class ManageNovelBible extends ViewRecord
             'taboos',
             'hard_constraints',
             'ending_contract',
+            'style_profile',
         ]);
+
+        if (! is_array($data['style_profile'] ?? null)) {
+            $data['style_profile'] = self::defaultStyleProfile();
+        }
 
         foreach (['required_foreshadowing_payoff', 'character_arc_requirements', 'allowed_open_endings'] as $key) {
             $value = data_get($data, "ending_contract.{$key}", []);
@@ -168,5 +245,62 @@ class ManageNovelBible extends ViewRecord
         }
 
         return $data;
+    }
+
+    /** @return array<string, string> */
+    private static function styleOptions(): array
+    {
+        return collect(config('narrative.styles', []))
+            ->mapWithKeys(fn (array $style, string $code): array => [$code => $style['name']])
+            ->all();
+    }
+
+    /** @return array<int, Select> */
+    private static function styleParameterFields(): array
+    {
+        return collect(self::styleParameterLabels())
+            ->map(fn (string $label, string $key): Select => Select::make("style_profile.parameters.{$key}")
+                ->label($label)
+                ->options([1 => '1 / 5', 2 => '2 / 5', 3 => '3 / 5', 4 => '4 / 5', 5 => '5 / 5'])
+                ->required()
+                ->validationMessages([
+                    'required' => "请选择{$label}。",
+                    'in' => "{$label}必须是 1 至 5 的整数。",
+                ]))
+            ->values()
+            ->all();
+    }
+
+    /** @return array<string, string> */
+    private static function styleParameterLabels(): array
+    {
+        return [
+            'ornateness' => '语言华丽度',
+            'dialogue_ratio' => '对白占比',
+            'description_density' => '环境描写密度',
+            'psychology_density' => '心理描写密度',
+            'humor_level' => '幽默程度',
+            'literary_level' => '文学性',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private static function defaultStyleProfile(): array
+    {
+        $primaryStyle = 'accessible_brisk';
+        $parameterKeys = config('narrative.parameter_keys', []);
+        $parameterValues = data_get(config('narrative.styles', []), "{$primaryStyle}.parameters", []);
+
+        return [
+            'subgenre' => null,
+            'target_platform' => 'general',
+            'primary_style' => $primaryStyle,
+            'secondary_styles' => [],
+            'language_era' => 'modern_spoken',
+            'pacing' => 'balanced',
+            'parameters' => collect($parameterKeys)
+                ->mapWithKeys(fn (string $key, int $index): array => [$key => $parameterValues[$index]])
+                ->all(),
+        ];
     }
 }

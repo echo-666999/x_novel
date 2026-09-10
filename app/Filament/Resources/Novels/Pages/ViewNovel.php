@@ -95,10 +95,31 @@ class ViewNovel extends ViewRecord
                 ->modalDescription('采用后将写入现有小说规划页面；采用前不会修改小说圣经、人物、世界或故事结构。')
                 ->modalWidth('5xl')
                 ->modalSubmitAction(false)
-                ->infolist([
+                ->schema([
                     Section::make('核心方案')->schema([
                         TextEntry::make('blueprint_logline')->label('一句话梗概')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.logline')),
                         TextEntry::make('blueprint_themes')->label('主题')->state(fn (): array => data_get($this->latestBlueprintArtifact()?->data, 'bible.themes', []))->bulleted(),
+                    ]),
+                    Section::make('叙事与文风基线')->columns(3)->schema([
+                        TextEntry::make('blueprint_tone')->label('基调')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.tone')),
+                        TextEntry::make('blueprint_pov')->label('视角')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.pov')),
+                        TextEntry::make('blueprint_tense')->label('时态')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.tense')),
+                        TextEntry::make('blueprint_subgenre')->label('子题材')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.style_profile.subgenre'))->placeholder('未设置'),
+                        TextEntry::make('blueprint_target_platform')->label('目标平台')->state(fn (): string => $this->blueprintNarrativeLabel('platforms', 'target_platform')),
+                        TextEntry::make('blueprint_primary_style')->label('主文风')->state(fn (): string => $this->blueprintNarrativeLabel('styles', 'primary_style')),
+                        TextEntry::make('blueprint_secondary_styles')->label('辅助文风')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'bible.style_profile.secondary_styles', []))
+                            ->map(fn (mixed $state): string => $this->narrativeLabel('styles', $state))
+                            ->all())->badge()->placeholder('无'),
+                        TextEntry::make('blueprint_language_era')->label('语言时代感')->state(fn (): string => $this->blueprintNarrativeLabel('language_eras', 'language_era')),
+                        TextEntry::make('blueprint_pacing')->label('故事节奏')->state(fn (): string => $this->blueprintNarrativeLabel('paces', 'pacing')),
+                    ]),
+                    Section::make('文风高级设置')->columns(3)->schema([
+                        ...collect($this->styleParameterLabels())
+                            ->map(fn (string $label, string $key): TextEntry => TextEntry::make("blueprint_style_parameter_{$key}")
+                                ->label($label)
+                                ->state(fn (): string => $this->blueprintStyleParameter($key)))
+                            ->values()
+                            ->all(),
                     ]),
                     Section::make('规划结构')->columns(3)->schema([
                         TextEntry::make('blueprint_characters')->label('人物')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'characters', []))->pluck('name')->all())->bulleted(),
@@ -295,5 +316,48 @@ class ViewNovel extends ViewRecord
                 ->where('status', RunStatus::Succeeded))
             ->latest('id')
             ->first();
+    }
+
+    private function blueprintNarrativeLabel(string $group, string $key): string
+    {
+        return $this->narrativeLabel(
+            $group,
+            data_get($this->latestBlueprintArtifact()?->data, "bible.style_profile.{$key}"),
+        );
+    }
+
+    private function narrativeLabel(string $group, mixed $state): string
+    {
+        if (! is_string($state)) {
+            return '尚未记录';
+        }
+
+        $option = data_get(config('narrative'), "{$group}.{$state}");
+
+        if ($group === 'styles' && is_array($option)) {
+            return (string) ($option['name'] ?? $state);
+        }
+
+        return is_string($option) ? $option : $state;
+    }
+
+    private function blueprintStyleParameter(string $key): string
+    {
+        $state = data_get($this->latestBlueprintArtifact()?->data, "bible.style_profile.parameters.{$key}");
+
+        return is_int($state) ? "{$state} / 5" : '尚未记录';
+    }
+
+    /** @return array<string, string> */
+    private function styleParameterLabels(): array
+    {
+        return [
+            'ornateness' => '语言华丽度',
+            'dialogue_ratio' => '对白占比',
+            'description_density' => '环境描写密度',
+            'psychology_density' => '心理描写密度',
+            'humor_level' => '幽默程度',
+            'literary_level' => '文学性',
+        ];
     }
 }

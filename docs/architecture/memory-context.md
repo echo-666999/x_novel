@@ -51,7 +51,9 @@ L4 Style
 
 ### L4 Style
 
-POV、Narrative Voice、Tone、Forbidden Expressions、Style Examples。MVP 优先存在 Bible/Prompt Config，不建独立 Style Memory 表。
+权威来源是 Current Novel Bible Version，包含 tone、POV、tense、Narrative Voice、主/辅文风、语言时代感、节奏、高级参数，以及后续可选的 Forbidden Expressions、Style Examples。Prompt Config 只能把 Bible 中的稳定 code 展开为指令，不能保存另一套小说级权威值。MVP 不建独立 Style Memory 表。
+
+首次 AI 小说蓝图生成发生在 Current Bible 创建前，是唯一例外：它生成完整 Bible 候选；采用并创建 Current Bible 后，所有章节相关 Context 必须只读取该版本。迁移期旧 Editorial 只供迁移预览和数据复制，不得成为章节 Context 回退来源。
 
 ## 3. Context 优先级
 
@@ -67,7 +69,7 @@ POV、Narrative Voice、Tone、Forbidden Expressions、Style Examples。MVP 优�
 9 L2 Recent Story
 10 Previous Scene Tail
 11 L3 Long-term Memory
-12 L4 Style Examples
+12 L4 Style Contract
 13 Task Instruction
 ```
 
@@ -87,6 +89,7 @@ chapterId
 sceneId?
 taskType
 stateVersion
+bibleVersion
 chapterPlanId
 tokenBudget
 ```
@@ -100,6 +103,7 @@ schema_version
 novel_id / chapter_id / scene_id
 task_type
 bible_version
+style_contract_checksum
 state_version
 chapter_plan_id
 character_ids
@@ -453,6 +457,8 @@ bible_version
 plan_version
 ```
 
+新 Chapter Pipeline 必须绑定启动时的 Current Bible Version。运行中的 Pipeline 继续使用已冻结版本；若用户要求立即采用新 Bible Version，必须显式重启本章，不能静默替换 Context。
+
 Commit 前如果 Current State Version 已变化：
 
 ```text
@@ -725,7 +731,7 @@ L0 永远注入
 L1 来自 Canonical State
 L2 不依赖 Vector
 L3 只召回 active Memory
-L4 可按预算裁剪
+L4 Style Examples 可按预算裁剪，tone、POV、tense 和硬性风格约束不得裁剪
 Context Snapshot 可复现
 Knowledge Boundary 不泄漏
 Critical Foreshadowing 不漏
@@ -750,6 +756,7 @@ Token Budget 可解释
 10. Embedding failure never rolls back canonical content.
 11. Context is optimized for relevance, not maximum size.
 12. Retrieval quality is evaluated with fixed test cases.
+13. Chapter style context comes from one frozen Current Bible Version.
 ```
 
 # END OF memory-context.md
