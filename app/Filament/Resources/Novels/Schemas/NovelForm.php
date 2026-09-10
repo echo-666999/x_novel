@@ -21,7 +21,6 @@ class NovelForm
             ->components([
                 Section::make('基础信息')
                     ->description('维护小说的核心定位与生成目标。')
-                    ->columns(2)
                     ->schema([
                         TextInput::make('title')
                             ->label('标题')
@@ -54,44 +53,37 @@ class NovelForm
                             ->maxLength(10_000)
                             ->columnSpanFull(),
                     ]),
-                Grid::make(['default' => 1, 'lg' => 2])
-                    ->visible(fn (string $operation): bool => $operation === 'edit')
-                    ->columnSpanFull()
+                Section::make('AI Model Overrides')
+                    ->description('留空时继承 Global Default。这里只覆盖各 Stage 的模型，不保存 Provider 凭据。')
+                    ->icon('heroicon-o-cpu-chip')
+                    ->columns(['default' => 1, 'lg' => 2])
+                    ->schema(self::aiModelOverrideFields()),
+                Section::make('Budget Limits')
+                    ->description('留空时继承全局限制；0 表示立即阻止该范围的新 Provider Request。')
+                    ->icon('heroicon-o-banknotes')
+                    ->columns(['default' => 1, 'md' => 2])
                     ->schema([
-                        Grid::make(1)->schema([
-                            Section::make('Budget Limits')
-                                ->description('留空时继承全局限制；0 表示立即阻止该范围的新 Provider Request。')
-                                ->icon('heroicon-o-banknotes')
-                                ->columns(['default' => 1, 'md' => 2])
-                                ->schema([
-                                    TextInput::make('budget_limits.novel_total_limit')
-                                        ->label('Novel Total Limit')
-                                        ->numeric()
-                                        ->minValue(0)
-                                        ->step(0.000001)
-                                        ->placeholder(fn (): string => self::globalBudgetPlaceholder('novel_total_limit')),
-                                    TextInput::make('budget_limits.chapter_max_cost')
-                                        ->label('Chapter Max Cost')
-                                        ->numeric()
-                                        ->minValue(0)
-                                        ->step(0.000001)
-                                        ->placeholder(fn (): string => self::globalBudgetPlaceholder('chapter_max_cost')),
-                                ]),
-                            Section::make('生成自动化')
-                                ->description('控制 Review 通过后的下一步。关闭时仍可在章节工作台手工提交。')
-                                ->icon('heroicon-o-bolt')
-                                ->schema([
-                                    Toggle::make('auto_commit')
-                                        ->label('Review 通过后自动提交')
-                                        ->helperText('开启后，PASS Review 会通过 CommitChapterJob 提交正式章节。')
-                                        ->default(false),
-                                ]),
-                        ]),
-                        Section::make('AI Model Overrides')
-                            ->description('留空时继承 Global Default。这里只覆盖各 Stage 的模型，不保存 Provider 凭据。')
-                            ->icon('heroicon-o-cpu-chip')
-                            ->columns(['default' => 1, 'lg' => 2])
-                            ->schema(self::aiModelOverrideFields()),
+                        TextInput::make('budget_limits.novel_total_limit')
+                            ->label('Novel Total Limit')
+                            ->numeric()
+                            ->minValue(0)
+                            ->step(0.000001)
+                            ->placeholder(fn (): string => self::globalBudgetPlaceholder('novel_total_limit')),
+                        TextInput::make('budget_limits.chapter_max_cost')
+                            ->label('Chapter Max Cost')
+                            ->numeric()
+                            ->minValue(0)
+                            ->step(0.000001)
+                            ->placeholder(fn (): string => self::globalBudgetPlaceholder('chapter_max_cost')),
+                    ]),
+                Section::make('生成自动化')
+                    ->description('控制 Review 通过后的下一步。关闭时仍可在章节工作台手工提交。')
+                    ->icon('heroicon-o-bolt')
+                    ->schema([
+                        Toggle::make('auto_commit')
+                            ->label('Review 通过后自动提交')
+                            ->helperText('开启后，PASS Review 会通过 CommitChapterJob 提交正式章节。')
+                            ->default(false),
                     ]),
             ]);
     }
