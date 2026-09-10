@@ -25,15 +25,16 @@ class ContextInspectorSchema
         ) ?: '{}';
 
         return [
-            Section::make('Context 版本')->columns(4)->schema([
+            Section::make('Context 版本')->columns(5)->schema([
                 TextEntry::make($prefix.'state_version')->label('故事状态版本')->state(fn ($record): string => 'v'.(data_get($inspect($record), 'meta.state_version') ?? '—'))->badge(),
                 TextEntry::make($prefix.'bible_version')->label('Bible 版本')->state(fn ($record): string => 'v'.(data_get($inspect($record), 'meta.bible_version') ?? '—'))->badge(),
+                TextEntry::make($prefix.'style_contract_checksum')->label('Style Contract checksum')->state(fn ($record) => data_get($inspect($record), 'meta.style_contract_checksum'))->placeholder('—')->copyable(),
                 TextEntry::make($prefix.'prompt_version')->label('Prompt Version')->state(fn ($record) => data_get($inspect($record), 'meta.prompt_version'))->placeholder('—'),
                 TextEntry::make($prefix.'model')->label('模型')->state(fn ($record) => data_get($inspect($record), 'meta.model'))->placeholder('—'),
             ]),
             ...self::layerSections($inspect, $json, $prefix),
             Section::make('Token 分配')
-                ->description('各层实际占用和剩余预算；L0/L1 为不可裁剪层。')
+                ->description('各层实际占用和剩余预算；L0/L1/L4 硬性契约为不可裁剪层。')
                 ->columns(3)
                 ->schema([
                     TextEntry::make($prefix.'token_budget')->label('总预算')->state(fn ($record): int => (int) data_get($inspect($record), 'token_allocation.budget'))->numeric(),
@@ -94,7 +95,7 @@ class ContextInspectorSchema
             'l1' => ['L1 · 当前状态', '来自不可变 Canonical Story State Version。'],
             'l2' => ['L2 · 近期故事', '来自近期正式章节、事件与上一章结尾，不依赖向量检索。'],
             'l3' => ['L3 · 长期记忆', '通过 pgvector 检索、排序、去重和 Token Budget 后选入。'],
-            'l4' => ['L4 · 文风上下文', '文风示例或可裁剪的风格上下文；未接入时明确显示为空。'],
+            'l4' => ['L4 · Style Contract', '来自指定 Bible Version 的冻结文风契约；POV、时态和硬性边界不可裁剪。'],
         ];
 
         return collect($layers)->map(function (array $labels, string $layer) use ($inspect, $json, $prefix): Section {

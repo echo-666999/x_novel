@@ -12,6 +12,7 @@ use App\Enums\ReviewDecision;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Services\AutoStopService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -63,6 +64,7 @@ test('post commit volume gate failure disables auto generation and queues no nex
         'current_chapter_sequence' => 1,
         'settings' => ['auto_generate' => true],
     ]);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1, 'status' => ChapterStatus::Canonical]);
 

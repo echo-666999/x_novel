@@ -16,6 +16,7 @@ use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Memory;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
@@ -33,6 +34,7 @@ uses(RefreshDatabase::class);
 function reliabilityNovel(int $currentSequence = 0): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating, 'current_chapter_sequence' => $currentSequence ?: null]);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 

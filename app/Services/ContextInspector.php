@@ -28,6 +28,7 @@ class ContextInspector
             'meta' => [
                 'state_version' => data_get($snapshot, 'state_version', $run->state_version),
                 'bible_version' => data_get($snapshot, 'bible_version', $run->bible_version),
+                'style_contract_checksum' => data_get($snapshot, 'style_contract_checksum'),
                 'prompt_version' => data_get($snapshot, 'prompt_version', $run->prompt_version),
                 'model' => data_get($snapshot, 'model', $run->model_policy),
             ],

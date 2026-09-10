@@ -22,10 +22,14 @@ use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
+use App\Models\Review;
+use App\Models\Scene;
 use App\Services\ChapterReviewer;
 use App\Services\StateValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
@@ -33,6 +37,7 @@ function reviewFixture(): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
+    NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
     $content = '林舟守住城门，也兑现了向同伴作出的承诺。';
     ChapterPlan::factory()->for($chapter)->create(['target_words' => mb_strlen($content)]);
@@ -42,11 +47,35 @@ function reviewFixture(): array
     return compact('novel', 'chapter', 'draft');
 }
 
-function reviewResponse(string $decision = 'PASS', int $score = 90): AiResponse
+function reviewResponse(string $decision = 'PASS', int $score = 90, array $findings = []): AiResponse
 {
-    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'findings' => []];
+    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'findings' => $findings];
 
     return new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'review-request', model: 'review-test');
+}
+
+function reviewFinding(
+    string $code = 'STYLE_MISMATCH',
+    string $dimension = 'style',
+    string $severity = 'warning',
+    ?int $sceneId = null,
+    string $scope = 'chapter',
+    bool $autoFixable = false,
+    bool $requiresHumanDecision = false,
+    string $message = '主文风不匹配。',
+    string $evidence = '林舟守住城门',
+): array {
+    return [
+        'code' => $code,
+        'dimension' => $dimension,
+        'severity' => $severity,
+        'scene_id' => $sceneId,
+        'scope' => $scope,
+        'auto_fixable' => $autoFixable,
+        'requires_human_decision' => $requiresHumanDecision,
+        'message' => $message,
+        'evidence' => $evidence,
+    ];
 }
 
 function bindStateValidation(StateValidationResult $result): void
@@ -69,10 +98,50 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($review->continuity_score)->toBe('90.00')
         ->and($review->artifact->type)->toBe(ArtifactType::ReviewResult)
         ->and($review->generationRun->status)->toBe(RunStatus::Succeeded)
+        ->and($review->generationRun->bible_version)->toBe(1)
+        ->and(data_get($review->generationRun->context_snapshot, 'style_contract_checksum'))->toBe(data_get($review->generationRun->context_snapshot, 'l4.checksum'))
+        ->and(data_get($review->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
         ->and($fake->requests()[0]->systemPrompt)->toContain('message 与 evidence 必须使用简体中文')
         ->and($fake->requests()[0]->systemPrompt)->toContain('state_findings 为空表示确定性检查未发现问题')
         ->and($fake->requests()[0]->systemPrompt)->toContain('may_hint 是可选提示');
+});
+
+test('style findings are grounded in draft evidence and the frozen style contract', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $finding = [
+        'code' => 'STYLE_MISMATCH',
+        'dimension' => 'style',
+        'severity' => 'warning',
+        'scene_id' => null,
+        'scope' => 'chapter',
+        'auto_fixable' => false,
+        'requires_human_decision' => false,
+        'message' => '连续铺陈削弱了主文风要求的直接推进。',
+        'evidence' => '林舟守住城门',
+    ];
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse(findings: [$finding]));
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->findings)->toContainEqual([...$finding, 'source' => 'narrative_review'])
+        ->and($fake->requests()[0]->prompt)->toContain('通俗爽快')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('style finding 的 evidence 必须引用草稿中的具体短句');
+});
+
+test('review rejects a style finding without textual evidence', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse(findings: [reviewFinding(evidence: '')]));
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, 'Findings 结构无效');
+
+    expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Review)->sole()->status)
+        ->toBe(RunStatus::Failed);
 });
 
 test('narrative review compares the opening with the previous canonical ending', function () {
@@ -105,7 +174,7 @@ test('deterministic length check forces a short chapter into rewrite', function 
     $fixture = reviewFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 100]);
     bindStateValidation(new StateValidationResult([]));
-    $fake = (new FakeAiProvider)->enqueue(reviewResponse());
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse(score: 60));
     app()->instance(AiProvider::class, $fake);
 
     $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
@@ -116,6 +185,10 @@ test('deterministic length check forces a short chapter into rewrite', function 
             'code' => 'CHAPTER_LENGTH_TOO_SHORT',
             'dimension' => 'pacing',
             'severity' => 'error',
+            'scene_id' => null,
+            'scope' => 'chapter',
+            'auto_fixable' => true,
+            'requires_human_decision' => false,
             'message' => "当前草稿 {$actualWords} 字，目标 100 字，至少需要达到 85 字。",
             'evidence' => '当前稿完成度为 '.$actualWords.'%。',
             'source' => 'length_check',
@@ -146,6 +219,8 @@ test('deterministic hard state finding overrides narrative score with block', fu
 
     expect($review->decision)->toBe(ReviewDecision::Block)
         ->and($review->findings[0]['code'])->toBe('LOCKED_FACT_CONFLICT')
+        ->and($review->findings[0]['auto_fixable'])->toBeFalse()
+        ->and(data_get($review->artifact->data, 'decision_basis.rule'))->toBe('hard_finding')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked);
 });
 
@@ -165,16 +240,123 @@ test('missing state patch stops review before an ai request and does not create 
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
-test('low score requests rewrite and ambiguous model block requires attention', function (string $recommended, int $score, ReviewDecision $expected) {
+test('model recommendation does not override the laravel decision matrix', function (string $recommended) {
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse($recommended, $score)));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse($recommended, 95)));
 
-    expect(app(ChapterReviewer::class)->review($fixture['chapter']->getKey())->decision)->toBe($expected);
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Pass)
+        ->and(data_get($review->artifact->data, 'recommended_decision'))->toBe($recommended)
+        ->and(data_get($review->artifact->data, 'decision_basis.rule'))->toBe('score_and_non_blocking_findings');
 })->with([
-    ['PASS', 60, ReviewDecision::Rewrite],
-    ['BLOCK', 95, ReviewDecision::NeedsAttention],
+    'model suggests rewrite' => ['REWRITE'],
+    'model suggests needs attention' => ['NEEDS_ATTENTION'],
+    'model suggests block' => ['BLOCK'],
 ]);
+
+test('structured findings deterministically route ordinary warnings', function (array $finding, ReviewDecision $expected, string $rule) {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(score: 95, findings: [$finding])));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe($expected)
+        ->and(data_get($review->artifact->data, 'decision_basis.rule'))->toBe($rule)
+        ->and(data_get($review->artifact->data, 'decision_basis.finding_codes'))->toBe([$finding['code']]);
+})->with([
+    'auto fixable warning' => [reviewFinding(autoFixable: true), ReviewDecision::Rewrite, 'auto_fixable_finding'],
+    'non blocking warning' => [reviewFinding(), ReviewDecision::Pass, 'score_and_non_blocking_findings'],
+    'user choice required' => [reviewFinding(requiresHumanDecision: true, message: '两个互斥的角色动机均无 Canonical 依据，需要用户选择。'), ReviewDecision::NeedsAttention, 'human_decision_required'],
+]);
+
+test('auto fixable plan and style findings request rewrite', function (array $finding) {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [$finding])));
+
+    expect(app(ChapterReviewer::class)->review($fixture['chapter']->getKey())->decision)
+        ->toBe(ReviewDecision::Rewrite);
+})->with([
+    'plan' => [reviewFinding(code: 'PLAN_DEVIATION', dimension: 'plan', severity: 'error', autoFixable: true, message: '未完成必须揭示的信息。')],
+    'style' => [reviewFinding(severity: 'error', autoFixable: true)],
+]);
+
+test('a low score with an executable finding requests rewrite', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(score: 60, findings: [reviewFinding(autoFixable: true)])));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and(data_get($review->artifact->data, 'decision_basis.rule'))->toBe('auto_fixable_finding');
+});
+
+test('an ambiguous deterministic finding requires attention', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([
+        new StateFinding('CANONICAL_AMBIGUITY', StateFindingSeverity::Ambiguous, 'Canonical 数据不足以确定两个分支中的哪一个成立。'),
+    ]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse()));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and($review->findings[0]['requires_human_decision'])->toBeTrue()
+        ->and(data_get($review->artifact->data, 'decision_basis.finding_codes'))->toBe(['CANONICAL_AMBIGUITY']);
+});
+
+test('review validates scene references and finding evidence before persistence', function (string $invalidCase) {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create();
+    $finding = match ($invalidCase) {
+        'foreign_scene' => reviewFinding(sceneId: Scene::factory()->create()->getKey(), scope: 'scene'),
+        'missing_scene_id' => reviewFinding(scope: 'scene'),
+        'missing_evidence' => reviewFinding(evidence: ''),
+        'mismatched_code' => reviewFinding(code: 'PLAN_DEVIATION', dimension: 'style'),
+    };
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [$finding])));
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, 'Findings 结构无效');
+
+    expect(Review::query()->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $fixture['chapter']->getKey()))->count())->toBe(0)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Review)->sole()->status)->toBe(RunStatus::Failed);
+})->with([
+    'scene from another chapter' => ['foreign_scene'],
+    'scene scope without scene id' => ['missing_scene_id'],
+    'missing evidence' => ['missing_evidence'],
+    'code dimension mismatch' => ['mismatched_code'],
+]);
+
+test('a valid scene finding preserves its chapter scoped reference', function () {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create();
+    bindStateValidation(new StateValidationResult([]));
+    $finding = reviewFinding(sceneId: $scene->getKey(), scope: 'scene', autoFixable: true);
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse(findings: [$finding]));
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and($review->findings)->toContainEqual([...$finding, 'source' => 'narrative_review'])
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.findings.items.properties.code.enum'))->toContain('STYLE_MISMATCH')
+        ->and(data_get($review->generationRun->context_snapshot, 'scenes.0.id'))->toBe($scene->getKey());
+});
+
+test('a below threshold score without an executable finding is rejected', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(score: 60)));
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '没有提供可执行或需要人工决策的 Finding');
+});
 
 test('the review after the final rewrite moves unresolved findings to needs attention', function () {
     $fixture = reviewFixture();
@@ -194,12 +376,13 @@ test('the review after the final rewrite moves unresolved findings to needs atte
         ]);
     }
     bindStateValidation(new StateValidationResult([]));
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse('REWRITE', 90)));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse('PASS', 90, [reviewFinding(autoFixable: true)])));
 
     $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
 
     expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
         ->and(collect($review->findings)->pluck('code'))->toContain('REWRITE_EXHAUSTED')
+        ->and(data_get($review->artifact->data, 'decision_basis.rule'))->toBe('human_decision_required')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
@@ -272,7 +455,7 @@ test('review job does not auto commit a non pass review', function () {
     $fixture = reviewFixture();
     $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
     bindStateValidation(new StateValidationResult([]));
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse('REWRITE', 60)));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse('PASS', 60, [reviewFinding(autoFixable: true)])));
 
     (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
 

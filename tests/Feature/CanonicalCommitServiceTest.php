@@ -26,6 +26,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Memory;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
@@ -517,6 +518,7 @@ test('canonical commit dispatches memory update after the formal transaction', f
 test('canonical commit starts only the immediate next chapter when auto generation is enabled', function () {
     Queue::fake();
     $fixture = canonicalCommitFixture();
+    NovelBible::factory()->for($fixture['novel'])->create();
     $fixture['novel']->update(['settings' => ['auto_generate' => true]]);
     Volume::factory()->for($fixture['novel'])->create(['status' => VolumeStatus::Active]);
 

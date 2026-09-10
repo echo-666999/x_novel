@@ -25,7 +25,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly GenerationRunLease $runLease) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -57,9 +57,13 @@ class ChapterRewriter
         $findingHash = hash('sha256', json_encode($review->findings, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $settings = $this->settingsResolver->resolve(AiStage::Rewrite, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Rewrite);
+        $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
         $brief = [
             'scope' => $sceneId === null ? 'chapter' : 'scene',
             'source_artifact_id' => $source->getKey(),
+            'bible_version' => $styleContract['bible_version'],
+            'style_contract_checksum' => $styleContract['checksum'],
+            'l4' => $styleContract,
             'findings' => $review->findings,
             'must_preserve' => $chapter->latestPlan->only(['chapter_function', 'arc_contribution', 'reader_promise', 'must_reveal']),
             'expected_fixes' => collect($review->findings)->pluck('message')->filter()->values()->all(),
@@ -90,7 +94,7 @@ class ChapterRewriter
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 章节重写器。只修复给定问题，保留计划要求的剧情结果和既定事实。处理连续性问题时必须对照 previous_chapter_ending，让正文开头交代时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words；length_requirement.maximum_words 是不可超过的硬上限，字数统计排除空白和换行。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有场景的动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。只返回修订后的简体中文正文。',
+                systemPrompt: '你是 XNovel 章节重写器。只修复给定问题，保留计划要求的剧情结果和既定事实。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文开头交代时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words；length_requirement.maximum_words 是不可超过的硬上限，字数统计排除空白和换行。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有场景的动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。只返回修订后的简体中文正文。',
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
@@ -193,13 +197,14 @@ class ChapterRewriter
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 systemPrompt: $tooLong
-                    ? '你是 XNovel 重写稿压缩器。当前重写稿仍然超限。保留必须修复的问题、计划结果、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
-                    : '你是 XNovel 重写稿扩写器。当前重写稿仍然过短。保留已经完成的修复、计划结果和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
+                    ? '你是 XNovel 重写稿压缩器。当前重写稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、计划结果、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
+                    : '你是 XNovel 重写稿扩写器。当前重写稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、计划结果和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
                 prompt: ($tooLong ? '请压缩以下重写稿：' : '请扩写以下重写稿：').json_encode([
                     'scope' => $brief['scope'],
                     'findings' => $brief['findings'],
                     'must_preserve' => $brief['must_preserve'],
                     'must_not_change' => $brief['must_not_change'],
+                    'l4' => $brief['l4'],
                     'length_requirement' => $requirement,
                     'current_words' => $actual,
                     'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
@@ -264,6 +269,7 @@ class ChapterRewriter
                 'stage' => GenerationStage::Rewrite, 'status' => RunStatus::Running, 'attempt' => $attempt,
                 'idempotency_key' => $key, 'input_hash' => $inputHash,
                 'state_version' => $chapter->novel->canonicalStateVersion()->value('version'),
+                'bible_version' => $brief['bible_version'],
                 'prompt_version' => $promptVersion, 'model_policy' => $model,
                 'context_snapshot' => [...collect($brief)->except('content')->all(), 'finding_hash' => $findingHash], 'started_at' => now(),
             ]), false];
@@ -315,13 +321,42 @@ class ChapterRewriter
                 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter',
                 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded,
                 'attempt' => $source->generationRun->attempt + 1, 'idempotency_key' => $key,
-                'input_hash' => hash('sha256', $key), 'state_version' => $source->generationRun->state_version,
+                'input_hash' => hash('sha256', $key.'|'.data_get($source->generationRun->context_snapshot, 'style_contract_checksum')), 'state_version' => $source->generationRun->state_version,
+                'bible_version' => $source->generationRun->bible_version,
                 'prompt_version' => $source->generationRun->prompt_version, 'model_policy' => 'deterministic',
-                'context_snapshot' => ['reason' => 'rewrite_exhausted', 'source_review_id' => $source->getKey()],
+                'context_snapshot' => [
+                    'reason' => 'rewrite_exhausted',
+                    'source_review_id' => $source->getKey(),
+                    'bible_version' => $source->generationRun->bible_version,
+                    'style_contract_checksum' => data_get($source->generationRun->context_snapshot, 'style_contract_checksum'),
+                    'l4' => data_get($source->generationRun->context_snapshot, 'l4'),
+                ],
                 'started_at' => now(), 'finished_at' => now(),
             ]);
-            $findings = [...$source->findings, ['code' => 'REWRITE_EXHAUSTED', 'severity' => 'ambiguous', 'message' => '自动 Rewrite 已达到最大 2 次，需要人工处理。', 'source' => 'rewrite_loop']];
-            $data = ['decision' => ReviewDecision::NeedsAttention->value, 'score' => (float) $source->score, 'findings' => $findings, 'source_review_id' => $source->getKey()];
+            $findings = [...$source->findings, [
+                'code' => 'REWRITE_EXHAUSTED',
+                'dimension' => 'workflow',
+                'severity' => 'ambiguous',
+                'scene_id' => null,
+                'scope' => 'chapter',
+                'auto_fixable' => false,
+                'requires_human_decision' => true,
+                'message' => '自动 Rewrite 已达到最大 2 次，需要人工处理。',
+                'evidence' => '已完成 2 次自动 Rewrite。',
+                'source' => 'rewrite_loop',
+            ]];
+            $data = [
+                'decision' => ReviewDecision::NeedsAttention->value,
+                'decision_basis' => [
+                    'rule' => 'human_decision_required',
+                    'finding_codes' => ['REWRITE_EXHAUSTED'],
+                    'score' => (float) $source->score,
+                    'pass_score' => (float) config('generation.review_pass_score', 80),
+                ],
+                'score' => (float) $source->score,
+                'findings' => $findings,
+                'source_review_id' => $source->getKey(),
+            ];
             $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)
                 ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))->max('version');
             $artifact = $run->artifacts()->create([

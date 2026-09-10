@@ -7,6 +7,7 @@ use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
+use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -126,6 +127,14 @@ test('scene generator persists an immutable draft artifact and temporary state d
     $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
     $scene = $fixture['scenes']->first()->fresh();
     $run = $scene->generationRuns()->sole();
+    $inputContext = $run->context_snapshot;
+    unset($inputContext['regeneration_batch_id']);
+    $expectedInputHash = hash('sha256', json_encode([
+        'context' => $inputContext,
+        'model' => $run->model_policy,
+        'prompt_version' => $run->prompt_version,
+        'regeneration_batch_id' => null,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
     expect($artifact->type)->toBe(ArtifactType::SceneDraft)
         ->and($artifact->content)->toBe('雨幕中，林舟推开了门。')
@@ -136,12 +145,45 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($scene->current_artifact_id)->toBe($artifact->getKey())
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->stage)->toBe(GenerationStage::SceneGeneration)
-        ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'scene_task', 'temporary_state']);
+        ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'l4', 'style_contract_checksum', 'scene_task', 'temporary_state'])
+        ->and($run->bible_version)->toBe(1)
+        ->and($run->input_hash)->toBe($expectedInputHash)
+        ->and(data_get($run->context_snapshot, 'l4.checksum'))->toBe(data_get($run->context_snapshot, 'style_contract_checksum'));
     expect(data_get($run->context_snapshot, 'writing_constraints.scene_target_words'))->toBe($fixture['plan']->target_words)
         ->and(data_get($run->context_snapshot, 'scene_task.transition_from_previous'))->toBe('先写抵达学院和入住过程，再进入次日清晨。')
-        ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.primary_style'))->toBe('轻松幽默')
-        ->and(data_get($run->context_snapshot, 'writing_constraints.style_profile.instructions.0'))->toContain('情境幽默')
+        ->and(data_get($run->context_snapshot, 'writing_constraints'))->not->toHaveKey('style_profile')
+        ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
+        ->and(data_get($run->context_snapshot, 'l4.primary_style.instruction'))->toContain('语言直接易读')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日');
+});
+
+test('scene snapshots keep the bible version frozen for the current chapter plan', function () {
+    $fixture = sceneGenerationFixture(2);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('甲', 8)))
+        ->enqueue(sceneResponse(str_repeat('乙', 8)));
+    app()->instance(AiProvider::class, $fake);
+
+    app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    $firstBible = $fixture['novel']->currentBible()->firstOrFail();
+    $firstBible->update(['status' => BibleStatus::Superseded]);
+    NovelBible::factory()->for($fixture['novel'])->create([
+        'version' => 2,
+        'tone' => '冷峻',
+        'style_profile' => array_replace($firstBible->style_profile, ['primary_style' => 'austere']),
+        'status' => BibleStatus::Current,
+    ]);
+
+    app(SceneGenerator::class)->generate($fixture['scenes']->last()->getKey());
+
+    $runs = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::SceneGeneration)->oldest('id')->get();
+
+    expect($runs->pluck('bible_version')->all())->toBe([1, 1])
+        ->and($runs->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'l4.bible_version'))->all())->toBe([1, 1])
+        ->and($runs->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'style_contract_checksum'))->unique()->count())->toBe(1)
+        ->and(data_get($runs->last()->context_snapshot, 'l4.tone'))->toBe($firstBible->tone)
+        ->and(data_get($runs->last()->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快');
 });
 
 test('a final scene budget shortfall is expanded once before the chapter is blocked', function () {
@@ -161,7 +203,10 @@ test('a final scene budget shortfall is expanded once before the chapter is bloc
         ->and($fixture['scenes']->first()->generationRuns()->where('error_code', 'scene_budget_shortfall')->count())->toBe(1)
         ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts')->count())->toBe(0);
     expect($fake->requests())->toHaveCount(2)
-        ->and($fake->requests()[1]->systemPrompt)->toContain('场景扩写器');
+        ->and($fake->requests()[1]->systemPrompt)->toContain('场景扩写器')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('POV、时态、主文风')
+        ->and($fake->requests()[1]->prompt)->toContain('"l4"')
+        ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
 });
 
 test('a successful length expansion becomes the scene draft', function () {

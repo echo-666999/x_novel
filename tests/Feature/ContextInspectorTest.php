@@ -20,6 +20,7 @@ test('context inspector normalizes all layers tokens truncation and selected mem
         'context_snapshot' => [
             'state_version' => 5,
             'bible_version' => 2,
+            'style_contract_checksum' => 'style-checksum-123',
             'prompt_version' => 'scene-writer-v1',
             'model' => 'writer-model',
             'l0' => ['rules' => ['禁止复活']],
@@ -45,6 +46,7 @@ test('context inspector normalizes all layers tokens truncation and selected mem
     $inspection = app(ContextInspector::class)->inspect($run);
 
     expect($inspection['l0']['rules'])->toBe(['禁止复活'])
+        ->and($inspection['meta']['style_contract_checksum'])->toBe('style-checksum-123')
         ->and($inspection['l4']['style'])->toBe('克制')
         ->and($inspection['token_allocation']['sections'])->toContain(['section' => 'L3', 'tokens' => 100])
         ->and($inspection['truncated_sections'])->toBe([['section' => 'l3.long_term_memory']])

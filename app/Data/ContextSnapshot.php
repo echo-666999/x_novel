@@ -15,6 +15,7 @@ final readonly class ContextSnapshot
      * @param  array<string, mixed>  $l1
      * @param  array<string, mixed>  $l2
      * @param  array<string, mixed>  $l3
+     * @param  array<string, mixed>  $l4
      */
     public function __construct(
         public int $novelId,
@@ -22,6 +23,7 @@ final readonly class ContextSnapshot
         public ?int $sceneId,
         public string $taskType,
         public int $bibleVersion,
+        public string $styleContractChecksum,
         public int $stateVersion,
         public int $chapterPlanId,
         public array $characterIds,
@@ -38,18 +40,20 @@ final readonly class ContextSnapshot
         public array $l1,
         public array $l2,
         public array $l3,
+        public array $l4,
     ) {}
 
     /** @return array<string, mixed> */
     public function toArray(): array
     {
         return [
-            'schema_version' => 1,
+            'schema_version' => 2,
             'novel_id' => $this->novelId,
             'chapter_id' => $this->chapterId,
             'scene_id' => $this->sceneId,
             'task_type' => $this->taskType,
             'bible_version' => $this->bibleVersion,
+            'style_contract_checksum' => $this->styleContractChecksum,
             'state_version' => $this->stateVersion,
             'chapter_plan_id' => $this->chapterPlanId,
             'character_ids' => $this->characterIds,
@@ -68,6 +72,7 @@ final readonly class ContextSnapshot
             'l1' => $this->l1,
             'l2' => $this->l2,
             'l3' => $this->l3,
+            'l4' => $this->l4,
         ];
     }
 }

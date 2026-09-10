@@ -27,7 +27,7 @@ class ChapterAssembler
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
-        private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRunLease $runLease,
@@ -37,7 +37,6 @@ class ChapterAssembler
     {
         $chapter = Chapter::query()->with([
             'novel.canonicalStateVersion',
-            'novel.currentBible',
             'latestPlan',
             'scenes.currentArtifact.generationRun',
         ])->findOrFail($chapterId);
@@ -74,7 +73,7 @@ class ChapterAssembler
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文，遵守指定文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折和结果；对重复动作、重复解释和重复感受应主动合并。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，只返回完整章节正文。',
+                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文。l4 是唯一的 Style Contract；保持各 Scene 已有的 POV、时态和叙述声音，不得重新选择文风来源或让辅助文风覆盖主文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折和结果；对重复动作、重复解释和重复感受应主动合并。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，只返回完整章节正文。',
                 prompt: '请组装以下场景并只返回完整的简体中文章节正文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.3,
                 maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
@@ -158,22 +157,24 @@ class ChapterAssembler
         }
 
         $targetWords = (int) $chapter->latestPlan->target_words;
+        $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
 
         return [
             'chapter_id' => $chapter->getKey(),
             'state_version' => $stateVersion,
+            'bible_version' => $styleContract['bible_version'],
+            'style_contract_checksum' => $styleContract['checksum'],
+            'l4' => $styleContract,
             'chapter_plan' => $chapter->latestPlan->only([
                 'id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'tone', 'hook_type',
                 'must_reveal', 'may_hint', 'must_not_reveal', 'forbidden_conflicts', 'scene_plans',
             ]),
             'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
-            'style_constraints' => $chapter->novel->currentBible?->only(['tone', 'pov', 'tense', 'taboos', 'hard_constraints']) ?? [],
             'writing_constraints' => [
                 'chapter_target_words' => $targetWords,
                 'chapter_minimum_words' => $this->lengthPolicy->chapterMinimum($targetWords),
                 'chapter_maximum_words' => $this->lengthPolicy->chapterMaximum($targetWords),
                 'source_scene_words' => $artifacts->sum(fn (GenerationArtifact $artifact): int => $this->lengthPolicy->count($artifact->content)),
-                'style_profile' => $this->narrativeStyleProfile->forNovel($chapter->novel),
             ],
             'ordered_scene_checksums' => $artifacts->pluck('checksum')->all(),
             'scenes' => $chapter->scenes->values()->map(fn ($scene, int $index): array => [
@@ -229,7 +230,7 @@ class ChapterAssembler
                 'idempotency_key' => $key,
                 'input_hash' => $inputHash,
                 'state_version' => $context['state_version'],
-                'bible_version' => $chapter->novel->currentBible?->version,
+                'bible_version' => $context['bible_version'],
                 'prompt_version' => $promptVersion,
                 'model_policy' => $model,
                 'context_snapshot' => $context,
@@ -298,11 +299,12 @@ class ChapterAssembler
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 systemPrompt: $tooLong
-                    ? '你是 XNovel 章节压缩器。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
-                    : '你是 XNovel 章节扩写器。将过短草稿扩写为完整章节，保留计划和既定事实，通过既定场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
+                    ? '你是 XNovel 章节压缩器。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
+                    : '你是 XNovel 章节扩写器。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。将过短草稿扩写为完整章节，保留计划和既定事实，通过既定场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
                 prompt: ($tooLong ? '请压缩以下超限章节：' : '请扩写以下过短章节：').json_encode([
                     'chapter_plan' => $context['chapter_plan'],
                     'writing_constraints' => $constraints,
+                    'l4' => $context['l4'],
                     'current_words' => $actual,
                     'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
                     'repair_attempt' => $attempt,

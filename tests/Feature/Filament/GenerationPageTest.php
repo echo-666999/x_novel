@@ -202,8 +202,10 @@ test('run inspector exposes all context layers tokens truncation and selected me
         'novel_id' => $novel->getKey(),
         'state_version' => 7,
         'context_snapshot' => [
-            'schema_version' => 1,
+            'schema_version' => 2,
             'state_version' => 7,
+            'bible_version' => 4,
+            'style_contract_checksum' => 'style-checksum-123',
             'l0' => ['bible_hard_constraints' => ['禁止复活死者']],
             'l1' => ['canonical_story_state' => ['timeline' => ['夜幕降临']]],
             'l2' => ['recent_chapters' => [['sequence' => 6, 'summary' => '风暴逼近']]],
@@ -223,6 +225,8 @@ test('run inspector exposes all context layers tokens truncation and selected me
         ->assertSchemaComponentExists('context_l2')
         ->assertSchemaComponentExists('context_l3')
         ->assertSchemaComponentExists('context_l4')
+        ->assertSchemaComponentExists('context_bible_version', null, fn ($component): bool => $component->getState() === 'v4')
+        ->assertSchemaComponentExists('context_style_contract_checksum', null, fn ($component): bool => $component->getState() === 'style-checksum-123')
         ->assertSchemaComponentExists('context_token_allocation')
         ->assertSchemaComponentExists('context_truncated_sections')
         ->assertSchemaComponentExists('context_selected_memories');

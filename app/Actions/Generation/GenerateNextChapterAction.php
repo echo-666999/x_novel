@@ -11,11 +11,16 @@ use App\Exceptions\GenerationPreflightException;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\Volume;
+use App\Services\NarrativeStyleProfile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class GenerateNextChapterAction
 {
-    public function __construct(private readonly BudgetService $budgetService) {}
+    public function __construct(
+        private readonly BudgetService $budgetService,
+        private readonly NarrativeStyleProfile $narrativeStyleProfile,
+    ) {}
 
     public function handle(Novel $novel): Chapter
     {
@@ -62,6 +67,14 @@ class GenerateNextChapterAction
 
         if (! in_array($novel->status, [NovelStatus::Generating, NovelStatus::Completing], true)) {
             throw GenerationPreflightException::unavailableStatus();
+        }
+
+        try {
+            $this->narrativeStyleProfile->forNovel($novel);
+        } catch (ValidationException $exception) {
+            $detail = (string) collect($exception->errors())->flatten()->first();
+
+            throw GenerationPreflightException::bibleIncomplete($detail);
         }
 
         if ($novel->canonical_state_version_id === null) {

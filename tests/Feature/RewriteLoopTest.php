@@ -19,6 +19,7 @@ use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\StoryStateVersion;
 use App\Services\ChapterRewriter;
@@ -31,6 +32,7 @@ function rewriteFixture(): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
+    NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Rewrite]);
     ChapterPlan::factory()->for($chapter)->create(['target_words' => 8]);
     $assembly = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
@@ -62,6 +64,9 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and($artifact->data['word_count'])->toBe(mb_strlen('修订后的章节正文'))
         ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
         ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.current_words'))->toBe(mb_strlen('原始章节正文'))
+        ->and($artifact->generationRun->bible_version)->toBe(1)
+        ->and(data_get($artifact->generationRun->context_snapshot, 'style_contract_checksum'))->toBe(data_get($artifact->generationRun->context_snapshot, 'l4.checksum'))
+        ->and(data_get($artifact->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
 });
 
@@ -125,10 +130,17 @@ test('rewrite exhaustion becomes needs attention', function () {
         ->and(Review::query()->latest('id')->first()->decision)->toBe(ReviewDecision::NeedsAttention)
         ->and(Review::query()->latest('id')->first()->findings)->toContainEqual([
             'code' => 'REWRITE_EXHAUSTED',
+            'dimension' => 'workflow',
             'severity' => 'ambiguous',
+            'scene_id' => null,
+            'scope' => 'chapter',
+            'auto_fixable' => false,
+            'requires_human_decision' => true,
             'message' => '自动 Rewrite 已达到最大 2 次，需要人工处理。',
+            'evidence' => '已完成 2 次自动 Rewrite。',
             'source' => 'rewrite_loop',
         ])
+        ->and(data_get(Review::query()->latest('id')->first()->artifact->data, 'decision_basis.rule'))->toBe('human_decision_required')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
@@ -171,7 +183,10 @@ test('an overlength rewrite is compressed once before it becomes a rewrite draft
         ->and($artifact->data['word_count'])->toBe(100)
         ->and($artifact->data['maximum_words'])->toBe(115)
         ->and($fake->requests())->toHaveCount(2)
-        ->and($fake->requests()[1]->systemPrompt)->toContain('重写稿压缩器');
+        ->and($fake->requests()[1]->systemPrompt)->toContain('重写稿压缩器')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('POV、时态、主文风')
+        ->and($fake->requests()[1]->prompt)->toContain('"l4"')
+        ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
 });
 
 test('a failed length repair does not consume a rewrite artifact attempt', function () {

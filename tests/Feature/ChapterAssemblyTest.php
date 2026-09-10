@@ -92,6 +92,11 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($artifact->content)->toBe('第一幕。第二幕。第三幕。')
         ->and($artifact->data['ordered_scene_checksums'])->toBe($fixture['scenes']->pluck('currentArtifact.checksum')->all())
         ->and($run->status)->toBe(RunStatus::Succeeded)
+        ->and($run->bible_version)->toBe(1)
+        ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
+        ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
+        ->and($run->context_snapshot)->not->toHaveKeys(['style_constraints'])
+        ->and(data_get($run->context_snapshot, 'writing_constraints'))->not->toHaveKey('style_profile')
         ->and($run->context_snapshot['ordered_scene_checksums'])->toHaveCount(3)
         ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
         ->and(data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'))->toBe(11)
@@ -190,7 +195,10 @@ test('an overlength assembly is compressed once before it becomes a chapter draf
         ->and($artifact->data['word_count'])->toBe(100)
         ->and($artifact->data['maximum_words'])->toBe(115)
         ->and($fake->requests())->toHaveCount(2)
-        ->and($fake->requests()[1]->systemPrompt)->toContain('章节压缩器');
+        ->and($fake->requests()[1]->systemPrompt)->toContain('章节压缩器')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('POV、时态、主文风')
+        ->and($fake->requests()[1]->prompt)->toContain('"l4"')
+        ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
 });
 
 test('an assembly that remains overlength after compression is never persisted', function () {

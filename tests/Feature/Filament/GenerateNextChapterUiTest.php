@@ -6,6 +6,7 @@ use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\User;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -19,6 +20,7 @@ beforeEach(function () {
 
 test('the novel overview can create the next chapter and open its workbench', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 

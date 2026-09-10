@@ -9,6 +9,7 @@ use App\Enums\VolumeStatus;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -72,6 +73,7 @@ function autoGenerationFixture(bool $enabled): array
         'current_chapter_sequence' => 4,
         'settings' => ['auto_generate' => $enabled],
     ]);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
     $chapter = Chapter::factory()->for($novel)->for($volume)->create([

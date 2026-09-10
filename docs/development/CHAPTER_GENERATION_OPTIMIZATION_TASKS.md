@@ -3,7 +3,7 @@
 > 日期：2026-09-10  
 > 来源：`docs/development/CHAPTER_GENERATION_OPTIMIZATION_PLAN.md`  
 > 用途：把已确认的优化方案拆成可独立实施、测试、验收和回滚的任务。  
-> 当前状态：CGO-001、CGO-002、CGO-003 已完成；CGO-004 可开始实施。
+> 当前状态：CGO-001、CGO-002、CGO-003、CGO-004、CGO-005、CGO-006、CGO-007、CGO-008、CGO-009 已完成。
 
 ## 1. 使用规则
 
@@ -105,13 +105,13 @@ flowchart TD
 | CGO-001 | Source of Truth 规则对齐 | P0 | DONE | 无 |
 | CGO-002 | Bible `style_profile` 数据承载 | P0 | DONE | CGO-001 |
 | CGO-003 | Bible 版本 UI、展示与蓝图结构 | P0 | DONE | CGO-002 |
-| CGO-004 | 旧 Editorial 迁移助手与冲突处理 | P0 | READY | CGO-003 |
-| CGO-005 | 执行并验证现有小说迁移 | P0 | TODO | CGO-004 |
-| CGO-006 | 切换 Current Bible 唯一运行时来源 | P0 | TODO | CGO-005 |
-| CGO-007 | 停止兼容读取并清理旧 Editorial | P1 | TODO | CGO-006 |
-| CGO-008 | Context L4 与冻结 Style Contract | P0 | TODO | CGO-006 |
-| CGO-009 | 全生成阶段接入 Style Contract | P0 | TODO | CGO-008 |
-| CGO-010 | Review Finding Schema 与决策矩阵 | P0 | TODO | CGO-009 |
+| CGO-004 | 旧 Editorial 迁移助手与冲突处理 | P0 | DONE | CGO-003 |
+| CGO-005 | 执行并验证现有小说迁移 | P0 | DONE | CGO-004 |
+| CGO-006 | 切换 Current Bible 唯一运行时来源 | P0 | DONE | CGO-005 |
+| CGO-007 | 停止兼容读取并清理旧 Editorial | P1 | DONE | CGO-006 |
+| CGO-008 | Context L4 与冻结 Style Contract | P0 | DONE | CGO-006 |
+| CGO-009 | 全生成阶段接入 Style Contract | P0 | DONE | CGO-008 |
+| CGO-010 | Review Finding Schema 与决策矩阵 | P0 | DONE | CGO-009 |
 | CGO-011 | Review 后自动 Rewrite 闭环 | P0 | TODO | CGO-010 |
 | CGO-012 | Scene/Assembly Plan Adherence 质量门 | P1 | TODO | CGO-009 |
 | CGO-013 | 最小范围定向修复 | P1 | TODO | CGO-011、CGO-012 |
@@ -126,7 +126,7 @@ flowchart TD
 
 **Skills：** `generation-pipeline`, `memory-context`, `story-engine`  
 **优先级：** P0  
-**状态：** DONE  
+**状态：** DONE
 **依赖：** 无
 
 ### 目标
@@ -176,7 +176,7 @@ Source of Truth 文档一致，并且没有应用代码变化。
 
 **Skills：** `generation-pipeline`, `memory-context`  
 **优先级：** P0  
-**状态：** DONE  
+**状态：** DONE
 **依赖：** CGO-001
 
 ### 目标
@@ -305,7 +305,7 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 
 **Skills：** `filament-ui`, `generation-pipeline`  
 **优先级：** P0  
-**状态：** READY  
+**状态：** DONE
 **依赖：** CGO-003
 
 ### 目标
@@ -343,11 +343,24 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 
 迁移助手和失败恢复测试通过，但真实小说数据仍未改变。
 
+### 完成记录
+
+- 完成日期：2026-09-10。
+- 领域入口：新增 `MigrateEditorialToBibleAction`；预览 Current Bible 与旧 `settings.editorial` 原值，使用 `config/narrative.php` 对基调和视角做确定性 code 映射，只在语义一致时自动沿用。
+- 冲突处理：基调或视角不一致、缺失或无法确定性映射时，必须从 Current Bible 与旧 Editorial 候选值中人工选择；未选择时领域 Action 与 Filament 表单均拒绝提交。
+- 数据复制：子题材、目标平台、主辅文风、语言时代感、节奏和六项高级参数按旧 Editorial 原始值构建 `style_profile`，并继续交由 `CreateBibleVersionAction` 做完整结构校验和版本创建。
+- UI：Bible 页面仅在 Current Bible 的 `style_profile` 为 `null` 且存在旧 Editorial 时显示“迁移旧创作风格”；模态框显示两侧原值、映射名称、保留的时态和冲突选择。
+- 原子性与幂等：迁移锁定 Novel 并在事务中创建新版本；成功后完整 Current Bible 使入口隐藏，重复调用直接返回当前版本；模拟新版本持久化失败后，旧 Current Bible 状态和 `settings.editorial` 均保持不变。
+- 数据变化：没有执行任何真实小说迁移，没有修改或清理 `settings.editorial`，没有切换章节生成运行时来源。
+- 实库只读核对：当前仅有《六环余光》，Current Bible 已为 v3，且 `style_profile` 通过完整结构校验，因此迁移入口按防重复规则隐藏；CGO-005 开始时必须重新审计现状，不能继续假定 Current Bible 仍为 v1。本次核对没有写入数据。
+- 已验证：Pint、`git diff --check`；迁移 Action、NovelBible、Bible 页面与旧 `NarrativeStyleProfile` 共 42 个测试，41 个通过、245 个断言、1 个 PostgreSQL 专属用例在 SQLite 环境跳过。
+- 完整套件：共运行 631 个测试，603 个通过、3860 个断言、21 个跳过；其余仍是 CGO-003 已记录的 6 个范围外 Filament 旧断言失败和 1 个 Embedding Provider 连接错误，失败用例集合没有增加。
+
 ## CGO-005 — 执行并验证现有小说迁移
 
 **Skills：** `generation-pipeline`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-004
 
 ### 目标
@@ -359,7 +372,7 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 - 迁移前记录 Current Bible ID、版本、状态和 `settings.editorial` 原值。
 - 为当前《六环余光》创建下一个 Bible Version。
 - 新版本采用已确认的“热血 / 第一人称 / 过去时”。
-- Editorial 独有字段按原值复制到 `style_profile`。
+- 执行前审计发现 v3 已包含晚于旧 Editorial 的完整 `style_profile`；经用户确认，v4 原样保留 v3 的 `style_profile`，不再用旧 Editorial 覆盖。
 - 校验新版本成为 Current Bible，原 Bible v1 内容保持不变并仅变更版本状态。
 - 再次运行迁移检查，确认不会生成重复版本。
 
@@ -372,7 +385,7 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 ### 验收
 
 - 当前小说存在一个完整、合法的 Current Bible。
-- 新版本内容与已确认选择和旧独有字段一致。
+- 新版本采用已确认的基线，并与 v3 除基调外内容一致。
 - Bible v1 内容未被修改。
 - 没有重复版本或半迁移状态。
 
@@ -386,11 +399,24 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 
 真实现有小说迁移成功，证据可核对；本任务需要执行时的明确数据变更授权，不能随代码任务顺带执行。
 
+### 执行审计
+
+- 审计日期：2026-09-10。
+- 迁移前：Current Bible 为 v3（ID 3），内容哈希为 `b0c59e1ed3856e79c04ba743807ac377091b408907dfa76d63622a2f940cb4db`；旧 Editorial 原值已记录。
+- 决策：用户确认保留较新的 v3 完整文风，只创建 v4 将基调从“严肃且充满希望”改为“热血”。
+- 执行：通过 `CreateBibleVersionAction` 创建 v4（ID 4）；v4 为唯一 Current，采用“热血 / 第一人称 / 过去时”，v3 降级为 Superseded。
+- 内容核对：v4 与 v3 除 `tone` 外完全一致；v3、v1 的内容哈希保持不变，旧 Editorial 未清理或修改。
+- 幂等核对：再次调用迁移助手返回现有 v4，Bible 数量在调用前后均为 4，没有生成 v5。
+- 边界核对：Canonical Chapter 4、Story Event 41、Story State Version 7、Memory 41，迁移前后计数一致；未运行 AI。
+- 测试：`NovelBibleTest`、`MigrateEditorialToBibleActionTest`、`NovelBiblePageTest` 共 40 个测试，39 个通过、238 个断言、1 个 PostgreSQL 专属用例在 SQLite 环境跳过。
+- 未执行数据库备份，因此不声称存在本次操作的独立备份文件。
+- 完整证据：[CGO-005_MIGRATION_AUDIT.md](CGO-005_MIGRATION_AUDIT.md)。
+
 ## CGO-006 — 切换 Current Bible 唯一运行时来源
 
 **Skills：** `generation-pipeline`, `memory-context`, `filament-ui`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-005
 
 ### 目标
@@ -440,11 +466,24 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 
 唯一读取来源和生成前置检查测试通过，旧数据仍保留以便回滚核对。
 
+### 实施结果
+
+- 唯一来源：`NarrativeStyleProfile` 攅读取最新 Current Bible，校验其状态、基调、视角、时态和完整 `style_profile`；输出直接采用 Bible 的显式六项高级参数，不再展开或回退旧 Editorial Preset。
+- 兼容退出：章节规划、场景生成和章节组装通过同一 Profile 服务读取 Bible；运行时代码已移除 `settings.editorial` 和 `generation.narrative_style` 回退。
+- 蓝图例外：首次 AI 小说蓝图在尚无 Current Bible 时仍可生成完整 Bible 候选；其输入只保留章节目标字数，不再把旧 Editorial 当作生成偏好。
+- 前置检查：`GenerateNextChapterAction` 在创建或恢复 Chapter 前校验 Current Bible；缺失、状态错误或 `style_profile` 不完整时以 `current_bible_incomplete` 拒绝执行，并返回指向“小说圣经”的中文处理建议。
+- Novel 表单：新建和编辑页面已移除“创作风格”和“文风高级设置”；`CreateNovel` 不再创建 `settings.editorial`，`EditNovel` 不再回填或改写该 key。
+- 迁移窗口：已有 `settings.editorial` 数据仍原样保留，迁移助手及其 Bible 页面预览仍可只读访问；实际清理继续留给 CGO-007。
+- 实库核对：《六环余光》的运行时 Profile 来自 Current Bible v4，返回“热血 / 第一人称 / 过去时”、剑与魔法、番茄小说、通俗爽快及 v4 显式高级参数；未调用 AI，未写入业务数据。
+- 针对性验证：17 个相关测试文件共 132 个测试全部通过，包含唯一来源、旧值冲突、前置拒绝、表单移除、初始蓝图、自动生成、恢复和长跑入口。
+- 完整套件：共运行 635 个测试，608 个通过、3878 个断言、21 个跳过；剩余 5 个范围外 Filament 旧断言失败和 1 个 Embedding Provider 连接错误。本次影响过的失败用例经定向重跑均已通过。
+- 格式与静态检查：Pint 和 `git diff --check` 通过；运行时代码中对 Editorial 的剩余访问只存在于迁移 Action 和迁移预览 UI。
+
 ## CGO-007 — 停止兼容读取并清理旧 Editorial
 
 **Skills：** `generation-pipeline`  
 **优先级：** P1  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-006
 
 ### 目标
@@ -480,11 +519,23 @@ Bible UI 与蓝图流程测试通过，旧 Editorial 仍未迁移或删除。
 
 兼容读取和旧数据安全清理完成，历史追踪数据不变。
 
+### 完成记录
+
+- 完成日期：2026-09-10。
+- 迁移完成清单：实库共 1 部小说；《六环余光》（Novel ID 2）的最新 Bible 为 v4（ID 4）、状态为 Current，基调/视角/时态齐全，`style_profile` 通过与新 Bible Version 相同的完整结构校验；不存在未迁移小说。
+- 安全清理：新增 `CleanupEditorialSettingsAction`，在同一事务中先锁定并校验全部 Novel，任一小说缺少完整 Current Bible 时拒绝全部写入；校验通过后仅删除每部小说 `settings` 的 `editorial` key。
+- 兼容退出：删除 `MigrateEditorialToBibleAction`、Bible 页面“迁移旧创作风格”入口及其 Editorial 展示/映射方法，同时删除对应迁移测试 fixture；应用代码中已不存在 Editorial 文风读取来源。
+- 实库结果：首次清理 1 部小说，重复执行清理 0 部；《六环余光》不再包含 `settings.editorial`，原有 `ai`、`pause`、`auto_stop`、`auto_generate` key 及其值均保持不变。
+- 历史保护：清理前后 156 条 Generation Run `context_snapshot`、4 个 Bible、4 个 Chapter、93 个 Generation Artifact 的数量和逐表 SHA-256 指纹完全一致；没有改写历史快照、Bible、Chapter 或 Artifact。
+- 针对性验证：清理 Action、Bible Version、Bible 页面、Novel Settings 保存和 Novel Resource 共 48 个测试，47 个通过、292 个断言、1 个 PostgreSQL 专属用例在 SQLite 环境跳过；覆盖只删 Editorial、重复执行、未迁移拒绝、快照不变及其他设置保留。
+- 完整套件：共运行 631 个测试，604 个通过、3792 个断言、21 个跳过；剩余 5 个范围外 Filament 旧文案/展示断言失败和 1 个 Embedding Provider 连接错误，与 CGO-006 已记录的失败类别一致。
+- 格式与静态检查：Pint、PHP 语法检查和 `git diff --check` 通过；搜索确认 `app` 中只有清理 Action 会识别并删除 `editorial` key，不会将其作为文风来源。
+
 ## CGO-008 — Context L4 与冻结 Style Contract
 
 **Skills：** `memory-context`, `generation-pipeline`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-006
 
 ### 目标
@@ -531,11 +582,26 @@ Run Inspector 能回答本次调用使用了哪个 Bible Version 和 Style Contr
 
 L4 构建、序列化、hash 和预算测试通过。
 
+### 完成记录
+
+- 完成日期：2026-09-10。
+- L4 契约：`ContextSnapshot` 升级为 schema v2，显式保存 `l4` 和 `style_contract_checksum`；L4 包含 Bible ID/version、基调、视角、时态、作品定位、主辅文风、语言时代感、节奏、六项原值及可执行展开说明、禁忌和硬约束。
+- 稳定校验：Style Contract 在递归规范化关联键后计算 SHA-256；列表顺序保留，因此同一 Bible 重复构建得到相同 checksum，Bible Version 或契约内容变化会改变 checksum，并经完整 Context 进入实际 Scene `input_hash`。
+- 指定版本：`ContextRequest` 必须携带 Bible Version，`ContextBuilder` 只读取该小说的指定版本，不再在构建过程中隐式查询最新 Current Bible；无效或缺失的 `style_profile` 明确失败。
+- Pipeline 冻结：当前 Chapter Plan 已有 Run 时，以最早绑定该 Plan 的 Bible Version 为锚点；没有锚点时使用 Current Bible，并由首个 Scene Run 固定。后续 Scene 即使遇到新的 Current Bible，也继续使用锚定版本；已有 Run 不能改绑另一版本。
+- Token 规则：L0、L1、L4 一并作为不可裁剪区参与预算；紧张预算只裁剪近期故事和长期记忆，L4 中的 POV、时态、禁忌和硬约束保持完整。
+- Inspector：Run Inspector 的“Context 版本”同时展示 Bible Version 与可复制的 Style Contract checksum，并可查看完整 L4。
+- 兼容边界：Scene 的旧形态 `writing_constraints.style_profile` 暂时保留，但已从同一冻结 L4 投影，避免双来源；其移除以及 Plan、Assembly、Review、Rewrite 等全部 Prompt 的统一接入属于 CGO-009。
+- 实库只读核对：《六环余光》Current Bible v4（ID 4）可生成完整契约；checksum 为 `906db1978d4fd93e7cf371b4d660e19e96b3eba71bf90d803f06be0dce704e23`，基线为“热血 / 第一人称 / 过去时”。未写入业务数据，未调用 AI。
+- 针对性验证：Context 构建/检查、文风 Profile、Scene 生成、Plan Job、Assembly、Review、Rewrite、Run Inspector UI 与章节详情共 122 个测试全部通过，777 个断言。
+- 完整套件：共运行 636 个测试，609 个通过、3838 个断言、21 个跳过；剩余 5 个范围外 Filament 旧文案/展示断言失败和 1 个 Embedding Provider 连接错误，与 CGO-007 记录的失败类别一致。
+- 格式与静态检查：Pint 和 `git diff --check` 通过；本任务没有新增数据表或迁移。
+
 ## CGO-009 — 全生成阶段接入 Style Contract
 
 **Skills：** `generation-pipeline`, `memory-context`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-008
 
 ### 目标
@@ -582,11 +648,26 @@ L4 构建、序列化、hash 和预算测试通过。
 
 全阶段针对性测试通过，Review 分流和自动流水线行为尚未改变。
 
+### 完成记录
+
+- 完成日期：2026-09-10。
+- 唯一契约：Chapter Planner、Scene Writer、Assembler、Reviewer 和 Rewriter 的请求及 Run Snapshot 均保存同一结构的 `l4`、`bible_version` 和 `style_contract_checksum`；各阶段的 `input_hash` 均覆盖完整契约。
+- Planner：移除 `generation_preferences.style_profile`，保留 Bible 故事信息并以 L4 作为唯一文风契约；章节 tone 只能在契约基调范围内变化，辅助文风不得覆盖主文风，POV 与时态不得改变。
+- Writer/Assembler：Scene 移除 `writing_constraints.style_profile`；Assembler 移除 `style_constraints` 和重复的 `style_profile`。两者只读取 L4，Assembler 明确保留 Scene 的叙述声音，不重新选择文风来源。
+- Review：审校上下文加入冻结 L4；Reviewer 明确逐项核对主文风、辅助文风和展开参数，style finding 必须包含非空正文证据和对应的目标文风说明。最终 Decision Matrix 没有改动。
+- Rewrite 与长度修复：章节或 Scene Rewrite、Scene 扩写/压缩、Assembly 扩写/压缩和 Rewrite 扩写/压缩均继续注入同一 L4，并明确保持 POV、时态、主文风和辅助文风层级。
+- 版本冻结：已有 Chapter Plan 继续使用其最早绑定的 Bible Version；Current Bible 中途变化不会影响后续 Scene、Assembly、Review 或 Rewrite。普通重复投递复用原契约；只有显式“重新生成计划”才以新 Current Bible 启动新 Pipeline，其 checksum、`input_hash` 和 Artifact 均发生变化。
+- Prompt 追踪：因执行规则发生变化，版本升级为 `chapter-planner-v5`、`scene-writer-v9`、`assembler-v7`、`reviewer-v5`、`rewrite-v6`；Extractor 与 Summary 未改动。
+- 端到端契约测试：在 Current Bible 从 v1 切换到 v2 后，验证同一 Chapter 的 Assembly、Review、Rewrite 仍使用 v1 的相同 checksum，三个实际请求均包含 v1 的“热血激昂 / 第一人称”，且不包含 v2 的“冷峻克制”。
+- 针对性验证：全阶段 Style Contract、Context、Prompt 版本、自动生成/恢复路径和相关 Filament 页面共 179 个测试全部通过，1043 个断言。
+- 完整套件：共运行 640 个测试，613 个通过、3885 个断言、21 个跳过；剩余 5 个范围外 Filament 旧文案/展示断言失败和 1 个 Embedding Provider 连接错误，与 CGO-008 记录的失败类别一致。
+- 边界：没有修改 Review Decision Matrix、自动 Rewrite 派发或 Pipeline 编排；没有新增数据表、迁移或依赖，没有调用真实 AI，也没有写入真实小说数据。
+
 ## CGO-010 — Review Finding Schema 与决策矩阵
 
 **Skills：** `generation-pipeline`, `story-engine`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-009
 
 ### 目标
@@ -624,6 +705,18 @@ L4 构建、序列化、hash 和预算测试通过。
 ### 完成定义
 
 Decision Matrix 和相关回归测试通过。
+
+### 完成记录
+
+- 完成日期：2026-09-10。
+- Finding 契约：Narrative Review 使用七个固定 code，并强制输出 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message` 和 `evidence`；Reviewer 上下文新增本章 Scene ID 清单。
+- Schema 校验：拒绝未知 code、code 与 dimension 不匹配、缺少必填字段、空 evidence、互相冲突的修复标志、无处理路径的 error、非法跨章 scene_id，以及 scope 与 scene_id 不一致的响应；低于通过分数却没有可执行 Finding 的响应不会写入 Review。
+- Laravel 决策矩阵：StateValidator hard finding（包括 Locked Fact 与 Canonical 前置冲突）始终 BLOCK；`requires_human_decision=true` 或 Rewrite 耗尽进入 NEEDS_ATTENTION；`auto_fixable=true`（包括字数确定性 Finding）进入 REWRITE；评分达标且只有不阻塞 warning 时 PASS。
+- 模型边界：`recommended_decision` 继续保存为审校证据，但不参与最终分流；Review Artifact 新增 `decision_basis`，记录命中的 Laravel 规则、相关 Finding code、实际分数和通过阈值。
+- 统一持久化：State、字数和 Rewrite 耗尽 Finding 均补齐 scope、修复能力、人工决策等字段；Reviewer Prompt Version 升级为 `reviewer-v6`。
+- 针对性验证：Chapter Review、Rewrite 耗尽、Style Contract、Prompt Version、AI 设置、Canonical Commit 和 StateValidator 共 85 个测试全部通过，354 个断言。
+- 完整套件：共运行 654 个测试，627 个通过、3934 个断言、21 个跳过；剩余 5 个范围外 Filament 旧文案/展示断言失败和 1 个 Embedding Provider 连接错误，与 CGO-009 已记录的失败类别一致。
+- 边界：没有自动派发 Rewrite，没有改变最大 Rewrite 次数，没有修改 Canonical Commit 硬校验，没有调用真实 AI，也没有写入真实小说数据。
 
 ## CGO-011 — Review 后自动 Rewrite 闭环
 

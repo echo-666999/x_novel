@@ -72,7 +72,7 @@ class CreateBibleVersionAction
     /**
      * @return array<string, mixed>
      */
-    private function validateStyleProfile(mixed $profile): array
+    public function validateStyleProfile(mixed $profile): array
     {
         $styleCodes = array_keys(config('narrative.styles', []));
         $platformCodes = array_keys(config('narrative.platforms', []));

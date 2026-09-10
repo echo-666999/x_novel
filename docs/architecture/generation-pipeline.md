@@ -348,6 +348,8 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 普通 warning 按可执行性分流：可自动修复则 REWRITE；不影响发布且无需修复可 PASS；真正需要用户选择或 Rewrite 耗尽才 NEEDS_ATTENTION。Hard Conflict 必须 BLOCK，模型顶层建议不能覆盖 Laravel 的确定性决策。
 
+Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
+
 ## 13. RewriteChapterJob
 
 输入 Source Artifact、Review Findings、Plan、Current State、Locked Facts；输出 `rewrite_draft`。
@@ -586,12 +588,12 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v4
-scene-writer-v8
-assembler-v6
+chapter-planner-v5
+scene-writer-v9
+assembler-v7
 event-extractor-v4
-reviewer-v4
-rewrite-v5
+reviewer-v6
+rewrite-v6
 summary-v1
 ```
 

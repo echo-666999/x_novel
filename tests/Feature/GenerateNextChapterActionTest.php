@@ -12,6 +12,7 @@ use App\Exceptions\GenerationPreflightException;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\UsageRecord;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -25,6 +26,7 @@ function generationReadyNovel(array $attributes = []): Novel
         'current_chapter_sequence' => null,
     ], $attributes));
 
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
@@ -69,10 +71,46 @@ test('it resumes an existing non canonical next chapter', function () {
 
 test('preflight rejects an uninitialized story state', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    NovelBible::factory()->for($novel)->create();
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
     app(GenerateNextChapterAction::class)->handle($novel);
 })->throws(GenerationPreflightException::class, 'Story State 尚未初始化。');
+
+test('preflight rejects a missing current bible before creating a chapter', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+
+    try {
+        app(GenerateNextChapterAction::class)->handle($novel);
+        test()->fail('Expected missing Current Bible to fail preflight.');
+    } catch (GenerationPreflightException $exception) {
+        expect($exception->reason)->toBe('current_bible_incomplete')
+            ->and($exception->getMessage())->toContain('缺少 Current Bible')
+            ->and($exception->getMessage())->toContain('请先在“小说圣经”中创建完整的 Current Bible Version')
+            ->and($novel->chapters()->count())->toBe(0);
+    }
+});
+
+test('preflight rejects an incomplete bible profile instead of using old editorial', function () {
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Generating,
+        'settings' => ['editorial' => ['primary_style' => 'accessible_brisk']],
+    ]);
+    NovelBible::factory()->for($novel)->create(['style_profile' => null]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+
+    try {
+        app(GenerateNextChapterAction::class)->handle($novel);
+        test()->fail('Expected incomplete Bible Style Profile to fail preflight.');
+    } catch (GenerationPreflightException $exception) {
+        expect($exception->reason)->toBe('current_bible_incomplete')
+            ->and($exception->getMessage())->toContain('必须提供完整的文风设置')
+            ->and($novel->chapters()->count())->toBe(0);
+    }
+});
 
 test('preflight rejects a paused novel', function () {
     $novel = generationReadyNovel(['status' => NovelStatus::Paused]);

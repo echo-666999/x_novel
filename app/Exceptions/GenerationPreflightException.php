@@ -28,6 +28,14 @@ class GenerationPreflightException extends RuntimeException
         return new self('story_state_uninitialized', 'Story State 尚未初始化。');
     }
 
+    public static function bibleIncomplete(string $detail): self
+    {
+        return new self(
+            'current_bible_incomplete',
+            '小说圣经尚未完成迁移：'.$detail.' 请先在“小说圣经”中创建完整的 Current Bible Version。',
+        );
+    }
+
     public static function currentVolumeMissing(): self
     {
         return new self('current_volume_missing', '没有进行中的卷，请先将一个卷设为进行中。');

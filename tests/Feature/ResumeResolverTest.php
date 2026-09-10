@@ -21,6 +21,7 @@ use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
 use App\Models\Volume;
@@ -173,6 +174,7 @@ function pausedResumeNovel(array $settings = [], ?int $currentSequence = null): 
             'pause' => ['previous_status' => 'generating', 'label' => '章节规划'],
         ], $settings),
     ]);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 

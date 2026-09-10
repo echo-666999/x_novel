@@ -7,6 +7,7 @@ use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
+use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -117,11 +118,49 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v4')
+        ->and($run->prompt_version)->toBe('chapter-planner-v5')
+        ->and($run->bible_version)->toBe(1)
+        ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
+        ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
+        ->and(data_get($run->context_snapshot, 'generation_preferences'))->not->toHaveKey('style_profile')
         ->and($run->artifacts()->sole()->type)->toBe(ArtifactType::ChapterPlan)
         ->and($fake->requests())->toHaveCount(1)
-        ->and($fake->requests()[0]->prompt)->toContain('冷峻克制')
+        ->and($fake->requests()[0]->prompt)->toContain('通俗爽快')
+        ->and($fake->requests()[0]->prompt)->not->toContain('冷峻克制')
         ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []');
+});
+
+test('a new bible applies only after explicitly restarting the chapter pipeline', function () {
+    [$chapter, $character] = plannerChapter();
+    $fake = (new FakeAiProvider)
+        ->enqueue(plannerResponse(plannerPayload($character->getKey())))
+        ->enqueue(plannerResponse(plannerPayload($character->getKey(), ['tone' => '冷峻'])));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    $firstPlan = $planner->generate($chapter->getKey());
+    $firstBible = $chapter->novel->currentBible()->firstOrFail();
+    $firstBible->update(['status' => BibleStatus::Superseded]);
+    NovelBible::factory()->for($chapter->novel)->create([
+        'version' => 2,
+        'tone' => '冷峻',
+        'style_profile' => array_replace($firstBible->style_profile, ['primary_style' => 'austere']),
+        'status' => BibleStatus::Current,
+    ]);
+
+    $stillFrozen = $planner->generate($chapter->getKey());
+    $restartedPlan = $planner->generate($chapter->getKey(), true);
+    $runs = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->oldest('id')->get();
+
+    expect($stillFrozen?->is($firstPlan))->toBeTrue()
+        ->and($restartedPlan?->version)->toBe(2)
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($runs->pluck('bible_version')->all())->toBe([1, 2])
+        ->and($runs->pluck('input_hash')->unique()->count())->toBe(2)
+        ->and($runs->flatMap(fn (GenerationRun $run) => $run->artifacts)->where('type', ArtifactType::ChapterPlan))->toHaveCount(2)
+        ->and($runs->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'style_contract_checksum'))->unique()->count())->toBe(2)
+        ->and($fake->requests()[0]->prompt)->toContain('通俗爽快')
+        ->and($fake->requests()[1]->prompt)->toContain('冷峻克制');
 });
 
 test('the planner receives closing restrictions and closure debt in completing mode', function () {

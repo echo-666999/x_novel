@@ -9,6 +9,7 @@ final readonly class ContextRequest
         public int $chapterId,
         public ?int $sceneId,
         public string $taskType,
+        public int $bibleVersion,
         public int $stateVersion,
         public int $chapterPlanId,
         public int $tokenBudget,

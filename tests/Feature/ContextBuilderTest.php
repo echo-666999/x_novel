@@ -7,6 +7,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeEmbeddingProvider;
 use App\Data\ContextRequest;
 use App\Enums\ArtifactType;
+use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Models\Chapter;
@@ -23,11 +24,12 @@ use App\Models\WorldEntity;
 use App\Services\ContextBuilder;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException as ContextInvalidArgumentException;
 
 uses(RefreshDatabase::class);
 
-function contextFixture(): array
+function contextFixture(array $bibleOverrides = []): array
 {
     $novel = Novel::factory()->create();
     $state = app(InitializeNovelStateAction::class)->handle($novel);
@@ -35,6 +37,7 @@ function contextFixture(): array
         'version' => 3,
         'hard_constraints' => ['魔法不能复活死者'],
         'ending_contract' => ['主角必须回到故乡'],
+        ...$bibleOverrides,
     ]);
     $chapter = Chapter::factory()->for($novel)->create(['sequence' => 20]);
     $character = Character::factory()->for($novel)->create();
@@ -69,6 +72,7 @@ test('context builder freezes l0 and the requested canonical l1 with trace metad
         chapterId: $fixture['chapter']->getKey(),
         sceneId: null,
         taskType: 'scene_generation',
+        bibleVersion: $fixture['bible']->version,
         stateVersion: 0,
         chapterPlanId: $fixture['plan']->getKey(),
         tokenBudget: 10_000,
@@ -77,8 +81,9 @@ test('context builder freezes l0 and the requested canonical l1 with trace metad
     ));
     $data = $snapshot->toArray();
 
-    expect($data['schema_version'])->toBe(1)
+    expect($data['schema_version'])->toBe(2)
         ->and($data['bible_version'])->toBe(3)
+        ->and($data['style_contract_checksum'])->toBe($data['l4']['checksum'])
         ->and($data['state_version'])->toBe(0)
         ->and($data['chapter_plan_id'])->toBe($fixture['plan']->getKey())
         ->and($data['prompt_version'])->toBe('scene-writer-v1')
@@ -93,7 +98,14 @@ test('context builder freezes l0 and the requested canonical l1 with trace metad
         ->and($data['world_entity_ids'])->toBe([$fixture['world']->getKey()])
         ->and($data['memory_ids'])->toBe([])
         ->and($data['recent_chapter_ids'])->toBe([])
-        ->and($data['token_allocation']['sections'])->toHaveKeys(['l0', 'l1', 'l2'])
+        ->and($data['l4']['bible_id'])->toBe($fixture['bible']->getKey())
+        ->and($data['l4']['tone'])->toBe($fixture['bible']->tone)
+        ->and($data['l4']['pov'])->toBe($fixture['bible']->pov)
+        ->and($data['l4']['tense'])->toBe($fixture['bible']->tense)
+        ->and($data['l4']['primary_style'])->toHaveKeys(['code', 'name', 'instruction'])
+        ->and(data_get($data, 'l4.expanded_parameters.ornateness'))->toHaveKeys(['value', 'level', 'instruction'])
+        ->and(data_get($data, 'l4.constraints.hard_constraints'))->toBe(['魔法不能复活死者'])
+        ->and($data['token_allocation']['sections'])->toHaveKeys(['l0', 'l1', 'l2', 'l4'])
         ->and($data['truncated_sections'])->toBe([]);
 });
 
@@ -152,14 +164,15 @@ test('l2 drops recent story before mandatory context when the budget is tight', 
         'summary' => str_repeat('很长的近期剧情', 300),
     ]);
     $large = app(ContextBuilder::class)->build(contextRequest($fixture));
-    $mandatory = $large->tokenAllocation->sections['l0'] + $large->tokenAllocation->sections['l1'];
+    $mandatory = $large->tokenAllocation->sections['l0'] + $large->tokenAllocation->sections['l1'] + $large->tokenAllocation->sections['l4'];
 
     $snapshot = app(ContextBuilder::class)->build(contextRequest($fixture, $mandatory));
 
     expect($snapshot->l0)->toBe($large->l0)
         ->and($snapshot->l1)->toBe($large->l1)
         ->and($snapshot->recentChapterIds)->toBe([])
-        ->and($snapshot->tokenAllocation->sections)->toHaveKeys(['l0', 'l1'])
+        ->and($snapshot->l4)->toBe($large->l4)
+        ->and($snapshot->tokenAllocation->sections)->toHaveKeys(['l0', 'l1', 'l4'])
         ->and($snapshot->tokenAllocation->truncatedSections)->toBe(['l2.recent_story']);
 });
 
@@ -209,14 +222,68 @@ test('l3 retrieval failure preserves mandatory context and records the fallback'
         ->and($snapshot->tokenAllocation->truncatedSections)->toContain('l3.long_term_memory');
 });
 
-function contextRequest(array $fixture, int $tokenBudget = 10_000): ContextRequest
+function contextRequest(array $fixture, int $tokenBudget = 10_000, ?int $bibleVersion = null): ContextRequest
 {
     return new ContextRequest(
         novelId: $fixture['novel']->getKey(), chapterId: $fixture['chapter']->getKey(), sceneId: null,
-        taskType: 'scene_generation', stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
+        taskType: 'scene_generation', bibleVersion: $bibleVersion ?? $fixture['bible']->version,
+        stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
         tokenBudget: $tokenBudget, promptVersion: 'scene-writer-v1', model: 'writer-test',
     );
 }
+
+test('style contract checksum is stable and a requested bible version changes the frozen input', function () {
+    $fixture = contextFixture();
+    $builder = app(ContextBuilder::class);
+    $first = $builder->build(contextRequest($fixture));
+    $repeated = $builder->build(contextRequest($fixture));
+
+    $fixture['bible']->update(['status' => BibleStatus::Superseded]);
+    $nextBible = NovelBible::factory()->for($fixture['novel'])->create([
+        'version' => 4,
+        'tone' => '冷峻',
+        'status' => BibleStatus::Current,
+    ]);
+    $stillFrozen = $builder->build(contextRequest($fixture));
+    $next = $builder->build(contextRequest($fixture, bibleVersion: $nextBible->version));
+    $inputHash = fn ($snapshot): string => hash('sha256', json_encode([
+        'context' => $snapshot->toArray(),
+        'model' => 'writer-test',
+        'prompt_version' => 'scene-writer-v1',
+        'regeneration_batch_id' => null,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+
+    expect($repeated->styleContractChecksum)->toBe($first->styleContractChecksum)
+        ->and($stillFrozen->styleContractChecksum)->toBe($first->styleContractChecksum)
+        ->and($stillFrozen->l4['bible_version'])->toBe(3)
+        ->and($stillFrozen->l4['tone'])->toBe($fixture['bible']->tone)
+        ->and($next->styleContractChecksum)->not->toBe($first->styleContractChecksum)
+        ->and($next->l4['bible_version'])->toBe(4)
+        ->and($next->l4['tone'])->toBe('冷峻')
+        ->and($inputHash($next))->not->toBe($inputHash($first));
+});
+
+test('chapter pipeline keeps the bible version attached to its current plan', function () {
+    $fixture = contextFixture();
+    GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'bible_version' => $fixture['bible']->version,
+        'context_snapshot' => ['chapter_plan_id' => $fixture['plan']->getKey()],
+    ]);
+    $fixture['bible']->update(['status' => BibleStatus::Superseded]);
+    NovelBible::factory()->for($fixture['novel'])->create([
+        'version' => 4,
+        'status' => BibleStatus::Current,
+    ]);
+
+    expect(app(ContextBuilder::class)->bibleVersionForChapter($fixture['chapter']))
+        ->toBe($fixture['bible']->version);
+});
+
+test('context builder rejects an invalid requested style profile without using another bible', function () {
+    $fixture = contextFixture(['style_profile' => null]);
+
+    app(ContextBuilder::class)->build(contextRequest($fixture));
+})->throws(ValidationException::class, '必须提供完整的文风设置');
 
 test('l1 comes from the requested immutable state version instead of projections', function () {
     $fixture = contextFixture();
@@ -228,7 +295,8 @@ test('l1 comes from the requested immutable state version instead of projections
 
     $snapshot = app(ContextBuilder::class)->build(new ContextRequest(
         novelId: $fixture['novel']->getKey(), chapterId: $fixture['chapter']->getKey(), sceneId: null,
-        taskType: 'scene_generation', stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
+        taskType: 'scene_generation', bibleVersion: $fixture['bible']->version,
+        stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
         tokenBudget: 10_000, promptVersion: 'scene-writer-v1', model: 'writer-test',
     ));
 
@@ -242,7 +310,8 @@ test('context builder rejects chapter plans from another novel', function () {
 
     app(ContextBuilder::class)->build(new ContextRequest(
         novelId: $fixture['novel']->getKey(), chapterId: $fixture['chapter']->getKey(), sceneId: null,
-        taskType: 'scene_generation', stateVersion: 0, chapterPlanId: $foreignPlan->getKey(),
+        taskType: 'scene_generation', bibleVersion: $fixture['bible']->version,
+        stateVersion: 0, chapterPlanId: $foreignPlan->getKey(),
         tokenBudget: 10_000, promptVersion: 'scene-writer-v1', model: 'writer-test',
     ));
 })->throws(ModelNotFoundException::class);
@@ -251,11 +320,13 @@ test('context builder freezes the snapshot on its generation run', function () {
     $fixture = contextFixture();
     $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
         'scene_id' => null,
+        'bible_version' => null,
         'context_snapshot' => null,
     ]);
     $request = new ContextRequest(
         novelId: $fixture['novel']->getKey(), chapterId: $fixture['chapter']->getKey(), sceneId: null,
-        taskType: 'scene_generation', stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
+        taskType: 'scene_generation', bibleVersion: $fixture['bible']->version,
+        stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
         tokenBudget: 10_000, promptVersion: 'scene-writer-v1', model: 'writer-test',
     );
 
@@ -275,7 +346,19 @@ test('context builder refuses to attach a snapshot to an unrelated run', functio
 
     app(ContextBuilder::class)->buildForRun($foreignRun, new ContextRequest(
         novelId: $fixture['novel']->getKey(), chapterId: $fixture['chapter']->getKey(), sceneId: null,
-        taskType: 'scene_generation', stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
+        taskType: 'scene_generation', bibleVersion: $fixture['bible']->version,
+        stateVersion: 0, chapterPlanId: $fixture['plan']->getKey(),
         tokenBudget: 10_000, promptVersion: 'scene-writer-v1', model: 'writer-test',
     ));
 })->throws(ContextInvalidArgumentException::class, 'ContextRequest 与 GenerationRun');
+
+test('context builder refuses to replace a run frozen to another bible version', function () {
+    $fixture = contextFixture();
+    $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'scene_id' => null,
+        'bible_version' => 2,
+        'context_snapshot' => null,
+    ]);
+
+    app(ContextBuilder::class)->buildForRun($run, contextRequest($fixture));
+})->throws(ContextInvalidArgumentException::class, 'Bible Version 不一致');

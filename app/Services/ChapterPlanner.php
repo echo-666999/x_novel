@@ -32,6 +32,7 @@ class ChapterPlanner
         private readonly ClosureDebtService $closureDebt,
         private readonly SyncScenesFromChapterPlanAction $syncScenes,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly ContextBuilder $contextBuilder,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRunLease $runLease,
     ) {}
@@ -47,7 +48,7 @@ class ChapterPlanner
 
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Planner);
-        $context = $this->context($chapter);
+        $context = $this->context($chapter, $regenerate);
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'model' => $settings->model,
@@ -192,23 +193,28 @@ class ChapterPlanner
     }
 
     /** @return array<string, mixed> */
-    private function context(Chapter $chapter): array
+    private function context(Chapter $chapter, bool $restartPipeline): array
     {
         $novel = $chapter->novel;
-        $bible = $novel->currentBible()->first();
+        $bible = $restartPipeline
+            ? $novel->currentBible()->first()
+            : $novel->bibles()->where('version', $this->contextBuilder->bibleVersionForChapter($chapter))->first();
 
         if ($bible === null || $novel->canonicalStateVersion === null || $chapter->volume === null) {
             throw new AiProviderException('planner_context_incomplete', 'Chapter Planner 缺少 Bible、Story State 或 Current Volume。', false);
         }
 
+        $styleContract = $this->narrativeStyleProfile->contractForBible($bible);
+
         $context = [
             'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
             'generation_preferences' => [
                 'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
-                'style_profile' => $this->narrativeStyleProfile->forNovel($novel),
             ],
             'chapter' => ['id' => $chapter->getKey(), 'sequence' => $chapter->sequence],
             'bible_version' => $bible->version,
+            'style_contract_checksum' => $styleContract['checksum'],
+            'l4' => $styleContract,
             'bible' => $bible->only(['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract']),
             'state_version' => $novel->canonicalStateVersion->version,
             'story_state' => $novel->canonicalStateVersion->state,
@@ -245,7 +251,7 @@ class ChapterPlanner
 
     private function systemPrompt(Novel $novel): string
     {
-        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。';
+        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。l4 是本次 Pipeline 唯一的 Style Contract：章节 tone 只能在其基调范围内形成局部变体，主文风决定主体表达，辅助文风不得覆盖主文风，POV 与时态不得改变。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。';
 
         if ($novel->status->value === 'completing') {
             $prompt .= ' 当前处于收束阶段：不得新增核心人物、主线、硬世界规则或高重要度伏笔；计划必须推进结局契约或降低收束债务。';

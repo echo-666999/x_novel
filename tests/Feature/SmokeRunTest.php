@@ -11,6 +11,7 @@ use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\Volume;
@@ -29,6 +30,7 @@ function smokeRunNovel(int $currentSequence = 0): array
         'status' => NovelStatus::Generating,
         'current_chapter_sequence' => $currentSequence ?: null,
     ]);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 

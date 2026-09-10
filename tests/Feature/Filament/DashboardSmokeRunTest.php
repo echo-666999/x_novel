@@ -5,6 +5,7 @@ use App\Enums\NovelStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Pages\Dashboard;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\User;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,6 +30,7 @@ test('dashboard shows the long run empty state and start action', function () {
 test('dashboard starts and displays a tracked smoke run', function () {
     Queue::fake();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating, 'title' => '雾海长明']);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 

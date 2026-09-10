@@ -5,6 +5,7 @@ use App\Enums\NovelStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Pages\Dashboard;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\User;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -26,6 +27,7 @@ test('dashboard shows mvp readiness empty state and soak action', function () {
 test('dashboard starts and displays mvp soak progress', function () {
     Queue::fake();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating, 'title' => '星河长卷']);
+    NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 

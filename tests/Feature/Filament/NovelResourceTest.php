@@ -51,21 +51,14 @@ test('the owner can list search and filter novels', function () {
 
 test('the owner can create a novel and enters its workbench', function () {
     Livewire::test(CreateNovel::class)
+        ->assertDontSee('创作风格')
+        ->assertDontSee('文风高级设置')
         ->fillForm([
             'title' => '长夜将明',
             'genre' => '玄幻',
             'premise' => '失去故乡的少年踏上寻找真相的旅程。',
             'target_words' => 1_000_000,
             'generation_chapter_target_words' => 3_500,
-            'editorial_subgenre' => '东方玄幻',
-            'editorial_target_platform' => 'qidian',
-            'editorial_story_tone' => 'serious',
-            'editorial_primary_style' => 'steady_weighty',
-            'editorial_secondary_styles' => ['plain_realist', 'austere'],
-            'editorial_language_era' => 'vernacular_ancient',
-            'editorial_pacing' => 'balanced',
-            'editorial_narrative_pov' => 'third_limited',
-            'editorial_style_parameters' => ['dialogue_ratio' => 3],
         ])
         ->call('create')
         ->assertHasNoFormErrors()
@@ -76,9 +69,7 @@ test('the owner can create a novel and enters its workbench', function () {
     expect($novel->title)->toBe('长夜将明')
         ->and($novel->status)->toBe(NovelStatus::Draft)
         ->and(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(3_500)
-        ->and(data_get($novel->settings, 'editorial.primary_style'))->toBe('steady_weighty')
-        ->and(data_get($novel->settings, 'editorial.secondary_styles'))->toBe(['plain_realist', 'austere'])
-        ->and(data_get($novel->settings, 'editorial.style_parameters.dialogue_ratio'))->toBe(3);
+        ->and(data_get($novel->settings, 'editorial'))->toBeNull();
 
     $this->get(NovelResource::getUrl('view', ['record' => $novel]))
         ->assertOk()
@@ -86,17 +77,21 @@ test('the owner can create a novel and enters its workbench', function () {
 });
 
 test('the owner can edit a novels basic information', function () {
-    $novel = Novel::factory()->create();
+    $editorial = [
+        'primary_style' => 'light_humorous',
+        'style_parameters' => ['humor_level' => 4],
+    ];
+    $novel = Novel::factory()->create(['settings' => ['editorial' => $editorial]]);
 
     Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertDontSee('创作风格')
+        ->assertDontSee('文风高级设置')
         ->fillForm([
             'title' => '群星彼岸',
             'genre' => '科幻',
             'premise' => '远航者寻找失落文明。',
             'target_words' => 600_000,
             'generation_chapter_target_words' => 4_000,
-            'editorial_primary_style' => 'suspenseful',
-            'editorial_secondary_styles' => ['austere'],
         ])
         ->call('save')
         ->assertHasNoFormErrors();
@@ -108,8 +103,7 @@ test('the owner can edit a novels basic information', function () {
         ->status->toBe(NovelStatus::Draft)
         ->current_chapter_sequence->toBeNull();
     expect(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(4_000)
-        ->and(data_get($novel->settings, 'editorial.primary_style'))->toBe('suspenseful')
-        ->and(data_get($novel->settings, 'editorial.secondary_styles'))->toBe(['austere']);
+        ->and(data_get($novel->settings, 'editorial'))->toBe($editorial);
 });
 
 test('novel form validates required fields and positive target words', function () {
@@ -119,7 +113,6 @@ test('novel form validates required fields and positive target words', function 
             'genre' => '',
             'target_words' => 0,
             'generation_chapter_target_words' => 100,
-            'editorial_primary_style' => null,
         ])
         ->call('create')
         ->assertHasFormErrors([
@@ -127,7 +120,6 @@ test('novel form validates required fields and positive target words', function 
             'genre' => 'required',
             'target_words' => 'min',
             'generation_chapter_target_words' => 'min',
-            'editorial_primary_style' => 'required',
         ]);
 });
 

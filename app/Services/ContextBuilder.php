@@ -25,6 +25,7 @@ class ContextBuilder
         private readonly TokenBudget $tokenBudget,
         private readonly MemoryRetriever $memoryRetriever,
         private readonly PreviousChapterEnding $previousChapterEnding,
+        private readonly NarrativeStyleProfile $narrativeStyleProfile,
     ) {}
 
     public function buildForRun(GenerationRun $run, ContextRequest $request): ContextSnapshot
@@ -52,7 +53,7 @@ class ContextBuilder
         $novel = Novel::query()->findOrFail($request->novelId);
         $chapter = Chapter::query()->whereKey($request->chapterId)->where('novel_id', $novel->getKey())->firstOrFail();
         $plan = ChapterPlan::query()->whereKey($request->chapterPlanId)->where('chapter_id', $chapter->getKey())->firstOrFail();
-        $bible = $novel->currentBible()->firstOrFail();
+        $bible = $novel->bibles()->where('version', $request->bibleVersion)->firstOrFail();
         $state = StoryStateVersion::query()
             ->where('novel_id', $novel->getKey())
             ->where('version', $request->stateVersion)
@@ -100,6 +101,7 @@ class ContextBuilder
             ],
         ];
         $l1 = ['canonical_story_state' => $state->state];
+        $l4 = $this->narrativeStyleProfile->contractForBible($bible);
         $characterIds = collect([$plan->pov_character_id])
             ->merge(collect($plan->scene_plans ?? [])->pluck('pov_character_id'))
             ->merge($facts->where('subject_type', 'character')->pluck('subject_id'))
@@ -107,13 +109,13 @@ class ContextBuilder
         $worldEntityIds = $worldRules->pluck('id')
             ->merge($facts->where('subject_type', 'world_entity')->pluck('subject_id'))
             ->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();
-        $mandatoryAllocation = $this->tokenBudget->allocate($request->tokenBudget, ['l0' => $l0, 'l1' => $l1]);
+        $mandatoryAllocation = $this->tokenBudget->allocate($request->tokenBudget, ['l0' => $l0, 'l1' => $l1, 'l4' => $l4]);
         [$l2, $recentChapterIds, $l2Truncated] = $this->recentStory(
             $novel,
             $chapter,
             $mandatoryAllocation->remaining,
         );
-        $sections = ['l0' => $l0, 'l1' => $l1];
+        $sections = ['l0' => $l0, 'l1' => $l1, 'l4' => $l4];
 
         if ($this->tokenBudget->estimate($l2) <= $mandatoryAllocation->remaining) {
             $sections['l2'] = $l2;
@@ -162,6 +164,7 @@ class ContextBuilder
             sceneId: $request->sceneId,
             taskType: $request->taskType,
             bibleVersion: $bible->version,
+            styleContractChecksum: $l4['checksum'],
             stateVersion: $state->version,
             chapterPlanId: $plan->getKey(),
             characterIds: $characterIds,
@@ -178,7 +181,38 @@ class ContextBuilder
             l1: $l1,
             l2: $l2,
             l3: $l3,
+            l4: $l4,
         );
+    }
+
+    public function bibleVersionForChapter(Chapter $chapter): int
+    {
+        $chapter->loadMissing(['latestPlan', 'novel']);
+        $planId = $chapter->latestPlan?->getKey();
+
+        if ($planId !== null) {
+            $anchor = $chapter->generationRuns()
+                ->whereNotNull('bible_version')
+                ->oldest('id')
+                ->get(['bible_version', 'context_snapshot'])
+                ->first(fn (GenerationRun $run): bool => (int) data_get($run->context_snapshot, 'chapter_plan_id') === $planId);
+
+            if ($anchor?->bible_version !== null) {
+                return $anchor->bible_version;
+            }
+        }
+
+        return $chapter->novel->currentBible()->firstOrFail()->version;
+    }
+
+    /** @return array<string, mixed> */
+    public function styleContractForChapter(Chapter $chapter): array
+    {
+        $chapter->loadMissing('novel');
+        $version = $this->bibleVersionForChapter($chapter);
+        $bible = $chapter->novel->bibles()->where('version', $version)->firstOrFail();
+
+        return $this->narrativeStyleProfile->contractForBible($bible);
     }
 
     /**
@@ -244,8 +278,9 @@ class ContextBuilder
     {
         if ($run->novel_id !== $request->novelId
             || $run->chapter_id !== $request->chapterId
-            || $run->scene_id !== $request->sceneId) {
-            throw new InvalidArgumentException('ContextRequest 与 GenerationRun 的 Novel、Chapter 或 Scene 不一致。');
+            || $run->scene_id !== $request->sceneId
+            || ($run->bible_version !== null && $run->bible_version !== $request->bibleVersion)) {
+            throw new InvalidArgumentException('ContextRequest 与 GenerationRun 的 Novel、Chapter、Scene 或 Bible Version 不一致。');
         }
     }
 
