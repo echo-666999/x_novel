@@ -2,9 +2,14 @@
 
 namespace App\Jobs;
 
+use App\AI\BudgetService;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\Exceptions\BudgetExceededException;
+use App\Enums\ArtifactType;
 use App\Enums\ReviewDecision;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
+use App\Models\GenerationArtifact;
+use App\Models\Review;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
 use App\Services\GenerationStageGate;
@@ -14,6 +19,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -27,8 +33,11 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 
     public array $backoff = [10, 30];
 
-    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false)
+    public readonly string $operationId;
+
+    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false, ?string $operationId = null)
     {
+        $this->operationId = $operationId ?? (string) Str::uuid();
         $this->onQueue('generation');
     }
 
@@ -40,9 +49,11 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
     public function handle(ChapterReviewer $reviewer): void
     {
         try {
-            $review = $reviewer->review($this->chapterId, $this->regenerate);
+            $review = $reviewer->review($this->chapterId, $this->regenerate, $this->operationId);
 
-            if ($review?->decision === ReviewDecision::Pass
+            if ($review?->decision === ReviewDecision::Rewrite) {
+                $this->dispatchRewrite($review);
+            } elseif ($review?->decision === ReviewDecision::Pass
                 && (bool) data_get($review->generationRun->novel->settings, 'auto_commit', false)) {
                 app(GenerationStageGate::class)->dispatchForChapter(
                     $this->chapterId,
@@ -81,5 +92,31 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 
         app(AutoStopService::class)->stopForFailure($this->chapterId, $e);
         app(ChapterReviewer::class)->markTerminalFailure($this->chapterId);
+    }
+
+    private function dispatchRewrite(Review $review): void
+    {
+        $alreadyCompleted = GenerationArtifact::query()
+            ->where('type', ArtifactType::RewriteDraft)
+            ->where('data->source_review_id', $review->getKey())
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->exists();
+
+        if ($alreadyCompleted) {
+            return;
+        }
+
+        try {
+            app(BudgetService::class)->assertWithinChapterLimits($review->generationRun->chapter);
+        } catch (BudgetExceededException $exception) {
+            app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
+
+            return;
+        }
+
+        app(GenerationStageGate::class)->dispatchForChapter(
+            $this->chapterId,
+            fn () => $this->dispatchGenerationJob(new RewriteChapterJob($this->chapterId)),
+        );
     }
 }

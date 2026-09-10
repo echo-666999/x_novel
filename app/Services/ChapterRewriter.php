@@ -25,7 +25,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -172,8 +172,7 @@ class ChapterRewriter
 
     private function attemptCount(Chapter $chapter): int
     {
-        return GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))->count();
+        return $this->rewriteCounter->countFor($chapter);
     }
 
     /** @param array<string, mixed> $brief
@@ -283,8 +282,12 @@ class ChapterRewriter
             if ($chapter->novel->canonicalStateVersion?->version !== $expectedStateVersion) {
                 throw new AiProviderException('state_version_conflict', 'Rewrite 期间 Canonical Story State 已变化。', false);
             }
+            $version = (int) GenerationArtifact::query()
+                ->where('type', ArtifactType::RewriteDraft)
+                ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+                ->max('version') + 1;
             $artifact = $run->artifacts()->create([
-                'type' => ArtifactType::RewriteDraft, 'version' => $attempt, 'content' => $content,
+                'type' => ArtifactType::RewriteDraft, 'version' => $version, 'content' => $content,
                 'data' => [
                     'scope' => $sceneId === null ? 'chapter' : 'scene',
                     'source_artifact_id' => $source->getKey(),

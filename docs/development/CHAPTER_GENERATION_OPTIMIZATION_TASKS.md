@@ -112,7 +112,7 @@ flowchart TD
 | CGO-008 | Context L4 与冻结 Style Contract | P0 | DONE | CGO-006 |
 | CGO-009 | 全生成阶段接入 Style Contract | P0 | DONE | CGO-008 |
 | CGO-010 | Review Finding Schema 与决策矩阵 | P0 | DONE | CGO-009 |
-| CGO-011 | Review 后自动 Rewrite 闭环 | P0 | TODO | CGO-010 |
+| CGO-011 | Review 后自动 Rewrite 闭环 | P0 | DONE | CGO-010 |
 | CGO-012 | Scene/Assembly Plan Adherence 质量门 | P1 | TODO | CGO-009 |
 | CGO-013 | 最小范围定向修复 | P1 | TODO | CGO-011、CGO-012 |
 | CGO-014 | 自动章节推进器，运行到 PASS | P0 | TODO | CGO-011、CGO-013 |
@@ -722,7 +722,7 @@ Decision Matrix 和相关回归测试通过。
 
 **Skills：** `generation-pipeline`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-010
 
 ### 目标
@@ -769,6 +769,17 @@ Review 得到 REWRITE 时自动开始现有重写链，并在最多两次自动�
 ### 完成定义
 
 自动重写闭环的成功、耗尽、重复投递和暂停测试通过。
+
+### 完成记录
+
+- 完成日期：2026-09-10。
+- 自动闭环：`ReviewChapterJob` 对 REWRITE 结果检查预算后，通过现有 `GenerationStageGate` 与 `GenerationJobDispatcher` 派发一次整章 `RewriteChapterJob`；后续继续复用 Rewrite → Extract Events → Build State Patch → Review 链。
+- 幂等：Review Job 增加稳定 operation ID；同一强制审校 Job 重复投递时复用已成功 Run。已完成当前 Review 对应的 Rewrite Artifact 时不再重复派发，队列预留键继续阻止并发重复入队。
+- 次数口径：新增统一自动 Rewrite 计数，只统计当前成功 Chapter Plan 之后且 `manual_edit` 不为 true 的 Rewrite Artifact；Reviewer、Rewriter 与章节工作台均使用该口径，最大自动次数仍为 2。Artifact 展示版本仍按全部不可变重写稿递增，避免人工修改与自动重写出现重复版本号。
+- 停止条件：第二次自动 Rewrite 后仍有可修复 Finding 时，Review 直接转为 NEEDS_ATTENTION；预算到限时保留 Review 并记录 `budget_limit`，Pause、状态版本冲突和其他未成功 Review 均不会派发 Rewrite。
+- 针对性验证：审校、重写、预算、事件提取、状态补丁、队列去重、暂停/恢复、人工修订、Style Contract 和章节工作台共 127 个测试全部通过，634 个断言。
+- 完整套件：共运行 663 个测试，636 个通过、3955 个断言、21 个跳过；剩余 5 个范围外 Filament 展示断言失败和 1 个 MemoryUpdater 连接 Embedding Provider 错误。失败测试分别位于 DueForeshadowingsWidget、NovelAiSettings、NovelPlanningPreview、NovelStoryStateInitialization（2 个）和 MemoryUpdater，与本任务改动的 Review/Rewrite 针对性回归无重叠。
+- 边界：自动派发暂为整章 Rewrite；Finding 驱动的最小范围选择属于 CGO-013。没有实现完整章节推进器，没有增加第三次 Rewrite，没有修改 Canonical Commit，也没有调用真实 AI 或写入真实小说数据。
 
 ## CGO-012 — Scene/Assembly Plan Adherence 质量门
 

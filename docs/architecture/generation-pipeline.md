@@ -350,6 +350,8 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
 
+`ReviewChapterJob` 保存 REWRITE 结果后，先检查 Daily、Novel 与 Chapter Hard Budget，再通过 `GenerationStageGate` 和 `GenerationJobDispatcher` 派发 `RewriteChapterJob`。预算到限时保留已完成的 Review，写入 `budget_limit` 自动停止原因，不派发下一阶段；小说在结果保存后被暂停时同样不得派发。每个 Review Job 带有稳定的 operation ID，使同一强制审校投递被重复执行时复用已完成 Run，而新的人工强制审校仍可创建新 Run。
+
 ## 13. RewriteChapterJob
 
 输入 Source Artifact、Review Findings、Plan、Current State、Locked Facts；输出 `rewrite_draft`。
@@ -359,6 +361,8 @@ Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scen
 Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
 
 优先 Scene Rewrite，再 Whole Chapter Rewrite。默认 `max_rewrite_attempts = 2`。
+
+自动 Rewrite 次数只统计当前成功 Chapter Plan 之后生成且不含 `manual_edit = true` 的 `rewrite_draft`；Reviewer、Rewriter 与章节工作台共用同一统计口径。人工修改不会消耗自动次数，但 Artifact 展示版本仍按全部不可变重写稿连续递增。CGO-011 的自动派发使用整章 Rewrite；根据 Finding 自动选择最小修复范围由后续定向修复任务实现。
 
 最后一次 Rewrite 后若重新审校仍应为 `REWRITE`，Laravel 必须在该次 Review 中直接将最终决策转为 `NEEDS_ATTENTION`，不得等待一次无法从 UI 发起的额外 Rewrite 才标记耗尽。
 

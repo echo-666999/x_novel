@@ -40,9 +40,9 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter) {}
 
-    public function review(int $chapterId, bool $regenerate = false): ?Review
+    public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
         $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan', 'scenes'])->findOrFail($chapterId);
         if ($chapter->novel->status === NovelStatus::Paused) {
@@ -82,8 +82,16 @@ class ChapterReviewer
 
         $settings = $this->settingsResolver->resolve(AiStage::Reviewer, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Reviewer);
-        $inputHash = hash('sha256', json_encode(['context' => $context, 'model' => $settings->model, 'prompt_version' => $promptVersion, 'pass_score' => config('generation.review_pass_score', 80)], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        [$run, $reused] = $this->startRun($chapter, "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}", $inputHash, $context, $settings->model, $promptVersion, $regenerate);
+        $reviewOperationId = $regenerate ? $operationId : null;
+        $input = [
+            'context' => $context,
+            'model' => $settings->model,
+            'prompt_version' => $promptVersion,
+            'pass_score' => config('generation.review_pass_score', 80),
+            ...($reviewOperationId === null ? [] : ['operation_id' => $reviewOperationId]),
+        ];
+        $inputHash = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        [$run, $reused] = $this->startRun($chapter, "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}", $inputHash, $context, $settings->model, $promptVersion, $regenerate, $reviewOperationId);
         if ($reused) {
             return $run->review;
         }
@@ -206,9 +214,9 @@ class ChapterReviewer
         return $actual === $keys;
     }
 
-    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate): array
+    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate, ?string $operationId): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate) {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate, $operationId) {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::Review);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
@@ -218,11 +226,12 @@ class ChapterReviewer
             if ($active) {
                 $active->update(['status' => RunStatus::Failed, 'error_code' => 'worker_interrupted', 'error_message' => 'Review Run 超时未完成，已由后续投递恢复。', 'finished_at' => now()]);
             }
-            if (! $regenerate && ($done = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
+            if ((! $regenerate || $operationId !== null)
+                && ($done = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
                 return [$done, true];
             }
             $attempt = (int) $runs->clone()->max('attempt') + 1;
-            $run = GenerationRun::query()->create(['novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Running, 'attempt' => $attempt, 'idempotency_key' => $attempt === 1 ? $baseKey : "$baseKey:attempt:$attempt", 'input_hash' => $inputHash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'], 'prompt_version' => $promptVersion, 'model_policy' => $model, 'context_snapshot' => [...$context, 'draft' => collect($context['draft'])->except('content')->all()], 'started_at' => now()]);
+            $run = GenerationRun::query()->create(['novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Running, 'attempt' => $attempt, 'idempotency_key' => $attempt === 1 ? $baseKey : "$baseKey:attempt:$attempt", 'input_hash' => $inputHash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'], 'prompt_version' => $promptVersion, 'model_policy' => $model, 'context_snapshot' => [...$context, 'draft' => collect($context['draft'])->except('content')->all(), ...($operationId === null ? [] : ['operation_id' => $operationId])], 'started_at' => now()]);
 
             return [$run, false];
         });
@@ -245,10 +254,7 @@ class ChapterReviewer
                 ...array_map(fn (array $finding): array => [...$finding, 'source' => 'narrative_review'], $payload['findings']),
             ];
             [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
-            $rewriteAttempts = GenerationArtifact::query()
-                ->where('type', ArtifactType::RewriteDraft)
-                ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
-                ->count();
+            $rewriteAttempts = $this->rewriteCounter->countFor($chapter);
             $rewriteExhausted = $decision === ReviewDecision::Rewrite
                 && $rewriteAttempts >= (int) config('generation.max_rewrite_attempts', 2);
             if ($rewriteExhausted) {

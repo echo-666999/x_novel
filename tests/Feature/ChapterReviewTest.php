@@ -17,6 +17,7 @@ use App\Enums\RunStatus;
 use App\Enums\StateFindingSeverity;
 use App\Jobs\CommitChapterJob;
 use App\Jobs\ReviewChapterJob;
+use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
@@ -25,13 +26,22 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Models\StoryStateVersion;
 use App\Services\ChapterReviewer;
 use App\Services\StateValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
+
+beforeEach(function () {
+    Cache::flush();
+    config()->set('ai.budget.daily_hard_limit', null);
+    config()->set('ai.budget.novel_total_limit', null);
+    config()->set('ai.budget.chapter_max_cost', null);
+});
 
 function reviewFixture(): array
 {
@@ -386,6 +396,32 @@ test('the review after the final rewrite moves unresolved findings to needs atte
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
+test('manual edits do not exhaust automatic rewrite attempts during review', function () {
+    $fixture = reviewFixture();
+    foreach ([1, 2] as $version) {
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scope_type' => 'chapter',
+            'scope_id' => $fixture['chapter']->getKey(),
+            'stage' => GenerationStage::Rewrite,
+            'status' => RunStatus::Succeeded,
+        ]);
+        GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::RewriteDraft,
+            'version' => $version,
+            'content' => $fixture['draft']->content,
+            'checksum' => $fixture['draft']->checksum,
+            'data' => ['manual_edit' => true],
+        ]);
+    }
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [reviewFinding(autoFixable: true)])));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and(collect($review->findings)->pluck('code'))->not->toContain('REWRITE_EXHAUSTED');
+});
+
 test('duplicate review delivery reuses the successful review', function () {
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));
@@ -396,6 +432,122 @@ test('duplicate review delivery reuses the successful review', function () {
     $second = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
 
     expect($second?->is($first))->toBeTrue()->and($fake->requests())->toHaveCount(1);
+});
+
+test('review job automatically dispatches one rewrite for an auto fixable finding', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [reviewFinding(autoFixable: true)])));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    Queue::assertPushed(RewriteChapterJob::class, 1);
+    Queue::assertPushed(RewriteChapterJob::class, fn (RewriteChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && $job->sceneId === null);
+});
+
+test('duplicate review job delivery does not dispatch the same rewrite twice', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse(findings: [reviewFinding(autoFixable: true)]));
+    app()->instance(AiProvider::class, $fake);
+    $job = new ReviewChapterJob($fixture['chapter']->getKey(), true);
+
+    $job->handle(app(ChapterReviewer::class));
+    $job->handle(app(ChapterReviewer::class));
+
+    expect($fake->requests())->toHaveCount(1);
+    expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Review)->count())->toBe(1);
+    Queue::assertPushed(RewriteChapterJob::class, 1);
+});
+
+test('a completed rewrite for the reused review prevents stale redispatch', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [reviewFinding(autoFixable: true)])));
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+    $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::Rewrite,
+        'status' => RunStatus::Succeeded,
+    ]);
+    GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::RewriteDraft,
+        'data' => ['source_review_id' => $review->getKey()],
+    ]);
+    $reviewer = Mockery::mock(ChapterReviewer::class);
+    $reviewer->shouldReceive('review')->once()->andReturn($review);
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle($reviewer);
+
+    Queue::assertNotPushed(RewriteChapterJob::class);
+});
+
+test('budget exhaustion after review preserves the result and stops before rewrite dispatch', function () {
+    Queue::fake();
+    config()->set('ai.budget.daily_hard_limit', 0);
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [reviewFinding(autoFixable: true)])));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Rewrite)
+        ->and(data_get($fixture['novel']->fresh()->settings, 'auto_stop.code'))->toBe('budget_limit');
+    Queue::assertNotPushed(RewriteChapterJob::class);
+});
+
+test('a provider response is saved but pause prevents automatic rewrite dispatch', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, new class($fixture['novel']) implements AiProvider
+    {
+        public function __construct(private readonly Novel $novel) {}
+
+        public function generate(AiRequest $request): AiResponse
+        {
+            $this->novel->update(['status' => NovelStatus::Paused]);
+
+            return reviewResponse(findings: [reviewFinding(autoFixable: true)]);
+        }
+    });
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    expect($fixture['chapter']->generationRuns()
+        ->where('stage', GenerationStage::Review)
+        ->where('status', RunStatus::Succeeded)
+        ->sole()
+        ->artifacts()
+        ->where('type', ArtifactType::ReviewResult)
+        ->exists())->toBeTrue();
+    Queue::assertNotPushed(RewriteChapterJob::class);
+});
+
+test('state version conflict during review never dispatches rewrite', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, new class($fixture['novel']) implements AiProvider
+    {
+        public function __construct(private readonly Novel $novel) {}
+
+        public function generate(AiRequest $request): AiResponse
+        {
+            $nextVersion = (int) $this->novel->storyStateVersions()->max('version') + 1;
+            $version = StoryStateVersion::factory()->for($this->novel)->create(['version' => $nextVersion]);
+            $this->novel->update(['canonical_state_version_id' => $version->getKey()]);
+
+            return reviewResponse(findings: [reviewFinding(autoFixable: true)]);
+        }
+    });
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    expect(Review::query()->count())->toBe(0);
+    Queue::assertNotPushed(RewriteChapterJob::class);
 });
 
 test('review job dispatches canonical commit only for pass reviews with auto commit enabled', function () {

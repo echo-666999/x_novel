@@ -81,6 +81,19 @@ test('chapter hard limit only counts usage for the requested chapter', function 
     )))->toThrow(BudgetExceededException::class, 'AI chapter hard limit 已达到。');
 });
 
+test('chapter limit preflight can guard a queued follow up stage', function () {
+    config()->set('ai.budget.chapter_max_cost', 3);
+    $chapter = Chapter::factory()->create();
+    UsageRecord::factory()->create([
+        'novel_id' => $chapter->novel_id,
+        'chapter_id' => $chapter->getKey(),
+        'estimated_cost' => 3,
+    ]);
+
+    expect(fn () => app(BudgetService::class)->assertWithinChapterLimits($chapter))
+        ->toThrow(BudgetExceededException::class, 'AI chapter hard limit 已达到。');
+});
+
 test('a request below all limits reaches the provider', function () {
     config()->set('ai.budget.daily_hard_limit', 10);
     config()->set('ai.budget.novel_total_limit', 5);

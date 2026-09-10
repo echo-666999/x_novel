@@ -18,6 +18,12 @@ class BudgetService
         $this->assertAvailable($this->novelUsage($novel));
     }
 
+    public function assertWithinChapterLimits(Chapter $chapter): void
+    {
+        $this->assertWithinNovelLimits($chapter->novel);
+        $this->assertAvailable($this->chapterUsage($chapter));
+    }
+
     public function assertCanRequest(AiRequest $request): void
     {
         $this->assertAvailable($this->dailyUsage());

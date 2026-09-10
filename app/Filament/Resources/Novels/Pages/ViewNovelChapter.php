@@ -28,6 +28,7 @@ use App\Models\GenerationRun;
 use App\Models\Review;
 use App\Models\Scene;
 use App\Models\UsageRecord;
+use App\Services\AutomaticRewriteCounter;
 use App\Services\CanonicalCommitService;
 use App\Services\DraftLengthPolicy;
 use App\Services\DraftRewriteDiff;
@@ -815,8 +816,7 @@ class ViewNovelChapter extends ViewRecord
 
     private function automaticRewriteArtifacts()
     {
-        return $this->rewriteArtifacts()
-            ->reject(fn (GenerationArtifact $artifact): bool => (bool) data_get($artifact->data, 'manual_edit'));
+        return app(AutomaticRewriteCounter::class)->artifactsFor($this->chapter());
     }
 
     /** @return array<int, array<string, mixed>> */

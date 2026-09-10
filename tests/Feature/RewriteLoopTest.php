@@ -144,6 +144,31 @@ test('rewrite exhaustion becomes needs attention', function () {
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
+test('manual edits do not consume the automatic rewrite budget', function () {
+    $fixture = rewriteFixture();
+    foreach ([1, 2] as $version) {
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scope_type' => 'chapter',
+            'scope_id' => $fixture['chapter']->getKey(),
+            'stage' => GenerationStage::Rewrite,
+            'status' => RunStatus::Succeeded,
+        ]);
+        GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::RewriteDraft,
+            'version' => $version,
+            'content' => '人工修改稿',
+            'data' => ['manual_edit' => true, 'source_review_id' => 1000 + $version],
+        ]);
+    }
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(rewriteResponse()));
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->version)->toBe(3)
+        ->and($artifact->data['attempt'])->toBe(1)
+        ->and($artifact->data)->not->toHaveKey('manual_edit');
+});
+
 test('paused novel cannot start rewrite', function () {
     $fixture = rewriteFixture();
     $fixture['novel']->update(['status' => NovelStatus::Paused]);
