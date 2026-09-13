@@ -28,8 +28,8 @@ final class SceneDraftPayload
                 ],
                 'uncertainties' => ['type' => 'array', 'items' => ['type' => 'string']],
                 'self_check' => [
-                    'type' => 'string',
-                    'description' => 'Self-check result encoded as a JSON object.',
+                    ...PlanCoverage::schema(),
+                    'description' => 'Coverage of the planned goal, conflict, turn, and outcome.',
                 ],
             ],
         ];
@@ -40,10 +40,12 @@ final class SceneDraftPayload
      */
     public static function validate(array $payload): array
     {
+        if (! self::hasExactKeys($payload, ['content', 'temporary_state_delta', 'declared_events', 'uncertainties', 'self_check'])) {
+            throw ValidationException::withMessages(['scene_draft' => 'Scene Draft 必须只包含 content、temporary_state_delta、declared_events、uncertainties 和 self_check。']);
+        }
+
         $payload['temporary_state_delta'] = self::decodeObject($payload['temporary_state_delta'] ?? null, 'temporary_state_delta');
         $payload['declared_events'] = self::decodeObjectList($payload['declared_events'] ?? null);
-        $payload['self_check'] = self::decodeObject($payload['self_check'] ?? null, 'self_check');
-
         $validated = validator($payload, [
             'content' => ['required', 'string', 'min:1'],
             'temporary_state_delta' => ['present', 'array'],
@@ -51,12 +53,14 @@ final class SceneDraftPayload
             'declared_events.*' => ['array'],
             'uncertainties' => ['present', 'array'],
             'uncertainties.*' => ['string'],
-            'self_check' => ['present', 'array'],
+            'self_check' => ['required', 'array'],
         ])->validate();
 
         if (blank(trim($validated['content']))) {
             throw ValidationException::withMessages(['content' => 'Scene 正文不能为空。']);
         }
+
+        $validated['self_check'] = PlanCoverage::validate($validated['self_check'], $validated['content'], 'self_check');
 
         return $validated;
     }
@@ -90,5 +94,15 @@ final class SceneDraftPayload
             fn (mixed $event): array => self::decodeObject($event, 'declared_events'),
             $value,
         );
+    }
+
+    /** @param array<int, string> $keys */
+    private static function hasExactKeys(array $value, array $keys): bool
+    {
+        $actual = array_keys($value);
+        sort($actual);
+        sort($keys);
+
+        return $actual === $keys;
     }
 }

@@ -10,8 +10,11 @@ use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
+use App\Enums\SceneStatus;
+use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
@@ -21,6 +24,7 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
+use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Services\ChapterRewriter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -34,7 +38,7 @@ function rewriteFixture(): array
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Rewrite]);
-    ChapterPlan::factory()->for($chapter)->create(['target_words' => 8]);
+    ChapterPlan::factory()->for($chapter)->create(['target_words' => 8, 'status' => PlanStatus::Ready]);
     $assembly = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
     $draft = GenerationArtifact::factory()->for($assembly)->create(['type' => ArtifactType::ChapterDraft, 'content' => '原始章节正文', 'checksum' => hash('sha256', '原始章节正文')]);
     $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded]);
@@ -49,9 +53,112 @@ function rewriteResponse(string $content = '修订后的章节正文'): AiRespon
     return new AiResponse(content: $content, structuredData: null, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
 }
 
+function sceneRewriteResponse(string $content = '破门逆转'): AiResponse
+{
+    $selfCheck = collect(['goal', 'conflict', 'turn', 'outcome'])
+        ->mapWithKeys(fn (string $element): array => [$element => [
+            'status' => 'fulfilled',
+            'evidence' => '破门',
+        ]])
+        ->all();
+    $data = ['content' => $content, 'self_check' => $selfCheck];
+
+    return new AiResponse(
+        content: json_encode($data, JSON_UNESCAPED_UNICODE),
+        structuredData: $data,
+        inputTokens: 100,
+        outputTokens: 100,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'scene-rewrite',
+        model: 'rewrite-test',
+    );
+}
+
+function sceneRewriteFixture(): array
+{
+    $fixture = rewriteFixture();
+    $fixture['chapter']->latestPlan()->update([
+        'target_words' => 8,
+        'scene_plans' => [
+            [
+                'goal' => '突破城门',
+                'conflict' => '守军阻拦',
+                'turn' => '队友掩护',
+                'outcome' => '林舟破门',
+                'outcome_allowed' => ['破门'],
+                'outcome_forbidden' => ['撤退'],
+            ],
+            [
+                'goal' => '固守通道',
+                'conflict' => '追兵逼近',
+                'turn' => '机关启动',
+                'outcome' => '暂时守住',
+                'outcome_allowed' => ['守住'],
+                'outcome_forbidden' => ['失守'],
+            ],
+        ],
+    ]);
+
+    $scenes = collect([
+        ['sequence' => 1, 'content' => '旧稿失速', 'goal' => '突破城门', 'conflict' => '守军阻拦', 'turn' => '队友掩护', 'outcome' => '林舟破门'],
+        ['sequence' => 2, 'content' => '守军待命', 'goal' => '固守通道', 'conflict' => '追兵逼近', 'turn' => '机关启动', 'outcome' => '暂时守住'],
+    ])->map(function (array $attributes) use ($fixture): array {
+        $content = $attributes['content'];
+        unset($attributes['content']);
+        $scene = Scene::factory()->for($fixture['chapter'])->create([
+            ...$attributes,
+            'status' => SceneStatus::Draft,
+        ]);
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scene_id' => $scene->getKey(),
+            'scope_type' => 'scene',
+            'scope_id' => $scene->getKey(),
+            'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft,
+            'content' => $content,
+            'checksum' => hash('sha256', $content),
+        ]);
+        $scene->update(['current_artifact_id' => $artifact->getKey()]);
+
+        return ['scene' => $scene->refresh(), 'artifact' => $artifact];
+    })->all();
+
+    $fixture['review']->update(['findings' => [
+        [
+            'code' => 'STYLE_MISMATCH',
+            'dimension' => 'style',
+            'severity' => 'error',
+            'scene_id' => $scenes[0]['scene']->getKey(),
+            'scope' => 'scene',
+            'auto_fixable' => true,
+            'requires_human_decision' => false,
+            'message' => '第一场景节奏失速。',
+            'evidence' => '旧稿失速',
+        ],
+        [
+            'code' => 'STYLE_MISMATCH',
+            'dimension' => 'style',
+            'severity' => 'warning',
+            'scene_id' => $scenes[1]['scene']->getKey(),
+            'scope' => 'scene',
+            'auto_fixable' => false,
+            'requires_human_decision' => false,
+            'message' => '第二场景有可选的文风建议。',
+            'evidence' => '守军待命',
+        ],
+    ]]);
+
+    return [...$fixture, 'target' => $scenes[0], 'untouched' => $scenes[1]];
+}
+
 test('chapter rewrite creates a new immutable artifact with finding hash', function () {
     $fixture = rewriteFixture();
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(rewriteResponse()));
+    $fake = (new FakeAiProvider)->enqueue(rewriteResponse());
+    app()->instance(AiProvider::class, $fake);
 
     $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
 
@@ -67,6 +174,9 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and($artifact->generationRun->bible_version)->toBe(1)
         ->and(data_get($artifact->generationRun->context_snapshot, 'style_contract_checksum'))->toBe(data_get($artifact->generationRun->context_snapshot, 'l4.checksum'))
         ->and(data_get($artifact->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
+        ->and(data_get($artifact->data, 'plan_acceptance.chapter_function'))->toBe($fixture['chapter']->latestPlan->chapter_function)
+        ->and(data_get($artifact->data, 'repair_findings.0.evidence'))->toBe('末段重复')
+        ->and($fake->requests()[0]->prompt)->toContain('"plan_acceptance"')
         ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
 });
 
@@ -113,7 +223,52 @@ test('rewrite job continues with fresh event extraction', function () {
 
     (new RewriteChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterRewriter::class));
 
-    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->regenerate && $job->continueRewrite);
+    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => ! $job->regenerate && ! $job->continueRewrite);
+});
+
+test('scene rewrite replaces only the target pointer and preserves plan and style constraints', function () {
+    $fixture = sceneRewriteFixture();
+    $fake = (new FakeAiProvider)->enqueue(sceneRewriteResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite(
+        $fixture['chapter']->getKey(),
+        $fixture['target']['scene']->getKey(),
+    );
+
+    expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
+        ->and($artifact->data['scope'])->toBe('scene')
+        ->and($artifact->data['source_artifact_id'])->toBe($fixture['target']['artifact']->getKey())
+        ->and($artifact->data['repair_findings'])->toHaveCount(1)
+        ->and(data_get($artifact->data, 'repair_findings.0.evidence'))->toBe('旧稿失速')
+        ->and(data_get($artifact->data, 'plan_acceptance.coverage_expectations.outcome.description'))->toBe('林舟破门')
+        ->and(data_get($artifact->data, 'self_check.outcome.status'))->toBe('fulfilled')
+        ->and($artifact->data['plan_findings'])->toBe([])
+        ->and($fixture['target']['scene']->fresh()->current_artifact_id)->toBe($artifact->getKey())
+        ->and($fixture['untouched']['scene']->fresh()->current_artifact_id)->toBe($fixture['untouched']['artifact']->getKey())
+        ->and($fixture['target']['artifact']->fresh()->content)->toBe('旧稿失速')
+        ->and($fixture['draft']->fresh()->content)->toBe('原始章节正文')
+        ->and(data_get($artifact->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
+        ->and($fake->requests()[0]->responseSchema)->not->toBeNull()
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得改写其他 Scene')
+        ->and($fake->requests()[0]->prompt)->toContain('旧稿失速')
+        ->and($fake->requests()[0]->prompt)->not->toContain('第二场景有可选的文风建议');
+});
+
+test('scene rewrite job returns to assembly before event extraction', function () {
+    Queue::fake();
+    $fixture = sceneRewriteFixture();
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneRewriteResponse()));
+
+    (new RewriteChapterJob(
+        $fixture['chapter']->getKey(),
+        $fixture['target']['scene']->getKey(),
+    ))->handle(app(ChapterRewriter::class));
+
+    Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
+        && ! $job->regenerate
+        && ! $job->continueRewrite);
+    Queue::assertNotPushed(ExtractStoryEventsJob::class);
 });
 
 test('rewrite exhaustion becomes needs attention', function () {

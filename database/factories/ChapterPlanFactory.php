@@ -34,6 +34,8 @@ class ChapterPlanFactory extends Factory
                 'conflict' => fake()->sentence(),
                 'turn' => fake()->sentence(),
                 'outcome' => fake()->sentence(),
+                'outcome_allowed' => [],
+                'outcome_forbidden' => [],
                 'transition_from_previous' => null,
             ]],
             'status' => PlanStatus::Draft,

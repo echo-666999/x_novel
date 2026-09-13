@@ -21,11 +21,12 @@ use App\Models\GenerationRun;
 use App\Models\Review;
 use App\Models\Scene;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -42,6 +43,12 @@ class ChapterRewriter
         if ($completed !== null) {
             return $completed;
         }
+        $findings = $sceneId === null
+            ? $review->findings
+            : $this->rewriteScopeResolver->findingsForScene($chapter, $review->findings, $sceneId);
+        if ($findings === []) {
+            throw new AiProviderException('rewrite_scope_unresolved', '当前 Finding 无法安全定位到指定 Scene，已停止自动重写。', false);
+        }
         $source = $sceneId === null ? $this->latestChapterDraft($chapter) : $this->sceneSource($chapter, $sceneId);
         $chapterTargetWords = (int) $chapter->latestPlan->target_words;
         $sceneAllocation = $sceneId === null ? null : $this->sceneAllocation($chapter, $sceneId, $chapterTargetWords);
@@ -54,7 +61,7 @@ class ChapterRewriter
             throw new AiProviderException('rewrite_exhausted', 'Rewrite 已达到最大 2 次，已转为需要人工处理。', false);
         }
 
-        $findingHash = hash('sha256', json_encode($review->findings, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $findingHash = hash('sha256', json_encode($findings, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $settings = $this->settingsResolver->resolve(AiStage::Rewrite, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Rewrite);
         $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
@@ -64,9 +71,10 @@ class ChapterRewriter
             'bible_version' => $styleContract['bible_version'],
             'style_contract_checksum' => $styleContract['checksum'],
             'l4' => $styleContract,
-            'findings' => $review->findings,
+            'findings' => $findings,
+            'plan_acceptance' => $this->planAcceptance($chapter, $sceneId),
             'must_preserve' => $chapter->latestPlan->only(['chapter_function', 'arc_contribution', 'reader_promise', 'must_reveal']),
-            'expected_fixes' => collect($review->findings)->pluck('message')->filter()->values()->all(),
+            'expected_fixes' => collect($findings)->pluck('message')->filter()->values()->all(),
             'must_not_change' => $chapter->latestPlan->only(['must_not_reveal', 'forbidden_conflicts']),
             'state_version' => $chapter->novel->canonicalStateVersion->version,
             'current_state' => $chapter->novel->canonicalStateVersion->state,
@@ -94,28 +102,27 @@ class ChapterRewriter
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 章节重写器。只修复给定问题，保留计划要求的剧情结果和既定事实。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文开头交代时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words；length_requirement.maximum_words 是不可超过的硬上限，字数统计排除空白和换行。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有场景的动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。只返回修订后的简体中文正文。',
+                systemPrompt: $this->systemPrompt($sceneId !== null),
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
+                responseSchema: $sceneId === null ? null : SceneRewritePayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value],
             ));
-            $content = trim($response->content);
-            if ($content === '') {
-                throw new AiProviderException('rewrite_empty_draft', 'Rewrite 返回了空正文。', false);
-            }
+            $payload = $this->responsePayload($response->content, $response->structuredData, $sceneId !== null);
 
-            $content = $this->repairLengthIfNeeded(
-                content: $content,
+            $payload = $this->repairLengthIfNeeded(
+                payload: $payload,
                 brief: $brief,
                 model: $settings->model,
                 promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value],
+                sceneRewrite: $sceneId !== null,
             );
-            $this->validateLength($content, $brief['length_requirement']);
+            $this->validateLength($payload['content'], $brief['length_requirement']);
 
-            return $this->complete($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt, $brief['state_version']);
+            return $this->complete($run, $chapter, $sceneId, $source, $review, $payload, $findingHash, $attempt, $brief['state_version']);
         } catch (Throwable $exception) {
             $run->update(['status' => RunStatus::Failed, 'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'rewrite_failed', 'error_message' => $exception->getMessage(), 'finished_at' => now()]);
             throw $exception;
@@ -175,15 +182,82 @@ class ChapterRewriter
         return $this->rewriteCounter->countFor($chapter);
     }
 
+    private function systemPrompt(bool $sceneRewrite): string
+    {
+        $base = '你是 XNovel 定向重写器。只修复 findings 中的问题，严格保留 plan_acceptance 要求的剧情结果和既定事实。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words；length_requirement.maximum_words 是不可超过的硬上限，字数统计排除空白和换行。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
+
+        return $sceneRewrite
+            ? $base.'当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'
+            : $base.'当前 scope=chapter，返回完整的简体中文章节替换稿。';
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $structuredData
+     * @return array<string, mixed>
+     */
+    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite): array
+    {
+        if ($sceneRewrite) {
+            if ($structuredData === null) {
+                throw new AiProviderException('rewrite_schema_invalid', 'Scene Rewrite 未返回合法的结构化结果。', false);
+            }
+
+            try {
+                return SceneRewritePayload::validate($structuredData);
+            } catch (ValidationException $exception) {
+                throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
+            }
+        }
+
+        $content = trim($content);
+        if ($content === '') {
+            throw new AiProviderException('rewrite_empty_draft', 'Rewrite 返回了空正文。', false);
+        }
+
+        return ['content' => $content];
+    }
+
+    /** @return array<string, mixed> */
+    private function planAcceptance(Chapter $chapter, ?int $sceneId): array
+    {
+        if ($sceneId === null) {
+            return $chapter->latestPlan->only([
+                'chapter_function',
+                'arc_contribution',
+                'reader_promise',
+                'must_reveal',
+                'must_not_reveal',
+                'forbidden_conflicts',
+                'scene_plans',
+            ]);
+        }
+
+        $scene = $chapter->scenes->firstWhere('id', $sceneId);
+        if ($scene === null) {
+            throw new AiProviderException('rewrite_scope_unresolved', '指定 Scene 不属于当前 Chapter。', false);
+        }
+
+        $scenePlan = data_get($chapter->latestPlan->scene_plans, $scene->sequence - 1, []);
+
+        return [
+            'scene_id' => $scene->getKey(),
+            'sequence' => $scene->sequence,
+            'coverage_expectations' => PlanCoverage::expectations(
+                $scene->only(PlanCoverage::ELEMENTS),
+                is_array($scenePlan) ? $scenePlan : [],
+            ),
+        ];
+    }
+
     /** @param array<string, mixed> $brief
      * @param  array<string, mixed>  $metadata
      */
-    private function repairLengthIfNeeded(string $content, array $brief, string $model, string $promptVersion, array $metadata): string
+    private function repairLengthIfNeeded(array $payload, array $brief, string $model, string $promptVersion, array $metadata, bool $sceneRewrite): array
     {
         $requirement = $brief['length_requirement'];
 
         for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
-            $actual = $this->lengthPolicy->count($content);
+            $actual = $this->lengthPolicy->count($payload['content']);
             $minimum = (int) $requirement['minimum_words'];
             $maximum = (int) $requirement['maximum_words'];
             $tooShort = $actual < $minimum;
@@ -196,11 +270,12 @@ class ChapterRewriter
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 systemPrompt: $tooLong
-                    ? '你是 XNovel 重写稿压缩器。当前重写稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、计划结果、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
-                    : '你是 XNovel 重写稿扩写器。当前重写稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、计划结果和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
+                    ? '你是 XNovel 重写稿压缩器。当前重写稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、plan_acceptance、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。Scene Rewrite 必须同时返回覆盖最终正文的固定 self_check；Chapter Rewrite 只返回完整简体中文正文。'
+                    : '你是 XNovel 重写稿扩写器。当前重写稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、plan_acceptance 和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。Scene Rewrite 必须同时返回覆盖最终正文的固定 self_check；Chapter Rewrite 只返回完整简体中文正文。',
                 prompt: ($tooLong ? '请压缩以下重写稿：' : '请扩写以下重写稿：').json_encode([
                     'scope' => $brief['scope'],
                     'findings' => $brief['findings'],
+                    'plan_acceptance' => $brief['plan_acceptance'],
                     'must_preserve' => $brief['must_preserve'],
                     'must_not_change' => $brief['must_not_change'],
                     'l4' => $brief['l4'],
@@ -208,21 +283,18 @@ class ChapterRewriter
                     'current_words' => $actual,
                     'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
                     'repair_attempt' => $attempt,
-                    'content' => $content,
+                    'draft' => $payload,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
+                responseSchema: $sceneRewrite ? SceneRewritePayload::schema() : null,
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
-            $content = trim($response->content);
-
-            if ($content === '') {
-                throw new AiProviderException('rewrite_empty_draft', 'Rewrite 字数修复返回了空正文。', false);
-            }
+            $payload = $this->responsePayload($response->content, $response->structuredData, $sceneRewrite);
         }
 
-        return $content;
+        return $payload;
     }
 
     /** @param array<string, mixed> $requirement */
@@ -275,9 +347,9 @@ class ChapterRewriter
         });
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, ?int $sceneId, GenerationArtifact $source, Review $review, string $content, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, ?int $sceneId, GenerationArtifact $source, Review $review, array $payload, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $chapter, $sceneId, $source, $review, $content, $findingHash, $attempt, $expectedStateVersion) {
+        return DB::transaction(function () use ($run, $chapter, $sceneId, $source, $review, $payload, $findingHash, $attempt, $expectedStateVersion) {
             $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
             if ($chapter->novel->canonicalStateVersion?->version !== $expectedStateVersion) {
                 throw new AiProviderException('state_version_conflict', 'Rewrite 期间 Canonical Story State 已变化。', false);
@@ -287,19 +359,30 @@ class ChapterRewriter
                 ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
                 ->max('version') + 1;
             $artifact = $run->artifacts()->create([
-                'type' => ArtifactType::RewriteDraft, 'version' => $version, 'content' => $content,
+                'type' => ArtifactType::RewriteDraft, 'version' => $version, 'content' => $payload['content'],
                 'data' => [
                     'scope' => $sceneId === null ? 'chapter' : 'scene',
                     'source_artifact_id' => $source->getKey(),
                     'source_review_id' => $review->getKey(),
                     'finding_hash' => $findingHash,
                     'attempt' => $attempt,
-                    'word_count' => $this->lengthPolicy->count($content),
+                    'repair_findings' => data_get($run->context_snapshot, 'findings', []),
+                    'plan_acceptance' => data_get($run->context_snapshot, 'plan_acceptance'),
+                    ...($sceneId === null ? [] : [
+                        'self_check' => $payload['self_check'],
+                        'plan_findings' => PlanCoverage::findings(
+                            $sceneId,
+                            $payload['self_check'],
+                            data_get($run->context_snapshot, 'plan_acceptance.coverage_expectations', []),
+                            'scene_rewrite_self_check',
+                        ),
+                    ]),
+                    'word_count' => $this->lengthPolicy->count($payload['content']),
                     'target_words' => (int) data_get($run->context_snapshot, 'length_requirement.target_words'),
                     'minimum_words' => (int) data_get($run->context_snapshot, 'length_requirement.minimum_words'),
                     'maximum_words' => (int) data_get($run->context_snapshot, 'length_requirement.maximum_words'),
                 ],
-                'checksum' => hash('sha256', $content),
+                'checksum' => hash('sha256', $payload['content']),
             ]);
             if ($sceneId !== null) {
                 Scene::query()->whereKey($sceneId)->update(['status' => SceneStatus::Draft, 'current_artifact_id' => $artifact->getKey()]);

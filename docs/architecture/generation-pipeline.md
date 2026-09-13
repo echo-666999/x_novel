@@ -51,6 +51,10 @@ GenerateNextChapterAction
 
 `PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 不得因为 `auto_commit` 设置自动派发 Commit；只有用户确认动作可以启动 Canonical Commit。
 
+`AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan、Scene、Assembly、Event Extraction、Review 和 Rewrite Job 成功后都调用该动作，不再各自维护后续分支。
+
+推进器使用 `GenerationJobDispatcher` 的短期待执行标记消除重复入队窗口，但断点判断只依赖 PostgreSQL。Scene 按 sequence 严格串行；Chapter Draft 必须对应当前 Scene Artifact，Event Candidate 必须来源于当前 Chapter Draft，State Patch 必须来源于当前 Event Candidate 且匹配当前 State Version，Review 必须来源于当前 Chapter Draft。任一来源不匹配时，从最早失效阶段恢复，不复用失效的下游结果。PASS、NEEDS_ATTENTION、BLOCK、暂停、正式提交或废弃章节都不会继续派发生成 Job。
+
 ## 3. Queue
 
 MVP 只使用两个 Queue。
@@ -258,10 +262,25 @@ MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_stat
 建议 Envelope：
 
 ```json
-{"content":"...","declared_events":[],"uncertainties":[],"self_check":{}}
+{
+  "content": "...",
+  "temporary_state_delta": "{}",
+  "declared_events": [],
+  "uncertainties": [],
+  "self_check": {
+    "goal": {"status": "fulfilled", "evidence": "正文原句"},
+    "conflict": {"status": "fulfilled", "evidence": "正文原句"},
+    "turn": {"status": "fulfilled", "evidence": "正文原句"},
+    "outcome": {"status": "fulfilled", "evidence": "正文原句"}
+  }
+}
 ```
 
 `declared_events` 仅辅助，不是正式 Story Event。
+
+`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用，并把缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果属于生成质量证据，不是 Canonical Fact，也不单独决定最终 Review Decision。
+
+Scene Plan 的 `outcome` 由 `outcome_allowed` 和 `outcome_forbidden` 补充行为边界。边界保存在 Chapter Plan 的 `scene_plans` JSON 中，不新增 Scene 表字段；Scene Writer 从当前冻结 Plan 读取它们。
 
 幂等键：
 
@@ -284,6 +303,10 @@ MVP 不做 Scene Parallel。
 输入 Ordered Scene Artifacts + Chapter Plan + Style Constraints；输出 `chapter_draft`。
 
 只负责衔接、过渡、语气统一、重复清理、局部语言修正，不得主动改变 Scene Outcome、增加重大事实/能力/世界规则/人物知识。
+
+Assembler 使用结构化响应：`content`、按 Scene 顺序返回的 `scene_coverage`，以及必须为空的 `introduced_major_facts`。每个 coverage 固定检查 goal/conflict/turn/outcome，并执行与 Scene self-check 相同的 evidence 引用校验；Scene ID 必须完整、顺序一致、不得重复或跨章引用。若 Scene Draft 已把某项报告为 missing/contradicted，Assembler 不得将该项直接提升为 fulfilled。缺失或反转项写入 Chapter Draft Artifact 的 `plan_findings`，供后续最小范围修复使用。
+
+上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。本阶段不自动修复 coverage，也不改变最终 Review Decision。
 
 幂等键：
 
@@ -350,19 +373,23 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
 
-`ReviewChapterJob` 保存 REWRITE 结果后，先检查 Daily、Novel 与 Chapter Hard Budget，再通过 `GenerationStageGate` 和 `GenerationJobDispatcher` 派发 `RewriteChapterJob`。预算到限时保留已完成的 Review，写入 `budget_limit` 自动停止原因，不派发下一阶段；小说在结果保存后被暂停时同样不得派发。每个 Review Job 带有稳定的 operation ID，使同一强制审校投递被重复执行时复用已完成 Run，而新的人工强制审校仍可创建新 Run。
+Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 使用确定性规则选择最小安全范围：单一有效 `scene_id` 进入 Scene Rewrite；Paragraph Finding 只在 evidence 能唯一命中一个当前 Scene Artifact 时映射到该 Scene；任一 Chapter Finding 或多个 Scene 受影响时进入 Chapter Rewrite。无效 Scene 引用、不支持的 scope 或不唯一的段落证据会追加 `REWRITE_SCOPE_UNRESOLVED` 并转为 `NEEDS_ATTENTION`，不猜测修复位置。Review Artifact 固定保存 `rewrite_scope`，队列派发与暂停恢复均优先使用该不可变路由。
+
+`ReviewChapterJob` 保存结果后调用 `AdvanceChapterPipelineAction`。推进器只在 Decision 为 REWRITE 且范围、预算和状态允许时派发 `RewriteChapterJob`；PASS、NEEDS_ATTENTION 与 BLOCK 均停止。预算到限时保留已完成的 Review，写入 `budget_limit` 自动停止原因，不派发下一阶段；小说在结果保存后被暂停时同样不得派发。每个 Review Job 带有稳定的 operation ID，使同一强制审校投递被重复执行时复用已完成 Run，而新的人工强制审校仍可创建新 Run。
 
 ## 13. RewriteChapterJob
 
-输入 Source Artifact、Review Findings、Plan、Current State、Locked Facts；输出 `rewrite_draft`。
+输入 Source Artifact、Review Findings 及 evidence、Plan 验收项、Current State、Locked Facts 和冻结 Style Contract；输出新的 `rewrite_draft`，不覆盖原 Artifact。
 
 重写跨章连续性问题时同时输入 `previous_chapter_ending`，使模型能依据真实上一章结尾补写过渡，而不是只依赖 Finding 的概述。
 
 Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
 
-优先 Scene Rewrite，再 Whole Chapter Rewrite。默认 `max_rewrite_attempts = 2`。
+优先 Scene Rewrite，再 Whole Chapter Rewrite。Paragraph 在当前 Artifact 粒度下不单独产生半个 Scene 的 Artifact；可唯一定位的 Paragraph Finding 改写所属的完整 Scene。默认 `max_rewrite_attempts = 2`。
 
-自动 Rewrite 次数只统计当前成功 Chapter Plan 之后生成且不含 `manual_edit = true` 的 `rewrite_draft`；Reviewer、Rewriter 与章节工作台共用同一统计口径。人工修改不会消耗自动次数，但 Artifact 展示版本仍按全部不可变重写稿连续递增。CGO-011 的自动派发使用整章 Rewrite；根据 Finding 自动选择最小修复范围由后续定向修复任务实现。
+Scene Rewrite 返回结构化 `content + self_check`，保留 goal/conflict/turn/outcome 验收证据，仅更新目标 Scene 的 `current_artifact_id`；其他 Scene 指针保持不变，然后重新 Assembly 并继续 Event/Patch/Review。Chapter Rewrite 产生整章替换稿，然后直接重新 Event/Patch/Review。
+
+自动 Rewrite 次数只统计当前成功 Chapter Plan 之后生成且不含 `manual_edit = true` 的 `rewrite_draft`；Reviewer、Rewriter 与章节工作台共用同一统计口径。人工修改不会消耗自动次数，但 Artifact 展示版本仍按全部不可变重写稿连续递增。自动派发读取 Review Artifact 中冻结的 `rewrite_scope`，按其选择 Scene 或 Chapter Rewrite。
 
 最后一次 Rewrite 后若重新审校仍应为 `REWRITE`，Laravel 必须在该次 Review 中直接将最终决策转为 `NEEDS_ATTENTION`，不得等待一次无法从 UI 发起的额外 Rewrite 才标记耗尽。
 
@@ -481,6 +508,8 @@ Auto Generate 不能预先 Queue 100 章。
 
 Auto Generate 只自动推进当前章到 Review PASS，不自动 Canonical Commit。用户手动提交 Chapter N 后，才执行 Post-Commit 并启动 Chapter N+1。
 
+Filament 的“生成下一章”会创建或恢复当前目标章，并立即调用 `AdvanceChapterPipelineAction`；“开始自动生成”完成相同的创建或恢复与推进，确认没有前置或断点错误后再开启 `auto_generate`。`auto_generate` 只表示用户手动提交后允许续接下一章，不改变 PASS 的停止规则。设置页不提供 `auto_commit`，历史数据库中尚未清理的同名键不参与运行时判断。
+
 ```text
 Chapter N Commit
 → Post-Commit
@@ -525,13 +554,15 @@ Plan 已完成 → Scene 1
 无 Plan → Plan
 ```
 
+恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。章节工作台同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
+
 不要根据 Redis Queue 中是否还有 Job 判断业务进度。
 
 ## 19. Crash Recovery
 
 Worker Crash 可能留下 `generation_runs.status=running`。维护任务识别超时 Run，并标记 failed，例如 `error_code=worker_lost`。
 
-恢复时根据成功 Artifact + input_hash 决定 reuse 或 retry。
+恢复时根据 Artifact + input_hash 决定 reuse 或 retry。若经过 Schema/业务校验的不可变 Artifact 已经持久化，但 Worker 在把 Run 标记为 succeeded 前崩溃，恢复流程复用该 Artifact 并从其后续合法阶段继续；没有 Artifact 的失败 Run 才重试当前阶段。Chapter Draft 恢复后仍必须依次完成 Event Candidate、State Patch 和 Review。
 
 错误分类：
 
@@ -592,16 +623,18 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v5
-scene-writer-v9
-assembler-v7
+chapter-planner-v6
+scene-writer-v10
+assembler-v8
 event-extractor-v4
-reviewer-v6
-rewrite-v6
+reviewer-v7
+rewrite-v7
 summary-v1
 ```
 
-模型按 Stage 从 config / Novel Settings 解析，不在 Job 中写死。MVP 只实现当前实际使用的 Provider。
+模型按 Stage 从 Novel Settings / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 全局非空 Stage Override → 全局 `AI_MODEL`。小说表单或 `.env` 中的 Stage Override 为空时必须继承全局模型，空字符串不是独立模型值。
+
+当前只注册 `AI_PROVIDER=openai`，Provider 通过可配置的 `AI_BASE_URL` 调用 OpenAI-compatible Chat Completions 与 Embeddings。`.env.example` 面向默认的 OpenAI 官方端点，生成模型使用已核实支持 Chat Completions 和 Structured Outputs 的 [`gpt-4.1-mini`](https://developers.openai.com/api/docs/models/gpt-4.1-mini)，Embedding 使用 [`text-embedding-3-small`](https://developers.openai.com/api/docs/models/text-embedding-3-small)。自定义兼容端点及其模型必须由部署者显式配置并自行核实；示例值不代表历史 Run，历史实际模型以 `generation_runs.model_policy` 和 `usage_records.model` 为准。发布前应重新检查相应端点和账户的模型可用性。
 
 ## 23. Observability
 
@@ -630,6 +663,22 @@ scene:{id}
 run:{id}
 stage:{stage}
 ```
+
+### 23.1 操作与恢复
+
+正常操作只有两个明确的人工作业点：在小说概览启动“生成下一章”，Laravel 自动推进 Plan、顺序 Scene、Assembly、Event Candidate、State Patch、Review 和必要的 Rewrite；到 Review PASS 后停止。操作人员确认当前草稿、事件和状态变化后，在章节工作台点击“提交正式章节”。PASS 本身不会提交，也不会写入正式 Story State、Story Event 或 Memory。
+
+常见停止原因按以下方式处理：
+
+| 停止状态或错误 | 已确认行为 | 操作入口 |
+|---|---|---|
+| `current_bible_incomplete` | 生成前置检查拒绝启动，不读取旧 `settings.editorial` 兜底 | 打开该小说的“小说圣经”，创建新的完整 Bible Version；明确填写 tone、POV、tense 和全部 Style Profile 后重新启动。当前没有独立的 Bible 迁移 Artisan 命令 |
+| Stage/Provider 失败 | 成功的 Run/Artifact 保留；不得靠重放全部流水线覆盖历史产物 | 在“Generation → 恢复中心”查看错误和可重试性；可重试失败使用“重试”，暂停小说使用“恢复”。章节工作台的分阶段按钮仅用于定位后的调试或恢复 |
+| Rewrite 耗尽 | 最后一次复审转为 `NEEDS_ATTENTION`，不再自动派发 Rewrite | 在章节工作台“审校”中“人工修改正文”并自动重走 Event/Patch/Review；无 Hard Conflict 且符合 Override 条件时可填写原因“人工通过（Override）” |
+| Review PASS | 流水线停止在等待提交，不受 `auto_commit` 影响 | 在章节工作台点击“提交正式章节”；小说仍暂停时先在小说概览执行“继续” |
+| NEEDS_ATTENTION / BLOCK | 自动推进停止；Hard Finding 不允许普通 Override | 按 Findings 修订正文或修复状态前置条件，再重新审校；历史 Review 和 Artifact 保留 |
+
+`php artisan generation:mark-stalled` 只把超时的 queued/running Run 标记为失败，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
 
 ## 24. 测试
 

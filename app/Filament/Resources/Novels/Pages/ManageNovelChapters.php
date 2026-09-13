@@ -400,6 +400,14 @@ class ManageNovelChapters extends ManageRelatedRecords
                             Textarea::make('conflict')->label('冲突')->rows(2)->required(),
                             Textarea::make('turn')->label('转折')->rows(2)->required(),
                             Textarea::make('outcome')->label('结果')->rows(2)->required(),
+                            TagsInput::make('outcome_allowed')
+                                ->label('结果允许行为')
+                                ->helperText('列出符合该结果的具体行为；没有时留空。')
+                                ->default([]),
+                            TagsInput::make('outcome_forbidden')
+                                ->label('结果禁止行为')
+                                ->helperText('列出会反转或越过该结果的具体行为；没有时留空。')
+                                ->default([]),
                         ])
                         ->columns(['default' => 1, 'lg' => 2])
                         ->minItems(1)

@@ -24,6 +24,10 @@ use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    Queue::fake();
+});
+
 /** @return array<string, mixed> */
 function memoryUpdaterFixture(): array
 {
@@ -64,7 +68,6 @@ function memoryUpdaterFixture(): array
 }
 
 test('memory updater creates traceable memories only from active canonical events', function () {
-    Queue::fake();
     $fixture = memoryUpdaterFixture();
     StoryEvent::factory()->create([
         'novel_id' => $fixture['novel']->getKey(),

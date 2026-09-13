@@ -46,6 +46,23 @@ test('post commit check creates and queues only the immediate next chapter when 
     Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $first->getKey());
 });
 
+test('post commit check resumes an existing next chapter through the unified pipeline', function () {
+    Queue::fake();
+    [$novel, $canonical] = autoGenerationFixture(true);
+    $next = Chapter::factory()->for($novel)->create([
+        'volume_id' => $canonical->volume_id,
+        'sequence' => 5,
+        'status' => ChapterStatus::Planned,
+    ]);
+
+    $resolved = app(CheckNextAction::class)->handle($novel, $canonical->getKey());
+
+    expect($resolved?->is($next))->toBeTrue()
+        ->and($novel->chapters()->where('sequence', 5)->count())->toBe(1);
+    Queue::assertPushed(PlanChapterJob::class, 1);
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $next->getKey());
+});
+
 test('post commit check does nothing when auto generation is off or callback chapter is stale', function () {
     Queue::fake();
     [$offNovel, $offChapter] = autoGenerationFixture(false);

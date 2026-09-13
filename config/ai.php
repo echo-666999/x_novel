@@ -2,7 +2,7 @@
 
 return [
     'provider' => env('AI_PROVIDER', 'openai'),
-    'model' => env('AI_MODEL', 'gpt-4.1-mini'),
+    'model' => env('AI_MODEL', 'gpt-5.6-luna'),
 
     'models' => [
         'planner' => env('AI_MODEL_PLANNER', env('AI_MODEL', 'gpt-5.6-luna')),

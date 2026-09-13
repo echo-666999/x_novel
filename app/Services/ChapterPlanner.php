@@ -72,6 +72,7 @@ class ChapterPlanner
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'due_foreshadowings 只能使用 due_foreshadowings[].id，due_foreshadowings 为空时必须返回 []。'
+                    .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
                     .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。上下文：'
                     .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
@@ -251,7 +252,7 @@ class ChapterPlanner
 
     private function systemPrompt(Novel $novel): string
     {
-        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。l4 是本次 Pipeline 唯一的 Style Contract：章节 tone 只能在其基调范围内形成局部变体，主文风决定主体表达，辅助文风不得覆盖主文风，POV 与时态不得改变。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。';
+        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。l4 是本次 Pipeline 唯一的 Style Contract：章节 tone 只能在其基调范围内形成局部变体，主文风决定主体表达，辅助文风不得覆盖主文风，POV 与时态不得改变。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。Scene outcome 必须是明确验收结果，并用 outcome_allowed 与 outcome_forbidden 消除行为边界歧义。';
 
         if ($novel->status->value === 'completing') {
             $prompt .= ' 当前处于收束阶段：不得新增核心人物、主线、硬世界规则或高重要度伏笔；计划必须推进结局契约或降低收束债务。';

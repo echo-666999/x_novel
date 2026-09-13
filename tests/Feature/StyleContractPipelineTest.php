@@ -103,8 +103,21 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
             'evidence' => '组装后的章节正文',
         ]],
     ];
+    $assembledContent = '组装后的章节正文';
+    $fulfilled = ['status' => 'fulfilled', 'evidence' => $assembledContent];
+    $assemblyPayload = [
+        'content' => $assembledContent,
+        'scene_coverage' => $chapter->scenes()->orderBy('sequence')->get()->map(fn (Scene $scene): array => [
+            'scene_id' => $scene->getKey(),
+            'goal' => $fulfilled,
+            'conflict' => $fulfilled,
+            'turn' => $fulfilled,
+            'outcome' => $fulfilled,
+        ])->all(),
+        'introduced_major_facts' => [],
+    ];
     $fake = (new FakeAiProvider)
-        ->enqueue(new AiResponse('组装后的章节正文', null, 10, 10, 0, 10, 'assembly', 'test'))
+        ->enqueue(new AiResponse(json_encode($assemblyPayload), $assemblyPayload, 10, 10, 0, 10, 'assembly', 'test'))
         ->enqueue(new AiResponse(json_encode($reviewPayload), $reviewPayload, 10, 10, 0, 10, 'review', 'test'))
         ->enqueue(new AiResponse('修订后的章节正文', null, 10, 10, 0, 10, 'rewrite', 'test'));
     app()->instance(AiProvider::class, $fake);

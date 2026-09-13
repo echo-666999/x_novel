@@ -2,11 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
-use App\Services\GenerationStageGate;
-use App\Services\StatePatchBuilder;
 use App\Services\StoryEventExtractor;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -38,15 +37,14 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
         return 'chapter:'.$this->chapterId;
     }
 
-    public function handle(StoryEventExtractor $extractor): void
+    public function handle(StoryEventExtractor $extractor, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        $advance ??= app(AdvanceChapterPipelineAction::class);
+
         try {
             $artifact = $extractor->extract($this->chapterId, $this->regenerate);
-            if ($artifact !== null && $this->continueRewrite) {
-                app(GenerationStageGate::class)->dispatchForChapter($this->chapterId, function (): void {
-                    app(StatePatchBuilder::class)->build($this->chapterId);
-                    $this->dispatchGenerationJob(new ReviewChapterJob($this->chapterId, true));
-                });
+            if ($artifact !== null) {
+                $advance->handle($this->chapterId);
             }
 
             $this->releaseGenerationDispatch();

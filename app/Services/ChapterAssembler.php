@@ -73,10 +73,11 @@ class ChapterAssembler
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文。l4 是唯一的 Style Contract；保持各 Scene 已有的 POV、时态和叙述声音，不得重新选择文风来源或让辅助文风覆盖主文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折和结果；对重复动作、重复解释和重复感受应主动合并。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，只返回完整章节正文。',
-                prompt: '请组装以下场景并只返回完整的简体中文章节正文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文。l4 是唯一的 Style Contract；保持各 Scene 已有的 POV、时态和叙述声音，不得重新选择文风来源或让辅助文风覆盖主文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折、结果及 outcome_allowed / outcome_forbidden 行为边界；对重复动作、重复解释和重复感受应主动合并。scene_coverage 必须按 Scene 顺序逐项返回 goal、conflict、turn、outcome 的 fulfilled、missing 或 contradicted 状态；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。Assembler 不能创作 Scene Draft 中不存在的重大剧情结果来补齐 coverage，introduced_major_facts 必须返回 []。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，返回符合 Schema 的 JSON。',
+                prompt: '请组装以下场景并返回结构化章节结果：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.3,
                 maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
+                responseSchema: ChapterAssemblyPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [
                     'generation_run_id' => $run->getKey(),
@@ -85,14 +86,15 @@ class ChapterAssembler
                     'stage' => AiStage::Assembler->value,
                 ],
             ));
-            $content = trim($response->content);
-
-            if ($content === '') {
-                throw new AiProviderException('assembly_empty_draft', 'Chapter Assembly 返回了空正文。', false);
+            if ($response->structuredData === null) {
+                throw new AiProviderException('assembly_schema_invalid', 'AI 未返回合法的结构化 Chapter Assembly。', false);
             }
 
-            $content = $this->repairLengthIfNeeded(
-                content: $content,
+            $payload = ChapterAssemblyPayload::validate($response->structuredData, $chapter, $artifacts);
+            $payload = $this->repairLengthIfNeeded(
+                payload: $payload,
+                chapter: $chapter,
+                artifacts: $artifacts,
                 context: $context,
                 model: $settings->model,
                 promptVersion: $promptVersion,
@@ -103,12 +105,12 @@ class ChapterAssembler
                     'stage' => AiStage::Assembler->value,
                 ],
             );
-            $this->validateLength($content, $context['writing_constraints']);
+            $this->validateLength($payload['content'], $context['writing_constraints']);
 
             return $this->complete(
                 $run,
                 $chapter,
-                $content,
+                $payload,
                 $context['state_version'],
                 $context['ordered_scene_checksums'],
             );
@@ -240,9 +242,9 @@ class ChapterAssembler
     }
 
     /** @param array<int, string> $expectedChecksums */
-    private function complete(GenerationRun $run, Chapter $chapter, string $content, int $expectedStateVersion, array $expectedChecksums): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, array $payload, int $expectedStateVersion, array $expectedChecksums): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $chapter, $content, $expectedStateVersion, $expectedChecksums): GenerationArtifact {
+        return DB::transaction(function () use ($run, $chapter, $payload, $expectedStateVersion, $expectedChecksums): GenerationArtifact {
             $chapter = Chapter::query()->lockForUpdate()->with(['novel', 'scenes.currentArtifact'])->findOrFail($chapter->getKey());
             $currentStateVersion = $chapter->novel->canonicalStateVersion()->value('version');
             $currentChecksums = $chapter->scenes->pluck('currentArtifact.checksum')->all();
@@ -262,15 +264,16 @@ class ChapterAssembler
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::ChapterDraft,
                 'version' => ((int) $version) + 1,
-                'content' => $content,
+                'content' => $payload['content'],
                 'data' => [
+                    ...collect($payload)->except('content')->all(),
                     'ordered_scene_checksums' => $expectedChecksums,
-                    'word_count' => $this->lengthPolicy->count($content),
+                    'word_count' => $this->lengthPolicy->count($payload['content']),
                     'target_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'),
                     'minimum_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'),
                     'maximum_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_maximum_words'),
                 ],
-                'checksum' => hash('sha256', $content),
+                'checksum' => hash('sha256', $payload['content']),
             ]);
             $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
 
@@ -281,12 +284,12 @@ class ChapterAssembler
     /** @param array<string, mixed> $context
      * @param  array<string, mixed>  $metadata
      */
-    private function repairLengthIfNeeded(string $content, array $context, string $model, string $promptVersion, array $metadata): string
+    private function repairLengthIfNeeded(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $model, string $promptVersion, array $metadata): array
     {
         $constraints = $context['writing_constraints'];
 
         for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
-            $actual = $this->lengthPolicy->count($content);
+            $actual = $this->lengthPolicy->count($payload['content']);
             $minimum = (int) $constraints['chapter_minimum_words'];
             $maximum = (int) $constraints['chapter_maximum_words'];
             $tooShort = $actual < $minimum;
@@ -299,8 +302,8 @@ class ChapterAssembler
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 systemPrompt: $tooLong
-                    ? '你是 XNovel 章节压缩器。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。只返回完整简体中文正文。'
-                    : '你是 XNovel 章节扩写器。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。将过短草稿扩写为完整章节，保留计划和既定事实，通过既定场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。只返回完整简体中文正文。',
+                    ? '你是 XNovel 章节压缩器。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、行为边界、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节。重新按 Schema 输出覆盖最终 content 的 scene_coverage；evidence 必须逐字引用最终正文，introduced_major_facts 必须返回 []。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。'
+                    : '你是 XNovel 章节扩写器。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。将过短草稿扩写为完整章节，保留计划、行为边界和既定事实，通过既定场景内的动作、对话、环境、感官、心理和自然过渡补足。重新按 Schema 输出覆盖最终 content 的 scene_coverage；evidence 必须逐字引用最终正文，introduced_major_facts 必须返回 []。最终正文至少达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。',
                 prompt: ($tooLong ? '请压缩以下超限章节：' : '请扩写以下过短章节：').json_encode([
                     'chapter_plan' => $context['chapter_plan'],
                     'writing_constraints' => $constraints,
@@ -308,21 +311,22 @@ class ChapterAssembler
                     'current_words' => $actual,
                     'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
                     'repair_attempt' => $attempt,
-                    'content' => $content,
+                    'draft' => $payload,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
+                responseSchema: ChapterAssemblyPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
-            $content = trim($response->content);
-
-            if ($content === '') {
-                throw new AiProviderException('assembly_empty_draft', 'Chapter Assembly 字数修复返回了空正文。', false);
+            if ($response->structuredData === null) {
+                throw new AiProviderException('assembly_schema_invalid', 'AI 章节字数修复未返回合法的结构化 Chapter Assembly。', false);
             }
+
+            $payload = ChapterAssemblyPayload::validate($response->structuredData, $chapter, $artifacts);
         }
 
-        return $content;
+        return $payload;
     }
 
     /** @param array<string, mixed> $constraints */

@@ -22,9 +22,9 @@ test('novel settings shows global and overridden resolved models', function () {
     Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
         ->assertOk()
         ->assertSee('AI Model Overrides')
-        ->assertSee('Planner Resolved Model')
+        ->assertSee('章节规划 Resolved Model')
         ->assertSee('global-planner · Global Default')
-        ->assertSee('Writer Resolved Model')
+        ->assertSee('场景写作 Resolved Model')
         ->assertSee('novel-writer · Novel Override')
         ->assertFormSet([
             'ai_model_overrides.writer' => 'novel-writer',
@@ -64,15 +64,14 @@ test('saving novel model overrides preserves unrelated settings and removes blan
     ]);
 });
 
-test('the owner can enable automatic canonical commit after a pass review', function () {
-    $novel = Novel::factory()->create();
+test('novel settings no longer exposes automatic canonical commit', function () {
+    $novel = Novel::factory()->create(['settings' => ['auto_commit' => true]]);
 
     Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertSee('Review 通过后自动提交')
-        ->assertFormSet(['auto_commit' => false])
-        ->fillForm(['auto_commit' => true])
+        ->assertDontSee('Review 通过后自动提交')
         ->call('save')
         ->assertHasNoFormErrors();
 
+    // 历史键只作为未清理的旧数据保留；运行时与 UI 均不再读取它。
     expect(data_get($novel->refresh()->settings, 'auto_commit'))->toBeTrue();
 });

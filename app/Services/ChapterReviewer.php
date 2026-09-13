@@ -40,7 +40,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -63,6 +63,10 @@ class ChapterReviewer
         }
         $lengthCheck = $this->lengthCheck($draft->content, (int) $chapter->latestPlan?->target_words);
         $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
+        $planFindings = collect(data_get($draft->data, 'plan_findings', []))
+            ->filter(fn (mixed $finding): bool => is_array($finding))
+            ->values()
+            ->all();
         $context = [
             'chapter_id' => $chapter->getKey(),
             'bible_version' => $styleContract['bible_version'],
@@ -75,6 +79,7 @@ class ChapterReviewer
             'length_check' => $lengthCheck,
             'state_version' => $chapter->novel->canonicalStateVersion?->version,
             'state_findings' => array_map(fn ($finding) => $finding->toArray(), $stateValidation->findings),
+            'plan_findings' => $planFindings,
         ];
         if ($context['chapter_plan'] === null || $context['state_version'] === null) {
             throw new AiProviderException('review_context_incomplete', 'Narrative Review 缺少 Chapter Plan 或 Story State。', false);
@@ -99,7 +104,7 @@ class ChapterReviewer
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 叙事审校器。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头；时间、地点或行动发生跳跃却没有在正文中交代时，必须给出 continuity finding。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和可执行参数；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 finding 的 message 与 evidence 必须使用简体中文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。',
+                systemPrompt: '你是 XNovel 叙事审校器。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头；时间、地点或行动发生跳跃却没有在正文中交代时，必须给出 continuity finding。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null；scope=paragraph 的 evidence 必须逐字引用草稿短句，能确定所属 Scene 时应同时填写 scene_id。仅当问题可在一个 Scene 内独立修复时使用 scope=scene；涉及两个以上 Scene、上一章结尾与本章开头的连续性、章节整体节奏或全章结构时必须使用 scope=chapter 且 scene_id=null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和可执行参数；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 finding 的 message 与 evidence 必须使用简体中文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；plan_findings 是上游结构化覆盖证据，不要重复生成相同 Finding；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。',
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: (int) config('generation.review_max_output_tokens', 4000), responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
@@ -112,10 +117,11 @@ class ChapterReviewer
                 $chapter,
                 $lengthCheck['status'] !== 'within_range'
                     || $stateValidation->isBlocked()
-                    || collect($stateValidation->findings)->contains(fn ($finding): bool => $finding->severity->value === 'ambiguous'),
+                    || collect($stateValidation->findings)->contains(fn ($finding): bool => $finding->severity->value === 'ambiguous')
+                    || $planFindings !== [],
             );
 
-            $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $lengthCheck, $stateValidation->isBlocked(), $context['state_version']);
+            $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $planFindings, $lengthCheck, $stateValidation->isBlocked(), $context['state_version']);
             $this->autoStop->stopForReview($chapter, $review->decision, $stateValidation->isBlocked());
 
             return $review;
@@ -237,9 +243,9 @@ class ChapterReviewer
         });
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $payload, array $stateFindings, array $lengthCheck, bool $blocked, int $expectedVersion): Review
+    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $payload, array $stateFindings, array $planFindings, array $lengthCheck, bool $blocked, int $expectedVersion): Review
     {
-        return DB::transaction(function () use ($run, $chapter, $draft, $payload, $stateFindings, $lengthCheck, $blocked, $expectedVersion) {
+        return DB::transaction(function () use ($run, $chapter, $draft, $payload, $stateFindings, $planFindings, $lengthCheck, $blocked, $expectedVersion) {
             $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
             if ($chapter->novel->canonicalStateVersion?->version !== $expectedVersion) {
                 throw new AiProviderException('state_version_conflict', 'Review 期间 Canonical Story State 已变化。', false);
@@ -251,6 +257,7 @@ class ChapterReviewer
             $findings = [
                 ...array_map(fn (array $finding): array => $this->normalizeStateFinding($finding), $stateFindings),
                 ...($lengthFinding === null ? [] : [$lengthFinding]),
+                ...$planFindings,
                 ...array_map(fn (array $finding): array => [...$finding, 'source' => 'narrative_review'], $payload['findings']),
             ];
             [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
@@ -272,7 +279,18 @@ class ChapterReviewer
                 ];
                 [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
             }
-            $data = ['decision' => $decision->value, 'decision_basis' => $decisionBasis, 'recommended_decision' => $recommended->value, 'score' => $total, 'scores' => $scores, 'findings' => $findings, 'source_artifact_id' => $draft->getKey()];
+            $rewriteScope = null;
+            if ($decision === ReviewDecision::Rewrite) {
+                $scopeDecision = $this->rewriteScopeResolver->resolve($chapter, $findings);
+
+                if (! $scopeDecision->isResolved()) {
+                    $findings[] = $this->unresolvedRewriteScopeFinding($scopeDecision->reason);
+                    [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
+                } else {
+                    $rewriteScope = $scopeDecision->toArray();
+                }
+            }
+            $data = ['decision' => $decision->value, 'decision_basis' => $decisionBasis, 'recommended_decision' => $recommended->value, 'score' => $total, 'scores' => $scores, 'findings' => $findings, 'rewrite_scope' => $rewriteScope, 'source_artifact_id' => $draft->getKey()];
             $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->max('version');
             $artifact = $run->artifacts()->create(['type' => ArtifactType::ReviewResult, 'version' => (int) $version + 1, 'content' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'data' => $data, 'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))]);
             $review = $run->review()->create(['artifact_id' => $artifact->getKey(), 'decision' => $decision, 'score' => $total, ...collect($scores)->mapWithKeys(fn ($v, $k) => ["{$k}_score" => $v])->all(), 'findings' => $findings]);
@@ -350,6 +368,34 @@ class ChapterReviewer
             'auto_fixable' => false,
             'requires_human_decision' => $severity === 'ambiguous',
             'source' => 'state_validation',
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function unresolvedRewriteScopeFinding(string $reason): array
+    {
+        $reasonLabel = match ($reason) {
+            'paragraph_evidence_not_unique' => '段落证据无法唯一定位到一个当前 Scene。',
+            'invalid_scene_reference' => 'Finding 未引用当前章节中的有效 Scene。',
+            'chapter_finding_has_scene_reference' => 'Chapter 级 Finding 同时携带了 Scene 引用。',
+            'finding_requires_human_decision' => 'Finding 同时要求人工决策，不能自动修复。',
+            'unsupported_finding_scope' => 'Finding 使用了当前不支持的修复范围。',
+            'invalid_persisted_rewrite_scope' => '已保存的 Rewrite 范围无效。',
+            'no_auto_fixable_findings' => 'Review 没有可自动修复的 Finding。',
+            default => '无法从当前 Finding 确定安全的最小修复范围。',
+        };
+
+        return [
+            'code' => 'REWRITE_SCOPE_UNRESOLVED',
+            'dimension' => 'workflow',
+            'severity' => 'ambiguous',
+            'scene_id' => null,
+            'scope' => 'chapter',
+            'auto_fixable' => false,
+            'requires_human_decision' => true,
+            'message' => '无法自动选择安全的 Rewrite 范围，需要人工处理。',
+            'evidence' => $reasonLabel,
+            'source' => 'rewrite_scope_resolver',
         ];
     }
 

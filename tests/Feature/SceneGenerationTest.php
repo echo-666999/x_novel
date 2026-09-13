@@ -11,6 +11,7 @@ use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Jobs\GenerateSceneJob;
@@ -26,6 +27,7 @@ use App\Services\SceneDraftPayload;
 use App\Services\SceneGenerator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
@@ -42,6 +44,7 @@ function sceneGenerationFixture(int $sceneCount = 2): array
         'must_not_reveal' => ['终局真相'],
         'scene_plans' => [],
         'target_words' => $sceneCount * 8,
+        'status' => PlanStatus::Ready,
     ]);
     $scenes = collect(range(1, $sceneCount))->map(fn (int $sequence): Scene => Scene::factory()
         ->for($chapter)
@@ -54,14 +57,27 @@ function sceneGenerationFixture(int $sceneCount = 2): array
     return compact('novel', 'chapter', 'plan', 'scenes');
 }
 
-function sceneResponse(string $content, array $delta = []): AiResponse
+function sceneSelfCheck(string $content, array $overrides = []): array
+{
+    $fulfilled = ['status' => 'fulfilled', 'evidence' => $content];
+
+    return [
+        'goal' => $fulfilled,
+        'conflict' => $fulfilled,
+        'turn' => $fulfilled,
+        'outcome' => $fulfilled,
+        ...$overrides,
+    ];
+}
+
+function sceneResponse(string $content, array $delta = [], ?array $selfCheck = null): AiResponse
 {
     $payload = [
         'content' => $content,
         'temporary_state_delta' => $delta,
         'declared_events' => [],
         'uncertainties' => [],
-        'self_check' => ['passed' => true],
+        'self_check' => $selfCheck ?? sceneSelfCheck($content),
     ];
 
     return new AiResponse(
@@ -89,25 +105,82 @@ test('draft length excludes spaces tabs and line breaks', function () {
     expect(app(DraftLengthPolicy::class)->count("甲 \n\t 乙\r\n丙"))->toBe(3);
 });
 
-test('scene draft schema keeps dynamic objects compatible with strict structured output', function () {
+test('scene draft schema fixes plan coverage while keeping dynamic state objects encoded', function () {
     $schema = SceneDraftPayload::schema();
 
     expect($schema['additionalProperties'])->toBeFalse()
         ->and(data_get($schema, 'properties.temporary_state_delta.type'))->toBe('string')
         ->and(data_get($schema, 'properties.declared_events.items.type'))->toBe('string')
-        ->and(data_get($schema, 'properties.self_check.type'))->toBe('string');
+        ->and(data_get($schema, 'properties.self_check.type'))->toBe('object')
+        ->and(data_get($schema, 'properties.self_check.required'))->toBe(['goal', 'conflict', 'turn', 'outcome'])
+        ->and(data_get($schema, 'properties.self_check.properties.outcome.properties.status.enum'))->toBe(['fulfilled', 'missing', 'contradicted']);
 
     $payload = SceneDraftPayload::validate([
         'content' => '林舟进入灯塔。',
         'temporary_state_delta' => '{"characters":{"lin_zhou":{"location":"灯塔"}}}',
         'declared_events' => ['{"type":"character_moved","subject":"lin_zhou"}'],
         'uncertainties' => [],
-        'self_check' => '{"passed":true}',
+        'self_check' => sceneSelfCheck('林舟进入灯塔。'),
     ]);
 
     expect(data_get($payload, 'temporary_state_delta.characters.lin_zhou.location'))->toBe('灯塔')
         ->and(data_get($payload, 'declared_events.0.type'))->toBe('character_moved')
-        ->and(data_get($payload, 'self_check.passed'))->toBeTrue();
+        ->and(data_get($payload, 'self_check.outcome.status'))->toBe('fulfilled');
+});
+
+test('missing or contradicted scene coverage creates stable localized findings', function (string $status, string $code, ?string $evidence) {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟在门前停下，没有进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $selfCheck = sceneSelfCheck($content, [
+        'outcome' => ['status' => $status, 'evidence' => $evidence],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneResponse($content, selfCheck: $selfCheck)));
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+    $finding = data_get($artifact->data, 'plan_findings.0');
+
+    expect($finding['code'])->toBe($code)
+        ->and($finding['scene_id'])->toBe($fixture['scenes']->first()->getKey())
+        ->and($finding['plan_element'])->toBe('outcome')
+        ->and($finding['coverage_status'])->toBe($status)
+        ->and($finding['expected'])->toBe([
+            'description' => $fixture['scenes']->first()->outcome,
+            'allowed' => [],
+            'forbidden' => [],
+        ])
+        ->and($finding['source'])->toBe('scene_self_check');
+})->with([
+    'missing outcome' => ['missing', 'SCENE_PLAN_COVERAGE_MISSING', null],
+    'contradicted outcome' => ['contradicted', 'SCENE_PLAN_COVERAGE_CONTRADICTED', '没有进入灯塔'],
+]);
+
+test('scene coverage evidence must quote the generated scene exactly', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $selfCheck = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneResponse($content, selfCheck: $selfCheck)));
+
+    expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey()))
+        ->toThrow(ValidationException::class, '必须逐字来自当前正文');
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::SceneDraft)->count())->toBe(0);
+});
+
+test('scene self check rejects an incomplete fixed schema', function () {
+    $payload = [
+        'content' => '林舟进入灯塔。',
+        'temporary_state_delta' => '{}',
+        'declared_events' => [],
+        'uncertainties' => [],
+        'self_check' => collect(sceneSelfCheck('林舟进入灯塔。'))->except('outcome')->all(),
+    ];
+
+    expect(fn () => SceneDraftPayload::validate($payload))
+        ->toThrow(ValidationException::class, '必须完整包含 goal、conflict、turn、outcome');
 });
 
 test('scene generator persists an immutable draft artifact and temporary state delta', function () {
@@ -116,6 +189,8 @@ test('scene generator persists an immutable draft artifact and temporary state d
         'target_words' => 11,
         'scene_plans' => [[
             'transition_from_previous' => '先写抵达学院和入住过程，再进入次日清晨。',
+            'outcome_allowed' => ['进入灯塔大厅并保持警戒'],
+            'outcome_forbidden' => ['直接取得灯塔控制权'],
         ]],
     ]);
     $fixture['novel']->update(['settings' => ['editorial' => ['primary_style' => 'light_humorous', 'secondary_styles' => [], 'style_parameters' => []]]]);
@@ -151,6 +226,8 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and(data_get($run->context_snapshot, 'l4.checksum'))->toBe(data_get($run->context_snapshot, 'style_contract_checksum'));
     expect(data_get($run->context_snapshot, 'writing_constraints.scene_target_words'))->toBe($fixture['plan']->target_words)
         ->and(data_get($run->context_snapshot, 'scene_task.transition_from_previous'))->toBe('先写抵达学院和入住过程，再进入次日清晨。')
+        ->and(data_get($run->context_snapshot, 'scene_task.outcome_allowed'))->toBe(['进入灯塔大厅并保持警戒'])
+        ->and(data_get($run->context_snapshot, 'scene_task.outcome_forbidden'))->toBe(['直接取得灯塔控制权'])
         ->and(data_get($run->context_snapshot, 'writing_constraints'))->not->toHaveKey('style_profile')
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and(data_get($run->context_snapshot, 'l4.primary_style.instruction'))->toContain('语言直接易读')
@@ -443,6 +520,7 @@ test('a stale running scene is marked interrupted and resumed with a new run', f
 });
 
 test('retryable provider failures are recorded and rethrown for queue retry', function () {
+    Queue::fake();
     $fixture = sceneGenerationFixture(1);
     $fixture['plan']->update(['target_words' => 12]);
     $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', 'timeout', true));

@@ -2,11 +2,11 @@
 
 namespace App\Jobs;
 
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterRewriter;
-use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -35,8 +35,10 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
         return 'chapter:'.$this->chapterId;
     }
 
-    public function handle(ChapterRewriter $rewriter): void
+    public function handle(ChapterRewriter $rewriter, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        $advance ??= app(AdvanceChapterPipelineAction::class);
+
         try {
             $artifact = $rewriter->rewrite($this->chapterId, $this->sceneId);
             if ($artifact === null) {
@@ -44,13 +46,7 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
 
                 return;
             }
-            app(GenerationStageGate::class)->dispatchForChapter($this->chapterId, function (): void {
-                if ($this->sceneId === null) {
-                    $this->dispatchGenerationJob(new ExtractStoryEventsJob($this->chapterId, true, true));
-                } else {
-                    $this->dispatchGenerationJob(new AssembleChapterJob($this->chapterId, true, true));
-                }
-            });
+            $advance->handle($this->chapterId);
             $this->releaseGenerationDispatch();
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {

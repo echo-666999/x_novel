@@ -7,7 +7,7 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
-use App\Jobs\ReviewChapterJob;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -67,14 +67,14 @@ test('worker crash after artifact persistence resumes the next database stage on
     $recovery = app(StalledRunRecoveryService::class);
     $point = $recovery->recover($run);
 
-    expect($point->key)->toBe('review')
+    expect($point->key)->toBe('event_extraction')
         ->and($novel->fresh()->status)->toBe(NovelStatus::Generating)
         ->and($run->fresh()->status)->toBe(RunStatus::Failed)
         ->and($run->fresh()->error_code)->toBe(StalledRunRecoveryService::ERROR_CODE)
         ->and(data_get($run->fresh()->context_snapshot, 'recovery.resumed_at'))->not->toBeNull()
         ->and(fn () => $recovery->recover($run))->toThrow(ValidationException::class, '已经恢复或正在恢复');
 
-    Queue::assertPushed(ReviewChapterJob::class, 1);
+    Queue::assertPushed(ExtractStoryEventsJob::class, 1);
 });
 
 test('the maintenance command marks a simulated worker crash', function () {

@@ -10,6 +10,7 @@ use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
@@ -563,9 +564,7 @@ class ViewNovelChapter extends ViewRecord
         $used = $this->automaticRewriteArtifacts()->count();
         $maximum = (int) config('generation.max_rewrite_attempts', 2);
         $budget = "已使用 {$used} / {$maximum} 次";
-        $afterPass = (bool) data_get($this->getRecord()->settings, 'auto_commit', false)
-            ? '自动提交正式章节'
-            : '页面顶部提交正式章节';
+        $afterPass = '等待提交正式章节';
         $flow = '重写场景 → 重新组装章节 → 重新提取事件 → 重建状态补丁 → 重新审校；重写章节从“重新提取事件”继续。';
 
         if ($review === null) {
@@ -704,6 +703,17 @@ class ViewNovelChapter extends ViewRecord
             ->with('artifact')->latest('id')->first();
     }
 
+    private function currentDraftReview(): ?Review
+    {
+        $draft = $this->currentDraftArtifact();
+        $review = $this->latestReview();
+
+        return $draft !== null
+            && (int) data_get($review?->artifact?->data, 'source_artifact_id') === $draft->getKey()
+                ? $review
+                : null;
+    }
+
     private function currentReviewDraft(): ?GenerationArtifact
     {
         $artifactId = (int) data_get($this->latestReview()?->artifact?->data, 'source_artifact_id');
@@ -755,7 +765,7 @@ class ViewNovelChapter extends ViewRecord
 
     private function canonicalCommitContext(): ?CanonicalCommitData
     {
-        $review = $this->latestReview();
+        $review = $this->currentDraftReview();
         $draftId = (int) data_get($review?->artifact?->data, 'source_artifact_id', 0);
         $draft = $draftId > 0 ? GenerationArtifact::query()->find($draftId) : null;
         $candidate = $draft === null ? null : GenerationArtifact::query()
@@ -915,7 +925,118 @@ class ViewNovelChapter extends ViewRecord
                             : 'v'.$this->chapter()->latestStateVersion->version)
                         ->placeholder('—'),
                 ]),
+            $this->pipelineGuidanceSection(),
             $this->pipelineTimelineSection(),
+        ];
+    }
+
+    private function pipelineGuidanceSection(): Section
+    {
+        $guidance = $this->pipelineGuidance();
+
+        return Section::make('当前流水线状态')
+            ->description('正常生成由 Laravel 自动推进到 Review PASS；分阶段按钮保留用于调试、重跑和故障恢复。')
+            ->icon('heroicon-o-map')
+            ->columns(['default' => 1, 'md' => 3])
+            ->schema([
+                TextEntry::make('pipeline_current_stage')
+                    ->label('当前 Stage')
+                    ->state($guidance['stage'])
+                    ->badge()
+                    ->color($guidance['color']),
+                TextEntry::make('pipeline_stop_reason')
+                    ->label('停止原因')
+                    ->state($guidance['reason']),
+                TextEntry::make('pipeline_next_action')
+                    ->label('下一可执行操作')
+                    ->state($guidance['next_action'])
+                    ->weight('medium'),
+            ]);
+    }
+
+    /** @return array{stage: string, reason: string, next_action: string, color: string} */
+    private function pipelineGuidance(): array
+    {
+        $chapter = $this->chapter();
+        $review = $this->currentDraftReview();
+        $paused = $this->getRecord()->status === NovelStatus::Paused;
+
+        if ($chapter->status === ChapterStatus::Canonical) {
+            return [
+                'stage' => 'Canonical',
+                'reason' => '本章已经正式提交，章节自动流水线已完成。',
+                'next_action' => (bool) data_get($this->getRecord()->settings, 'auto_generate', false)
+                    ? '等待下一章自动启动'
+                    : '返回小说概览生成下一章',
+                'color' => 'success',
+            ];
+        }
+
+        if ($review?->decision === ReviewDecision::Pass) {
+            return [
+                'stage' => 'Review PASS',
+                'reason' => $paused
+                    ? 'Review 已 PASS，但小说仍处于暂停状态；系统不会自动提交正式章节。'
+                    : 'Review 已 PASS，自动流水线按规则停止；当前内容仍是草稿。',
+                'next_action' => $paused ? '先在小说概览继续，再提交正式章节' : '提交正式章节',
+                'color' => 'success',
+            ];
+        }
+
+        if (in_array($review?->decision, [ReviewDecision::NeedsAttention, ReviewDecision::Block], true)) {
+            return [
+                'stage' => $review->decision->value,
+                'reason' => '审校结果需要人工处理，自动流水线已停止。',
+                'next_action' => '在审校页签处理 Findings',
+                'color' => $review->decision->getColor(),
+            ];
+        }
+
+        $latestRun = $chapter->generationRuns
+            ->where('id', '>=', $this->currentPlanningRunId())
+            ->sortByDesc('id')
+            ->first();
+
+        if ($paused) {
+            return [
+                'stage' => data_get($this->getRecord()->settings, 'pause.label', '等待下一阶段'),
+                'reason' => '小说已暂停，不会派发新的生成阶段。',
+                'next_action' => '返回小说概览点击“继续”',
+                'color' => 'gray',
+            ];
+        }
+
+        if ($this->generationWorkPending()) {
+            $current = collect($this->pipelineTimeline())->firstWhere('state', 'current');
+
+            return [
+                'stage' => $latestRun !== null && in_array($latestRun->status, [RunStatus::Queued, RunStatus::Running], true)
+                    ? $latestRun->stage->getLabel()
+                    : (string) data_get($current, 'label', $chapter->status->getLabel()),
+                'reason' => '当前阶段已加入队列或正在执行，流水线尚未停止。',
+                'next_action' => '等待当前任务完成',
+                'color' => 'primary',
+            ];
+        }
+
+        if ($latestRun !== null && in_array($latestRun->status, [RunStatus::Failed, RunStatus::Cancelled], true)) {
+            return [
+                'stage' => $latestRun->stage->getLabel(),
+                'reason' => $latestRun->error_code === null
+                    ? '当前阶段未成功完成，自动流水线已停止。'
+                    : $latestRun->error_code.' · '.$latestRun->error_message,
+                'next_action' => '查看失败详情并从该阶段重试',
+                'color' => 'danger',
+            ];
+        }
+
+        $current = collect($this->pipelineTimeline())->firstWhere('state', 'current');
+
+        return [
+            'stage' => (string) data_get($current, 'label', $chapter->status->getLabel()),
+            'reason' => '当前没有运行中的任务，流水线可以从持久化断点继续。',
+            'next_action' => '返回小说概览启动或继续流水线',
+            'color' => 'gray',
         ];
     }
 
@@ -1958,7 +2079,14 @@ class ViewNovelChapter extends ViewRecord
 
         $items[] = $this->timelineItem('assembly', '章节组装', $this->latestTimelineRun(GenerationStage::ChapterAssembly), $assemblyArtifact, $assemblyArtifact !== null, $assemblyArtifact === null ? '等待组装章节草稿' : '章节草稿 v'.$assemblyArtifact->version);
         $items[] = $this->timelineItem('events', '事件', $this->latestTimelineRun(GenerationStage::EventExtraction), $eventArtifact, $eventArtifact !== null, $eventArtifact === null ? '等待提取故事事件' : '事件候选已生成');
-        $items[] = $this->timelineItem('review', '审校', $this->latestTimelineRun(GenerationStage::Review), $reviewArtifact, $reviewArtifact !== null, $reviewArtifact === null ? '等待审校' : '审校结果已生成');
+        $reviewDetail = match ($this->currentDraftReview()?->decision) {
+            ReviewDecision::Pass => '审校 PASS，等待提交正式章节',
+            ReviewDecision::Rewrite => '审校要求重写',
+            ReviewDecision::NeedsAttention => '审校需要人工处理',
+            ReviewDecision::Block => '审校已阻塞',
+            default => $reviewArtifact === null ? '等待审校' : '审校结果已生成',
+        };
+        $items[] = $this->timelineItem('review', '审校', $this->latestTimelineRun(GenerationStage::Review), $reviewArtifact, $reviewArtifact !== null, $reviewDetail);
         $items[] = $this->timelineItem('commit', '正式提交', $this->latestTimelineRun(GenerationStage::Commit), null, $chapter->canonical_artifact_id !== null || $chapter->latestStateVersion !== null, $chapter->latestStateVersion === null ? '等待正式提交' : '已提交状态 v'.$chapter->latestStateVersion->version);
         $items[] = $this->timelineItem('memory', '记忆', $memoryRun, $this->latestTimelineArtifact(ArtifactType::Summary), $memoryRun?->status === RunStatus::Succeeded, $memoryRun === null ? '等待正式章节写入记忆' : '记忆更新'.$memoryRun->status->getLabel());
 

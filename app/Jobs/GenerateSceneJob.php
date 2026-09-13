@@ -2,8 +2,8 @@
 
 namespace App\Jobs;
 
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
-use App\Enums\SceneStatus;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\Scene;
 use App\Services\AutoStopService;
@@ -41,13 +41,18 @@ class GenerateSceneJob implements ShouldBeUnique, ShouldQueue
         return 'scene:'.$this->sceneId;
     }
 
-    public function handle(SceneGenerator $generator): void
+    public function handle(SceneGenerator $generator, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        $advance ??= app(AdvanceChapterPipelineAction::class);
+
         try {
             $artifact = $generator->generate($this->sceneId, $this->regenerate, $this->regenerationBatchId);
 
-            if ($this->cascade && $artifact !== null) {
-                $this->dispatchNextScene();
+            if ($artifact !== null) {
+                $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
+                if ($chapterId !== null) {
+                    $advance->handle((int) $chapterId, $this->regenerationBatchId);
+                }
             }
 
             $this->releaseGenerationDispatch();
@@ -64,27 +69,6 @@ class GenerateSceneJob implements ShouldBeUnique, ShouldQueue
             }
 
             throw $exception;
-        }
-    }
-
-    private function dispatchNextScene(): void
-    {
-        $scene = Scene::query()->findOrFail($this->sceneId);
-        $nextSceneId = $scene->chapter->scenes()
-            ->where('sequence', '>', $scene->sequence)
-            ->where('status', SceneStatus::Planned)
-            ->whereNull('current_artifact_id')
-            ->orderBy('sequence')
-            ->value('id');
-
-        if ($nextSceneId !== null) {
-            $job = new GenerateSceneJob(
-                sceneId: (int) $nextSceneId,
-                cascade: true,
-                regenerationBatchId: $this->regenerationBatchId,
-            );
-            $job->afterCommit();
-            $this->dispatchGenerationJob($job);
         }
     }
 

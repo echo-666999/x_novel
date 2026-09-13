@@ -3,6 +3,7 @@
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
@@ -15,14 +16,15 @@ beforeEach(function () {
 
 test('the novel overview offers story state initialization when state is missing', function () {
     $novel = Novel::factory()->create();
+    NovelBible::factory()->for($novel)->create();
 
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertSee('Story State: Not Initialized')
+        ->assertSee('故事状态: 未初始化')
         ->assertActionVisible('initializeStoryState')
         ->callAction('initializeStoryState')
         ->assertHasNoActionErrors()
-        ->assertNotified('Story State 已初始化')
-        ->assertSee('Current State Version: 0')
+        ->assertNotified('故事状态已初始化')
+        ->assertSee('当前版本: 0')
         ->assertActionHidden('initializeStoryState');
 
     expect($novel->storyStateVersions()->count())->toBe(1)
@@ -34,6 +36,6 @@ test('the novel overview shows an initialized state without another initialize a
     app(InitializeNovelStateAction::class)->handle($novel);
 
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertSee('Current State Version: 0')
+        ->assertSee('当前版本: 0')
         ->assertActionHidden('initializeStoryState');
 });

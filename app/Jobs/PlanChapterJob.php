@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
@@ -36,10 +37,15 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
         return 'chapter:'.$this->chapterId;
     }
 
-    public function handle(ChapterPlanner $planner): void
+    public function handle(ChapterPlanner $planner, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        $advance ??= app(AdvanceChapterPipelineAction::class);
+
         try {
-            $planner->generate($this->chapterId, $this->regenerate);
+            $plan = $planner->generate($this->chapterId, $this->regenerate);
+            if ($plan !== null) {
+                $advance->handle($this->chapterId);
+            }
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 $this->releaseGenerationDispatch();

@@ -55,6 +55,8 @@ L4 Style
 
 首次 AI 小说蓝图生成发生在 Current Bible 创建前，是唯一例外：它生成完整 Bible 候选；采用并创建 Current Bible 后，所有章节相关 Context 必须只读取该版本。迁移期旧 Editorial 只供迁移预览和数据复制，不得成为章节 Context 回退来源。
 
+章节启动前必须验证 Current Bible 的 tone、POV、tense 和完整 Style Profile。缺失或无效时以 `current_bible_incomplete` 停止，操作人员必须在“小说圣经”创建新的完整版本；不得用默认 Style、旧 Editorial 或历史 Bible 填补当前 Context。当前实现没有独立的 Bible 迁移 Artisan 命令。
+
 ## 3. Context 优先级
 
 ```text
@@ -149,7 +151,7 @@ important_dialogue
 
 ## 7. Memory Creation Pipeline
 
-Canonical Commit 后：
+用户在 Review PASS 后确认 Canonical Commit，且事务成功后：
 
 ```text
 UpdateMemoryJob

@@ -64,6 +64,8 @@ function plannerPayload(int $characterId, array $overrides = []): array
             'conflict' => '港务官拒绝放行',
             'turn' => '潮汐钟提前响起',
             'outcome' => '主角决定偷船',
+            'outcome_allowed' => ['寻找无人看守的小船'],
+            'outcome_forbidden' => ['取得港务官正式许可'],
             'pov_character_id' => $characterId,
             'location' => '旧港',
             'time_anchor' => '黄昏',
@@ -113,12 +115,14 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
 
     expect($plan->status)->toBe(PlanStatus::Ready)
         ->and($plan->scene_plans)->toHaveCount(1)
+        ->and(data_get($plan->scene_plans, '0.outcome_allowed'))->toBe(['寻找无人看守的小船'])
+        ->and(data_get($plan->scene_plans, '0.outcome_forbidden'))->toBe(['取得港务官正式许可'])
         ->and($plan->target_words)->toBe(4_200)
         ->and($chapter->scenes()->count())->toBe(1)
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v5')
+        ->and($run->prompt_version)->toBe('chapter-planner-v6')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -127,7 +131,9 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->prompt)->toContain('通俗爽快')
         ->and($fake->requests()[0]->prompt)->not->toContain('冷峻克制')
-        ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []');
+        ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []')
+        ->and($fake->requests()[0]->prompt)->toContain('outcome_allowed')
+        ->and($fake->requests()[0]->prompt)->toContain('outcome_forbidden');
 });
 
 test('a new bible applies only after explicitly restarting the chapter pipeline', function () {

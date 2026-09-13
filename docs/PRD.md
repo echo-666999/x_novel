@@ -220,6 +220,8 @@ Chapter
 - 不得重复更新状态；
 - 能从最近 Artifact / Run 恢复。
 
+恢复必须以 PostgreSQL 中的 Run、Artifact 和章节状态为依据。Current Bible 的叙事基线或完整 Style Profile 缺失时，生成前置检查必须以 `current_bible_incomplete` 停止；用户在“小说圣经”创建新的完整版本后才能重试，不得回退到旧 Editorial。Rewrite 达到上限后必须停在 NEEDS_ATTENTION，由用户人工修改后重新审校，或在没有 Hard Conflict 且满足 Override 条件时明确填写原因后人工通过。
+
 ---
 
 ## G5 可完结

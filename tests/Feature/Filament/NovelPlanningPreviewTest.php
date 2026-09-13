@@ -76,9 +76,8 @@ test('planning preview shows the complete chapter plan in reading order', functi
     ])
         ->assertOk()
         ->assertActionVisible('backToChapter')
-        ->assertActionHasUrl('backToChapter', NovelResource::getUrl('chapter', [
+        ->assertActionHasUrl('backToChapter', NovelResource::getUrl('chapters', [
             'record' => $novel,
-            'chapter' => $chapter,
         ]))
         ->assertSeeTextInOrder([
             '规划预览',

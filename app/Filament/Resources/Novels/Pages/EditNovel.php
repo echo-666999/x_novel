@@ -19,7 +19,6 @@ class EditNovel extends EditRecord
     {
         $data['ai_model_overrides'] = data_get($data, 'settings.ai.models', []);
         $data['budget_limits'] = data_get($data, 'settings.budget', []);
-        $data['auto_commit'] = (bool) data_get($data, 'settings.auto_commit', false);
         $data['generation_chapter_target_words'] = (int) data_get($data, 'settings.generation.chapter_target_words', 3_000);
 
         return $data;
@@ -48,13 +47,8 @@ class EditNovel extends EditRecord
             $settings['budget'] = $budgetLimits;
         }
 
-        $autoCommit = (bool) ($data['auto_commit'] ?? false);
-        if ($autoCommit || array_key_exists('auto_commit', $settings)) {
-            $settings['auto_commit'] = $autoCommit;
-        }
-
         $data['settings'] = $settings;
-        unset($data['ai_model_overrides'], $data['budget_limits'], $data['auto_commit'], $data['generation_chapter_target_words']);
+        unset($data['ai_model_overrides'], $data['budget_limits'], $data['generation_chapter_target_words']);
 
         return $data;
     }

@@ -43,7 +43,7 @@ beforeEach(function () {
     config()->set('ai.budget.chapter_max_cost', null);
 });
 
-function reviewFixture(): array
+function reviewFixture(?Closure $draftDataFactory = null): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
@@ -52,7 +52,12 @@ function reviewFixture(): array
     $content = '林舟守住城门，也兑现了向同伴作出的承诺。';
     ChapterPlan::factory()->for($chapter)->create(['target_words' => mb_strlen($content)]);
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
-    $draft = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterDraft, 'content' => $content, 'checksum' => hash('sha256', $content)]);
+    $draft = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => $content,
+        'data' => $draftDataFactory?->__invoke($chapter) ?? [],
+        'checksum' => hash('sha256', $content),
+    ]);
 
     return compact('novel', 'chapter', 'draft');
 }
@@ -355,8 +360,45 @@ test('a valid scene finding preserves its chapter scoped reference', function ()
 
     expect($review->decision)->toBe(ReviewDecision::Rewrite)
         ->and($review->findings)->toContainEqual([...$finding, 'source' => 'narrative_review'])
+        ->and(data_get($review->artifact->data, 'rewrite_scope.scope'))->toBe('scene')
+        ->and(data_get($review->artifact->data, 'rewrite_scope.scene_id'))->toBe($scene->getKey())
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.findings.items.properties.code.enum'))->toContain('STYLE_MISMATCH')
         ->and(data_get($review->generationRun->context_snapshot, 'scenes.0.id'))->toBe($scene->getKey());
+});
+
+test('review consumes structured plan findings and preserves their scene repair route', function () {
+    $scene = null;
+    $fixture = reviewFixture(function (Chapter $chapter) use (&$scene): array {
+        $scene = Scene::factory()->for($chapter)->create(['sequence' => 1]);
+
+        return ['plan_findings' => [[
+            'code' => 'SCENE_PLAN_COVERAGE_MISSING',
+            'dimension' => 'plan',
+            'severity' => 'error',
+            'scene_id' => $scene->getKey(),
+            'scope' => 'scene',
+            'auto_fixable' => true,
+            'requires_human_decision' => false,
+            'plan_element' => 'outcome',
+            'coverage_status' => 'missing',
+            'expected' => ['description' => '林舟守住城门'],
+            'evidence' => null,
+            'message' => '场景计划的结果未在正文中落实。',
+            'source' => 'assembly_coverage',
+        ]]];
+    });
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and(collect($review->findings)->pluck('code'))->toContain('SCENE_PLAN_COVERAGE_MISSING')
+        ->and(data_get($review->artifact->data, 'rewrite_scope.scope'))->toBe('scene')
+        ->and(data_get($review->artifact->data, 'rewrite_scope.scene_id'))->toBe($scene->getKey())
+        ->and(data_get($review->generationRun->context_snapshot, 'plan_findings.0.plan_element'))->toBe('outcome')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('plan_findings 是上游结构化覆盖证据');
 });
 
 test('a below threshold score without an executable finding is rejected', function () {
@@ -444,6 +486,59 @@ test('review job automatically dispatches one rewrite for an auto fixable findin
 
     Queue::assertPushed(RewriteChapterJob::class, 1);
     Queue::assertPushed(RewriteChapterJob::class, fn (RewriteChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && $job->sceneId === null);
+});
+
+test('review job dispatches a scene rewrite for one local finding', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [
+        reviewFinding(sceneId: $scene->getKey(), scope: 'scene', autoFixable: true),
+    ])));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    Queue::assertPushed(RewriteChapterJob::class, 1);
+    Queue::assertPushed(RewriteChapterJob::class, fn (RewriteChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
+        && $job->sceneId === $scene->getKey());
+});
+
+test('review job upgrades findings from multiple scenes to chapter rewrite', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    $first = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $second = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 2]);
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [
+        reviewFinding(sceneId: $first->getKey(), scope: 'scene', autoFixable: true),
+        reviewFinding(sceneId: $second->getKey(), scope: 'scene', autoFixable: true),
+    ])));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    Queue::assertPushed(RewriteChapterJob::class, 1);
+    Queue::assertPushed(RewriteChapterJob::class, fn (RewriteChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
+        && $job->sceneId === null);
+});
+
+test('an unlocatable paragraph finding becomes needs attention without rewrite dispatch', function () {
+    Queue::fake();
+    $fixture = reviewFixture();
+    Scene::factory()->for($fixture['chapter'])->create();
+    bindStateValidation(new StateValidationResult([]));
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [
+        reviewFinding(sceneId: null, scope: 'paragraph', autoFixable: true),
+    ])));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    $review = Review::query()->latest('id')->firstOrFail();
+    expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(collect($review->findings)->pluck('code'))->toContain('REWRITE_SCOPE_UNRESOLVED')
+        ->and(data_get($review->artifact->data, 'rewrite_scope'))->toBeNull()
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
+    Queue::assertNotPushed(RewriteChapterJob::class);
 });
 
 test('duplicate review job delivery does not dispatch the same rewrite twice', function () {
@@ -550,7 +645,7 @@ test('state version conflict during review never dispatches rewrite', function (
     Queue::assertNotPushed(RewriteChapterJob::class);
 });
 
-test('review job dispatches canonical commit only for pass reviews with auto commit enabled', function () {
+test('review job stops at pass even when legacy auto commit is enabled', function () {
     Queue::fake();
     $fixture = reviewFixture();
     $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
@@ -559,7 +654,7 @@ test('review job dispatches canonical commit only for pass reviews with auto com
 
     (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
 
-    Queue::assertPushed(CommitChapterJob::class, fn (CommitChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey());
+    Queue::assertNotPushed(CommitChapterJob::class);
 });
 
 test('a provider response is saved but pause prevents the review job from dispatching commit', function () {

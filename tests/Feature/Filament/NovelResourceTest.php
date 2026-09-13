@@ -1,20 +1,24 @@
 <?php
 
+use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
+use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\StoryArc;
 use App\Models\User;
+use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -179,6 +183,7 @@ test('the novel overview shows closure debt totals and expandable details', func
 });
 
 test('draft novels show planning entry and generating novels show chapter controls', function () {
+    Queue::fake();
     $draft = Novel::factory()->create();
 
     Livewire::test(ViewNovel::class, ['record' => $draft->getRouteKey()])
@@ -187,8 +192,11 @@ test('draft novels show planning entry and generating novels show chapter contro
         ->assertActionHidden('startAutoGenerate');
 
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    NovelBible::factory()->for($novel)->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
-    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+    $component = Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertSee('尚无正式章节')
         ->assertSee('Auto: OFF')
         ->assertActionExists('generateNextChapter')
@@ -196,7 +204,14 @@ test('draft novels show planning entry and generating novels show chapter contro
         ->assertActionVisible('startAutoGenerate')
         ->assertActionHidden('stopAutoGenerate')
         ->callAction('startAutoGenerate')
-        ->assertNotified('自动生成已开启')
+        ->assertNotified('自动生成已开启，章节流水线已启动')
+        ->assertRedirect();
+
+    $chapter = $novel->chapters()->sole();
+    expect(data_get($novel->fresh()->settings, 'auto_generate'))->toBeTrue();
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey());
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertActionHidden('startAutoGenerate')
         ->assertActionVisible('stopAutoGenerate')
         ->assertSee('Auto: ON')

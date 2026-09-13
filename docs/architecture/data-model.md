@@ -167,7 +167,9 @@ Review
     ↓
 Rewrite if needed
     ↓
-Canonical Commit
+Review PASS
+    ↓
+User-confirmed Canonical Commit
     ↓
 Story State Update
     ↓
@@ -234,6 +236,8 @@ Novel Canonical Pointer
 
 ```text
 Review PASS
+↓
+用户确认“提交正式章节”
 ↓
 CanonicalCommitService
 ```

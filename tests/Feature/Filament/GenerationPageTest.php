@@ -11,6 +11,7 @@ use App\Enums\VolumeStatus;
 use App\Filament\Pages\Generation;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\AssembleChapterJob;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
@@ -336,5 +337,5 @@ test('stalled run is shown as worker lost and can recover from its persisted art
         ->assertSee('Worker 丢失');
 
     expect($run->fresh()->error_code)->toBe('worker_lost');
-    Queue::assertPushed(ReviewChapterJob::class, 1);
+    Queue::assertPushed(ExtractStoryEventsJob::class, 1);
 });

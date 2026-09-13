@@ -4,11 +4,20 @@
 
 ## 1. 发布前
 
-- 在项目根目录执行 `php artisan test` 和 `npm run build`。
-- 执行 `php artisan migrate:status`，确认没有未执行 Migration。
+- 在项目根目录先执行与本次改动直接相关的目标测试，再执行 `php artisan test`；前端资源有变化时执行 `npm run build`。
+- 记录每条测试命令的测试数、断言数、跳过数、失败数和执行时间。不得把上一次发布或另一环境的结果当成本次结果。
+- 执行 `php artisan migrate:status`，逐项确认没有未执行 Migration，并把命令输出时间和结论写入发布记录。
 - 执行 `php artisan schedule:list`，确认包含 `generation:mark-stalled` 和 `horizon:snapshot`。
 - 检查 Settings 页面的“系统健康”，处理所有“需要处理”项。
 - 确认至少配置 `AI_DAILY_HARD_LIMIT`、`AI_NOVEL_TOTAL_LIMIT` 或 `AI_CHAPTER_MAX_COST` 中的一项。
+- 核实 `AI_PROVIDER`、`AI_BASE_URL` 和实际模型在当前端点/账户可用。Stage 模型留空表示继承全局 `AI_MODEL`；不要把 `.env.example` 当成历史 Run 或生产配置证据，也不要把 API Key 复制进发布记录。
+
+章节流水线相关发布至少执行：
+
+```bash
+php artisan test tests/Feature/AiSettingsResolverTest.php tests/Feature/ChapterPipelineOrchestrationTest.php tests/Feature/StyleContractPipelineTest.php tests/Feature/RewriteLoopTest.php tests/Feature/AutoGenerationTest.php tests/Feature/CanonicalCommitServiceTest.php
+php artisan test
+```
 
 ## 2. PostgreSQL 备份
 
@@ -75,13 +84,22 @@ php artisan memory:rebuild NOVEL_ID
 
 ## 6. 运行检查
 
-- `php artisan horizon:status`：Horizon 正在运行。
+- `php artisan horizon:status`：记录实际输出；正式运行环境必须为 `Horizon is running`，否则发布不通过。
 - `php artisan queue:failed`：没有未处理的关键失败 Job。
 - `php artisan schedule:list`：生产 Cron 正在执行 `schedule:run`。
 - `storage/logs/laravel.log`：路径可写，无持续增长的同类异常。
 - Emergency Stop：Settings 页开关可阻止新 Provider Request 和 Canonical Commit。
 - `/up`：应用健康路由返回成功。
 
+章节流程抽查：
+
+- “生成下一章”能自动推进至 Review PASS，过程中不要求逐 Scene 点击。
+- PASS 后 Chapter 仍不是 Canonical，Story State、Story Event 和正式 Memory 尚未更新；章节工作台显示“提交正式章节”。
+- 用户确认“提交正式章节”后才执行 Canonical Commit。
+- 缺少完整 Current Bible/Style Profile 时显示 `current_bible_incomplete`，在“小说圣经”创建新版本后可以重新启动。
+- Rewrite 耗尽后停在 NEEDS_ATTENTION，并显示“人工修改正文”；符合条件时才显示或启用人工 Override。
+- 暂停后的“恢复”从数据库中的 Run/Artifact 断点继续；PASS 恢复点仍等待人工提交。
+
 ## 7. 发布记录
 
-每次记录：版本/提交、备份文件、恢复演练时间、Migration 状态、Horizon 状态、Scheduler 状态、State/Memory 重建结果、未解决警告和回滚决定。
+每次记录：版本/提交、备份文件、恢复演练时间、Migration 状态、Horizon 原始状态、Scheduler 状态、目标测试与完整测试的实际结果、章节流程抽查结果、State/Memory 重建结果、未解决警告和回滚决定。

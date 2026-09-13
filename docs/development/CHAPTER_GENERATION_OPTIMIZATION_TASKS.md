@@ -3,7 +3,7 @@
 > 日期：2026-09-10  
 > 来源：`docs/development/CHAPTER_GENERATION_OPTIMIZATION_PLAN.md`  
 > 用途：把已确认的优化方案拆成可独立实施、测试、验收和回滚的任务。  
-> 当前状态：CGO-001、CGO-002、CGO-003、CGO-004、CGO-005、CGO-006、CGO-007、CGO-008、CGO-009 已完成。
+> 当前状态：CGO-001 至 CGO-017 已完成。
 
 ## 1. 使用规则
 
@@ -40,7 +40,9 @@ P2  不阻塞主链路的整理工作
 
 ## 2. 已确认事实、决策与未决项
 
-### 2.1 已确认事实
+### 2.1 任务拆分时的已确认基线（历史）
+
+以下条目记录 2026-09-10 拆分任务时的实现状态，用于解释任务来源，不代表 CGO-017 完成后的当前行为。
 
 - `novel_bibles` 已有 `tone`、`pov`、`tense` 和可空 `style_profile`；历史版本可为 `null`，CGO-003 起所有新版本必须保存完整对象。
 - Bible 内容不可原地修改；变化通过新 Bible Version 表达。
@@ -113,12 +115,12 @@ flowchart TD
 | CGO-009 | 全生成阶段接入 Style Contract | P0 | DONE | CGO-008 |
 | CGO-010 | Review Finding Schema 与决策矩阵 | P0 | DONE | CGO-009 |
 | CGO-011 | Review 后自动 Rewrite 闭环 | P0 | DONE | CGO-010 |
-| CGO-012 | Scene/Assembly Plan Adherence 质量门 | P1 | TODO | CGO-009 |
-| CGO-013 | 最小范围定向修复 | P1 | TODO | CGO-011、CGO-012 |
-| CGO-014 | 自动章节推进器，运行到 PASS | P0 | TODO | CGO-011、CGO-013 |
-| CGO-015 | 自动化入口、Pause/Resume 与 PASS 停点 | P0 | TODO | CGO-014 |
-| CGO-016 | 端到端测试与质量基线 | P0 | TODO | CGO-007、CGO-009、CGO-013、CGO-015 |
-| CGO-017 | 配置、架构文档与发布收尾 | P2 | TODO | CGO-016 |
+| CGO-012 | Scene/Assembly Plan Adherence 质量门 | P1 | DONE | CGO-009 |
+| CGO-013 | 最小范围定向修复 | P1 | DONE | CGO-011、CGO-012 |
+| CGO-014 | 自动章节推进器，运行到 PASS | P0 | DONE | CGO-011、CGO-013 |
+| CGO-015 | 自动化入口、Pause/Resume 与 PASS 停点 | P0 | DONE | CGO-014 |
+| CGO-016 | 端到端测试与质量基线 | P0 | DONE | CGO-007、CGO-009、CGO-013、CGO-015 |
+| CGO-017 | 配置、架构文档与发布收尾 | P2 | DONE | CGO-016 |
 
 ## 5. Task Cards
 
@@ -241,7 +243,7 @@ Migration、Model、Action 和针对性测试全部通过，不包含 UI 或数�
 
 **Skills：** `filament-ui`, `generation-pipeline`  
 **优先级：** P0  
-**状态：** DONE  
+**状态：** DONE
 **依赖：** CGO-002
 
 ### 目标
@@ -785,7 +787,7 @@ Review 得到 REWRITE 时自动开始现有重写链，并在最多两次自动�
 
 **Skills：** `generation-pipeline`  
 **优先级：** P1  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-009
 
 ### 目标
@@ -822,11 +824,24 @@ Review 得到 REWRITE 时自动开始现有重写链，并在最多两次自动�
 
 Self-check、coverage 和 Finding 测试通过。
 
+### 完成记录
+
+- 完成日期：2026-09-13。
+- Scene Writer：`self_check` 固定为 goal/conflict/turn/outcome 四项；每项只接受 fulfilled、missing、contradicted，并按状态校验 evidence 是否逐字引用当前正文。Scene Artifact 保存自检及稳定的 `SCENE_PLAN_COVERAGE_MISSING` / `SCENE_PLAN_COVERAGE_CONTRADICTED` Finding。
+- Outcome 边界：Chapter Plan 的每个 Scene 新增 `outcome_allowed` 与 `outcome_forbidden` 数组；AI 规划 Schema、人工编辑表单、规划预览和 Scene Writer 上下文已同步。旧 Plan 读取时缺少边界会按空数组处理，未修改历史 Plan。
+- Assembly：由纯正文响应改为结构化 `content + scene_coverage + introduced_major_facts`；Laravel 校验 Scene ID 完整、顺序、唯一且属于当前章节，并校验 coverage evidence 引用。Chapter Draft Artifact 保存 coverage 和可定位 Finding。
+- 防止补写：Assembler Prompt 明确禁止通过新增重大剧情结果补齐 coverage；若来源 Scene self-check 已报告 missing/contradicted，Assembly 不能直接报告 fulfilled；`introduced_major_facts` 非空时响应校验失败。
+- 边界：模型自检与 coverage 只作为生成质量证据，不是 Canonical Fact；Laravel 能确认结构和字符串引用，无法单凭模型自报确认语义判断或发现未声明的新增事实。后续仍由 Event/State Validation 与最终 Review 检查。本任务没有自动修复 Finding，没有新增 Critic Agent，也没有改变 Review Decision。
+- Prompt 版本：`chapter-planner-v6`、`scene-writer-v10`、`assembler-v8`；其他 Stage 版本未改动。
+- 针对性验证：Scene、Assembly、Planner、Prompt Version、AI Settings/Debug、Scene 同步、章节管理与 Style Contract 集成共 92 个测试全部通过，553 个断言；Pint 通过。
+- 完整套件：共运行 673 个测试，646 个通过、4006 个断言、21 个跳过；剩余 5 个 Filament 展示断言失败和 1 个 MemoryUpdater 连接 Embedding Provider 错误。失败文件为 DueForeshadowingsWidget、NovelAiSettings、NovelPlanningPreview、NovelStoryStateInitialization（2 个）和 MemoryUpdater。
+- 已知范围外失败：CGO-012 没有修改上述 Dashboard/Novel 概览/返回按钮展示逻辑或 Memory Embedding 调用；这些失败位置与 coverage、Outcome 边界和 Prompt 版本无重叠。
+
 ## CGO-013 — 最小范围定向修复
 
 **Skills：** `generation-pipeline`  
 **优先级：** P1  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-011、CGO-012
 
 ### 目标
@@ -864,11 +879,26 @@ Self-check、coverage 和 Finding 测试通过。
 
 最小范围选择和两种 Rewrite 路径测试通过。
 
+### 完成记录
+
+- 完成日期：2026-09-13。
+- 范围决策：新增确定性 `RewriteScopeResolver`。单一有效 Scene Finding 选择 Scene Rewrite；Paragraph Finding 的 evidence 只有在一个当前 Scene Artifact 中唯一命中才映射到该 Scene；存在 Chapter Finding 或多个 Scene 受影响时选择 Chapter Rewrite。当前没有 Paragraph Artifact，因此段落级问题的最小可持久修复单位是所属 Scene。
+- 失败转人工：非法 Scene 引用、不支持的 scope 或无法唯一定位的 Paragraph evidence 会追加 `REWRITE_SCOPE_UNRESOLVED` Finding，将最终 Decision 转为 NEEDS_ATTENTION，不派发错误 Scene Rewrite。暂停恢复使用同一规则，无法确定范围时保持阻断。
+- 路由冻结：Review Artifact 新增 `rewrite_scope`，保存 scope、scene_id、原因与 Finding 索引；自动派发和恢复优先使用已保存的不可变路由，旧 Review 没有该字段时才按现有 Finding 重建。
+- 定向修复：Rewrite Brief 包含选中 Finding 及 evidence、`plan_acceptance`、Current State、Locked Facts、上一章结尾和冻结 `l4` Style Contract。Scene Rewrite 改为结构化 `content + self_check`，生成新 `rewrite_draft` 并仅切换目标 Scene 指针；原 Scene Artifact、其他 Scene 指针和原 Chapter Draft 保持不变。
+- 后续链路：Scene Rewrite 继续 Rewrite → Assembly → Event Extraction → State Patch → Review；Chapter Rewrite 继续 Rewrite → Event Extraction → State Patch → Review。没有跳过 Review 或修改 Canonical 数据。
+- 上游证据：Reviewer 现在读取 Chapter Draft 中 CGO-012 产生的 `plan_findings`，与 Narrative、State 和字数 Finding 合并决策，并要求模型不得重复报告同一问题。
+- Prompt 版本：Reviewer 和 Rewrite 的执行规则已变更，分别升级为 `reviewer-v7` 和 `rewrite-v7`。
+- 针对性验证：范围决策、Review、Rewrite、恢复、Plan/Scene/Assembly、Event/Patch、Style Contract、Prompt Version 和 Filament 章节界面共 182 个测试全部通过，975 个断言；Pint 通过。
+- 完整套件：共运行 684 个测试，657 个通过、4059 个断言、21 个跳过；剩余 5 个 Filament 展示断言失败和 1 个 MemoryUpdater 连接 Embedding Provider 错误。失败文件为 DueForeshadowingsWidget、NovelAiSettings、NovelPlanningPreview、NovelStoryStateInitialization 和 MemoryUpdater，与 CGO-012 已记录的失败类别相同。
+- 已知范围外失败：CGO-013 没有修改上述 Dashboard/Novel 展示逻辑或 Memory Embedding 调用；这些失败与 Rewrite 范围路由、定向修复和 Prompt 版本回归无重叠。
+- 边界：未增加并行 Scene 生成，未让 LLM 决定流程，未修改 Canonical Commit，未调用真实 AI，未写入真实小说数据。
+
 ## CGO-014 — 自动章节推进器，运行到 PASS
 
 **Skills：** `generation-pipeline`, `story-engine`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-011、CGO-013
 
 ### 目标
@@ -922,11 +952,25 @@ Self-check、coverage 和 Finding 测试通过。
 
 推进器的成功、重复、暂停和恢复测试通过。
 
+### 完成记录
+
+- 完成日期：2026-09-13。
+- 新增 `AdvanceChapterPipelineAction`，在 Novel 行锁内根据 PostgreSQL 的当前 Plan、Scene 指针、Artifact 来源链、State Version 与 Review Decision 确定唯一下一阶段。
+- 正常链路统一为 Plan → 顺序 Scene → Assembly → Event Extraction → State Patch → Review；Review 为 REWRITE 时按已冻结范围进入 Rewrite，并根据 Chapter 或 Scene Rewrite 的持久化结果分别回到 Event Extraction 或 Assembly。
+- Plan、Scene、Assembly、Event Extraction、Review、Rewrite Job 成功后统一调用推进器；原 Job 内的级联 Scene、Rewrite 后续分支和 Review 自动提交分支已移除。
+- PASS、NEEDS_ATTENTION、BLOCK、暂停、Canonical 和 Void 均停止自动推进；即使遗留 `auto_commit=true`，PASS 也不会派发 `CommitChapterJob`。
+- 继续复用 `GenerationStageGate`、`GenerationJobDispatcher`、Job 唯一键、Run `input_hash` 与不可变 Artifact；Redis 标记只负责抑制重复入队，恢复判断不依赖 Redis。
+- 新增推进顺序、Scene 串行、重复调用、暂停、运行中断点恢复、Rewrite 路由和 PASS 停点测试；相关回归共 245 个测试、1835 个断言全部通过，Pint 通过。
+- 完整套件共 691 个测试：664 个通过、4096 个断言、21 个跳过；仍有此前已记录的 5 个 Filament 展示断言失败和 1 个 MemoryUpdater 外部 Embedding 连接错误。相对 CGO-013 基线新增的 7 个测试全部通过，没有出现新的 CGO-014 失败。
+- 验证未调用真实 AI，未写入真实小说数据。
+- 边界：未改 Filament 自动化入口、Pause/Resume 展示与操作语义，这些仍属于 CGO-015；未自动 Canonical Commit，未增加 Queue 或工作流引擎。
+
 ## CGO-015 — 自动化入口、Pause/Resume 与 PASS 停点
 
 **Skills：** `filament-ui`, `generation-pipeline`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
+
 **依赖：** CGO-014
 
 ### 目标
@@ -978,11 +1022,25 @@ Self-check、coverage 和 Finding 测试通过。
 
 自动化入口、PASS 停点、手动 Commit 后续接和恢复测试通过。
 
+### 完成记录
+
+- 完成日期：2026-09-13。
+- “生成下一章”与“开始自动生成”都会创建或恢复当前目标章，并立即调用 `AdvanceChapterPipelineAction`；成功后跳转章节工作台。“开始自动生成”只有在章节前置检查成功后才开启 `auto_generate`，避免只打开开关却没有可运行章节。
+- `CheckNextAction` 不再直接派发 Plan，也不只处理新建 Chapter；用户手动 Canonical Commit 后，仅在 `auto_generate=true` 且回调章节仍是最新正式章时创建或恢复紧邻下一章，并交给统一推进器运行。
+- 设置页已移除 `auto_commit` 控件和表单读写；Review Job 的运行时自动提交分支已在 CGO-014 删除。历史 `settings.auto_commit` 键可能仍存在，但 UI 与运行时均不读取，本任务没有伪装成数据迁移删除旧值。
+- `ResumeResolver` 恢复小说状态后在事务外调用统一推进器，并补齐 Event Candidate、State Patch 与 Review 的持久化断点识别。PASS 恢复点固定为“等待提交正式章节”，恢复只解除暂停，不派发 `CommitChapterJob`。
+- Worker 在不可变 Artifact 已持久化、Run 尚未标记 succeeded 时崩溃，恢复流程会复用该 Artifact；Chapter Draft 从 Event Extraction 继续，不跳过事件、状态补丁或 Review。
+- 章节工作台新增“当前流水线状态”，明确显示当前 Stage、停止原因和下一可执行操作；PASS 明确显示仍是草稿并等待用户提交。原 Plan、Scene、Assembly、Extract、Review、Rewrite 按钮保留用于调试、指定重跑和故障恢复。
+- 受影响范围验证：自动入口、自动续接、暂停/恢复、Worker 恢复、Review/Rewrite、Canonical Commit、Generation 页面与 Filament 工作台共 174 个测试、1541 个断言全部通过。Pint 与 `git diff --check` 通过。
+- 完整套件：共 693 个测试、4124 个断言；667 个通过、21 个跳过，剩余 4 个既有 Filament 展示断言失败和 1 个 MemoryUpdater 外部 Embedding 连接错误。失败文件为 `DueForeshadowingsWidgetTest`、`NovelPlanningPreviewTest`、`NovelStoryStateInitializationTest`（2 项）与 `MemoryUpdaterTest`，均不在 CGO-015 修改链路。
+- CGO-015 针对性验证使用测试队列与测试数据，没有调用真实生成模型，也没有写入真实小说数据；完整套件中的既有 `MemoryUpdaterTest` 尝试连接外部 Embedding Provider 后失败，没有取得 Provider 结果。未修改 `CanonicalCommitService` 的事务实现，未提前排队多个章节。
+
 ## CGO-016 — 端到端测试与质量基线
 
 **Skills：** `generation-pipeline`, `memory-context`, `story-engine`, `filament-ui`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** DONE
+
 **依赖：** CGO-007、CGO-009、CGO-013、CGO-015
 
 ### 目标
@@ -1037,11 +1095,67 @@ all creative/review/rewrite snapshots → same Style Contract
 
 新增测试、受影响测试和完整测试套件全部通过，质量基线已记录且不含虚构指标。
 
+### 实施结果（2026-09-13）
+
+- 新增 `tests/Feature/ChapterPipelineOrchestrationTest.php`，使用真实数据库记录和 Fake Provider，由测试队列逐个执行 Job，验证一次入口后的实际阶段推进。
+- 新增固定回归输入 `tests/Fixtures/chapter_pipeline_quality_baseline.php`；包含两个动态 Scene、42 字章节目标、热血 / 第一人称 / 过去时、热血激昂主文风和轻松幽默辅助文风。
+- 首轮 PASS 路径已验证：Plan → 两个 Scene → Assembly → Event Candidate → State Patch → Review PASS，并停在草稿状态，不创建正式 Story Event 或新 State Version。
+- 手动 Canonical Commit 已验证：创建一个正式 Story Event 和 State Version v1，更新 Novel/Chapter 指针，派发 Memory Update，并只创建、排队紧邻的下一章。
+- 自动 Rewrite 路径已验证：首次 Review REWRITE → 定向 Scene Rewrite → 重新 Assembly → 重新 Extract/Patch → 第二次 Review PASS；旧的下游 Artifact 不会被当成当前版本。
+- 主链所有 Planning、Writing、Assembly、Review、Rewrite 成功 Run 均断言使用同一 Bible Version 和 Style Contract checksum。
+- 修正 4 处既有 Filament 过期断言，并让 `MemoryUpdaterTest` 默认 Fake Queue，避免测试环境同步执行 Embedding Job 而访问外部 Provider。
+- 新增与受影响模块验证：201 tests、984 assertions，全部通过。
+- 完整 Laravel 测试：695 tests、4207 assertions；674 passed、21 skipped、0 failed，测试进程报告 2 条 warning 但未提供 warning 明细。
+- `vendor/bin/pint --dirty` 与 `git diff --check` 通过；本任务未修改前端资源，因此未运行前端构建。
+
+### 必要场景覆盖矩阵
+
+| 场景 | 自动证据 |
+|---|---|
+| 单次入口到 Review PASS，PASS 不自动 Commit | `ChapterPipelineOrchestrationTest` 首个测试 |
+| 手动 Commit、Story Events、State Version、Memory 后续任务、下一章 | `ChapterPipelineOrchestrationTest` 首个测试 |
+| REWRITE、定向 Scene 修复、重新提取与 PASS | `ChapterPipelineOrchestrationTest` 第二个测试 |
+| Rewrite 耗尽转 NEEDS_ATTENTION | `RewriteLoopTest` 的 `rewrite exhaustion becomes needs attention` |
+| 确定性 hard finding 转 BLOCK | `ChapterReviewTest` 的 `deterministic hard state finding overrides narrative score with block` |
+| 暂停后不派发下一阶段 | `AdvanceChapterPipelineActionTest` 与 `ChapterReviewTest` 的暂停场景 |
+| 重复投递只有一个有效 Artifact / Commit | `AdvanceChapterPipelineActionTest`、`ChapterReviewTest`、`CanonicalCommitServiceTest` |
+| Worker crash 从已持久化 Artifact 恢复 | `StalledRunRecoveryTest` 的 `worker crash after artifact persistence resumes the next database stage once` |
+| 缺少已迁移 Bible Style Profile 时前置阻止 | `GenerateNextChapterActionTest` 的 incomplete Bible profile 场景 |
+| Bible Version 变化后不复用旧 Style Artifact | `PlanChapterJobTest`、`SceneGenerationTest` 与 `StyleContractPipelineTest` |
+| 创意、审校、重写 Run 使用同一 Style Contract | `ChapterPipelineOrchestrationTest` 的 `assertFrozenPipelineStyle` |
+
+### 质量基线
+
+#### 当前本地历史样本（只读核对于 2026-09-13）
+
+当前本地数据库仍只有《六环余光》4 章；与最初调查时不同，4 章现均为 Canonical，共有 22 条 Review。首次 Review 如下：
+
+| Chapter | 首次决策 | 首次总分 |
+|---:|---|---:|
+| 1 | BLOCK | 86.95 |
+| 2 | BLOCK | 88.90 |
+| 3 | NEEDS_ATTENTION | 96.65 |
+| 4 | NEEDS_ATTENTION | 92.30 |
+
+该样本来自优化前后混合的历史运行，只有一部小说、四章，且多次人工处理和重复审校共同存在。它不能用于估计当前流水线的首稿 PASS 率、自动 Rewrite 成功率或文学质量提升幅度，也不据此设定百分比目标。
+
+#### 固定结构质量回归 Fixture
+
+固定 fixture 的确定性验收值为：
+
+```text
+Scene goal/conflict/turn/outcome = 全部 fulfilled
+Assembly plan_findings = 0
+最终 Review style findings = 0
+```
+
+这些值只验证固定输入下的 Plan Coverage、Style Contract 传递和 Finding 结构没有回归。Fake Provider 的正文和评分是测试数据，不是对真实模型文学质量或线上 PASS 率的测量。
+
 ## CGO-017 — 配置、架构文档与发布收尾
 
 **Skills：** `generation-pipeline`, `memory-context`  
 **优先级：** P2  
-**状态：** TODO  
+**状态：** DONE
 **依赖：** CGO-016
 
 ### 目标
@@ -1076,6 +1190,18 @@ all creative/review/rewrite snapshots → same Style Contract
 ### 完成定义
 
 代码、测试、架构文档、配置示例和发布说明不存在已知冲突。
+
+### 完成记录
+
+- 完成日期：2026-09-13。
+- Summary：逐项回查最终流水线后同步 PRD、Generation Pipeline、Memory Context 和 Data Model；补充从启动到 PASS、手动 Canonical Commit、`current_bible_incomplete`、生成失败、Rewrite 耗尽及暂停恢复的实际操作入口。任务拆分时的“当前实现”改为明确的历史基线，避免与完成后的行为混淆。
+- Provider / Model：当前代码只注册 `AI_PROVIDER=openai`，使用可配置 `AI_BASE_URL` 的 OpenAI-compatible 接口。依据 OpenAI 官方模型页核实 `gpt-4.1-mini` 支持 Chat Completions 与 Structured Outputs，`text-embedding-3-small` 为官方 Embedding 型号；没有可靠依据确认 `gpt-5.6-luna` 是 OpenAI 官方 API 型号，因此 `.env.example` 与 `config/ai.php` 的无环境变量默认值统一为 `gpt-4.1-mini`。空 Stage Override 继续由 `AiSettingsResolver` 回退全局 `AI_MODEL`，没有新增 Provider 或路由。
+- Files Changed：`.env.example`、`config/ai.php`、`docs/PRD.md`、`docs/architecture/generation-pipeline.md`、`docs/architecture/memory-context.md`、`docs/architecture/data-model.md`、`docs/development/MVP_RELEASE_CHECKLIST.md` 和本任务文件。
+- Database / State Changes：无 Migration、无数据库写入、无真实 Provider 请求、无 Queue 重试或清理，也未改写历史 Run/Artifact。
+- Tests Actually Run：目标回归 50 个测试全部通过、323 个断言；完整套件 695 个测试中 674 个通过、21 个跳过、0 个失败、4207 个断言。Pest 分别报告 1 和 2 条 warning，但未输出 warning 明细，原因无法确认。
+- Release Checks：文档路径、`.env.example` 配置 key 和操作说明引用的 Artisan 命令均已检查存在；`php artisan migrate:status` 显示全部 Migration 为 `Ran`；`php artisan horizon:status` 显示 `Horizon is running`；`php artisan schedule:list` 显示 `generation:mark-stalled` 每分钟执行、`horizon:snapshot` 每五分钟执行。首次在受限沙箱内读取 Scheduler 因 Redis `Operation not permitted` 失败，允许连接本机 Redis 后同一命令成功。
+- Known Limitations：`php artisan queue:failed` 仍列出 28 条 2026-09-08 至 2026-09-10 的历史失败 Job，本任务没有权限依据判断它们是否仍需重试，也没有擅自重试或删除；正式发布前仍需逐项确认。没有调用真实模型，因此未验证当前账户权限、兼容端点或线上文学质量/PASS 率。
+- Next Task：CGO-001 至 CGO-017 已全部完成；后续是发布前失败 Queue 审核与经授权的真实 Provider 冒烟验证，不属于新的 CGO 实施任务。
 
 ## 6. 推荐执行批次
 

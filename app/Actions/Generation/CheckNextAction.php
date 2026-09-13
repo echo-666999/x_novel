@@ -5,7 +5,6 @@ namespace App\Actions\Generation;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\ChapterStatus;
 use App\Exceptions\GenerationPreflightException;
-use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Services\AutoStopService;
@@ -17,6 +16,7 @@ class CheckNextAction
 {
     public function __construct(
         private readonly GenerateNextChapterAction $generateNextChapter,
+        private readonly AdvanceChapterPipelineAction $advanceChapterPipeline,
         private readonly AutoStopService $autoStop,
         private readonly MvpSoakRunService $mvpSoakRun,
         private readonly ReliabilityRunService $reliabilityRun,
@@ -48,9 +48,7 @@ class CheckNextAction
             return null;
         }
 
-        if ($nextChapter->wasRecentlyCreated) {
-            PlanChapterJob::dispatch($nextChapter->getKey())->afterCommit();
-        }
+        $this->advanceChapterPipeline->handle($nextChapter->getKey());
 
         return $nextChapter;
     }

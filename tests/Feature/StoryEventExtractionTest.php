@@ -167,7 +167,7 @@ test('the event workflow automatically builds the matching state patch before re
     expect((int) data_get($patch->data, 'source_artifact_id'))->toBe($candidate->getKey())
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
-    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && $job->regenerate);
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && ! $job->regenerate);
 });
 
 test('extractor binds evidence to the authoritative chapter draft instead of trusting a model artifact id', function () {
@@ -275,6 +275,7 @@ test('extractor records the candidate index and invalid value for validation fai
 });
 
 test('retryable provider failure is recorded and retried from event extraction', function () {
+    Queue::fake();
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(new AiProviderException('provider_timeout', 'timeout', true))

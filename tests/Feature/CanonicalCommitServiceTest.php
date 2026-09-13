@@ -485,6 +485,10 @@ test('a pass review exposes a canonical commit preview and action', function () 
         'record' => $fixture['novel']->getRouteKey(),
         'chapter' => $fixture['chapter']->getRouteKey(),
     ])
+        ->assertSee('当前流水线状态')
+        ->assertSee('Review PASS')
+        ->assertSee('自动流水线按规则停止')
+        ->assertSee('提交正式章节')
         ->assertActionVisible('commitCanonical')
         ->assertActionEnabled('commitCanonical')
         ->callAction('commitCanonical')

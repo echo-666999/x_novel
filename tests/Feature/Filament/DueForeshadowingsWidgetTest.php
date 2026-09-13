@@ -49,7 +49,7 @@ test('the dashboard widget shows due soon critical due and overdue foreshadowing
         ->assertOk()
         ->assertSeeTextInOrder([
             '待处理伏笔',
-            'Due Soon、Critical Due 与 Overdue',
+            '即将到期、到期和逾期',
             '星河彼岸',
             '失落坐标',
             'Overdue',

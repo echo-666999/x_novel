@@ -12,6 +12,7 @@ use App\Enums\SceneStatus;
 use App\Enums\VolumeStatus;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\CommitChapterJob;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
@@ -27,10 +28,13 @@ use App\Models\Scene;
 use App\Models\Volume;
 use App\Services\ResumeResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
+
+beforeEach(fn () => Cache::flush());
 
 test('resolver detects every persisted pipeline resume point without queue state', function () {
     $resolver = app(ResumeResolver::class);
@@ -46,19 +50,54 @@ test('resolver detects every persisted pipeline resume point without queue state
 
     $partial = pausedResumeNovel();
     $partialChapter = resumeChapter($partial);
+    ChapterPlan::factory()->for($partialChapter)->create(['status' => PlanStatus::Ready]);
     [$finishedScene, $nextScene] = resumeScenes($partialChapter, false);
 
     $complete = pausedResumeNovel();
     $completeChapter = resumeChapter($complete);
+    ChapterPlan::factory()->for($completeChapter)->create(['status' => PlanStatus::Ready]);
     resumeScenes($completeChapter, true);
+
+    $sceneRewritten = pausedResumeNovel();
+    $sceneRewrittenChapter = resumeChapter($sceneRewritten);
+    ChapterPlan::factory()->for($sceneRewrittenChapter)->create(['status' => PlanStatus::Ready]);
+    $rewrittenScene = Scene::factory()->for($sceneRewrittenChapter)->create([
+        'sequence' => 1,
+        'status' => SceneStatus::Draft,
+    ]);
+    $sceneRewrite = resumeArtifact($sceneRewritten, $sceneRewrittenChapter, ArtifactType::RewriteDraft, $rewrittenScene);
+    $rewrittenScene->update(['current_artifact_id' => $sceneRewrite->getKey()]);
 
     $drafted = pausedResumeNovel();
     $draftedChapter = resumeChapter($drafted, ChapterStatus::Review);
     resumeArtifact($drafted, $draftedChapter, ArtifactType::ChapterDraft);
 
+    $reviewReady = pausedResumeNovel();
+    $reviewReadyChapter = resumeChapter($reviewReady, ChapterStatus::Review);
+    $reviewReadyDraft = resumeArtifact($reviewReady, $reviewReadyChapter, ArtifactType::ChapterDraft);
+    $reviewReadyCandidate = resumeArtifact($reviewReady, $reviewReadyChapter, ArtifactType::EventCandidate, data: [
+        'source_artifact_id' => $reviewReadyDraft->getKey(),
+    ]);
+    resumeArtifact($reviewReady, $reviewReadyChapter, ArtifactType::StatePatch, data: [
+        'source_artifact_id' => $reviewReadyCandidate->getKey(),
+        'expected_state_version' => $reviewReady->canonicalStateVersion->version,
+    ]);
+
     $rewrite = pausedResumeNovel();
     $rewriteChapter = resumeChapter($rewrite, ChapterStatus::Rewrite);
-    $rewriteReview = resumeReview($rewrite, $rewriteChapter, ReviewDecision::Rewrite, [['scene_id' => 7]]);
+    $rewriteScene = Scene::factory()->for($rewriteChapter)->create([
+        'id' => 7,
+        'sequence' => 1,
+        'status' => SceneStatus::Draft,
+    ]);
+    $rewriteSource = resumeArtifact($rewrite, $rewriteChapter, ArtifactType::SceneDraft, $rewriteScene);
+    $rewriteScene->update(['current_artifact_id' => $rewriteSource->getKey()]);
+    $rewriteReview = resumeReview($rewrite, $rewriteChapter, ReviewDecision::Rewrite, [[
+        'scope' => 'scene',
+        'scene_id' => 7,
+        'auto_fixable' => true,
+        'requires_human_decision' => false,
+    ]]);
 
     $passed = pausedResumeNovel();
     $passedChapter = resumeChapter($passed, ChapterStatus::Review);
@@ -74,10 +113,13 @@ test('resolver detects every persisted pipeline resume point without queue state
         ->and($resolver->detect($withPlan)->sceneId)->toBeNull()
         ->and($resolver->detect($partial)->sceneId)->toBe($nextScene->getKey())
         ->and($resolver->detect($complete)->key)->toBe('assemble')
-        ->and($resolver->detect($drafted)->key)->toBe('review')
+        ->and($resolver->detect($sceneRewritten)->key)->toBe('assemble')
+        ->and($resolver->detect($drafted)->key)->toBe('event_extraction')
+        ->and($resolver->detect($reviewReady)->key)->toBe('review')
         ->and($resolver->detect($rewrite)->key)->toBe('rewrite')
         ->and($resolver->detect($rewrite)->sceneId)->toBe(7)
-        ->and($resolver->detect($passed)->key)->toBe('commit')
+        ->and($resolver->detect($passed)->key)->toBe('awaiting_commit')
+        ->and($resolver->detect($passed)->label)->toBe('等待提交正式章节')
         ->and($resolver->detect($passed)->reviewId)->toBe($passReview->getKey())
         ->and($resolver->detect($canonical)->key)->toBe('post_commit')
         ->and($resolver->detect($canonical)->chapterId)->toBe($canonicalChapter->getKey())
@@ -106,6 +148,7 @@ test('resume restores the previous status and dispatches exactly one job for eac
 
     $complete = pausedResumeNovel();
     $completeChapter = resumeChapter($complete);
+    ChapterPlan::factory()->for($completeChapter)->create(['status' => PlanStatus::Ready]);
     resumeScenes($completeChapter, true);
     $resolver->resume($complete);
 
@@ -113,6 +156,18 @@ test('resume restores the previous status and dispatches exactly one job for eac
     $draftedChapter = resumeChapter($drafted, ChapterStatus::Review);
     resumeArtifact($drafted, $draftedChapter, ArtifactType::ChapterDraft);
     $resolver->resume($drafted);
+
+    $reviewReady = pausedResumeNovel();
+    $reviewReadyChapter = resumeChapter($reviewReady, ChapterStatus::Review);
+    $reviewReadyDraft = resumeArtifact($reviewReady, $reviewReadyChapter, ArtifactType::ChapterDraft);
+    $reviewReadyCandidate = resumeArtifact($reviewReady, $reviewReadyChapter, ArtifactType::EventCandidate, data: [
+        'source_artifact_id' => $reviewReadyDraft->getKey(),
+    ]);
+    resumeArtifact($reviewReady, $reviewReadyChapter, ArtifactType::StatePatch, data: [
+        'source_artifact_id' => $reviewReadyCandidate->getKey(),
+        'expected_state_version' => $reviewReady->canonicalStateVersion->version,
+    ]);
+    $resolver->resume($reviewReady);
 
     $rewrite = pausedResumeNovel();
     $rewriteChapter = resumeChapter($rewrite, ChapterStatus::Rewrite);
@@ -134,9 +189,13 @@ test('resume restores the previous status and dispatches exactly one job for eac
     Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $noneChapter->getKey());
     Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $syncedScene->getKey());
     Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $completeChapter->getKey());
-    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $draftedChapter->getKey());
+    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $draftedChapter->getKey());
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $reviewReadyChapter->getKey());
     Queue::assertPushed(RewriteChapterJob::class, fn (RewriteChapterJob $job): bool => $job->chapterId === $rewriteChapter->getKey());
-    Queue::assertPushed(CommitChapterJob::class, fn (CommitChapterJob $job): bool => $job->chapterId === $passedChapter->getKey() && $job->reviewId === $passReview->getKey());
+    Queue::assertNotPushed(CommitChapterJob::class);
+    expect($passed->fresh()->status)->toBe(NovelStatus::Generating)
+        ->and($passReview->decision)->toBe(ReviewDecision::Pass)
+        ->and($passedChapter->fresh()->status)->toBe(ChapterStatus::Review);
 });
 
 test('blocked review stays paused and repeated resume is rejected', function () {
@@ -160,7 +219,7 @@ test('a review for an older draft does not decide the resume point for a newer d
 
     $point = app(ResumeResolver::class)->detect($novel);
 
-    expect($point->key)->toBe('review')
+    expect($point->key)->toBe('event_extraction')
         ->and($latestDraft->type)->toBe(ArtifactType::RewriteDraft);
 });
 
@@ -209,28 +268,45 @@ function resumeScenes(Chapter $chapter, bool $complete): array
     return [$first->refresh(), $second->refresh()];
 }
 
-function resumeArtifact(Novel $novel, Chapter $chapter, ArtifactType $type, ?Scene $scene = null): GenerationArtifact
+/** @param array<string, mixed> $data */
+function resumeArtifact(Novel $novel, Chapter $chapter, ArtifactType $type, ?Scene $scene = null, array $data = []): GenerationArtifact
 {
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'scene_id' => $scene?->getKey(),
         'scope_type' => $scene === null ? 'chapter' : 'scene',
         'scope_id' => $scene?->getKey() ?? $chapter->getKey(),
-        'stage' => $type === ArtifactType::SceneDraft ? GenerationStage::SceneGeneration : GenerationStage::ChapterAssembly,
+        'stage' => match (true) {
+            $type === ArtifactType::SceneDraft => GenerationStage::SceneGeneration,
+            $type === ArtifactType::RewriteDraft && $scene !== null => GenerationStage::Rewrite,
+            $type === ArtifactType::EventCandidate, $type === ArtifactType::StatePatch => GenerationStage::EventExtraction,
+            default => GenerationStage::ChapterAssembly,
+        },
         'status' => RunStatus::Succeeded,
+        'state_version' => $novel->canonicalStateVersion?->version ?? 0,
     ]);
 
-    return GenerationArtifact::factory()->for($run)->create(['type' => $type]);
+    return GenerationArtifact::factory()->for($run)->create(['type' => $type, 'data' => $data]);
 }
 
 /** @param array<int, array<string, mixed>> $findings */
 function resumeReview(Novel $novel, Chapter $chapter, ReviewDecision $decision, array $findings = []): Review
 {
+    if ($decision === ReviewDecision::Rewrite && $findings === []) {
+        $findings = [[
+            'scope' => 'chapter',
+            'scene_id' => null,
+            'auto_fixable' => true,
+            'requires_human_decision' => false,
+        ]];
+    }
+
     $draft = resumeArtifact($novel, $chapter, ArtifactType::ChapterDraft);
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'scope_type' => 'chapter',
         'scope_id' => $chapter->getKey(),
         'stage' => GenerationStage::Review,
         'status' => RunStatus::Succeeded,
+        'state_version' => $novel->canonicalStateVersion?->version ?? 0,
     ]);
 
     $reviewArtifact = GenerationArtifact::factory()->for($run)->create([

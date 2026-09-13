@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Generation\CheckNextAction;
 use App\Actions\Generation\GenerateNextChapterAction;
 use App\Data\ResumePoint;
@@ -11,13 +11,8 @@ use App\Enums\ChapterStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
+use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
-use App\Jobs\AssembleChapterJob;
-use App\Jobs\CommitChapterJob;
-use App\Jobs\GenerateSceneJob;
-use App\Jobs\PlanChapterJob;
-use App\Jobs\ReviewChapterJob;
-use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
@@ -29,8 +24,9 @@ class ResumeResolver
 {
     public function __construct(
         private readonly GenerateNextChapterAction $generateNextChapter,
+        private readonly AdvanceChapterPipelineAction $advanceChapterPipeline,
         private readonly CheckNextAction $checkNextAction,
-        private readonly SyncScenesFromChapterPlanAction $syncScenes,
+        private readonly RewriteScopeResolver $rewriteScopeResolver,
     ) {}
 
     public function detect(Novel $novel): ResumePoint
@@ -58,13 +54,22 @@ class ResumeResolver
         $review = $draft === null ? null : $this->latestReview($chapter, $draft);
 
         if ($review?->decision === ReviewDecision::Pass) {
-            return new ResumePoint('commit', '正式提交', $chapter->getKey(), reviewId: $review->getKey());
+            return new ResumePoint('awaiting_commit', '等待提交正式章节', $chapter->getKey(), reviewId: $review->getKey());
         }
 
         if ($review?->decision === ReviewDecision::Rewrite) {
-            $sceneId = collect($review->findings)->pluck('scene_id')->first(fn (mixed $id): bool => is_numeric($id));
+            $scopeDecision = $this->rewriteScopeResolver->resolveReview($chapter, $review);
 
-            return new ResumePoint('rewrite', $sceneId === null ? '整章重写' : '场景重写', $chapter->getKey(), $sceneId === null ? null : (int) $sceneId);
+            if (! $scopeDecision->isResolved()) {
+                return new ResumePoint('blocked', '无法确定安全的重写范围，需要人工处理', $chapter->getKey(), canResume: false);
+            }
+
+            return new ResumePoint(
+                'rewrite',
+                $scopeDecision->scope === 'scene' ? '场景重写' : '整章重写',
+                $chapter->getKey(),
+                $scopeDecision->sceneId,
+            );
         }
 
         if (in_array($review?->decision, [ReviewDecision::NeedsAttention, ReviewDecision::Block], true)) {
@@ -72,7 +77,20 @@ class ResumeResolver
         }
 
         if ($draft !== null) {
+            $candidate = $this->currentEventCandidate($chapter, $draft);
+            if ($candidate === null) {
+                return new ResumePoint('event_extraction', '故事事件提取', $chapter->getKey());
+            }
+
+            if ($this->currentStatePatch($chapter, $candidate) === null) {
+                return new ResumePoint('review_preparation', '状态补丁与章节审校', $chapter->getKey());
+            }
+
             return new ResumePoint('review', '章节审校', $chapter->getKey());
+        }
+
+        if (! $chapter->plans()->where('status', PlanStatus::Ready)->exists()) {
+            return new ResumePoint('plan', '章节规划', $chapter->getKey());
         }
 
         $scenes = $chapter->scenes()->orderBy('sequence')->get();
@@ -85,16 +103,12 @@ class ResumeResolver
                 : new ResumePoint('scene', '场景 '.$incomplete->sequence, $chapter->getKey(), $incomplete->getKey());
         }
 
-        if ($chapter->plans()->where('status', PlanStatus::Ready)->exists()) {
-            return new ResumePoint('scene', '场景 1', $chapter->getKey());
-        }
-
-        return new ResumePoint('plan', '章节规划', $chapter->getKey());
+        return new ResumePoint('scene', '场景 1', $chapter->getKey());
     }
 
     public function resume(Novel $novel): ResumePoint
     {
-        return DB::transaction(function () use ($novel): ResumePoint {
+        $point = DB::transaction(function () use ($novel): ResumePoint {
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
             $point = $this->detect($lockedNovel);
 
@@ -114,10 +128,13 @@ class ResumeResolver
                 unset($settings['auto_stop']);
             }
             $lockedNovel->update(['status' => $status, 'settings' => $settings]);
-            $this->dispatch($lockedNovel->refresh(), $point);
 
             return $point;
         });
+
+        $this->advance($novel->fresh(), $point);
+
+        return $point;
     }
 
     private function activeChapter(Novel $novel): ?Chapter
@@ -132,8 +149,13 @@ class ResumeResolver
 
     private function latestReview(Chapter $chapter, GenerationArtifact $draft): ?Review
     {
+        $stateVersion = $chapter->novel->canonicalStateVersion?->version;
+
         return Review::query()
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->where('state_version', $stateVersion)
+                ->where('status', RunStatus::Succeeded))
             ->with('artifact')
             ->latest('id')
             ->get()
@@ -144,47 +166,61 @@ class ResumeResolver
     {
         return GenerationArtifact::query()
             ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->whereNull('scene_id')
+                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
             ->latest('id')
             ->first();
     }
 
-    private function dispatch(Novel $novel, ResumePoint $point): void
+    private function currentEventCandidate(Chapter $chapter, GenerationArtifact $draft): ?GenerationArtifact
     {
-        match ($point->key) {
-            'post_commit' => $this->checkNextAction->handle($novel, (int) $point->chapterId),
-            'commit' => CommitChapterJob::dispatch((int) $point->chapterId, (int) $point->reviewId)->afterCommit(),
-            'rewrite' => RewriteChapterJob::dispatch((int) $point->chapterId, $point->sceneId)->afterCommit(),
-            'review' => ReviewChapterJob::dispatch((int) $point->chapterId)->afterCommit(),
-            'assemble' => AssembleChapterJob::dispatch((int) $point->chapterId)->afterCommit(),
-            'scene' => $this->dispatchScene($point),
-            'plan' => $this->dispatchPlan($novel, $point),
-            default => null,
-        };
+        $stateVersion = $chapter->novel->canonicalStateVersion?->version;
+
+        return GenerationArtifact::query()
+            ->where('type', ArtifactType::EventCandidate)
+            ->where('data->source_artifact_id', $draft->getKey())
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->where('state_version', $stateVersion)
+                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
+            ->latest('id')
+            ->first();
     }
 
-    private function dispatchScene(ResumePoint $point): void
+    private function currentStatePatch(Chapter $chapter, GenerationArtifact $candidate): ?GenerationArtifact
     {
-        $sceneId = $point->sceneId;
-        if ($sceneId === null) {
-            $chapter = Chapter::query()->findOrFail($point->chapterId);
-            $this->syncScenes->execute($chapter);
-            $sceneId = $chapter->scenes()->orderBy('sequence')->value('id');
-        }
+        $stateVersion = $chapter->novel->canonicalStateVersion?->version;
 
-        if ($sceneId === null) {
-            throw ValidationException::withMessages(['resume' => 'Chapter Plan 没有可恢复的 Scene。']);
-        }
-
-        GenerateSceneJob::dispatch($sceneId)->afterCommit();
+        return GenerationArtifact::query()
+            ->where('type', ArtifactType::StatePatch)
+            ->where('data->source_artifact_id', $candidate->getKey())
+            ->where('data->expected_state_version', $stateVersion)
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
+            ->latest('id')
+            ->first();
     }
 
-    private function dispatchPlan(Novel $novel, ResumePoint $point): void
+    private function advance(Novel $novel, ResumePoint $point): void
     {
-        $chapter = $point->chapterId === null
-            ? $this->generateNextChapter->handle($novel)
-            : Chapter::query()->findOrFail($point->chapterId);
+        if ($point->key === 'post_commit') {
+            $this->checkNextAction->handle($novel, (int) $point->chapterId);
 
-        PlanChapterJob::dispatch($chapter->getKey())->afterCommit();
+            return;
+        }
+
+        if ($point->key === 'awaiting_commit') {
+            return;
+        }
+
+        $chapterId = $point->chapterId;
+        if ($chapterId === null) {
+            $chapterId = $this->generateNextChapter->handle($novel)->getKey();
+        }
+
+        $this->advanceChapterPipeline->handle((int) $chapterId);
     }
 }

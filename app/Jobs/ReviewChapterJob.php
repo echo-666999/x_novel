@@ -2,17 +2,11 @@
 
 namespace App\Jobs;
 
-use App\AI\BudgetService;
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
-use App\AI\Exceptions\BudgetExceededException;
-use App\Enums\ArtifactType;
-use App\Enums\ReviewDecision;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
-use App\Models\GenerationArtifact;
-use App\Models\Review;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
-use App\Services\GenerationStageGate;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -46,19 +40,15 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
         return 'chapter:'.$this->chapterId;
     }
 
-    public function handle(ChapterReviewer $reviewer): void
+    public function handle(ChapterReviewer $reviewer, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        $advance ??= app(AdvanceChapterPipelineAction::class);
+
         try {
             $review = $reviewer->review($this->chapterId, $this->regenerate, $this->operationId);
 
-            if ($review?->decision === ReviewDecision::Rewrite) {
-                $this->dispatchRewrite($review);
-            } elseif ($review?->decision === ReviewDecision::Pass
-                && (bool) data_get($review->generationRun->novel->settings, 'auto_commit', false)) {
-                app(GenerationStageGate::class)->dispatchForChapter(
-                    $this->chapterId,
-                    fn () => CommitChapterJob::dispatch($this->chapterId, $review->getKey()),
-                );
+            if ($review !== null) {
+                $advance->handle($this->chapterId);
             }
 
             $this->releaseGenerationDispatch();
@@ -92,31 +82,5 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 
         app(AutoStopService::class)->stopForFailure($this->chapterId, $e);
         app(ChapterReviewer::class)->markTerminalFailure($this->chapterId);
-    }
-
-    private function dispatchRewrite(Review $review): void
-    {
-        $alreadyCompleted = GenerationArtifact::query()
-            ->where('type', ArtifactType::RewriteDraft)
-            ->where('data->source_review_id', $review->getKey())
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
-            ->exists();
-
-        if ($alreadyCompleted) {
-            return;
-        }
-
-        try {
-            app(BudgetService::class)->assertWithinChapterLimits($review->generationRun->chapter);
-        } catch (BudgetExceededException $exception) {
-            app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
-
-            return;
-        }
-
-        app(GenerationStageGate::class)->dispatchForChapter(
-            $this->chapterId,
-            fn () => $this->dispatchGenerationJob(new RewriteChapterJob($this->chapterId)),
-        );
     }
 }

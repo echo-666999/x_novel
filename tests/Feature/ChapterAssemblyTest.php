@@ -23,10 +23,12 @@ use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Services\ChapterAssembler;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
-function chapterAssemblyFixture(int $sceneCount = 2): array
+function chapterAssemblyFixture(int $sceneCount = 2, array $firstSceneCoverageOverrides = []): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
@@ -40,7 +42,7 @@ function chapterAssemblyFixture(int $sceneCount = 2): array
         'scene_plans' => [],
         'target_words' => 7,
     ]);
-    $scenes = collect(range(1, $sceneCount))->map(function (int $sequence) use ($chapter, $novel): Scene {
+    $scenes = collect(range(1, $sceneCount))->map(function (int $sequence) use ($chapter, $novel, $firstSceneCoverageOverrides): Scene {
         $scene = Scene::factory()->for($chapter)->create([
             'sequence' => $sequence,
             'status' => SceneStatus::Draft,
@@ -50,9 +52,18 @@ function chapterAssemblyFixture(int $sceneCount = 2): array
             'status' => RunStatus::Succeeded,
         ]);
         $content = "Scene {$sequence} 正文";
+        $fulfilled = ['status' => 'fulfilled', 'evidence' => $content];
+        $selfCheck = [
+            'goal' => $fulfilled,
+            'conflict' => $fulfilled,
+            'turn' => $fulfilled,
+            'outcome' => $fulfilled,
+            ...($sequence === 1 ? $firstSceneCoverageOverrides : []),
+        ];
         $artifact = GenerationArtifact::factory()->for($run)->create([
             'type' => ArtifactType::SceneDraft,
             'content' => $content,
+            'data' => ['self_check' => $selfCheck],
             'checksum' => hash('sha256', $content),
         ]);
         $scene->update(['current_artifact_id' => $artifact->getKey()]);
@@ -63,11 +74,36 @@ function chapterAssemblyFixture(int $sceneCount = 2): array
     return compact('novel', 'chapter', 'scenes');
 }
 
-function assemblyResponse(string $content = '完整章节正文'): AiResponse
+function assemblyCoverage(string $content, ?array $overrides = null): array
 {
+    $fulfilled = ['status' => 'fulfilled', 'evidence' => $content];
+
+    return Scene::query()->orderBy('sequence')->get()->map(function (Scene $scene) use ($fulfilled, $overrides): array {
+        $coverage = [
+            'scene_id' => $scene->getKey(),
+            'goal' => $fulfilled,
+            'conflict' => $fulfilled,
+            'turn' => $fulfilled,
+            'outcome' => $fulfilled,
+        ];
+
+        return $scene->getKey() === data_get($overrides, 'scene_id')
+            ? [...$coverage, ...($overrides['coverage'] ?? [])]
+            : $coverage;
+    })->values()->all();
+}
+
+function assemblyResponse(string $content = '完整章节正文', ?array $coverage = null, array $introducedMajorFacts = []): AiResponse
+{
+    $payload = [
+        'content' => $content,
+        'scene_coverage' => $coverage ?? assemblyCoverage($content),
+        'introduced_major_facts' => $introducedMajorFacts,
+    ];
+
     return new AiResponse(
-        content: $content,
-        structuredData: null,
+        content: json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $payload,
         inputTokens: 300,
         outputTokens: 600,
         cachedTokens: 0,
@@ -90,6 +126,9 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
     expect($artifact->type)->toBe(ArtifactType::ChapterDraft)
         ->and($artifact->version)->toBe(1)
         ->and($artifact->content)->toBe('第一幕。第二幕。第三幕。')
+        ->and($artifact->data['scene_coverage'])->toHaveCount(3)
+        ->and($artifact->data['plan_findings'])->toBe([])
+        ->and($artifact->data['introduced_major_facts'])->toBe([])
         ->and($artifact->data['ordered_scene_checksums'])->toBe($fixture['scenes']->pluck('currentArtifact.checksum')->all())
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->bible_version)->toBe(1)
@@ -104,9 +143,78 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($artifact->data['word_count'])->toBe(mb_strlen('第一幕。第二幕。第三幕。'))
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得把正文压缩成摘要')
         ->and($fake->requests()[0]->systemPrompt)->toContain('previous_chapter_ending')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.scene_coverage.items.required'))->toBe(['scene_id', 'goal', 'conflict', 'turn', 'outcome'])
         ->and(mb_strpos($prompt, 'Scene 1 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 2 正文'))
         ->and(mb_strpos($prompt, 'Scene 2 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 3 正文'));
 });
+
+test('assembly coverage creates a localized finding for a missing or contradicted outcome', function (string $status, string $code, ?string $evidence) {
+    $fixture = chapterAssemblyFixture(1);
+    $content = '林舟在门前停下，没有进入灯塔。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $coverage = assemblyCoverage($content, [
+        'scene_id' => $fixture['scenes']->first()->getKey(),
+        'coverage' => ['outcome' => ['status' => $status, 'evidence' => $evidence]],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse($content, $coverage)));
+
+    $artifact = app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey());
+    $finding = data_get($artifact->data, 'plan_findings.0');
+
+    expect($finding['code'])->toBe($code)
+        ->and($finding['scene_id'])->toBe($fixture['scenes']->first()->getKey())
+        ->and($finding['plan_element'])->toBe('outcome')
+        ->and($finding['coverage_status'])->toBe($status)
+        ->and($finding['source'])->toBe('assembly_coverage');
+})->with([
+    'missing outcome' => ['missing', 'SCENE_PLAN_COVERAGE_MISSING', null],
+    'contradicted outcome' => ['contradicted', 'SCENE_PLAN_COVERAGE_CONTRADICTED', '没有进入灯塔'],
+]);
+
+test('assembly rejects foreign scene references and evidence outside the final chapter', function (callable $mutateCoverage, string $message) {
+    $fixture = chapterAssemblyFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $valid = assemblyCoverage($content);
+    $coverage = $mutateCoverage($fixture, $valid);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse($content, $coverage)));
+
+    expect(fn () => app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, $message);
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(0);
+})->with([
+    'foreign scene' => [
+        fn (array $fixture, array $coverage): array => [[...$coverage[0], 'scene_id' => Scene::factory()->create()->getKey()]],
+        '必须按顺序且不重复地引用本章全部 Scene',
+    ],
+    'invalid evidence' => [
+        fn (array $fixture, array $coverage): array => [[...$coverage[0], 'outcome' => ['status' => 'fulfilled', 'evidence' => '正文中不存在的句子']]],
+        '必须逐字来自当前正文',
+    ],
+]);
+
+test('assembly cannot invent a missing scene outcome or declare new major facts', function (bool $upgradeCoverage) {
+    $fixture = chapterAssemblyFixture(1, [
+        'outcome' => ['status' => 'missing', 'evidence' => null],
+    ]);
+    $content = '林舟突然获得了新能力。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $response = $upgradeCoverage
+        ? assemblyResponse($content)
+        : assemblyResponse($content, introducedMajorFacts: ['林舟获得新能力']);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue($response));
+
+    expect(fn () => app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, $upgradeCoverage
+            ? '不得把 Scene Draft 中缺失或反转的计划项改写为 fulfilled'
+            : '不得新增重大事实');
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(0);
+})->with([
+    'coverage upgrade' => [true],
+    'declared major fact' => [false],
+]);
 
 test('assembly refuses to run until every scene has a successful draft', function () {
     $fixture = chapterAssemblyFixture();
@@ -164,6 +272,7 @@ test('retrying assembly recovers a blocked chapter before starting a new run', f
 });
 
 test('retryable assembly failures are recorded and retry from assembly only', function () {
+    Queue::fake();
     $fixture = chapterAssemblyFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(new AiProviderException('provider_timeout', 'timeout', true))

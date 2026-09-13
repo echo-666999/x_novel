@@ -143,6 +143,14 @@ class ViewNovelPlanningPreview extends ViewRecord
                             TextEntry::make('conflict')->label('冲突'),
                             TextEntry::make('turn')->label('转折'),
                             TextEntry::make('outcome')->label('结果'),
+                            TextEntry::make('outcome_allowed')
+                                ->label('结果允许行为')
+                                ->badge()
+                                ->placeholder('未限定'),
+                            TextEntry::make('outcome_forbidden')
+                                ->label('结果禁止行为')
+                                ->badge()
+                                ->placeholder('未限定'),
                         ]),
                 ]),
             Section::make('约束与伏笔')
@@ -230,6 +238,8 @@ class ViewNovelPlanningPreview extends ViewRecord
                 'conflict' => $scene['conflict'] ?? null,
                 'turn' => $scene['turn'] ?? null,
                 'outcome' => $scene['outcome'] ?? null,
+                'outcome_allowed' => $scene['outcome_allowed'] ?? [],
+                'outcome_forbidden' => $scene['outcome_forbidden'] ?? [],
             ])
             ->all();
     }
