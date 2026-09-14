@@ -91,6 +91,15 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
             'pacing' => 90,
             'style' => 90,
         ],
+        'dimension_audits' => [
+            'continuity' => ['status' => 'pass', 'summary' => '全量检查未发现需要报告的问题。'],
+            'plan' => ['status' => 'pass', 'summary' => '全量检查未发现需要报告的问题。'],
+            'character' => ['status' => 'pass', 'summary' => '全量检查未发现需要报告的问题。'],
+            'progress' => ['status' => 'pass', 'summary' => '全量检查未发现需要报告的问题。'],
+            'repetition' => ['status' => 'pass', 'summary' => '全量检查未发现需要报告的问题。'],
+            'pacing' => ['status' => 'pass', 'summary' => '全量检查未发现需要报告的问题。'],
+            'style' => ['status' => 'issues_found', 'summary' => '已一次列出文风维度发现的全部问题。'],
+        ],
         'findings' => [[
             'code' => 'STYLE_MISMATCH',
             'dimension' => 'style',

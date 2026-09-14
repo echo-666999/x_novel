@@ -1332,6 +1332,8 @@ Scene
 
 普通 warning 按可执行性分流：可自动修复则 REWRITE；不影响发布且无需修复可 PASS；真正需要用户选择或 Rewrite 耗尽才 NEEDS_ATTENTION。Hard Conflict 仍无条件 BLOCK。
 
+每轮 Review 必须先完成全部七个质量维度的全量检查，再一次性返回当前正文中所有有明确证据的问题；不得发现一个问题后提前结束或把同一根因拆到后续轮次。Rewrite 必须把同一 Review 的全部可修复问题作为一个批次一次解决，并在返回前再次全量检查，避免修复旧问题时保留或引入同类问题。
+
 ---
 
 # 17. Rewrite 策略

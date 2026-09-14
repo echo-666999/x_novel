@@ -377,6 +377,8 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
 
+Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。结构化输出为每个维度保存 `dimension_audits.status = pass|issues_found` 与简短结论；状态必须与该维度 Findings 一致，否则拒绝持久化。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Narrative Findings 作为回归清单，逐项确认是否消除，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
+
 Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 使用确定性规则选择最小安全范围：单一有效 `scene_id` 进入 Scene Rewrite；Paragraph Finding 只在 evidence 能唯一命中一个当前 Scene Artifact 时映射到该 Scene；任一 Chapter Finding 或多个 Scene 受影响时进入 Chapter Rewrite。无效 Scene 引用、不支持的 scope 或不唯一的段落证据会追加 `REWRITE_SCOPE_UNRESOLVED` 并转为 `NEEDS_ATTENTION`，不猜测修复位置。Review Artifact 固定保存 `rewrite_scope`，队列派发与暂停恢复均优先使用该不可变路由。
 
 `ReviewChapterJob` 保存结果后调用 `AdvanceChapterPipelineAction`。推进器只在 Decision 为 REWRITE 且范围、预算和状态允许时派发 `RewriteChapterJob`；PASS、NEEDS_ATTENTION 与 BLOCK 均停止。预算到限时保留已完成的 Review，写入 `budget_limit` 自动停止原因，不派发下一阶段；小说在结果保存后被暂停时同样不得派发。每个 Review Job 带有稳定的 operation ID，使同一强制审校投递被重复执行时复用已完成 Run，而新的人工强制审校仍可创建新 Run。
@@ -388,6 +390,8 @@ Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding
 重写跨章连续性问题时同时输入 `previous_chapter_ending`，使模型能依据真实上一章结尾补写过渡，而不是只依赖 Finding 的概述。
 
 Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
+
+同一 Review 的全部可修复 Findings 构成一个不可拆分的批量修复合同。Rewrite 必须在一次响应中逐项解决全部问题，随后对七个维度、计划边界、时间地点、人物状态、物品位置、动作因果和 Style Contract 进行全量自检，并在返回前修复发现的连带问题；不得只处理首个或最严重的 Finding。
 
 整章 Rewrite 的首轮提示同时给出 95%～105% 的优选字数区间。若首轮仍越界，长度修复只请求最多 12 项精确局部替换，并给出进入优选区间所需的净增减字符数。`search` 必须在当前正文中逐字且唯一命中；压缩补丁的 replacement 必须更短，扩写补丁必须更长。Laravel 逐项应用并确定性校验方向和硬上下限，跨越另一侧硬边界的补丁拒绝应用，拒绝原因反馈给下一次修复。这样任何无效补丁都不会覆盖当前 Draft，也不会在压缩和扩写之间切换输入。
 
@@ -633,8 +637,8 @@ chapter-planner-v6
 scene-writer-v10
 assembler-v8
 event-extractor-v4
-reviewer-v7
-rewrite-v8
+reviewer-v8
+rewrite-v9
 rewrite-length-patch-v1
 summary-v1
 ```

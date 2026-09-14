@@ -6,8 +6,8 @@ return [
         'writer' => 'scene-writer-v10',
         'assembler' => 'assembler-v8',
         'extractor' => 'event-extractor-v4',
-        'reviewer' => 'reviewer-v7',
-        'rewrite' => 'rewrite-v8',
+        'reviewer' => 'reviewer-v8',
+        'rewrite' => 'rewrite-v9',
         'summary' => 'summary-v1',
     ],
 ];

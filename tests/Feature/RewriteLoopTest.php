@@ -215,7 +215,32 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and(data_get($artifact->data, 'plan_acceptance.chapter_function'))->toBe($fixture['chapter']->latestPlan->chapter_function)
         ->and(data_get($artifact->data, 'repair_findings.0.evidence'))->toBe('末段重复')
         ->and($fake->requests()[0]->prompt)->toContain('"plan_acceptance"')
+        ->and($fake->requests()[0]->prompt)->toContain('"require_all_in_one_response":true')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('必须一次性解决的完整问题批次')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得只处理第一项')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度进行一次全量自检')
         ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
+});
+
+test('chapter rewrite sends every review finding as one required repair batch', function () {
+    $fixture = rewriteFixture();
+    $findings = [
+        ['code' => 'PACING_ISSUE', 'dimension' => 'pacing', 'severity' => 'warning', 'scene_id' => null, 'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '压缩重复的流程说明。', 'evidence' => '重复流程'],
+        ['code' => 'STYLE_MISMATCH', 'dimension' => 'style', 'severity' => 'warning', 'scene_id' => null, 'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '改为直接表达。', 'evidence' => '文学化比喻'],
+        ['code' => 'CONTINUITY_BREAK', 'dimension' => 'continuity', 'severity' => 'error', 'scene_id' => null, 'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '修正物品位置。', 'evidence' => '封套已经入柜'],
+    ];
+    $fixture['review']->update(['findings' => $findings]);
+    $fake = (new FakeAiProvider)->enqueue(rewriteResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->data['repair_findings'])->toBe($findings)
+        ->and(data_get($artifact->generationRun->context_snapshot, 'batch_repair.required_finding_count'))->toBe(3)
+        ->and(data_get($artifact->generationRun->context_snapshot, 'batch_repair.required_finding_codes'))->toBe(['PACING_ISSUE', 'STYLE_MISMATCH', 'CONTINUITY_BREAK'])
+        ->and($fake->requests()[0]->prompt)->toContain('压缩重复的流程说明。')
+        ->and($fake->requests()[0]->prompt)->toContain('改为直接表达。')
+        ->and($fake->requests()[0]->prompt)->toContain('修正物品位置。');
 });
 
 test('chapter rewrite receives the previous canonical ending for continuity repair', function () {

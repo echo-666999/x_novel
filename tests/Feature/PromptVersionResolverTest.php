@@ -10,8 +10,8 @@ test('prompt versions follow the documented convention', function () {
         'writer' => 'scene-writer-v10',
         'assembler' => 'assembler-v8',
         'extractor' => 'event-extractor-v4',
-        'reviewer' => 'reviewer-v7',
-        'rewrite' => 'rewrite-v8',
+        'reviewer' => 'reviewer-v8',
+        'rewrite' => 'rewrite-v9',
         'summary' => 'summary-v1',
     ]);
 });
@@ -23,8 +23,8 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
     'writer' => [AiStage::Writer, 'scene-writer-v10'],
     'assembler' => [AiStage::Assembler, 'assembler-v8'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v4'],
-    'reviewer' => [AiStage::Reviewer, 'reviewer-v7'],
-    'rewrite' => [AiStage::Rewrite, 'rewrite-v8'],
+    'reviewer' => [AiStage::Reviewer, 'reviewer-v8'],
+    'rewrite' => [AiStage::Rewrite, 'rewrite-v9'],
     'summary' => [AiStage::Summary, 'summary-v1'],
 ]);
 

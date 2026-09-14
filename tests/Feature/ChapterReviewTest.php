@@ -62,9 +62,19 @@ function reviewFixture(?Closure $draftDataFactory = null): array
     return compact('novel', 'chapter', 'draft');
 }
 
-function reviewResponse(string $decision = 'PASS', int $score = 90, array $findings = []): AiResponse
+function reviewResponse(string $decision = 'PASS', int $score = 90, array $findings = [], ?array $dimensionAudits = null): AiResponse
 {
-    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'findings' => $findings];
+    $dimensionAudits ??= collect(['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'])
+        ->mapWithKeys(function (string $dimension) use ($findings): array {
+            $hasFindings = collect($findings)->contains(fn (array $finding): bool => ($finding['dimension'] ?? null) === $dimension);
+
+            return [$dimension => [
+                'status' => $hasFindings ? 'issues_found' : 'pass',
+                'summary' => $hasFindings ? '已一次列出该维度发现的全部问题。' : '全量检查未发现需要报告的问题。',
+            ]];
+        })
+        ->all();
+    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'dimension_audits' => $dimensionAudits, 'findings' => $findings];
 
     return new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'review-request', model: 'review-test');
 }
@@ -119,7 +129,55 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
         ->and($fake->requests()[0]->systemPrompt)->toContain('message 与 evidence 必须使用简体中文')
         ->and($fake->requests()[0]->systemPrompt)->toContain('state_findings 为空表示确定性检查未发现问题')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('may_hint 是可选提示');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('may_hint 是可选提示')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得发现一个问题后提前停止')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度逐项完成全量检查')
+        ->and(data_get($review->artifact->data, 'dimension_audits.continuity.status'))->toBe('pass');
+});
+
+test('review rejects dimension audit status that does not match the complete finding set', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $finding = reviewFinding(autoFixable: true);
+    $audits = collect(['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'])
+        ->mapWithKeys(fn (string $dimension): array => [$dimension => [
+            'status' => 'pass',
+            'summary' => '未发现问题。',
+        ]])
+        ->all();
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(findings: [$finding], dimensionAudits: $audits)));
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, 'style 审计状态与 Findings 不一致');
+});
+
+test('review after rewrite carries every prior actionable finding as a verification checklist', function () {
+    $fixture = reviewFixture();
+    $reviewRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create(['type' => ArtifactType::ReviewResult]);
+    $priorFindings = [
+        reviewFinding(code: 'PACING_ISSUE', dimension: 'pacing', autoFixable: true, message: '节奏拖沓。'),
+        reviewFinding(autoFixable: true),
+    ];
+    Review::factory()->create([
+        'generation_run_id' => $reviewRun->getKey(),
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::Rewrite,
+        'findings' => $priorFindings,
+    ]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey(), regenerate: true, operationId: 'full-review-verification');
+
+    expect(data_get($review->generationRun->context_snapshot, 'repair_verification.required_findings'))->toHaveCount(2)
+        ->and($fake->requests()[0]->prompt)->toContain('节奏拖沓。')
+        ->and($fake->requests()[0]->prompt)->toContain('主文风不匹配。')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('上一轮全部可修复问题是否已经消除');
 });
 
 test('style findings are grounded in draft evidence and the frozen style contract', function () {

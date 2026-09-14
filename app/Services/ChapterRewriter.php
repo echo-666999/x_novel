@@ -79,6 +79,13 @@ class ChapterRewriter
             'style_contract_checksum' => $styleContract['checksum'],
             'l4' => $styleContract,
             'findings' => $findings,
+            'batch_repair' => [
+                'required_finding_count' => count($findings),
+                'required_finding_indexes' => array_keys($findings),
+                'required_finding_codes' => collect($findings)->pluck('code')->values()->all(),
+                'require_all_in_one_response' => true,
+                'full_quality_check' => ['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'],
+            ],
             'plan_acceptance' => $this->planAcceptance($chapter, $sceneId),
             'must_preserve' => $chapter->latestPlan->only(['chapter_function', 'arc_contribution', 'reader_promise', 'must_reveal']),
             'expected_fixes' => collect($findings)->pluck('message')->filter()->values()->all(),
@@ -205,7 +212,7 @@ class ChapterRewriter
 
     private function systemPrompt(bool $sceneRewrite): string
     {
-        $base = '你是 XNovel 定向重写器。只修复 findings 中的问题，严格保留 plan_acceptance 要求的剧情结果和既定事实。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words 且不得超过 length_requirement.maximum_words，并优先进入 preferred_minimum_words～preferred_maximum_words 的窄目标区间；字数统计排除空白和换行。原稿已处于硬范围时，应保持原有段落结构和整体篇幅；修复重复或节奏问题必须净缩减。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
+        $base = '你是 XNovel 批量定向重写器。findings 是本轮必须一次性解决的完整问题批次；必须逐项修复 batch_repair.required_finding_indexes 指定的全部问题，不得只处理第一项、最严重项或最容易处理的项，也不得把剩余问题留给下一轮。严格保留 plan_acceptance 要求的剧情结果和既定事实。完成全部指定修复后，必须重新通读最终正文，对 continuity、plan、character、progress、repetition、pacing、style 七个维度进行一次全量自检，并立即修复重写过程中产生或原稿中仍然明显存在的同类问题；尤其检查时间地点、人物身体状态、物品位置、动作因果、重复表达和文风参数，避免修好旧问题又保留或引入低级矛盾。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words 且不得超过 length_requirement.maximum_words，并优先进入 preferred_minimum_words～preferred_maximum_words 的窄目标区间；字数统计排除空白和换行。原稿已处于硬范围时，应保持原有段落结构和整体篇幅；修复重复或节奏问题必须净缩减。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
 
         return $sceneRewrite
             ? $base.'当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'

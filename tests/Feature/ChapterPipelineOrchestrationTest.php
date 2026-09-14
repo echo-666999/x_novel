@@ -482,6 +482,16 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'pacing' => 92,
                 'style' => 92,
             ],
+            'dimension_audits' => collect(['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'])
+                ->mapWithKeys(fn (string $dimension): array => [$dimension => [
+                    'status' => collect($findings)->contains(fn (array $finding): bool => $finding['dimension'] === $dimension)
+                        ? 'issues_found'
+                        : 'pass',
+                    'summary' => collect($findings)->contains(fn (array $finding): bool => $finding['dimension'] === $dimension)
+                        ? '已一次列出该维度发现的全部问题。'
+                        : '全量检查未发现需要报告的问题。',
+                ]])
+                ->all(),
             'findings' => $findings,
         ];
     }
