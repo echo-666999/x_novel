@@ -98,6 +98,8 @@ Budget 未达到 Hard Limit
 
 下一章 `sequence = current_chapter_sequence + 1`。已有同 sequence 非 Canonical Chapter 时恢复，不重复创建。
 
+Filament 的章节生成和长跑入口必须捕获可预期的 Preflight、Budget 与 Validation 异常，以危险通知展示具体原因；这些业务拒绝不得变成 HTTP 500。
+
 ## 5. GenerationRun / Artifact
 
 独立 Run Stage：

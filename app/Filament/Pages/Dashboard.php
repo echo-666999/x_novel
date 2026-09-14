@@ -5,6 +5,8 @@ namespace App\Filament\Pages;
 use App\Actions\Generation\StartMvpSoakRunAction;
 use App\Actions\Generation\StartReliabilityRunAction;
 use App\Actions\Generation\StartSmokeRunAction;
+use App\AI\Exceptions\BudgetExceededException;
+use App\Exceptions\GenerationPreflightException;
 use App\Filament\Actions\EmergencyStopAction;
 use App\Filament\Widgets\DueForeshadowingsWidget;
 use App\Models\Novel;
@@ -23,6 +25,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Schema;
 use Filament\Widgets\StatsOverviewWidget\Stat;
+use Illuminate\Validation\ValidationException;
 
 class Dashboard extends BaseDashboard
 {
@@ -52,7 +55,17 @@ class Dashboard extends BaseDashboard
                         ->required(),
                 ])
                 ->action(function (array $data, StartMvpSoakRunAction $start): void {
-                    $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+                    try {
+                        $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法启动 100 章 MVP 浸泡测试')
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
 
                     Notification::make()
                         ->title('100 章 MVP 浸泡测试已启动')
@@ -79,7 +92,17 @@ class Dashboard extends BaseDashboard
                         ->required(),
                 ])
                 ->action(function (array $data, StartReliabilityRunAction $start): void {
-                    $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+                    try {
+                        $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法启动 50 章可靠性长跑')
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
 
                     Notification::make()
                         ->title('50 章可靠性长跑已启动')
@@ -106,7 +129,17 @@ class Dashboard extends BaseDashboard
                         ->required(),
                 ])
                 ->action(function (array $data, StartSmokeRunAction $start): void {
-                    $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+                    try {
+                        $chapter = $start->handle(Novel::query()->findOrFail($data['novel_id']));
+                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法启动 20 章长跑')
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
 
                     Notification::make()
                         ->title('20 章长跑已启动')
