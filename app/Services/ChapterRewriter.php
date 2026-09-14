@@ -7,6 +7,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
+use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -112,8 +113,12 @@ class ChapterRewriter
                 metadata: $metadata,
             ));
             $payload = $this->responsePayload(
-                content: $response->content,
-                structuredData: $response->structuredData,
+                content: $sceneId === null
+                    ? StructuredOutput::requireContent($response, 'rewrite', 'Chapter Rewrite')
+                    : $response->content,
+                structuredData: $sceneId === null
+                    ? $response->structuredData
+                    : StructuredOutput::require($response, 'rewrite', 'Scene Rewrite'),
                 sceneRewrite: $sceneId !== null,
                 model: $settings->model,
                 metadata: $metadata,
@@ -326,8 +331,12 @@ class ChapterRewriter
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
             $payload = $this->responsePayload(
-                content: $response->content,
-                structuredData: $response->structuredData,
+                content: $sceneRewrite
+                    ? $response->content
+                    : StructuredOutput::requireContent($response, 'rewrite', 'Chapter Rewrite'),
+                structuredData: $sceneRewrite
+                    ? StructuredOutput::require($response, 'rewrite', 'Scene Rewrite')
+                    : $response->structuredData,
                 sceneRewrite: $sceneRewrite,
                 model: $model,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt],

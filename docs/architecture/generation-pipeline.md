@@ -162,7 +162,7 @@ context
 → hash 不同：new attempt
 ```
 
-技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。
+技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 且没有可解析结构化结果时，必须记录为对应阶段的 `*_output_truncated` 技术故障并交由 Queue 重试，不能把它误记为普通 Schema 内容错误后立即阻塞。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
 
 Filament 发起生成任务时，必须在派发前写入带 TTL 的临时待执行标记，并在标记存在或数据库已有 `queued / running` Run 时禁用本章的生成操作。Queue Job 同时使用按阶段与业务对象定义的唯一键，防止页面刷新、多标签页或并发请求重复入队。Job 成功或最终失败后清除临时标记；Worker 异常退出时由 TTL 自动释放。该标记只用于弥补 Job 入队到 `GenerationRun` 创建之间的可见性窗口，业务恢复与执行进度仍以 PostgreSQL 中的 Run 和 Artifact 为准。
 
@@ -212,7 +212,9 @@ scene_plans
 
 小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
 
-字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，且在计算当前上限时，必须按章节下限和 Scene 总数为每个尚未生成的后续 Scene 保留最低字数空间，不能让前置 Scene 用完章节硬上限后再把最后一个完整剧情任务压缩成极短文本。最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+
+Scene Draft 的正文、临时状态、声明事件和 Coverage 先经过本地校验。`temporary_state_delta` 或 `declared_events` 仅发生 JSON 语法或对象结构错误时，流水线最多执行两次 `scene-support-fields-repair-v1` 定向修复；该修复不得改写正文和 Coverage，也不得引入输入之外的新事实。无法可靠结构化的临时状态返回空对象，无法可靠结构化的声明事件丢弃。Coverage 引用先执行空白、引号和高置信连续重合片段的确定性归位，再执行独立的证据修复。证据修复耗尽后，不得把未经验证的引用当成事实，也不得仅因引用格式阻塞整章；系统将对应 Coverage 保守降为 `missing`，生成可自动 Rewrite 的计划覆盖 Finding。
 
 Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
 
@@ -634,7 +636,7 @@ summary-v1
 
 模型按 Stage 从 Novel Settings / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 全局非空 Stage Override → 全局 `AI_MODEL`。小说表单或 `.env` 中的 Stage Override 为空时必须继承全局模型，空字符串不是独立模型值。
 
-当前只注册 `AI_PROVIDER=openai`，Provider 通过可配置的 `AI_BASE_URL` 调用 OpenAI-compatible Chat Completions 与 Embeddings。`.env.example` 面向默认的 OpenAI 官方端点，生成模型使用已核实支持 Chat Completions 和 Structured Outputs 的 [`gpt-4.1-mini`](https://developers.openai.com/api/docs/models/gpt-4.1-mini)，Embedding 使用 [`text-embedding-3-small`](https://developers.openai.com/api/docs/models/text-embedding-3-small)。自定义兼容端点及其模型必须由部署者显式配置并自行核实；示例值不代表历史 Run，历史实际模型以 `generation_runs.model_policy` 和 `usage_records.model` 为准。发布前应重新检查相应端点和账户的模型可用性。
+当前只注册 `AI_PROVIDER=openai`，Provider 通过可配置的 `AI_BASE_URL` 调用 OpenAI-compatible Chat Completions 与 Embeddings。代码和 `.env.example` 当前将 `gpt-5.6-luna` 作为生成阶段默认模型，将 `text-embedding-3-small` 作为 Embedding 默认模型。仓库配置本身不能证明任意 `AI_BASE_URL`、账户或兼容服务都提供这些模型；部署者必须按实际端点核实可用性。示例值不代表历史 Run，历史实际模型以 `generation_runs.model_policy` 和 `usage_records.model` 为准。
 
 ## 23. Observability
 

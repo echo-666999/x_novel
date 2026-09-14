@@ -24,6 +24,7 @@ use App\Models\NovelBible;
 use App\Models\Scene;
 use App\Services\DraftLengthPolicy;
 use App\Services\SceneDraftPayload;
+use App\Services\SceneDraftStructureRepairer;
 use App\Services\SceneGenerator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -121,11 +122,34 @@ function truncatedCoverageResponse(): AiResponse
     );
 }
 
+function sceneStructureResponse(string $temporaryStateDelta, array $declaredEvents = []): AiResponse
+{
+    $payload = [
+        'temporary_state_delta' => $temporaryStateDelta,
+        'declared_events' => $declaredEvents,
+    ];
+
+    return new AiResponse(
+        content: json_encode($payload, JSON_UNESCAPED_UNICODE),
+        structuredData: $payload,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'scene-structure-repair-request',
+        model: 'writer-test',
+    );
+}
+
 test('scene allocation shares the chapter word budget across remaining scenes', function () {
     $policy = app(DraftLengthPolicy::class);
 
     expect($policy->sceneAllocation(3000, 0, 1)['scene_target_words'])->toBe(3000)
         ->and($policy->sceneAllocation(3000, 0, 4)['scene_target_words'])->toBe(750)
+        ->and($policy->sceneAllocation(3000, 0, 4, 4)['minimum_scene_reserve_words'])->toBe(638)
+        ->and($policy->sceneAllocation(3000, 0, 4, 4)['future_scene_word_reserve'])->toBe(1914)
+        ->and($policy->sceneAllocation(3000, 0, 4, 4)['maximum_scene_words'])->toBe(1536)
+        ->and($policy->sceneAllocation(3000, 1286, 3, 4)['maximum_scene_words'])->toBe(888)
         ->and($policy->sceneAllocation(3000, 300, 1)['scene_target_words'])->toBe(2700)
         ->and($policy->sceneAllocation(3000, 300, 1)['required_scene_words'])->toBe(2250);
 });
@@ -216,6 +240,26 @@ test('scene coverage resolves whitespace-only formatting differences to an exact
         ->and(str_contains($content, data_get($payload, 'self_check.turn.evidence')))->toBeTrue();
 });
 
+test('scene coverage resolves a high confidence transcription difference to an exact quote', function () {
+    $exact = '林舟沿着生锈的螺旋楼梯一步步走上灯塔顶层，始终没有松开手中的钥匙。';
+    $content = '风雨拍打窗户。'.$exact.'门后传来钟声。';
+    $payload = SceneDraftPayload::validate([
+        'content' => $content,
+        'temporary_state_delta' => '{}',
+        'declared_events' => [],
+        'uncertainties' => [],
+        'self_check' => sceneSelfCheck($content, [
+            'turn' => [
+                'status' => 'fulfilled',
+                'evidence' => '林舟沿着生锈的螺旋楼梯一步步走上灯塔顶层，始终没有松开手里的钥匙。',
+            ],
+        ]),
+    ]);
+
+    expect(data_get($payload, 'self_check.turn.evidence'))->toBe('林舟沿着生锈的螺旋楼梯一步步走上灯塔顶层，始终没有松开手')
+        ->and(str_contains($content, data_get($payload, 'self_check.turn.evidence')))->toBeTrue();
+});
+
 test('scene generator repairs invalid coverage evidence without rewriting the prose', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
@@ -236,6 +280,81 @@ test('scene generator repairs invalid coverage evidence without rewriting the pr
         ->and($fake->requests()[1]->promptVersion)->toBe('coverage-evidence-repair-v1')
         ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
         ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1);
+});
+
+test('scene generator repairs malformed support fields without rewriting the prose', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidPayload = [
+        'content' => $content,
+        'temporary_state_delta' => '{"林舟仍在灯塔。"}',
+        'declared_events' => ['{"event":"林舟进入灯塔"}'],
+        'uncertainties' => [],
+        'self_check' => sceneSelfCheck($content),
+    ];
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiResponse(
+            content: json_encode($invalidPayload, JSON_UNESCAPED_UNICODE),
+            structuredData: $invalidPayload,
+            inputTokens: 100,
+            outputTokens: 200,
+            cachedTokens: 0,
+            latencyMs: 350,
+            providerRequestId: 'malformed-scene-request',
+            model: 'writer-test',
+        ))
+        ->enqueue(sceneStructureResponse(
+            '{"characters":{"lin_zhou":{"location":"灯塔"}}}',
+            ['{"event":"林舟进入灯塔"}'],
+        ));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact?->content)->toBe($content)
+        ->and(data_get($artifact?->data, 'temporary_state_delta.characters.lin_zhou.location'))->toBe('灯塔')
+        ->and(data_get($artifact?->data, 'declared_events.0.event'))->toBe('林舟进入灯塔')
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe(SceneDraftStructureRepairer::PROMPT_VERSION)
+        ->and(data_get($fake->requests()[1]->metadata, 'scene_structure_repair_attempt'))->toBe(1);
+});
+
+test('scene support field repair and coverage evidence repair can run in sequence', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidPayload = [
+        'content' => $content,
+        'temporary_state_delta' => '{"林舟仍在灯塔。"}',
+        'declared_events' => [],
+        'uncertainties' => [],
+        'self_check' => sceneSelfCheck($content, [
+            'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
+        ]),
+    ];
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiResponse(
+            content: json_encode($invalidPayload, JSON_UNESCAPED_UNICODE),
+            structuredData: $invalidPayload,
+            inputTokens: 100,
+            outputTokens: 200,
+            cachedTokens: 0,
+            latencyMs: 350,
+            providerRequestId: 'malformed-scene-request',
+            model: 'writer-test',
+        ))
+        ->enqueue(sceneStructureResponse('{}'))
+        ->enqueue(sceneCoverageResponse(sceneSelfCheck($content)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact?->content)->toBe($content)
+        ->and(data_get($artifact?->data, 'self_check.outcome.evidence'))->toBe($content)
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[1]->promptVersion)->toBe(SceneDraftStructureRepairer::PROMPT_VERSION)
+        ->and($fake->requests()[2]->promptVersion)->toBe('coverage-evidence-repair-v1');
 });
 
 test('coverage evidence repair cannot change the original status', function () {
@@ -279,6 +398,28 @@ test('coverage evidence repair retries with a larger budget after a truncated re
         ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1)
         ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
         ->and(data_get($fake->requests()[2]->metadata, 'coverage_repair_attempt'))->toBe(2);
+});
+
+test('unverifiable coverage evidence becomes a rewrite finding after repair is exhausted', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidCoverage = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '这里没有任何可核对的原文'],
+    ]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, selfCheck: $invalidCoverage))
+        ->enqueue(truncatedCoverageResponse())
+        ->enqueue(truncatedCoverageResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect(data_get($artifact?->data, 'self_check.outcome'))->toBe([
+        'status' => 'missing',
+        'evidence' => null,
+    ])->and(data_get($artifact?->data, 'plan_findings.0.code'))->toBe('SCENE_PLAN_COVERAGE_MISSING')
+        ->and($fake->requests())->toHaveCount(3);
 });
 
 test('scene self check rejects an incomplete fixed schema', function () {
@@ -533,9 +674,10 @@ test('scene two cannot execute before scene one succeeds', function () {
 
 test('the next scene receives previous temporary state and scene tail', function () {
     $fixture = sceneGenerationFixture();
+    $fixture['plan']->update(['target_words' => 20]);
     $fake = (new FakeAiProvider)
-        ->enqueue(sceneResponse('第一幕结尾：门后传来钟声。', ['items' => ['key' => ['owner' => '林舟']]]))
-        ->enqueue(sceneResponse('第二幕。'));
+        ->enqueue(sceneResponse('第一幕：门后传来钟声', ['items' => ['key' => ['owner' => '林舟']]]))
+        ->enqueue(sceneResponse('第二幕承接钟声继续。'));
     app()->instance(AiProvider::class, $fake);
     $generator = app(SceneGenerator::class);
 
@@ -652,6 +794,32 @@ test('retryable provider failures are recorded and rethrown for queue retry', fu
         ->and($fixture['scenes']->first()->generationRuns()->count())->toBe(2)
         ->and($fixture['scenes']->first()->generationRuns()->latest('id')->first()->attempt)->toBe(2)
         ->and($fake->requests())->toHaveCount(2);
+});
+
+test('truncated structured scene output is retried as a technical failure', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(1);
+    $fake = (new FakeAiProvider)->enqueue(new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 4_000,
+        cachedTokens: 0,
+        latencyMs: 350,
+        providerRequestId: 'truncated-scene-request',
+        model: 'writer-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    ));
+    app()->instance(AiProvider::class, $fake);
+    $job = new GenerateSceneJob($fixture['scenes']->first()->getKey());
+
+    expect(fn () => $job->handle(app(SceneGenerator::class)))
+        ->toThrow(AiProviderException::class, '按技术故障重试');
+
+    $run = $fixture['scenes']->first()->generationRuns()->sole();
+    expect($run->error_code)->toBe('scene_output_truncated')
+        ->and($run->status)->toBe(RunStatus::Failed)
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating);
 });
 
 test('terminal failure blocks the scene and chapter while preserving earlier artifacts', function () {

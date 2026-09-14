@@ -7,6 +7,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
+use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -109,11 +110,8 @@ class ChapterReviewer
                 temperature: .2, maxTokens: (int) config('generation.review_max_output_tokens', 4000), responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
             ));
-            if ($response->structuredData === null) {
-                throw new AiProviderException('review_schema_invalid', 'AI 未返回合法的结构化 Narrative Review。', false);
-            }
             $payload = $this->validate(
-                $response->structuredData,
+                StructuredOutput::require($response, 'review', 'Narrative Review'),
                 $chapter,
                 $lengthCheck['status'] !== 'within_range'
                     || $stateValidation->isBlocked()

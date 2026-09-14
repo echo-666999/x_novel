@@ -11,12 +11,19 @@ class DraftLengthPolicy
         return mb_strlen($normalized ?? '');
     }
 
-    /** @return array{chapter_target_words: int, chapter_minimum_words: int, chapter_maximum_words: int, allocated_scene_words: int, remaining_chapter_words: int, remaining_scene_count: int, scene_target_words: int, required_scene_words: int, maximum_scene_words: int} */
-    public function sceneAllocation(int $chapterTarget, int $allocatedWords, int $remainingSceneCount): array
-    {
+    /** @return array{chapter_target_words: int, chapter_minimum_words: int, chapter_maximum_words: int, allocated_scene_words: int, remaining_chapter_words: int, remaining_scene_count: int, scene_target_words: int, required_scene_words: int, minimum_scene_reserve_words: int, future_scene_word_reserve: int, maximum_scene_words: int} */
+    public function sceneAllocation(
+        int $chapterTarget,
+        int $allocatedWords,
+        int $remainingSceneCount,
+        ?int $totalSceneCount = null,
+    ): array {
         $remainingSceneCount = max(1, $remainingSceneCount);
+        $totalSceneCount = max($remainingSceneCount, $totalSceneCount ?? $remainingSceneCount);
         $remainingChapterWords = max(0, $chapterTarget - $allocatedWords);
         $isFinalScene = $remainingSceneCount === 1;
+        $minimumSceneReserveWords = (int) ceil($this->chapterMinimum($chapterTarget) / $totalSceneCount);
+        $futureSceneWordReserve = ($remainingSceneCount - 1) * $minimumSceneReserveWords;
 
         $sceneTargetWords = max(1, (int) ceil($remainingChapterWords / $remainingSceneCount));
 
@@ -31,9 +38,11 @@ class DraftLengthPolicy
             'required_scene_words' => $isFinalScene
                 ? max(0, $this->chapterMinimum($chapterTarget) - $allocatedWords)
                 : 0,
+            'minimum_scene_reserve_words' => $minimumSceneReserveWords,
+            'future_scene_word_reserve' => $futureSceneWordReserve,
             'maximum_scene_words' => max(
                 1,
-                $this->chapterMaximum($chapterTarget) - $allocatedWords,
+                $this->chapterMaximum($chapterTarget) - $allocatedWords - $futureSceneWordReserve,
             ),
         ];
     }

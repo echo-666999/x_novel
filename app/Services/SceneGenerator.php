@@ -7,6 +7,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
+use App\AI\StructuredOutput;
 use App\Data\ContextRequest;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -31,6 +32,7 @@ class SceneGenerator
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly GenerationRunLease $runLease,
+        private readonly SceneDraftStructureRepairer $structureRepairer,
         private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
     ) {}
 
@@ -125,12 +127,8 @@ class SceneGenerator
                 ],
             ));
 
-            if ($response->structuredData === null) {
-                throw new AiProviderException('scene_schema_invalid', 'AI 未返回合法的结构化 Scene Draft。', false);
-            }
-
             $payload = $this->validatePayloadWithCoverageRepair(
-                payload: $response->structuredData,
+                payload: StructuredOutput::require($response, 'scene', 'Scene Draft'),
                 context: $context,
                 model: $settings->model,
                 metadata: [
@@ -408,12 +406,8 @@ class SceneGenerator
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
 
-            if ($response->structuredData === null) {
-                throw new AiProviderException('scene_schema_invalid', 'AI 场景扩写未返回合法的结构化 Scene Draft。', false);
-            }
-
             $payload = $this->validatePayloadWithCoverageRepair(
-                payload: $response->structuredData,
+                payload: StructuredOutput::require($response, 'scene', 'Scene Draft'),
                 context: $context,
                 model: $model,
                 metadata: $metadata,
@@ -433,25 +427,54 @@ class SceneGenerator
      */
     private function validatePayloadWithCoverageRepair(array $payload, array $context, string $model, array $metadata): array
     {
-        try {
-            return SceneDraftPayload::validate($payload);
-        } catch (ValidationException $exception) {
-            if (! $this->containsOnlyCoverageEvidenceErrors($exception)) {
+        $structureRepaired = false;
+        $coverageRepaired = false;
+
+        while (true) {
+            try {
+                return SceneDraftPayload::validate($payload);
+            } catch (ValidationException $exception) {
+                if (! $structureRepaired && $this->containsOnlyStructureErrors($exception)) {
+                    $payload = [
+                        ...$payload,
+                        ...$this->structureRepairer->repair(
+                            payload: $payload,
+                            model: $model,
+                            metadata: $metadata,
+                            sceneTask: $context['scene_task'] ?? null,
+                        ),
+                    ];
+                    $structureRepaired = true;
+
+                    continue;
+                }
+
+                if (! $coverageRepaired && $this->containsOnlyCoverageEvidenceErrors($exception)) {
+                    $payload['self_check'] = $this->coverageEvidenceRepairer->repair(
+                        coverage: is_array($payload['self_check'] ?? null) ? $payload['self_check'] : [],
+                        content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
+                        model: $model,
+                        metadata: $metadata,
+                        task: $context['scene_task'] ?? null,
+                        path: 'self_check',
+                    );
+                    $coverageRepaired = true;
+
+                    continue;
+                }
+
                 throw $exception;
             }
-
         }
+    }
 
-        $payload['self_check'] = $this->coverageEvidenceRepairer->repair(
-            coverage: is_array($payload['self_check'] ?? null) ? $payload['self_check'] : [],
-            content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
-            model: $model,
-            metadata: $metadata,
-            task: $context['scene_task'] ?? null,
-            path: 'self_check',
+    private function containsOnlyStructureErrors(ValidationException $exception): bool
+    {
+        $fields = array_keys($exception->errors());
+
+        return $fields !== [] && collect($fields)->every(
+            fn (string $field): bool => $field === 'temporary_state_delta' || str_starts_with($field, 'declared_events'),
         );
-
-        return SceneDraftPayload::validate($payload);
     }
 
     private function containsOnlyCoverageEvidenceErrors(ValidationException $exception): bool
@@ -470,7 +493,12 @@ class SceneGenerator
         $allocatedWords = $otherScenes->sum(fn (Scene $other): int => $this->lengthPolicy->count($other->currentArtifact?->content));
         $remainingSceneCount = 1 + $otherScenes->whereNull('current_artifact_id')->count();
 
-        return $this->lengthPolicy->sceneAllocation($chapterTarget, $allocatedWords, $remainingSceneCount);
+        return $this->lengthPolicy->sceneAllocation(
+            $chapterTarget,
+            $allocatedWords,
+            $remainingSceneCount,
+            $scene->chapter->scenes->count(),
+        );
     }
 
     private function failRun(GenerationRun $run, Throwable $exception): void

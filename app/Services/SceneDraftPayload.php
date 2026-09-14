@@ -44,8 +44,12 @@ final class SceneDraftPayload
             throw ValidationException::withMessages(['scene_draft' => 'Scene Draft 必须只包含 content、temporary_state_delta、declared_events、uncertainties 和 self_check。']);
         }
 
-        $payload['temporary_state_delta'] = self::decodeObject($payload['temporary_state_delta'] ?? null, 'temporary_state_delta');
-        $payload['declared_events'] = self::decodeObjectList($payload['declared_events'] ?? null);
+        $machineFields = self::validateMachineFields(
+            $payload['temporary_state_delta'] ?? null,
+            $payload['declared_events'] ?? null,
+        );
+        $payload['temporary_state_delta'] = $machineFields['temporary_state_delta'];
+        $payload['declared_events'] = $machineFields['declared_events'];
         $validated = validator($payload, [
             'content' => ['required', 'string', 'min:1'],
             'temporary_state_delta' => ['present', 'array'],
@@ -63,6 +67,15 @@ final class SceneDraftPayload
         $validated['self_check'] = PlanCoverage::validate($validated['self_check'], $validated['content'], 'self_check');
 
         return $validated;
+    }
+
+    /** @return array{temporary_state_delta: array<string, mixed>, declared_events: array<int, array<string, mixed>>} */
+    public static function validateMachineFields(mixed $temporaryStateDelta, mixed $declaredEvents): array
+    {
+        return [
+            'temporary_state_delta' => self::decodeObject($temporaryStateDelta, 'temporary_state_delta'),
+            'declared_events' => self::decodeObjectList($declaredEvents),
+        ];
     }
 
     /** @return array<string, mixed> */

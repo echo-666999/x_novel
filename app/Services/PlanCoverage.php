@@ -78,6 +78,49 @@ final class PlanCoverage
     }
 
     /**
+     * Keep statuses that have verifiable evidence and conservatively mark unverifiable claims as missing.
+     *
+     * @param  array<string, mixed>  $coverage
+     * @return array<string, array{status: string, evidence: string|null}>
+     */
+    public static function fallbackUnverifiableEvidenceToMissing(array $coverage, string $content, string $path): array
+    {
+        if (! self::hasExactKeys($coverage, self::ELEMENTS)) {
+            return self::validate($coverage, $content, $path);
+        }
+
+        foreach (self::ELEMENTS as $element) {
+            $item = $coverage[$element] ?? null;
+
+            if (! is_array($item)
+                || ! self::hasExactKeys($item, ['status', 'evidence'])
+                || ! in_array($item['status'] ?? null, self::STATUSES, true)) {
+                return self::validate($coverage, $content, $path);
+            }
+
+            if ($item['status'] === 'missing') {
+                $coverage[$element]['evidence'] = null;
+
+                continue;
+            }
+
+            $evidence = is_string($item['evidence'] ?? null)
+                ? self::resolveExactEvidence($content, $item['evidence'])
+                : '';
+
+            if ($evidence !== '' && str_contains($content, $evidence)) {
+                $coverage[$element]['evidence'] = $evidence;
+
+                continue;
+            }
+
+            $coverage[$element] = ['status' => 'missing', 'evidence' => null];
+        }
+
+        return self::validate($coverage, $content, $path);
+    }
+
+    /**
      * @param  array<string, mixed>  $scene
      * @param  array<string, mixed>  $scenePlan
      * @return array<string, mixed>
@@ -165,7 +208,9 @@ final class PlanCoverage
             }
         }
 
-        return self::resolveWhitespaceEquivalentEvidence($content, $evidence) ?? $evidence;
+        return self::resolveWhitespaceEquivalentEvidence($content, $evidence)
+            ?? self::resolveHighConfidenceEvidence($content, $evidence)
+            ?? $evidence;
     }
 
     private static function resolveWhitespaceEquivalentEvidence(string $content, string $evidence): ?string
@@ -204,5 +249,44 @@ final class PlanCoverage
         }
 
         return implode('', array_slice($contentCharacters, $start, $end - $start + 1));
+    }
+
+    private static function resolveHighConfidenceEvidence(string $content, string $evidence): ?string
+    {
+        $contentCharacters = preg_split('//u', $content, -1, PREG_SPLIT_NO_EMPTY);
+        $evidenceCharacters = preg_split('//u', $evidence, -1, PREG_SPLIT_NO_EMPTY);
+
+        if (! is_array($contentCharacters) || ! is_array($evidenceCharacters) || $evidenceCharacters === []) {
+            return null;
+        }
+
+        $previous = array_fill(0, count($evidenceCharacters) + 1, 0);
+        $bestLength = 0;
+        $bestEnd = 0;
+
+        foreach ($contentCharacters as $contentIndex => $contentCharacter) {
+            $current = array_fill(0, count($evidenceCharacters) + 1, 0);
+
+            foreach ($evidenceCharacters as $evidenceIndex => $evidenceCharacter) {
+                if ($contentCharacter !== $evidenceCharacter) {
+                    continue;
+                }
+
+                $current[$evidenceIndex + 1] = $previous[$evidenceIndex] + 1;
+
+                if ($current[$evidenceIndex + 1] > $bestLength) {
+                    $bestLength = $current[$evidenceIndex + 1];
+                    $bestEnd = $contentIndex + 1;
+                }
+            }
+
+            $previous = $current;
+        }
+
+        if ($bestLength < 8 || $bestLength / count($evidenceCharacters) < .8) {
+            return null;
+        }
+
+        return implode('', array_slice($contentCharacters, $bestEnd - $bestLength, $bestLength));
     }
 }

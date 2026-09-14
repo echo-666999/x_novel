@@ -6,6 +6,7 @@ use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
@@ -103,11 +104,10 @@ class NovelPlanner
                 ],
             ));
 
-            if ($response->structuredData === null) {
-                throw new AiProviderException('novel_plan_schema_invalid', 'AI 未返回合法的小说规划。', false);
-            }
-
-            $blueprint = $this->validate($response->structuredData, $volumeCount);
+            $blueprint = $this->validate(
+                StructuredOutput::require($response, 'novel_plan', '小说规划'),
+                $volumeCount,
+            );
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::Context,
                 'version' => 1,

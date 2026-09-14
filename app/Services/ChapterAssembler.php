@@ -7,6 +7,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
+use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -88,12 +89,8 @@ class ChapterAssembler
                     'stage' => AiStage::Assembler->value,
                 ],
             ));
-            if ($response->structuredData === null) {
-                throw new AiProviderException('assembly_schema_invalid', 'AI 未返回合法的结构化 Chapter Assembly。', false);
-            }
-
             $payload = $this->validatePayloadWithCoverageRepair(
-                payload: $response->structuredData,
+                payload: StructuredOutput::require($response, 'assembly', 'Chapter Assembly'),
                 chapter: $chapter,
                 artifacts: $artifacts,
                 context: $context,
@@ -333,12 +330,8 @@ class ChapterAssembler
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
-            if ($response->structuredData === null) {
-                throw new AiProviderException('assembly_schema_invalid', 'AI 章节字数修复未返回合法的结构化 Chapter Assembly。', false);
-            }
-
             $payload = $this->validatePayloadWithCoverageRepair(
-                payload: $response->structuredData,
+                payload: StructuredOutput::require($response, 'assembly', 'Chapter Assembly'),
                 chapter: $chapter,
                 artifacts: $artifacts,
                 context: $context,

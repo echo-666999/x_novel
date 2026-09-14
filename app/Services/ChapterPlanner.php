@@ -8,6 +8,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
+use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -87,11 +88,9 @@ class ChapterPlanner
                 ],
             ));
 
-            if ($response->structuredData === null) {
-                throw new AiProviderException('plan_schema_invalid', 'AI 未返回合法的结构化 Chapter Plan。', false);
-            }
-
-            $payload = ChapterPlanPayload::validate($response->structuredData);
+            $payload = ChapterPlanPayload::validate(
+                StructuredOutput::require($response, 'plan', 'Chapter Plan'),
+            );
             $payload['target_words'] = (int) data_get($novel->settings, 'generation.chapter_target_words', $payload['target_words']);
             $candidate = new ChapterPlan($payload);
             $candidate->setRelation('chapter', $chapter);

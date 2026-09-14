@@ -7,6 +7,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
+use App\AI\StructuredOutput;
 use App\Data\StoryEventCandidate;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -79,11 +80,13 @@ class StoryEventExtractor
                 metadata: $metadata,
             ));
 
-            if ($response->structuredData === null) {
-                throw new AiProviderException('event_schema_invalid', 'AI 未返回合法的结构化 Story Event Candidates。', false);
-            }
-
-            $candidates = $this->validateCandidates($response->structuredData, $chapter, $draft, $settings->model, $metadata);
+            $candidates = $this->validateCandidates(
+                StructuredOutput::require($response, 'event', 'Story Event Candidates'),
+                $chapter,
+                $draft,
+                $settings->model,
+                $metadata,
+            );
 
             return $this->complete($run, $chapter, $draft, $candidates, $context['state_version']);
         } catch (Throwable $exception) {

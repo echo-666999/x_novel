@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
-use App\AI\Exceptions\AiProviderException;
 use Illuminate\Validation\ValidationException;
 
 final class PlanCoverageEvidenceRepairer
@@ -20,8 +19,6 @@ final class PlanCoverageEvidenceRepairer
      */
     public function repair(array $coverage, string $content, string $model, array $metadata, mixed $task, string $path): array
     {
-        $lastException = null;
-
         for ($attempt = 1; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
             $maxTokens = $attempt === 1
                 ? (int) config('generation.coverage_repair_max_output_tokens', 1_000)
@@ -42,18 +39,6 @@ final class PlanCoverageEvidenceRepairer
             ));
 
             if ($response->structuredData === null) {
-                $lastException = data_get($response->metadata, 'finish_reason') === 'length'
-                    ? new AiProviderException(
-                        'coverage_repair_output_truncated',
-                        "Coverage 证据修复第 {$attempt} 次响应因输出 Token 用尽而被截断。",
-                        false,
-                    )
-                    : new AiProviderException(
-                        'coverage_repair_schema_invalid',
-                        "Coverage 证据修复第 {$attempt} 次响应没有返回可解析的结构化结果。",
-                        false,
-                    );
-
                 continue;
             }
 
@@ -67,13 +52,11 @@ final class PlanCoverageEvidenceRepairer
 
             try {
                 return PlanCoverage::validate($response->structuredData, $content, $path);
-            } catch (ValidationException $exception) {
-                $lastException = $exception;
+            } catch (ValidationException) {
+                continue;
             }
         }
 
-        throw $lastException ?? ValidationException::withMessages([
-            $path => "{$path}：Coverage evidence 修复失败。",
-        ]);
+        return PlanCoverage::fallbackUnverifiableEvidenceToMissing($coverage, $content, $path);
     }
 }
