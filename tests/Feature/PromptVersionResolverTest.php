@@ -11,7 +11,7 @@ test('prompt versions follow the documented convention', function () {
         'assembler' => 'assembler-v8',
         'extractor' => 'event-extractor-v4',
         'reviewer' => 'reviewer-v7',
-        'rewrite' => 'rewrite-v7',
+        'rewrite' => 'rewrite-v8',
         'summary' => 'summary-v1',
     ]);
 });
@@ -24,7 +24,7 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
     'assembler' => [AiStage::Assembler, 'assembler-v8'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v4'],
     'reviewer' => [AiStage::Reviewer, 'reviewer-v7'],
-    'rewrite' => [AiStage::Rewrite, 'rewrite-v7'],
+    'rewrite' => [AiStage::Rewrite, 'rewrite-v8'],
     'summary' => [AiStage::Summary, 'summary-v1'],
 ]);
 

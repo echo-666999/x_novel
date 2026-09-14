@@ -212,7 +212,7 @@ scene_plans
 
 小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
 
-字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，且在计算当前上限时，必须按章节下限和 Scene 总数为每个尚未生成的后续 Scene 保留最低字数空间，不能让前置 Scene 用完章节硬上限后再把最后一个完整剧情任务压缩成极短文本。最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，且在计算当前上限时，必须按章节下限和 Scene 总数为每个尚未生成的后续 Scene 保留最低字数空间，不能让前置 Scene 用完章节硬上限后再把最后一个完整剧情任务压缩成极短文本。最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。整章 Rewrite 的长度修复不得再次返回整章替换稿，而应返回逐字唯一命中的 `search` / `replacement` 局部补丁；Laravel 负责应用补丁和重新计数，并拒绝让过长稿跨越下限成为过短稿、或让过短稿跨越上限成为过长稿，以避免扩写和压缩在硬范围两侧振荡。修复提示使用目标字数 95%～105% 的窄目标区间提供安全余量，最终硬范围仍为 85%～115%。修复后仍不合规则不得提升为当前 Artifact。最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
 
 Scene Draft 的正文、临时状态、声明事件和 Coverage 先经过本地校验。`temporary_state_delta` 或 `declared_events` 仅发生 JSON 语法或对象结构错误时，流水线最多执行两次 `scene-support-fields-repair-v1` 定向修复；该修复不得改写正文和 Coverage，也不得引入输入之外的新事实。无法可靠结构化的临时状态返回空对象，无法可靠结构化的声明事件丢弃。Coverage 引用先执行空白、引号和高置信连续重合片段的确定性归位，再执行独立的证据修复。证据修复耗尽后，不得把未经验证的引用当成事实，也不得仅因引用格式阻塞整章；系统将对应 Coverage 保守降为 `missing`，生成可自动 Rewrite 的计划覆盖 Finding。
 
@@ -386,6 +386,8 @@ Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding
 重写跨章连续性问题时同时输入 `previous_chapter_ending`，使模型能依据真实上一章结尾补写过渡，而不是只依赖 Finding 的概述。
 
 Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
+
+整章 Rewrite 的首轮提示同时给出 95%～105% 的优选字数区间。若首轮仍越界，长度修复只请求最多 12 项精确局部替换，并给出进入优选区间所需的净增减字符数。`search` 必须在当前正文中逐字且唯一命中；压缩补丁的 replacement 必须更短，扩写补丁必须更长。Laravel 逐项应用并确定性校验方向和硬上下限，跨越另一侧硬边界的补丁拒绝应用，拒绝原因反馈给下一次修复。这样任何无效补丁都不会覆盖当前 Draft，也不会在压缩和扩写之间切换输入。
 
 优先 Scene Rewrite，再 Whole Chapter Rewrite。Paragraph 在当前 Artifact 粒度下不单独产生半个 Scene 的 Artifact；可唯一定位的 Paragraph Finding 改写所属的完整 Scene。默认 `max_rewrite_attempts = 2`。
 
@@ -630,7 +632,8 @@ scene-writer-v10
 assembler-v8
 event-extractor-v4
 reviewer-v7
-rewrite-v7
+rewrite-v8
+rewrite-length-patch-v1
 summary-v1
 ```
 

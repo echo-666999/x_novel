@@ -106,15 +106,30 @@ class DeterministicStoryEventApplier implements StoryEventApplier
     /** @return array<int, array{op: string, path: string, value?: mixed}> */
     private function knowledge(string $id, array $payload, bool $forget): array
     {
-        $key = $this->segment(isset($payload['key']) ? (string) $payload['key'] : ($payload['knowledge'] ?? null));
+        $keys = $this->knowledgeKeys(
+            array_key_exists('key', $payload) ? $payload['key'] : ($payload['knowledge'] ?? null),
+        );
 
-        if ($key === '_unresolved') {
-            return [];
+        $operations = [];
+
+        foreach ($keys as $key) {
+            $operations[] = $forget
+                ? ['op' => 'unset', 'path' => "characters.{$id}.knowledge.{$key}"]
+                : ['op' => 'set', 'path' => "characters.{$id}.knowledge.{$key}", 'value' => $payload['value'] ?? true];
         }
 
-        return $forget
-            ? [['op' => 'unset', 'path' => "characters.{$id}.knowledge.{$key}"]]
-            : $this->set("characters.{$id}.knowledge.{$key}", $payload['value'] ?? true);
+        return $operations;
+    }
+
+    /** @return array<int, string> */
+    private function knowledgeKeys(mixed $value): array
+    {
+        $values = is_array($value) && array_is_list($value) ? $value : [$value];
+
+        return array_values(array_unique(array_filter(array_map(
+            fn (mixed $item): string => is_string($item) ? $this->segment(trim($item)) : '_unresolved',
+            $values,
+        ), fn (string $key): bool => $key !== '_unresolved')));
     }
 
     /** @return array<int, array{op: string, path: string, value: mixed}> */

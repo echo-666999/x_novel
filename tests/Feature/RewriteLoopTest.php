@@ -53,6 +53,23 @@ function rewriteResponse(string $content = '修订后的章节正文'): AiRespon
     return new AiResponse(content: $content, structuredData: null, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
 }
 
+/** @param array<int, array{search: string, replacement: string}> $edits */
+function rewriteLengthPatchResponse(array $edits): AiResponse
+{
+    $data = ['edits' => $edits];
+
+    return new AiResponse(
+        content: json_encode($data, JSON_UNESCAPED_UNICODE),
+        structuredData: $data,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'rewrite-length-patch',
+        model: 'rewrite-test',
+    );
+}
+
 function sceneRewriteResponse(string $content = '破门逆转', string $evidence = '破门'): AiResponse
 {
     $selfCheck = collect(['goal', 'conflict', 'turn', 'outcome'])
@@ -392,9 +409,13 @@ test('retryable provider failure records a failed run before retry succeeds', fu
 test('an overlength rewrite is compressed once before it becomes a rewrite draft', function () {
     $fixture = rewriteFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $overlength = str_repeat('超', 120);
     $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse(str_repeat('超', 120)))
-        ->enqueue(rewriteResponse(str_repeat('改', 100)));
+        ->enqueue(rewriteResponse($overlength))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $overlength,
+            'replacement' => str_repeat('改', 100),
+        ]]));
     app()->instance(AiProvider::class, $fake);
 
     $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
@@ -403,19 +424,31 @@ test('an overlength rewrite is compressed once before it becomes a rewrite draft
         ->and($artifact->data['word_count'])->toBe(100)
         ->and($artifact->data['maximum_words'])->toBe(115)
         ->and($fake->requests())->toHaveCount(2)
-        ->and($fake->requests()[1]->systemPrompt)->toContain('重写稿压缩器')
-        ->and($fake->requests()[1]->systemPrompt)->toContain('POV、时态、主文风')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('局部字符补丁器')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('不得返回完整重写稿')
+        ->and($fake->requests()[1]->responseSchema)->not->toBeNull()
+        ->and($fake->requests()[1]->promptVersion)->toBe('rewrite-length-patch-v1')
         ->and($fake->requests()[1]->prompt)->toContain('"l4"')
+        ->and($fake->requests()[1]->prompt)->toContain('"preferred_minimum_words":95')
+        ->and($fake->requests()[1]->prompt)->toContain('"preferred_maximum_words":105')
         ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
 });
 
 test('a rewrite can use a second length repair before it becomes a rewrite draft', function () {
     $fixture = rewriteFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $first = str_repeat('超', 120);
+    $second = str_repeat('仍', 116);
     $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse(str_repeat('超', 120)))
-        ->enqueue(rewriteResponse(str_repeat('仍', 116)))
-        ->enqueue(rewriteResponse(str_repeat('合', 100)));
+        ->enqueue(rewriteResponse($first))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $first,
+            'replacement' => $second,
+        ]]))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $second,
+            'replacement' => str_repeat('合', 100),
+        ]]));
     app()->instance(AiProvider::class, $fake);
 
     $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
@@ -424,16 +457,91 @@ test('a rewrite can use a second length repair before it becomes a rewrite draft
         ->and($artifact->data['word_count'])->toBe(100)
         ->and($fake->requests())->toHaveCount(3)
         ->and($fake->requests()[1]->metadata['length_repair_attempt'])->toBe(1)
-        ->and($fake->requests()[2]->metadata['length_repair_attempt'])->toBe(2);
+        ->and($fake->requests()[2]->metadata['length_repair_attempt'])->toBe(2)
+        ->and($fake->requests()[1]->metadata['length_repair_mode'])->toBe('compress_patch')
+        ->and($fake->requests()[2]->metadata['length_repair_mode'])->toBe('compress_patch');
+});
+
+test('a length patch that crosses the opposite hard limit is rejected instead of oscillating', function () {
+    $fixture = rewriteFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $overlength = str_repeat('超', 120);
+    $fake = (new FakeAiProvider)
+        ->enqueue(rewriteResponse($overlength))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $overlength,
+            'replacement' => str_repeat('短', 80),
+        ]]))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $overlength,
+            'replacement' => str_repeat('合', 100),
+        ]]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('合', 100))
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[2]->prompt)->toContain('压缩结果必须减少字数且不得低于 85 字')
+        ->and($fake->requests()[2]->prompt)->toContain('"current_words":120');
+});
+
+test('a length patch must match one exact passage before Laravel applies it', function () {
+    $fixture = rewriteFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $overlength = '重复重复'.str_repeat('长', 116);
+    $fake = (new FakeAiProvider)
+        ->enqueue(rewriteResponse($overlength))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => '重复',
+            'replacement' => '重',
+        ]]))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $overlength,
+            'replacement' => str_repeat('合', 100),
+        ]]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('合', 100))
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[2]->prompt)->toContain('search 必须在当前正文中逐字且唯一命中')
+        ->and($fake->requests()[2]->prompt)->toContain('"current_words":120');
+});
+
+test('an underlength chapter rewrite is expanded by a local patch', function () {
+    $fixture = rewriteFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $underlength = str_repeat('短', 80);
+    $fake = (new FakeAiProvider)
+        ->enqueue(rewriteResponse($underlength))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $underlength,
+            'replacement' => str_repeat('合', 100),
+        ]]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('合', 100))
+        ->and($fake->requests()[1]->metadata['length_repair_mode'])->toBe('expand_patch');
 });
 
 test('a failed length repair does not consume a rewrite artifact attempt', function () {
     $fixture = rewriteFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $overlength = str_repeat('超', 120);
     $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse(str_repeat('超', 120)))
-        ->enqueue(rewriteResponse(str_repeat('仍', 116)))
-        ->enqueue(rewriteResponse(str_repeat('仍', 116)))
+        ->enqueue(rewriteResponse($overlength))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $overlength,
+            'replacement' => str_repeat('短', 80),
+        ]]))
+        ->enqueue(rewriteLengthPatchResponse([[
+            'search' => $overlength,
+            'replacement' => str_repeat('仍短', 40),
+        ]]))
         ->enqueue(rewriteResponse(str_repeat('合', 100)));
     app()->instance(AiProvider::class, $fake);
 

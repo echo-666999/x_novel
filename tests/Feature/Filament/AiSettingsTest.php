@@ -42,7 +42,7 @@ test('ai settings shows provider model status and connection action without expo
         ->assertSee('assembler-v8')
         ->assertSee('event-extractor-v4')
         ->assertSee('reviewer-v7')
-        ->assertSee('rewrite-v7')
+        ->assertSee('rewrite-v8')
         ->assertSee('summary-v1')
         ->assertSee('config/prompts.php')
         ->assertSee('Test Connection')

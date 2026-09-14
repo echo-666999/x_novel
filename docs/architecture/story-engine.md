@@ -617,6 +617,8 @@ time_shift
 
 # 22. Knowledge Rule
 
+`character_learned` 与 `character_forgot` 的 payload 支持单项 `{"key":"知识","value":true}`，也支持批量 `{"knowledge":["知识一","知识二"]}`。State Patch Builder 必须把字符串列表逐项展开为独立的确定性操作；列表中的非字符串或无法形成安全状态路径的值忽略，不得因单个无效值触发运行时类型错误并阻断 Review。
+
 若角色当前不知道某秘密：
 
 ```text

@@ -92,6 +92,39 @@ test('builder deterministically previews event changes without mutating canonica
         ->and($fixture['state']->fresh()->state['characters'])->toBe([]);
 });
 
+test('character knowledge lists expand into deterministic state operations', function () {
+    $characterId = (string) 42;
+    $fixture = statePatchFixture([
+        statePatchEvent(EventType::CharacterLearned, $characterId, [
+            'knowledge' => ['三八一不是孤立记录', '第二处分叉的对应栏缺失'],
+        ]),
+    ]);
+
+    $artifact = app(StatePatchBuilder::class)->build($fixture['chapter']->getKey());
+
+    expect($artifact->data['operations'])->toHaveCount(2)
+        ->and($artifact->data['operations'][0])->toMatchArray([
+            'op' => 'set',
+            'path' => "characters.{$characterId}.knowledge.三八一不是孤立记录",
+            'value' => true,
+            'source_event_index' => 0,
+        ])
+        ->and($artifact->data['operations'][1]['path'])->toBe("characters.{$characterId}.knowledge.第二处分叉的对应栏缺失");
+});
+
+test('invalid knowledge list entries are ignored instead of crashing state patch construction', function () {
+    $fixture = statePatchFixture([
+        statePatchEvent(EventType::CharacterLearned, '42', [
+            'knowledge' => [['unexpected' => 'nested object'], null, '有效知识'],
+        ]),
+    ]);
+
+    $artifact = app(StatePatchBuilder::class)->build($fixture['chapter']->getKey());
+
+    expect($artifact->data['operations'])->toHaveCount(1)
+        ->and($artifact->data['operations'][0]['path'])->toBe('characters.42.knowledge.有效知识');
+});
+
 test('duplicate build reuses the same state patch artifact', function () {
     $fixture = statePatchFixture([
         statePatchEvent(EventType::CharacterMoved, '42', ['to' => '洛阳']),

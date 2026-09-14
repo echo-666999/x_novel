@@ -27,7 +27,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly ChapterRewriteLengthRepairer $chapterLengthRepairer) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -56,6 +56,12 @@ class ChapterRewriter
         $targetWords = $sceneAllocation['scene_target_words'] ?? $chapterTargetWords;
         $minimumWords = $sceneAllocation['required_scene_words'] ?? $this->lengthPolicy->chapterMinimum($targetWords);
         $maximumWords = $sceneAllocation['maximum_scene_words'] ?? $this->lengthPolicy->chapterMaximum($targetWords);
+        $preferredMinimumWords = max($minimumWords, (int) ceil($targetWords * .95));
+        $preferredMaximumWords = min($maximumWords, (int) floor($targetWords * 1.05));
+        if ($preferredMinimumWords > $preferredMaximumWords) {
+            $preferredMinimumWords = $minimumWords;
+            $preferredMaximumWords = $maximumWords;
+        }
         $attempt = $this->attemptCount($chapter) + 1;
         if ($attempt > (int) config('generation.max_rewrite_attempts', 2)) {
             $this->markExhausted($chapter, $review);
@@ -86,6 +92,8 @@ class ChapterRewriter
                 'target_words' => $targetWords,
                 'minimum_words' => $minimumWords,
                 'maximum_words' => $maximumWords,
+                'preferred_minimum_words' => $preferredMinimumWords,
+                'preferred_maximum_words' => $preferredMaximumWords,
                 'current_words' => $this->lengthPolicy->count($source->content),
                 ...($sceneAllocation === null ? [] : [
                     'chapter_target_words' => $chapterTargetWords,
@@ -197,7 +205,7 @@ class ChapterRewriter
 
     private function systemPrompt(bool $sceneRewrite): string
     {
-        $base = '你是 XNovel 定向重写器。只修复 findings 中的问题，严格保留 plan_acceptance 要求的剧情结果和既定事实。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words，并尽量接近 length_requirement.target_words；length_requirement.maximum_words 是不可超过的硬上限，字数统计排除空白和换行。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
+        $base = '你是 XNovel 定向重写器。只修复 findings 中的问题，严格保留 plan_acceptance 要求的剧情结果和既定事实。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words 且不得超过 length_requirement.maximum_words，并优先进入 preferred_minimum_words～preferred_maximum_words 的窄目标区间；字数统计排除空白和换行。原稿已处于硬范围时，应保持原有段落结构和整体篇幅；修复重复或节奏问题必须净缩减。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
 
         return $sceneRewrite
             ? $base.'当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'
@@ -293,6 +301,10 @@ class ChapterRewriter
      */
     private function repairLengthIfNeeded(array $payload, array $brief, string $model, string $promptVersion, array $metadata, bool $sceneRewrite): array
     {
+        if (! $sceneRewrite) {
+            return $this->chapterLengthRepairer->repair($payload, $brief, $model, $metadata);
+        }
+
         $requirement = $brief['length_requirement'];
 
         for ($attempt = 1; $attempt <= (int) config('generation.max_rewrite_length_repair_attempts', 2); $attempt++) {
@@ -309,8 +321,8 @@ class ChapterRewriter
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 systemPrompt: $tooLong
-                    ? '你是 XNovel 重写稿压缩器。当前重写稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、plan_acceptance、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。Scene Rewrite 必须同时返回覆盖最终正文的固定 self_check；Chapter Rewrite 只返回完整简体中文正文。'
-                    : '你是 XNovel 重写稿扩写器。当前重写稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、plan_acceptance 和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。Scene Rewrite 必须同时返回覆盖最终正文的固定 self_check；Chapter Rewrite 只返回完整简体中文正文。',
+                    ? '你是 XNovel 场景重写稿压缩器。当前稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、plan_acceptance、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。'
+                    : '你是 XNovel 场景重写稿扩写器。当前稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、plan_acceptance 和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。',
                 prompt: ($tooLong ? '请压缩以下重写稿：' : '请扩写以下重写稿：').json_encode([
                     'scope' => $brief['scope'],
                     'findings' => $brief['findings'],

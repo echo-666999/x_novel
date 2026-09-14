@@ -7,6 +7,7 @@ return [
     'scene_max_output_tokens' => (int) env('SCENE_MAX_OUTPUT_TOKENS', 4_000),
     'max_length_repair_attempts' => 1,
     'max_rewrite_length_repair_attempts' => 2,
+    'rewrite_length_patch_max_output_tokens' => 4_000,
     'max_coverage_repair_attempts' => 2,
     'coverage_repair_max_output_tokens' => 1_000,
     'coverage_repair_retry_max_output_tokens' => 4_000,
