@@ -212,7 +212,7 @@ scene_plans
 
 小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
 
-字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene、Assembler 和 Rewrite 输出超出当前上下限时最多进行一次定向扩写或压缩，修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。修复后仍不合规则不得提升为当前 Artifact。Chapter Draft 的严格可接受范围默认为目标字数的 85%～115%；最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
 
 Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
 
@@ -278,7 +278,7 @@ MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_stat
 
 `declared_events` 仅辅助，不是正式 Story Event。
 
-`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用，并把缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果属于生成质量证据，不是 Canonical Fact，也不单独决定最终 Review Decision。
+`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用；仅有空白或外层引号差异时，将 evidence 映射回正文中的连续原句，仍无法逐字命中时只修复 Coverage evidence，不重新生成正文，也不得改变原 status。轻量修复响应因输出 Token 用尽而没有正文时，使用提高后的修复预算重试一次；错误信息必须区分输出截断与 Schema 非法。修复后仍不能逐字命中则本次 Scene Run 失败。缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果属于生成质量证据，不是 Canonical Fact，也不单独决定最终 Review Decision。
 
 Scene Plan 的 `outcome` 由 `outcome_allowed` 和 `outcome_forbidden` 补充行为边界。边界保存在 Chapter Plan 的 `scene_plans` JSON 中，不新增 Scene 表字段；Scene Writer 从当前冻结 Plan 读取它们。
 
@@ -306,7 +306,7 @@ MVP 不做 Scene Parallel。
 
 Assembler 使用结构化响应：`content`、按 Scene 顺序返回的 `scene_coverage`，以及必须为空的 `introduced_major_facts`。每个 coverage 固定检查 goal/conflict/turn/outcome，并执行与 Scene self-check 相同的 evidence 引用校验；Scene ID 必须完整、顺序一致、不得重复或跨章引用。若 Scene Draft 已把某项报告为 missing/contradicted，Assembler 不得将该项直接提升为 fulfilled。缺失或反转项写入 Chapter Draft Artifact 的 `plan_findings`，供后续最小范围修复使用。
 
-上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。本阶段不自动修复 coverage，也不改变最终 Review Decision。
+上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。本阶段只允许修正无法逐字命中的 evidence quote，不修复 coverage 语义、不改变 status，也不改变最终 Review Decision。
 
 幂等键：
 
@@ -320,7 +320,7 @@ assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
 
 `ExtractStoryEventsJob` 输入 Chapter Draft、Plan、Current State、Locked Facts；输出 `event_candidate`。
 
-`subject_type` 必须同时通过 Provider JSON Schema 和 Laravel 业务校验。`current_state.world.entities` 中的实体统一引用为 `world_entity`，不得把实体内部的 `concept`、`rule`、`location` 或 `faction` 分类直接作为 `subject_type`。Laravel 还必须校验事件类型与主体类型匹配，例如 `foreshadowing_*` 只能引用 `foreshadowing`。校验失败信息必须包含候选事件序号、字段、错误值和允许值。
+`subject_type` 必须同时通过 Provider JSON Schema 和 Laravel 业务校验。`current_state.world.entities` 中的实体统一引用为 `world_entity`，不得把实体内部的 `concept`、`rule`、`location` 或 `faction` 分类直接作为 `subject_type`。Laravel 还必须校验事件类型与主体类型匹配，例如 `foreshadowing_*` 只能引用 `foreshadowing`。校验失败信息必须包含候选事件序号、字段、错误值和允许值。若候选事件只有 evidence quote 未逐字命中，系统可以在保持事件类型、主体、payload、时间和置信度不变的前提下单独修复 quote；外层引号、空白或省略号差异可以确定性映射回连续原文，模型省略说话人插入语时只保留与原文至少 80% 高度重合且不少于 8 字的连续片段。无法可靠定位的 Evidence Item 丢弃；事件至少保留一项逐字证据，否则拒绝创建 Event Candidate。轻量修复响应被 Token 截断时允许以更高预算重试一次。
 
 幂等键：
 

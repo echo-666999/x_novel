@@ -197,6 +197,10 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             latencyMs: $latencyMs,
             providerRequestId: $response->json('id'),
             model: $model,
+            metadata: [
+                'finish_reason' => $response->json('choices.0.finish_reason'),
+                'refusal' => $response->json('choices.0.message.refusal'),
+            ],
         );
     }
 

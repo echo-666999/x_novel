@@ -22,6 +22,7 @@ use App\Models\NovelBible;
 use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Services\ChapterAssembler;
+use App\Services\ChapterAssemblyPayload;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
@@ -113,6 +114,20 @@ function assemblyResponse(string $content = '完整章节正文', ?array $covera
     );
 }
 
+function assemblyCoverageRepairResponse(array $coverage): AiResponse
+{
+    return new AiResponse(
+        content: json_encode($coverage, JSON_UNESCAPED_UNICODE),
+        structuredData: $coverage,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'assembly-coverage-repair-request',
+        model: 'assembler-test',
+    );
+}
+
 test('assembler combines multiple scene drafts in sequence into a chapter draft', function () {
     $fixture = chapterAssemblyFixture(3);
     $fixture['chapter']->latestPlan->update(['target_words' => 12]);
@@ -171,28 +186,54 @@ test('assembly coverage creates a localized finding for a missing or contradicte
     'contradicted outcome' => ['contradicted', 'SCENE_PLAN_COVERAGE_CONTRADICTED', '没有进入灯塔'],
 ]);
 
-test('assembly rejects foreign scene references and evidence outside the final chapter', function (callable $mutateCoverage, string $message) {
+test('assembly rejects foreign scene references', function () {
     $fixture = chapterAssemblyFixture(1);
     $content = '林舟进入灯塔。';
     $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
     $valid = assemblyCoverage($content);
-    $coverage = $mutateCoverage($fixture, $valid);
+    $coverage = [[...$valid[0], 'scene_id' => Scene::factory()->create()->getKey()]];
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse($content, $coverage)));
 
     expect(fn () => app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey()))
-        ->toThrow(ValidationException::class, $message);
+        ->toThrow(ValidationException::class, '必须按顺序且不重复地引用本章全部 Scene');
 
     expect(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(0);
-})->with([
-    'foreign scene' => [
-        fn (array $fixture, array $coverage): array => [[...$coverage[0], 'scene_id' => Scene::factory()->create()->getKey()]],
-        '必须按顺序且不重复地引用本章全部 Scene',
-    ],
-    'invalid evidence' => [
-        fn (array $fixture, array $coverage): array => [[...$coverage[0], 'outcome' => ['status' => 'fulfilled', 'evidence' => '正文中不存在的句子']]],
-        '必须逐字来自当前正文',
-    ],
-]);
+});
+
+test('assembly payload rejects evidence outside the final chapter', function () {
+    $fixture = chapterAssemblyFixture(1);
+    $content = '林舟进入灯塔。';
+    $coverage = assemblyCoverage($content);
+    $coverage[0]['outcome'] = ['status' => 'fulfilled', 'evidence' => '正文中不存在的句子'];
+
+    expect(fn () => ChapterAssemblyPayload::validate([
+        'content' => $content,
+        'scene_coverage' => $coverage,
+        'introduced_major_facts' => [],
+    ], $fixture['chapter'], $fixture['scenes']->pluck('currentArtifact')))
+        ->toThrow(ValidationException::class, '必须逐字来自当前正文');
+});
+
+test('assembler repairs invalid coverage evidence without rewriting the chapter', function () {
+    $fixture = chapterAssemblyFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $invalid = assemblyCoverage($content);
+    $invalid[0]['outcome'] = ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'];
+    $validCoverage = collect(assemblyCoverage($content)[0])->except('scene_id')->all();
+    $fake = (new FakeAiProvider)
+        ->enqueue(assemblyResponse($content, $invalid))
+        ->enqueue(assemblyCoverageRepairResponse($validCoverage));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey());
+
+    expect($artifact?->content)->toBe($content)
+        ->and(data_get($artifact?->data, 'scene_coverage.0.outcome.evidence'))->toBe($content)
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe('coverage-evidence-repair-v1')
+        ->and(data_get($fake->requests()[1]->metadata, 'coverage_path'))->toBe('scene_coverage.0');
+});
 
 test('assembly cannot invent a missing scene outcome or declare new major facts', function (bool $upgradeCoverage) {
     $fixture = chapterAssemblyFixture(1, [

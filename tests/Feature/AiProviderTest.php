@@ -44,7 +44,10 @@ test('openai provider maps a successful response to the provider dto', function 
         'llm.example/*' => Http::response([
             'id' => 'request-123',
             'model' => 'current-model-2026-09-01',
-            'choices' => [['message' => ['content' => '{"answer":"OK"}']]],
+            'choices' => [[
+                'finish_reason' => 'stop',
+                'message' => ['content' => '{"answer":"OK"}', 'refusal' => null],
+            ]],
             'usage' => [
                 'prompt_tokens' => 11,
                 'completion_tokens' => 3,
@@ -72,7 +75,8 @@ test('openai provider maps a successful response to the provider dto', function 
         ->and($response->outputTokens)->toBe(3)
         ->and($response->cachedTokens)->toBe(4)
         ->and($response->providerRequestId)->toBe('request-123')
-        ->and($response->model)->toBe('current-model-2026-09-01');
+        ->and($response->model)->toBe('current-model-2026-09-01')
+        ->and($response->metadata)->toBe(['finish_reason' => 'stop', 'refusal' => null]);
 
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://llm.example/v1/chat/completions'
         && $request->hasHeader('Authorization', 'Bearer test-key')

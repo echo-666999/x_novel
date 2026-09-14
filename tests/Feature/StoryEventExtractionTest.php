@@ -84,6 +84,37 @@ function eventExtractionResponse(array $fixture, array $overrides = []): AiRespo
     );
 }
 
+function eventEvidenceRepairResponse(array $quotes): AiResponse
+{
+    $payload = ['quotes' => $quotes];
+
+    return new AiResponse(
+        content: json_encode($payload, JSON_UNESCAPED_UNICODE),
+        structuredData: $payload,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'event-evidence-repair-request',
+        model: 'extractor-test',
+    );
+}
+
+function truncatedEventEvidenceResponse(): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 1_000,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'truncated-event-evidence-repair-request',
+        model: 'extractor-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 test('story event candidate validates the documented event shape', function () {
     $fixture = eventExtractionFixture();
     $event = eventExtractionResponse($fixture)->structuredData['events'][0];
@@ -236,15 +267,18 @@ test('retrying extraction recovers a blocked chapter before starting a new run',
 
 test('invalid event evidence is rejected before artifact persistence', function () {
     $fixture = eventExtractionFixture();
-    $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
-        'evidence' => [[
-            'artifact_id' => $fixture['draft']->getKey(),
-            'scene_id' => null,
-            'quote' => '正文中不存在的句子',
-            'start_offset' => null,
-            'end_offset' => null,
-        ]],
-    ]));
+    $fake = (new FakeAiProvider)
+        ->enqueue(eventExtractionResponse($fixture, [
+            'evidence' => [[
+                'artifact_id' => $fixture['draft']->getKey(),
+                'scene_id' => null,
+                'quote' => '正文中不存在的句子',
+                'start_offset' => null,
+                'end_offset' => null,
+            ]],
+        ]))
+        ->enqueue(eventEvidenceRepairResponse(['修复后仍不存在的句子']))
+        ->enqueue(eventEvidenceRepairResponse(['第二次修复仍不存在的句子']));
     app()->instance(AiProvider::class, $fake);
 
     expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
@@ -252,6 +286,69 @@ test('invalid event evidence is rejected before artifact persistence', function 
 
     expect(GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->count())->toBe(0)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->status)->toBe(RunStatus::Failed);
+});
+
+test('extractor repairs invalid event quotes without changing the event', function () {
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(eventExtractionResponse($fixture, [
+            'evidence' => [[
+                'artifact_id' => $fixture['draft']->getKey(),
+                'scene_id' => null,
+                'quote' => '林舟抵达洛阳城下。',
+                'start_offset' => null,
+                'end_offset' => null,
+            ]],
+        ]))
+        ->enqueue(truncatedEventEvidenceResponse())
+        ->enqueue(eventEvidenceRepairResponse(['林舟终于抵达洛阳城下。']));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact?->data, 'events.0.event_type'))->toBe(EventType::CharacterMoved->value)
+        ->and(data_get($artifact?->data, 'events.0.payload.to'))->toBe('洛阳')
+        ->and(data_get($artifact?->data, 'events.0.evidence.0.quote'))->toBe('林舟终于抵达洛阳城下。')
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[1]->promptVersion)->toBe('event-evidence-repair-v1')
+        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and(data_get($fake->requests()[1]->metadata, 'event_evidence_repair_attempt'))->toBe(1)
+        ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
+        ->and(data_get($fake->requests()[2]->metadata, 'event_evidence_repair_attempt'))->toBe(2)
+        ->and(data_get($fake->requests()[2]->metadata, 'event_index'))->toBe(0);
+});
+
+test('extractor keeps only repaired evidence with a high confidence exact overlap', function () {
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(eventExtractionResponse($fixture, [
+            'evidence' => [
+                [
+                    'artifact_id' => $fixture['draft']->getKey(),
+                    'scene_id' => null,
+                    'quote' => '林舟抵达洛阳城下。城门在身后关闭。',
+                    'start_offset' => null,
+                    'end_offset' => null,
+                ],
+                [
+                    'artifact_id' => $fixture['draft']->getKey(),
+                    'scene_id' => null,
+                    'quote' => '正文完全不存在的补充证据',
+                    'start_offset' => null,
+                    'end_offset' => null,
+                ],
+            ],
+        ]))
+        ->enqueue(eventEvidenceRepairResponse([
+            '林舟终于抵达洛阳城下。城门在身后关闭。',
+            '正文完全不存在的补充证据',
+        ]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.0.evidence'))->toHaveCount(1)
+        ->and(data_get($artifact->data, 'events.0.evidence.0.quote'))->toBe('林舟终于抵达洛阳城下。城门在身后关闭。');
 });
 
 test('extractor records the candidate index and invalid value for validation failures', function () {

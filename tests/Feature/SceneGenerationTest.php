@@ -92,6 +92,35 @@ function sceneResponse(string $content, array $delta = [], ?array $selfCheck = n
     );
 }
 
+function sceneCoverageResponse(array $coverage): AiResponse
+{
+    return new AiResponse(
+        content: json_encode($coverage, JSON_UNESCAPED_UNICODE),
+        structuredData: $coverage,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'coverage-repair-request',
+        model: 'writer-test',
+    );
+}
+
+function truncatedCoverageResponse(): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 1_000,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'truncated-coverage-repair-request',
+        model: 'writer-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 test('scene allocation shares the chapter word budget across remaining scenes', function () {
     $policy = app(DraftLengthPolicy::class);
 
@@ -156,18 +185,100 @@ test('missing or contradicted scene coverage creates stable localized findings',
 ]);
 
 test('scene coverage evidence must quote the generated scene exactly', function () {
-    $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
     $selfCheck = sceneSelfCheck($content, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
     ]);
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneResponse($content, selfCheck: $selfCheck)));
+
+    expect(fn () => SceneDraftPayload::validate([
+        'content' => $content,
+        'temporary_state_delta' => '{}',
+        'declared_events' => [],
+        'uncertainties' => [],
+        'self_check' => $selfCheck,
+    ]))
+        ->toThrow(ValidationException::class, '必须逐字来自当前正文');
+});
+
+test('scene coverage resolves whitespace-only formatting differences to an exact quote', function () {
+    $content = "林舟推开门。\n\n塔内一片漆黑。";
+    $payload = SceneDraftPayload::validate([
+        'content' => $content,
+        'temporary_state_delta' => '{}',
+        'declared_events' => [],
+        'uncertainties' => [],
+        'self_check' => sceneSelfCheck($content, [
+            'turn' => ['status' => 'fulfilled', 'evidence' => '林舟推开门。塔内一片漆黑。'],
+        ]),
+    ]);
+
+    expect(data_get($payload, 'self_check.turn.evidence'))->toBe($content)
+        ->and(str_contains($content, data_get($payload, 'self_check.turn.evidence')))->toBeTrue();
+});
+
+test('scene generator repairs invalid coverage evidence without rewriting the prose', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidCoverage = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
+    ]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, selfCheck: $invalidCoverage))
+        ->enqueue(sceneCoverageResponse(sceneSelfCheck($content)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact?->content)->toBe($content)
+        ->and(data_get($artifact?->data, 'self_check.outcome.evidence'))->toBe($content)
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe('coverage-evidence-repair-v1')
+        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1);
+});
+
+test('coverage evidence repair cannot change the original status', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidCoverage = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
+    ]);
+    $changedCoverage = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'missing', 'evidence' => null],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, selfCheck: $invalidCoverage))
+        ->enqueue(sceneCoverageResponse($changedCoverage)));
 
     expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey()))
-        ->toThrow(ValidationException::class, '必须逐字来自当前正文');
+        ->toThrow(ValidationException::class, 'Coverage 证据修复不得改变原 status');
 
     expect(GenerationArtifact::query()->where('type', ArtifactType::SceneDraft)->count())->toBe(0);
+});
+
+test('coverage evidence repair retries with a larger budget after a truncated response', function () {
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidCoverage = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
+    ]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, selfCheck: $invalidCoverage))
+        ->enqueue(truncatedCoverageResponse())
+        ->enqueue(sceneCoverageResponse(sceneSelfCheck($content)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact?->content)->toBe($content)
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1)
+        ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
+        ->and(data_get($fake->requests()[2]->metadata, 'coverage_repair_attempt'))->toBe(2);
 });
 
 test('scene self check rejects an incomplete fixed schema', function () {

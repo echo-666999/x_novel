@@ -29,6 +29,8 @@ class StoryEventExtractor
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly GenerationRunLease $runLease,
+        private readonly StoryEventEvidenceRepairer $evidenceRepairer,
+        private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -60,6 +62,12 @@ class StoryEventExtractor
         }
 
         try {
+            $metadata = [
+                'generation_run_id' => $run->getKey(),
+                'novel_id' => $chapter->novel_id,
+                'chapter_id' => $chapter->getKey(),
+                'stage' => AiStage::Extractor->value,
+            ];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中该类型已经存在的实体。没有有效主体时必须省略该事件，不能借用角色 ID 充当 relationship、conflict、thread 或其他类型的 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_* 事件必须引用对应的 foreshadowing ID。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
@@ -68,19 +76,14 @@ class StoryEventExtractor
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
                 responseSchema: $this->responseSchema(),
                 promptVersion: $promptVersion,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $chapter->novel_id,
-                    'chapter_id' => $chapter->getKey(),
-                    'stage' => AiStage::Extractor->value,
-                ],
+                metadata: $metadata,
             ));
 
             if ($response->structuredData === null) {
                 throw new AiProviderException('event_schema_invalid', 'AI 未返回合法的结构化 Story Event Candidates。', false);
             }
 
-            $candidates = $this->validateCandidates($response->structuredData, $chapter, $draft);
+            $candidates = $this->validateCandidates($response->structuredData, $chapter, $draft, $settings->model, $metadata);
 
             return $this->complete($run, $chapter, $draft, $candidates, $context['state_version']);
         } catch (Throwable $exception) {
@@ -214,35 +217,40 @@ class StoryEventExtractor
     }
 
     /** @return array<int, StoryEventCandidate> */
-    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft): array
+    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata): array
     {
         if (array_keys($payload) !== ['events'] || ! is_array($payload['events'])) {
             throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须只返回 events 数组。']);
         }
 
-        return collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft): StoryEventCandidate {
+        return collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata): StoryEventCandidate {
             if (! is_array($event)) {
                 throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
             }
 
             try {
-                $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($draft): mixed {
-                    if (! is_array($evidence)) {
-                        return $evidence;
+                $event = $this->normalizeEvidence($event, $draft);
+
+                try {
+                    $candidate = StoryEventCandidate::fromArray($event);
+                    $this->validateEvidence($candidate, $chapter, $draft);
+                } catch (ValidationException $exception) {
+                    if (! $this->isEvidenceQuoteMismatch($exception)) {
+                        throw $exception;
                     }
 
-                    // The source artifact is authoritative server context, not a value the model should infer.
-                    $evidence['artifact_id'] = $draft->getKey();
+                    $event['evidence'] = $this->evidenceRepairer->repair(
+                        event: $event,
+                        content: (string) $draft->content,
+                        model: $model,
+                        metadata: $metadata,
+                        eventIndex: $index,
+                    );
+                    $event = $this->normalizeEvidence($event, $draft);
+                    $candidate = StoryEventCandidate::fromArray($event);
+                    $this->validateEvidence($candidate, $chapter, $draft);
+                }
 
-                    if (is_string($evidence['quote'] ?? null)) {
-                        $evidence['quote'] = $this->resolveEvidenceQuote((string) $draft->content, $evidence['quote']);
-                    }
-
-                    return $evidence;
-                })->all();
-
-                $candidate = StoryEventCandidate::fromArray($event);
-                $this->validateEvidence($candidate, $chapter, $draft);
                 $this->validateSubject($candidate, $chapter);
 
                 return $candidate;
@@ -250,6 +258,39 @@ class StoryEventExtractor
                 throw $this->withCandidateIndex($exception, $index);
             }
         })->all();
+    }
+
+    /** @param array<string, mixed> $event
+     * @return array<string, mixed>
+     */
+    private function normalizeEvidence(array $event, GenerationArtifact $draft): array
+    {
+        $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($draft): mixed {
+            if (! is_array($evidence)) {
+                return $evidence;
+            }
+
+            // The source artifact is authoritative server context, not a value the model should infer.
+            $evidence['artifact_id'] = $draft->getKey();
+
+            if (is_string($evidence['quote'] ?? null)) {
+                $evidence['quote'] = $this->evidenceQuoteResolver->resolve((string) $draft->content, $evidence['quote']);
+            }
+
+            return $evidence;
+        })->all();
+
+        return $event;
+    }
+
+    private function isEvidenceQuoteMismatch(ValidationException $exception): bool
+    {
+        $errors = $exception->errors();
+
+        return array_keys($errors) === ['evidence']
+            && collect($errors['evidence'])->contains(
+                fn (string $message): bool => str_contains($message, 'Evidence quote 必须逐字来自当前 Chapter Draft'),
+            );
     }
 
     private function withCandidateIndex(ValidationException $exception, int $index): ValidationException
@@ -302,47 +343,6 @@ class StoryEventExtractor
         if (! $valid) {
             throw ValidationException::withMessages(['subject_id' => 'Story Event Candidate 引用了当前 Novel 之外的实体。']);
         }
-    }
-
-    private function resolveEvidenceQuote(string $draft, string $quote): string
-    {
-        $quote = trim($quote, " \n\r\t\v\0\"'“”‘’");
-
-        if ($quote === '' || str_contains($draft, $quote)) {
-            return $quote;
-        }
-
-        $whitespacePattern = preg_replace('/\\s+/u', '\\s+', preg_quote($quote, '/'));
-
-        if (is_string($whitespacePattern)
-            && preg_match('/'.$whitespacePattern.'/u', $draft, $match) === 1) {
-            return $match[0];
-        }
-
-        $fragments = preg_split('/(?:…+|\.{3,})/u', $quote);
-
-        if (is_array($fragments) && count($fragments) > 1) {
-            $fragments = array_values(array_filter(array_map('trim', $fragments), fn (string $fragment): bool => mb_strlen($fragment) >= 4));
-            $start = null;
-            $end = 0;
-
-            foreach ($fragments as $fragment) {
-                $position = mb_strpos($draft, $fragment, $end);
-
-                if ($position === false) {
-                    return $quote;
-                }
-
-                $start ??= $position;
-                $end = $position + mb_strlen($fragment);
-            }
-
-            if ($start !== null) {
-                return mb_substr($draft, $start, $end - $start);
-            }
-        }
-
-        return $quote;
     }
 
     /** @param array<int, StoryEventCandidate> $candidates */

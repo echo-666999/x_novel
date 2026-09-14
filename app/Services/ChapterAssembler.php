@@ -19,6 +19,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class ChapterAssembler
@@ -31,6 +32,7 @@ class ChapterAssembler
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRunLease $runLease,
+        private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
     ) {}
 
     public function assemble(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -90,7 +92,19 @@ class ChapterAssembler
                 throw new AiProviderException('assembly_schema_invalid', 'AI 未返回合法的结构化 Chapter Assembly。', false);
             }
 
-            $payload = ChapterAssemblyPayload::validate($response->structuredData, $chapter, $artifacts);
+            $payload = $this->validatePayloadWithCoverageRepair(
+                payload: $response->structuredData,
+                chapter: $chapter,
+                artifacts: $artifacts,
+                context: $context,
+                model: $settings->model,
+                metadata: [
+                    'generation_run_id' => $run->getKey(),
+                    'novel_id' => $chapter->novel_id,
+                    'chapter_id' => $chapter->getKey(),
+                    'stage' => AiStage::Assembler->value,
+                ],
+            );
             $payload = $this->repairLengthIfNeeded(
                 payload: $payload,
                 chapter: $chapter,
@@ -323,10 +337,66 @@ class ChapterAssembler
                 throw new AiProviderException('assembly_schema_invalid', 'AI 章节字数修复未返回合法的结构化 Chapter Assembly。', false);
             }
 
-            $payload = ChapterAssemblyPayload::validate($response->structuredData, $chapter, $artifacts);
+            $payload = $this->validatePayloadWithCoverageRepair(
+                payload: $response->structuredData,
+                chapter: $chapter,
+                artifacts: $artifacts,
+                context: $context,
+                model: $model,
+                metadata: $metadata,
+            );
         }
 
         return $payload;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @param  Collection<int, GenerationArtifact>  $artifacts
+     * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $metadata
+     * @return array<string, mixed>
+     */
+    private function validatePayloadWithCoverageRepair(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $model, array $metadata): array
+    {
+        $repairedIndexes = [];
+
+        while (true) {
+            try {
+                return ChapterAssemblyPayload::validate($payload, $chapter, $artifacts);
+            } catch (ValidationException $exception) {
+                $fields = array_keys($exception->errors());
+
+                if ($fields === [] || ! collect($fields)->every(
+                    fn (string $field): bool => preg_match('/^scene_coverage\.\d+\.(goal|conflict|turn|outcome)\.evidence$/', $field) === 1,
+                )) {
+                    throw $exception;
+                }
+            }
+
+            $index = (int) explode('.', $fields[0])[1];
+
+            if (isset($repairedIndexes[$index])) {
+                throw $exception;
+            }
+
+            $row = data_get($payload, "scene_coverage.{$index}");
+
+            if (! is_array($row)) {
+                throw $exception;
+            }
+
+            $coverage = $this->coverageEvidenceRepairer->repair(
+                coverage: collect($row)->except('scene_id')->all(),
+                content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
+                model: $model,
+                metadata: $metadata,
+                task: data_get($context, "chapter_plan.scene_plans.{$index}"),
+                path: "scene_coverage.{$index}",
+            );
+            $payload['scene_coverage'][$index] = ['scene_id' => $row['scene_id'] ?? null, ...$coverage];
+            $repairedIndexes[$index] = true;
+        }
     }
 
     /** @param array<string, mixed> $constraints */

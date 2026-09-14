@@ -31,6 +31,7 @@ class SceneGenerator
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly GenerationRunLease $runLease,
+        private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
     ) {}
 
     public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null): ?GenerationArtifact
@@ -128,7 +129,18 @@ class SceneGenerator
                 throw new AiProviderException('scene_schema_invalid', 'AI 未返回合法的结构化 Scene Draft。', false);
             }
 
-            $payload = SceneDraftPayload::validate($response->structuredData);
+            $payload = $this->validatePayloadWithCoverageRepair(
+                payload: $response->structuredData,
+                context: $context,
+                model: $settings->model,
+                metadata: [
+                    'generation_run_id' => $run->getKey(),
+                    'novel_id' => $novel->getKey(),
+                    'chapter_id' => $chapter->getKey(),
+                    'scene_id' => $scene->getKey(),
+                    'stage' => AiStage::Writer->value,
+                ],
+            );
             $this->validatePlanConstraints($payload['content'], $plan->must_not_reveal ?? []);
             $payload = $this->repairLengthIfNeeded(
                 payload: $payload,
@@ -400,10 +412,55 @@ class SceneGenerator
                 throw new AiProviderException('scene_schema_invalid', 'AI 场景扩写未返回合法的结构化 Scene Draft。', false);
             }
 
-            $payload = SceneDraftPayload::validate($response->structuredData);
+            $payload = $this->validatePayloadWithCoverageRepair(
+                payload: $response->structuredData,
+                context: $context,
+                model: $model,
+                metadata: $metadata,
+            );
         }
 
         return $payload;
+    }
+
+    /**
+     * Keep the generated prose unchanged and repair only invalid Coverage quotes.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $metadata
+     * @return array<string, mixed>
+     */
+    private function validatePayloadWithCoverageRepair(array $payload, array $context, string $model, array $metadata): array
+    {
+        try {
+            return SceneDraftPayload::validate($payload);
+        } catch (ValidationException $exception) {
+            if (! $this->containsOnlyCoverageEvidenceErrors($exception)) {
+                throw $exception;
+            }
+
+        }
+
+        $payload['self_check'] = $this->coverageEvidenceRepairer->repair(
+            coverage: is_array($payload['self_check'] ?? null) ? $payload['self_check'] : [],
+            content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
+            model: $model,
+            metadata: $metadata,
+            task: $context['scene_task'] ?? null,
+            path: 'self_check',
+        );
+
+        return SceneDraftPayload::validate($payload);
+    }
+
+    private function containsOnlyCoverageEvidenceErrors(ValidationException $exception): bool
+    {
+        $fields = array_keys($exception->errors());
+
+        return $fields !== [] && collect($fields)->every(
+            fn (string $field): bool => preg_match('/^self_check\.(goal|conflict|turn|outcome)\.evidence$/', $field) === 1,
+        );
     }
 
     /** @return array<string, int> */

@@ -61,9 +61,17 @@ final class PlanCoverage
                 continue;
             }
 
-            if (! is_string($evidence) || trim($evidence) === '' || ! str_contains($content, $evidence)) {
-                throw ValidationException::withMessages(["{$itemPath}.evidence" => 'fulfilled 或 contradicted Coverage 的 evidence 必须逐字来自当前正文。']);
+            if (! is_string($evidence) || trim($evidence) === '') {
+                throw ValidationException::withMessages(["{$itemPath}.evidence" => "{$itemPath}.evidence：fulfilled 或 contradicted Coverage 的 evidence 必须逐字来自当前正文。"]);
             }
+
+            $evidence = self::resolveExactEvidence($content, $evidence);
+
+            if (! str_contains($content, $evidence)) {
+                throw ValidationException::withMessages(["{$itemPath}.evidence" => "{$itemPath}.evidence：fulfilled 或 contradicted Coverage 的 evidence 必须逐字来自当前正文。"]);
+            }
+
+            $coverage[$element]['evidence'] = $evidence;
         }
 
         return $coverage;
@@ -137,5 +145,64 @@ final class PlanCoverage
         sort($keys);
 
         return $actual === $keys;
+    }
+
+    private static function resolveExactEvidence(string $content, string $evidence): string
+    {
+        $evidence = trim($evidence);
+
+        if ($evidence === '' || str_contains($content, $evidence)) {
+            return $evidence;
+        }
+
+        foreach ([['“', '”'], ['‘', '’'], ['「', '」'], ['『', '』'], ['"', '"'], ["'", "'"]] as [$open, $close]) {
+            if (str_starts_with($evidence, $open) && str_ends_with($evidence, $close)) {
+                $unwrapped = mb_substr($evidence, mb_strlen($open), mb_strlen($evidence) - mb_strlen($open) - mb_strlen($close));
+
+                if ($unwrapped !== '' && str_contains($content, $unwrapped)) {
+                    return $unwrapped;
+                }
+            }
+        }
+
+        return self::resolveWhitespaceEquivalentEvidence($content, $evidence) ?? $evidence;
+    }
+
+    private static function resolveWhitespaceEquivalentEvidence(string $content, string $evidence): ?string
+    {
+        $contentCharacters = preg_split('//u', $content, -1, PREG_SPLIT_NO_EMPTY);
+        $evidenceWithoutWhitespace = preg_replace('/\s+/u', '', $evidence);
+
+        if (! is_array($contentCharacters) || ! is_string($evidenceWithoutWhitespace) || $evidenceWithoutWhitespace === '') {
+            return null;
+        }
+
+        $contentWithoutWhitespace = '';
+        $contentOffsets = [];
+
+        foreach ($contentCharacters as $offset => $character) {
+            if (preg_match('/\s/u', $character) === 1) {
+                continue;
+            }
+
+            $contentWithoutWhitespace .= $character;
+            $contentOffsets[] = $offset;
+        }
+
+        $normalizedPosition = mb_strpos($contentWithoutWhitespace, $evidenceWithoutWhitespace);
+
+        if ($normalizedPosition === false) {
+            return null;
+        }
+
+        $normalizedEnd = $normalizedPosition + mb_strlen($evidenceWithoutWhitespace) - 1;
+        $start = $contentOffsets[$normalizedPosition] ?? null;
+        $end = $contentOffsets[$normalizedEnd] ?? null;
+
+        if ($start === null || $end === null) {
+            return null;
+        }
+
+        return implode('', array_slice($contentCharacters, $start, $end - $start + 1));
     }
 }

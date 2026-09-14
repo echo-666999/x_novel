@@ -26,7 +26,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -100,6 +100,7 @@ class ChapterRewriter
         }
 
         try {
+            $metadata = ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 systemPrompt: $this->systemPrompt($sceneId !== null),
@@ -108,16 +109,23 @@ class ChapterRewriter
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
                 responseSchema: $sceneId === null ? null : SceneRewritePayload::schema(),
                 promptVersion: $promptVersion,
-                metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value],
+                metadata: $metadata,
             ));
-            $payload = $this->responsePayload($response->content, $response->structuredData, $sceneId !== null);
+            $payload = $this->responsePayload(
+                content: $response->content,
+                structuredData: $response->structuredData,
+                sceneRewrite: $sceneId !== null,
+                model: $settings->model,
+                metadata: $metadata,
+                task: $brief['plan_acceptance'],
+            );
 
             $payload = $this->repairLengthIfNeeded(
                 payload: $payload,
                 brief: $brief,
                 model: $settings->model,
                 promptVersion: $promptVersion,
-                metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value],
+                metadata: $metadata,
                 sceneRewrite: $sceneId !== null,
             );
             $this->validateLength($payload['content'], $brief['length_requirement']);
@@ -195,12 +203,29 @@ class ChapterRewriter
      * @param  array<string, mixed>|null  $structuredData
      * @return array<string, mixed>
      */
-    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite): array
+    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite, ?string $model = null, array $metadata = [], mixed $task = null): array
     {
         if ($sceneRewrite) {
             if ($structuredData === null) {
                 throw new AiProviderException('rewrite_schema_invalid', 'Scene Rewrite 未返回合法的结构化结果。', false);
             }
+
+            try {
+                return SceneRewritePayload::validate($structuredData);
+            } catch (ValidationException $exception) {
+                if ($model === null || ! $this->containsOnlyCoverageEvidenceErrors($exception)) {
+                    throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
+                }
+            }
+
+            $structuredData['self_check'] = $this->coverageEvidenceRepairer->repair(
+                coverage: is_array($structuredData['self_check'] ?? null) ? $structuredData['self_check'] : [],
+                content: is_string($structuredData['content'] ?? null) ? $structuredData['content'] : '',
+                model: $model,
+                metadata: $metadata,
+                task: $task,
+                path: 'self_check',
+            );
 
             try {
                 return SceneRewritePayload::validate($structuredData);
@@ -215,6 +240,15 @@ class ChapterRewriter
         }
 
         return ['content' => $content];
+    }
+
+    private function containsOnlyCoverageEvidenceErrors(ValidationException $exception): bool
+    {
+        $fields = array_keys($exception->errors());
+
+        return $fields !== [] && collect($fields)->every(
+            fn (string $field): bool => preg_match('/^self_check\.(goal|conflict|turn|outcome)\.evidence$/', $field) === 1,
+        );
     }
 
     /** @return array<string, mixed> */
@@ -256,7 +290,7 @@ class ChapterRewriter
     {
         $requirement = $brief['length_requirement'];
 
-        for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
+        for ($attempt = 1; $attempt <= (int) config('generation.max_rewrite_length_repair_attempts', 2); $attempt++) {
             $actual = $this->lengthPolicy->count($payload['content']);
             $minimum = (int) $requirement['minimum_words'];
             $maximum = (int) $requirement['maximum_words'];
@@ -291,7 +325,14 @@ class ChapterRewriter
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
-            $payload = $this->responsePayload($response->content, $response->structuredData, $sceneRewrite);
+            $payload = $this->responsePayload(
+                content: $response->content,
+                structuredData: $response->structuredData,
+                sceneRewrite: $sceneRewrite,
+                model: $model,
+                metadata: [...$metadata, 'length_repair_attempt' => $attempt],
+                task: $brief['plan_acceptance'],
+            );
         }
 
         return $payload;

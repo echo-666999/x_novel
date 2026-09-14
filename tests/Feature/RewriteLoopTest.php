@@ -53,12 +53,12 @@ function rewriteResponse(string $content = '修订后的章节正文'): AiRespon
     return new AiResponse(content: $content, structuredData: null, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
 }
 
-function sceneRewriteResponse(string $content = '破门逆转'): AiResponse
+function sceneRewriteResponse(string $content = '破门逆转', string $evidence = '破门'): AiResponse
 {
     $selfCheck = collect(['goal', 'conflict', 'turn', 'outcome'])
         ->mapWithKeys(fn (string $element): array => [$element => [
             'status' => 'fulfilled',
-            'evidence' => '破门',
+            'evidence' => $evidence,
         ]])
         ->all();
     $data = ['content' => $content, 'self_check' => $selfCheck];
@@ -71,6 +71,27 @@ function sceneRewriteResponse(string $content = '破门逆转'): AiResponse
         cachedTokens: 0,
         latencyMs: 100,
         providerRequestId: 'scene-rewrite',
+        model: 'rewrite-test',
+    );
+}
+
+function sceneRewriteCoverageResponse(string $evidence): AiResponse
+{
+    $coverage = collect(['goal', 'conflict', 'turn', 'outcome'])
+        ->mapWithKeys(fn (string $element): array => [$element => [
+            'status' => 'fulfilled',
+            'evidence' => $evidence,
+        ]])
+        ->all();
+
+    return new AiResponse(
+        content: json_encode($coverage, JSON_UNESCAPED_UNICODE),
+        structuredData: $coverage,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'rewrite-coverage-repair',
         model: 'rewrite-test',
     );
 }
@@ -255,6 +276,25 @@ test('scene rewrite replaces only the target pointer and preserves plan and styl
         ->and($fake->requests()[0]->prompt)->not->toContain('第二场景有可选的文风建议');
 });
 
+test('scene rewrite repairs invalid coverage evidence without rewriting its content', function () {
+    $fixture = sceneRewriteFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneRewriteResponse(evidence: '他成功破门'))
+        ->enqueue(sceneRewriteCoverageResponse('破门'));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite(
+        $fixture['chapter']->getKey(),
+        $fixture['target']['scene']->getKey(),
+    );
+
+    expect($artifact->content)->toBe('破门逆转')
+        ->and(data_get($artifact->data, 'self_check.outcome.evidence'))->toBe('破门')
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe('coverage-evidence-repair-v1')
+        ->and(data_get($fake->requests()[1]->metadata, 'coverage_path'))->toBe('self_check');
+});
+
 test('scene rewrite job returns to assembly before event extraction', function () {
     Queue::fake();
     $fixture = sceneRewriteFixture();
@@ -369,11 +409,30 @@ test('an overlength rewrite is compressed once before it becomes a rewrite draft
         ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
 });
 
+test('a rewrite can use a second length repair before it becomes a rewrite draft', function () {
+    $fixture = rewriteFixture();
+    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(rewriteResponse(str_repeat('超', 120)))
+        ->enqueue(rewriteResponse(str_repeat('仍', 116)))
+        ->enqueue(rewriteResponse(str_repeat('合', 100)));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('合', 100))
+        ->and($artifact->data['word_count'])->toBe(100)
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[1]->metadata['length_repair_attempt'])->toBe(1)
+        ->and($fake->requests()[2]->metadata['length_repair_attempt'])->toBe(2);
+});
+
 test('a failed length repair does not consume a rewrite artifact attempt', function () {
     $fixture = rewriteFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 100]);
     $fake = (new FakeAiProvider)
         ->enqueue(rewriteResponse(str_repeat('超', 120)))
+        ->enqueue(rewriteResponse(str_repeat('仍', 116)))
         ->enqueue(rewriteResponse(str_repeat('仍', 116)))
         ->enqueue(rewriteResponse(str_repeat('合', 100)));
     app()->instance(AiProvider::class, $fake);
@@ -388,7 +447,7 @@ test('a failed length repair does not consume a rewrite artifact attempt', funct
     expect($artifact->version)->toBe(1)
         ->and($artifact->data['attempt'])->toBe(1)
         ->and($artifact->content)->toBe(str_repeat('合', 100))
-        ->and($fake->requests())->toHaveCount(3);
+        ->and($fake->requests())->toHaveCount(4);
 });
 
 test('stale rewrite run is marked interrupted before recovery', function () {
