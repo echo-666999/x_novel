@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Exceptions\GenerationPreflightException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterPlanner;
@@ -55,7 +56,7 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
             }
 
             throw $exception;
-        } catch (ValidationException $exception) {
+        } catch (GenerationPreflightException|ValidationException $exception) {
             $this->releaseGenerationDispatch();
             $this->fail($exception);
 

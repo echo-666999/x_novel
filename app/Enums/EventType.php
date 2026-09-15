@@ -46,6 +46,26 @@ enum EventType: string
     case EventInvalidated = 'event_invalidated';
     case ManualCorrection = 'manual_correction';
 
+    /** @return array<int, self> */
+    public static function generationCases(): array
+    {
+        return array_values(array_filter(
+            self::cases(),
+            fn (self $type): bool => $type !== self::ForeshadowingDue,
+        ));
+    }
+
+    public function isForeshadowing(): bool
+    {
+        return in_array($this, [
+            self::ForeshadowingPlanted,
+            self::ForeshadowingReinforced,
+            self::ForeshadowingDue,
+            self::ForeshadowingPaidOff,
+            self::ForeshadowingAbandoned,
+        ], true);
+    }
+
     /** @return array<int, string> */
     public function allowedSubjectTypes(): array
     {

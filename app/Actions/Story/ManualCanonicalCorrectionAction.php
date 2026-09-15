@@ -5,6 +5,7 @@ namespace App\Actions\Story;
 use App\Data\StatePatch;
 use App\Enums\EventType;
 use App\Enums\StoryEventStatus;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Services\StatePatchBuilder;
@@ -26,13 +27,15 @@ class ManualCanonicalCorrectionAction
         string $path,
         mixed $value,
         string $reason,
+        ?int $actorId = null,
+        array $metadata = [],
     ): StoryStateVersion {
         $validated = Validator::make(compact('path', 'reason'), [
             'path' => ['required', 'string', 'max:500'],
             'reason' => ['required', 'string', 'max:2000'],
         ])->validate();
 
-        return DB::transaction(function () use ($novel, $expectedStateVersion, $value, $validated): StoryStateVersion {
+        $version = DB::transaction(function () use ($novel, $expectedStateVersion, $value, $validated, $actorId, $metadata): StoryStateVersion {
             $lockedNovel = Novel::query()
                 ->lockForUpdate()
                 ->with('canonicalStateVersion')
@@ -76,11 +79,14 @@ class ManualCanonicalCorrectionAction
                 'subject_type' => $segments[0],
                 'subject_id' => $segments[1] ?? null,
                 'payload' => [
+                    ...$metadata,
                     'path' => $validated['path'],
                     'before' => data_get($current->state, $validated['path']),
                     'after' => $value,
                     'reason' => $validated['reason'],
                     'previous_state_version' => $current->version,
+                    'actor_id' => $actorId,
+                    'performed_at' => now()->toISOString(),
                 ],
                 'evidence' => [[
                     'type' => 'manual_correction',
@@ -101,5 +107,9 @@ class ManualCanonicalCorrectionAction
 
             return $version;
         }, 3);
+
+        RefreshNovelProjectionJob::dispatch($version->novel_id, $version->getKey())->afterCommit();
+
+        return $version;
     }
 }

@@ -1,0 +1,395 @@
+{
+    "generated_at": "2026-09-15T11:53:20.669179Z",
+    "executed": false,
+    "plan": {
+        "schema_version": 1,
+        "novel_id": 2,
+        "novel_title": "六环余光",
+        "expected_state_version": 13,
+        "expected_state_checksum": "563dd01246898bd36a8fa0e233869a798a8c45b54aa611059691e6dacc406cfd",
+        "baseline_state_version": 1,
+        "event_repairs": [
+            {
+                "event_id": 15,
+                "action": "replace",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": "foreshadowing_planted",
+                "reason": "第 1 章正文首次建立魔法代价及其后续影响，原事件从 idea 直接进入 reinforced；改为 planted 以恢复合法生命周期。"
+            },
+            {
+                "event_id": 24,
+                "action": "replace",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": "foreshadowing_planted",
+                "reason": "第 2 章正文首次出现未知黑影与被注视感，原事件从 idea 直接进入 reinforced；改为 planted，提前铺设不违反兑现窗口规则。"
+            },
+            {
+                "event_id": 41,
+                "action": "invalidate",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": null,
+                "reason": "第 4 章证据只说明一般魔法代价与停止施法，没有出现原伏笔定义要求的为他人作出牺牲，属于错误绑定。"
+            },
+            {
+                "event_id": 52,
+                "action": "replace",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": "foreshadowing_planted",
+                "reason": "第 5 章正文首次明确写出林墨在失衡时先推开苏璃并承担自身损耗，符合牺牲伏笔的首次铺设；改为 planted 以恢复合法生命周期。"
+            }
+        ],
+        "state_corrections": [
+            {
+                "path": "foreshadowings.1.status",
+                "value": "abandoned",
+                "reason": "已确认 D-05 将魔法必有代价作为世界硬规则；现有开放式承诺没有可判定的兑现条件，停止把它作为 Critical 伏笔继续累计或伪装成已兑现。"
+            }
+        ],
+        "unresolved_items": [
+            {
+                "id": "UNRESOLVED-001",
+                "description": "伏笔 #1 后续需要另建具有具体结果、兑现窗口和逐字验收条件的新伏笔；当前资料不足以确定具体承诺，计划不自动编造。"
+            },
+            {
+                "id": "UNRESOLVED-002",
+                "description": "伏笔 #1 的第 2～11 章证据分别描述不同章节中的代价或选择，现有证据不能确定性证明其中任何一条只是重复提取，因此本计划全部保留。"
+            },
+            {
+                "id": "UNRESOLVED-003",
+                "description": "伏笔 #2 的第 3～9 章事件均有不同正文证据，提前铺设或强化不违反兑现窗口；是否文学上重复仍无法确定，因此本计划全部保留。"
+            },
+            {
+                "id": "UNRESOLVED-004",
+                "description": "伏笔 #3 的第 7、10、11 章事件均涉及在代价与选择之间收手，是否达到独立强化的文学强度无法确定；本计划保留，不将不确定判断写成事实。"
+            }
+        ]
+    },
+    "preview": {
+        "repair_key": "foreshadowing-history:edb77716e0e986a10c175002887f592df4afd338d3847884161d837e697f13ab",
+        "novel_id": 2,
+        "novel_title": "六环余光",
+        "baseline_state_version": 1,
+        "expected_state_version": 13,
+        "result_state_version": 14,
+        "source_rebuild_matches_current": true,
+        "event_repairs": [
+            {
+                "event_id": 15,
+                "action": "replace",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": "foreshadowing_planted",
+                "reason": "第 1 章正文首次建立魔法代价及其后续影响，原事件从 idea 直接进入 reinforced；改为 planted 以恢复合法生命周期。",
+                "memory_records_affected": 1
+            },
+            {
+                "event_id": 24,
+                "action": "replace",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": "foreshadowing_planted",
+                "reason": "第 2 章正文首次出现未知黑影与被注视感，原事件从 idea 直接进入 reinforced；改为 planted，提前铺设不违反兑现窗口规则。",
+                "memory_records_affected": 1
+            },
+            {
+                "event_id": 41,
+                "action": "invalidate",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": null,
+                "reason": "第 4 章证据只说明一般魔法代价与停止施法，没有出现原伏笔定义要求的为他人作出牺牲，属于错误绑定。",
+                "memory_records_affected": 1
+            },
+            {
+                "event_id": 52,
+                "action": "replace",
+                "expected_event_type": "foreshadowing_reinforced",
+                "replacement_event_type": "foreshadowing_planted",
+                "reason": "第 5 章正文首次明确写出林墨在失衡时先推开苏璃并承担自身损耗，符合牺牲伏笔的首次铺设；改为 planted 以恢复合法生命周期。",
+                "memory_records_affected": 1
+            }
+        ],
+        "state_corrections": [
+            {
+                "path": "foreshadowings.1.status",
+                "value": "abandoned",
+                "reason": "已确认 D-05 将魔法必有代价作为世界硬规则；现有开放式承诺没有可判定的兑现条件，停止把它作为 Critical 伏笔继续累计或伪装成已兑现。"
+            }
+        ],
+        "unresolved_items": [
+            {
+                "id": "UNRESOLVED-001",
+                "description": "伏笔 #1 后续需要另建具有具体结果、兑现窗口和逐字验收条件的新伏笔；当前资料不足以确定具体承诺，计划不自动编造。"
+            },
+            {
+                "id": "UNRESOLVED-002",
+                "description": "伏笔 #1 的第 2～11 章证据分别描述不同章节中的代价或选择，现有证据不能确定性证明其中任何一条只是重复提取，因此本计划全部保留。"
+            },
+            {
+                "id": "UNRESOLVED-003",
+                "description": "伏笔 #2 的第 3～9 章事件均有不同正文证据，提前铺设或强化不违反兑现窗口；是否文学上重复仍无法确定，因此本计划全部保留。"
+            },
+            {
+                "id": "UNRESOLVED-004",
+                "description": "伏笔 #3 的第 7、10、11 章事件均涉及在代价与选择之间收手，是否达到独立强化的文学强度无法确定；本计划保留，不将不确定判断写成事实。"
+            }
+        ],
+        "before_foreshadowings": {
+            "1": {
+                "title": "魔法代价的痛苦",
+                "due_to": 10,
+                "status": "reinforced",
+                "due_from": 1,
+                "importance": "critical",
+                "reinforce_count": 11
+            },
+            "2": {
+                "title": "反派的阴影",
+                "due_to": 30,
+                "status": "reinforced",
+                "due_from": 15,
+                "importance": "high",
+                "reinforce_count": 7
+            },
+            "3": {
+                "title": "牺牲的代价",
+                "due_to": 35,
+                "status": "reinforced",
+                "due_from": 20,
+                "importance": "high",
+                "reinforce_count": 5
+            }
+        },
+        "after_foreshadowings": {
+            "1": {
+                "title": "魔法代价的痛苦",
+                "due_to": 10,
+                "status": "abandoned",
+                "due_from": 1,
+                "importance": "critical",
+                "reinforce_count": 10
+            },
+            "2": {
+                "title": "反派的阴影",
+                "due_to": 30,
+                "status": "reinforced",
+                "due_from": 15,
+                "importance": "high",
+                "reinforce_count": 6
+            },
+            "3": {
+                "title": "牺牲的代价",
+                "due_to": 35,
+                "status": "reinforced",
+                "due_from": 20,
+                "importance": "high",
+                "reinforce_count": 3
+            }
+        },
+        "state_changes": [
+            {
+                "path": "foreshadowings.1.reinforce_count",
+                "before": 11,
+                "after": 10,
+                "before_missing": false,
+                "after_missing": false,
+                "type": "changed"
+            },
+            {
+                "path": "foreshadowings.1.status",
+                "before": "reinforced",
+                "after": "abandoned",
+                "before_missing": false,
+                "after_missing": false,
+                "type": "changed"
+            },
+            {
+                "path": "foreshadowings.2.reinforce_count",
+                "before": 7,
+                "after": 6,
+                "before_missing": false,
+                "after_missing": false,
+                "type": "changed"
+            },
+            {
+                "path": "foreshadowings.3.reinforce_count",
+                "before": 5,
+                "after": 3,
+                "before_missing": false,
+                "after_missing": false,
+                "type": "changed"
+            }
+        ],
+        "result_checksum": "e0367a6534f0650e15d4485f949d22c6163721e4e65f683d8f7f9f4e056e3b15",
+        "facts_affected": 0,
+        "projection_before": {
+            "character_drift_ids": [
+                1,
+                2
+            ],
+            "world_entity_drift_ids": [
+                4,
+                2
+            ],
+            "foreshadowing_drift_ids": [
+                1,
+                2,
+                3
+            ],
+            "errors": []
+        },
+        "foreshadowing_projection_ids_to_rebuild": [
+            1,
+            2,
+            3
+        ],
+        "projection_changes": {
+            "characters": [
+                {
+                    "id": 1,
+                    "name": "林墨",
+                    "before": {
+                        "summary": "刚开始踏上魔法修炼之路，面临初次魔法代价的考验。",
+                        "location": "六环城"
+                    },
+                    "after": {
+                        "goals": [
+                            "按学院程序继续调查三八一的借阅记录、近期借阅权限，并对照训练区下方的两处分叉线路"
+                        ],
+                        "health": {
+                            "notes": null,
+                            "state": "injured"
+                        },
+                        "emotion": "接受代价并愿意继续前进",
+                        "summary": "刚开始踏上魔法修炼之路，面临初次魔法代价的考验。",
+                        "location": "学院正式申请窗口方向的受监管走廊",
+                        "abilities": {
+                            "基础魔法施放": true,
+                            "魔法施放与控制": true,
+                            "控制魔法并在首个明显症状出现前主动切断": true
+                        },
+                        "knowledge": {
+                            "灰黑纹路会回应附近的魔力痕迹，并可能与训练室外的异常痕迹联动": true,
+                            "训练室异常薄片上的纹路与晶石失控后浮现的灰黑纹路一致，说明两者存在关联": true,
+                            "控制魔法的正确方式是从最弱的力量开始，记录身体反应，并在代价扩大前停下，而不是直接撞上极限": true,
+                            "三八一的借阅记录日期为今天，借阅人只写了半个姓；外侧档案架附近刚有人活动，但行动者身份仍无法确认": true,
+                            "魔法使用必然伴随代价，代价并非单纯伤口，而是会从施法者身体中带走某种力量；需要控制力量并在付不起之前停手": true,
+                            "相关目录材料在重新封存前出现此前不存在的擦痕、临时标记和折痕；有人可能掌握调查进度并干预材料，但身份未确认": true,
+                            "训练区下方存在被修补并封死的旧封存线路入口，旧线路在魔力接触后会回应并向训练区更深处分叉；入口内的异常仍在活动": true,
+                            "旧档案区记录过多年前的魔力回应封存物事件，异常纹路曾从训练区外墙延伸至地下封存通道；相关记录的关键页被人为抽走。": true,
+                            "魔法代价会表现为掌心裂纹加深、体力下降、反应变慢及感知障碍；在第一个明显症状出现时主动停手，可以避免代价继续扩大": true,
+                            "三八一不是孤立借阅记录，而是连续编号调查链中的一个节点；三七四到三八六的缺页集中在同一编号段，借阅人的身份和时间缺口仍待核查": true,
+                            "魔法代价不可避免，施法强度越大代价越重，控制越差还会产生额外损耗；身体衰弱时强行施法可能导致感知迟钝、协调丧失，甚至身体停止回应": true,
+                            "浅灰色标记附近存在微弱、断续且不稳定的魔力残痕，但无法追踪来源或确认留下者身份；三八一归还状态和具体时间仍无法确认，借阅权限正在复核；标记已并入三七四至三八六编号段的异常备注": true,
+                            "旧平面图显示旧档案区与训练区下方存在直接连接，线路在训练区下方分成两道；相关记录和封存目录室借阅登记的缺页集中在连续编号范围内，疑似被知晓编号的人按顺序取走；封存门近期有人员活动痕迹，但身份不明": true
+                        }
+                    }
+                },
+                {
+                    "id": 2,
+                    "name": "苏璃",
+                    "before": {
+                        "summary": "正在学习更高级魔法，逐渐接近魔法代价的核心秘密。",
+                        "location": "魔法学院"
+                    },
+                    "after": {
+                        "goals": [
+                            "按学院程序继续调查三八一的借阅记录、近期借阅权限，并对照训练区下方的两处分叉线路"
+                        ],
+                        "summary": "正在学习更高级魔法，逐渐接近魔法代价的核心秘密。",
+                        "location": "学院正式申请窗口方向的受监管走廊",
+                        "knowledge": {
+                            "被抽走的关键记录与训练区下方的封存通道直接关联，旧银线、墙后入口和分叉标记对应同一编号顺序": true,
+                            "三八一的借阅记录日期为今天，借阅人只写了半个姓；外侧档案架附近刚有人活动，但行动者身份仍无法确认": true,
+                            "相关目录材料在重新封存前出现此前不存在的擦痕、临时标记和折痕；有人可能掌握调查进度并干预材料，但身份未确认": true,
+                            "旧档案区记录过多年前的魔力回应封存物事件，异常纹路曾从训练区外墙延伸至地下封存通道；相关记录的关键页被人为抽走。": true,
+                            "三八一不是孤立借阅记录，而是连续编号调查链中的一个节点；三七四到三八六的缺页集中在同一编号段，借阅人的身份和时间缺口仍待核查": true,
+                            "浅灰色标记附近存在微弱、断续且不稳定的魔力残痕，但无法追踪来源或确认留下者身份；三八一归还状态和具体时间仍无法确认，借阅权限正在复核；标记已并入三七四至三八六编号段的异常备注": true,
+                            "旧平面图显示旧档案区与训练区下方存在直接连接，线路在训练区下方分成两道；相关记录和封存目录室借阅登记的缺页集中在连续编号范围内，疑似被知晓编号的人按顺序取走；封存门近期有人员活动痕迹，但身份不明": true
+                        }
+                    }
+                }
+            ],
+            "world_entities": [
+                {
+                    "id": 4,
+                    "name": "魔法代价",
+                    "before": [
+                        "代价机制稳定",
+                        "部分研究尝试降低代价"
+                    ],
+                    "after": {
+                        "rule": "魔法代价具有即时、可重复触发的身体与感知表现；即使采用较弱且分段的控制方式，也不能完全免除代价",
+                        "implication": "出现症状后停止可以限制代价扩大，但不能使施法无代价"
+                    }
+                },
+                {
+                    "id": 2,
+                    "name": "魔法学院",
+                    "before": [
+                        "学院正常运转",
+                        "部分秘密研究进行中"
+                    ],
+                    "after": {
+                        "changes": [
+                            "三八一归还时间和借阅人信息仍不完整",
+                            "三七四至三八六编号段存在连续登记时间缺口",
+                            "部分登记来自人工转交",
+                            "缺口与权限复核窗口存在重叠",
+                            "操作者身份未确认",
+                            "异常清单已入档并待后续核验",
+                            "训练区下方地下线路仍在封存范围之外"
+                        ]
+                    }
+                }
+            ],
+            "foreshadowings": [
+                {
+                    "id": 1,
+                    "title": "魔法代价的痛苦",
+                    "before": {
+                        "status": "idea",
+                        "reinforce_count": 0,
+                        "setup_chapter_id": null,
+                        "payoff_chapter_id": null
+                    },
+                    "after": {
+                        "status": "abandoned",
+                        "reinforce_count": 10,
+                        "setup_chapter_id": 1,
+                        "payoff_chapter_id": null
+                    }
+                },
+                {
+                    "id": 2,
+                    "title": "反派的阴影",
+                    "before": {
+                        "status": "idea",
+                        "reinforce_count": 0,
+                        "setup_chapter_id": null,
+                        "payoff_chapter_id": null
+                    },
+                    "after": {
+                        "status": "reinforced",
+                        "reinforce_count": 6,
+                        "setup_chapter_id": 2,
+                        "payoff_chapter_id": null
+                    }
+                },
+                {
+                    "id": 3,
+                    "title": "牺牲的代价",
+                    "before": {
+                        "status": "idea",
+                        "reinforce_count": 0,
+                        "setup_chapter_id": null,
+                        "payoff_chapter_id": null
+                    },
+                    "after": {
+                        "status": "reinforced",
+                        "reinforce_count": 3,
+                        "setup_chapter_id": 5,
+                        "payoff_chapter_id": null
+                    }
+                }
+            ]
+        }
+    }
+}

@@ -206,9 +206,13 @@ time_anchor
 hook_type
 must_reveal / may_hint / must_not_reveal
 required_facts / forbidden_conflicts
-due_foreshadowings
+foreshadowing_actions
 scene_plans
 ```
+
+`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v7` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
+
+`due_from_chapter`～`due_to_chapter` 是兑现窗口。Planning 以目标章序号选择本章机会，但正式 `upcoming / due / overdue` 只按最新 Canonical 章节计算。Planner 同时接收完整伏笔定义、Canonical 生命周期来源、领域投影状态、允许动作和已发生的重要 Active Events。Critical 在窗口内必须有动作；目标章为 `due_to` 时不能只做 `reinforce`；窗口结束后，`ForeshadowingPlanningGate` 在创建 Planning Run 和调用模型前阻止自动 Planner。此时只有人工建立包含 `pay_off`，或具有有效人工授权的 `defer / abandon` 动作契约，才构成可继续执行的修复计划。非 Critical 逾期只产生 Warning。
 
 `scene_plans[*].transition_from_previous` 明确记录衔接安排。存在上一章正式版本时，第一场景必须说明如何承接上一章结尾；发生时间、地点或行动跳跃时，正文必须呈现必要的抵达、安置或时间流逝过程，不能直接从上一章行动跳到次日新地点。
 
@@ -236,7 +240,7 @@ Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推�
 5 Current Canonical Story State
 6 Relevant Characters
 7 Relevant World Entities
-8 Due Foreshadowings
+8 Frozen Foreshadowing Action Contract
 9 Required / Forbidden Facts
 10 Recent Chapter Summaries
 11 Previous Accepted Scene Tail
@@ -245,9 +249,17 @@ Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推�
 14 Scene Task
 ```
 
-Token 不足时先缩减 Long-term Memory、较旧 Summary、Style Example；不得删除 Hard Constraints、Current State、Required/Forbidden Facts、Ending Constraints。
+Token 不足时先缩减 Long-term Memory、较旧 Summary、Style Example；不得删除 Hard Constraints、Current State、Required/Forbidden Facts、Ending Constraints，也不得删除结构化伏笔动作契约。若强制层本身超过预算，应明确失败，不能静默删去 Critical、Due 或 Overdue 伏笔。
 
-Snapshot 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Chapters、Previous Artifact、Prompt/Model、Token Budget，以及 Current Bible Version 和 Style Contract checksum。同一 Chapter Pipeline 冻结一个 Bible Version，不在中途静默切换。
+Snapshot Schema v3 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Chapters、Previous Artifact、Prompt/Model、Token Budget，以及 Current Bible Version、Style Contract checksum 和 Foreshadowing Contract checksum。同一 Chapter Pipeline 冻结一个 Bible Version，不在中途静默切换。
+
+`ForeshadowingContextContract` 从冻结的 Bible Version、Canonical State Version 和 Chapter Plan Version 确定性构建完整动作契约。每项包含伏笔定义、promised payoff、Canonical 优先的内容状态、时限、兑现窗口、重要度、所属 Arc、本章动作、目标 Scene、验收条件，以及不晚于冻结 State Version 的最近 Active Story Event 和证据。只有 `foreshadowing_actions` 中的目标具有本章处理权限；历史 `due_foreshadowings` 只记录为 legacy reference，未来未选中伏笔不会进入 actions。
+
+Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Assembler、Event Extractor、Reviewer 和 Rewriter 从各自 Run 的 `foreshadowing_contract` 读取同一结构并保存 checksum。`promised_payoff` 是作者侧约束，仍受 `must_not_reveal` 限制，不能被模型解释为允许提前揭晓。
+
+Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
+
+整章 Rewrite 使用与 Assembly 相同的结构化 `content + scene_coverage + introduced_major_facts` 契约，但允许重写在实际修正文后把原先 missing/contradicted 的 Coverage 重新判为 fulfilled；证据仍须逐字校验，必要时只修复证据引用。整章 Rewrite Artifact 保存新的 `scene_coverage` 和 `plan_findings`，随后推进器因 source artifact 已变化而重新执行 Event Extraction、State Patch 和 Review。Scene 级 Rewrite 仍先回到 Assembly，再执行同一完整下游链。Rewrite 不能写 Story Event、伏笔领域投影或 Canonical State。
 
 ## 8. Temporary Chapter State
 
@@ -284,6 +296,8 @@ MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_stat
 
 `self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用；仅有空白或外层引号差异时，将 evidence 映射回正文中的连续原句，仍无法逐字命中时只修复 Coverage evidence，不重新生成正文，也不得改变原 status。轻量修复响应因输出 Token 用尽而没有正文时，使用提高后的修复预算重试一次；错误信息必须区分输出截断与 Schema 非法。修复后仍不能逐字命中则本次 Scene Run 失败。缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果属于生成质量证据，不是 Canonical Fact，也不单独决定最终 Review Decision。
 
+`foreshadowing_coverage` 按冻结契约顺序列出分配给当前 Scene 的全部动作，每项固定包含 `foreshadowing_id`、`action`、`status` 和 `evidence`。Laravel 对照 `target_scene_sequence` 校验 ID、动作、顺序与 Scene 归属，并执行同样的逐字证据规则。只有正文具体结果满足 `acceptance_criteria` 时才允许模型声明 fulfilled；主题相近但缺少动作结果时必须声明 missing。证据修复只允许替换 evidence，不得改变 ID、动作、顺序或 status；修复耗尽时，将无法验证证据的声明降为 missing 并生成 `FORESHADOWING_COVERAGE_MISSING` Finding，不伪造正文结果。
+
 Scene Plan 的 `outcome` 由 `outcome_allowed` 和 `outcome_forbidden` 补充行为边界。边界保存在 Chapter Plan 的 `scene_plans` JSON 中，不新增 Scene 表字段；Scene Writer 从当前冻结 Plan 读取它们。
 
 幂等键：
@@ -308,7 +322,7 @@ MVP 不做 Scene Parallel。
 
 只负责衔接、过渡、语气统一、重复清理、局部语言修正，不得主动改变 Scene Outcome、增加重大事实/能力/世界规则/人物知识。
 
-Assembler 使用结构化响应：`content`、按 Scene 顺序返回的 `scene_coverage`，以及必须为空的 `introduced_major_facts`。每个 coverage 固定检查 goal/conflict/turn/outcome，并执行与 Scene self-check 相同的 evidence 引用校验；Scene ID 必须完整、顺序一致、不得重复或跨章引用。若 Scene Draft 已把某项报告为 missing/contradicted，Assembler 不得将该项直接提升为 fulfilled。缺失或反转项写入 Chapter Draft Artifact 的 `plan_findings`，供后续最小范围修复使用。
+Assembler 使用结构化响应：`content`、按 Scene 顺序返回的 `scene_coverage`，以及必须为空的 `introduced_major_facts`。每个 coverage 固定检查 goal/conflict/turn/outcome，并包含该 Scene 的 `foreshadowing_coverage`；两类 Coverage 都执行原文 evidence 校验。Scene ID 必须完整、顺序一致、不得重复或跨章引用；伏笔 Coverage 必须与冻结契约中的目标 Scene、伏笔 ID、动作和顺序一致。若 Scene Draft 已把普通计划项或伏笔动作报告为 missing/contradicted，Assembler 不得将其直接提升为 fulfilled。若组装删除了 Scene Draft 中唯一的伏笔完成证据，最终状态必须报告 missing/contradicted 并写入 Chapter Draft Artifact 的 `plan_findings`，供后续自动 Rewrite 使用。跨 Scene 的动作以各 Scene Coverage 保留并在 Chapter Draft 中聚合。
 
 上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。本阶段只允许修正无法逐字命中的 evidence quote，不修复 coverage 语义、不改变 status，也不改变最终 Review Decision。
 
@@ -323,6 +337,12 @@ assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
 ## 11. Event Extraction / State Validation
 
 `ExtractStoryEventsJob` 输入 Chapter Draft、Plan、Current State、Locked Facts；输出 `event_candidate`。
+
+伏笔候选事件只能引用本章冻结动作契约授权的目标，事件类型必须与 `plant / reinforce / pay_off / abandon` 动作一致，目标 Scene 的最终 `foreshadowing_coverage` 必须为 fulfilled。事件 evidence 至少有一项必须引用动作目标 Scene，并与 Coverage 的逐字证据互相包含；未选中伏笔、missing/contradicted Coverage、动作不匹配或只有主题相似内容都不能生成事件。`defer` 不产生正文 Story Event，`abandon` 必须带有与冻结 State Version 一致的人工授权。`foreshadowing_due` 不再生成，因为时间推进不是正文事件。
+
+`ForeshadowingEventValidator` 在 Event Candidate 保存前按候选顺序模拟内容生命周期，并在 StateValidator 阶段使用 Event Candidate Run 中冻结的契约再次执行。允许 `idea → planted`、`planted/reinforced → reinforced`、`planted/reinforced → paid_off`，重复 `reinforced → reinforced` 合法；同章 `planted → reinforce` 和 `planted → paid_off` 必须依次输出两个证据充分的事件。新 `idea` 尚未写入 Canonical State 时可以使用领域记录作为铺设起点；其他内容状态必须来自冻结 Canonical State，不能把领域投影当作事件生命周期证据。`paid_off / abandoned` 终态不能由生成事件重新开启。旧 Event Candidate 保持不可变；若包含伏笔事件但缺少匹配的冻结契约 checksum，StateValidator 返回 Hard Finding，不能进入 Canonical Commit。
+
+确定性校验能证明动作授权、Coverage 结论、证据来源和生命周期顺序一致，不能仅凭字符串证明正文语义真正满足 `acceptance_criteria` 或 `promised_payoff`；该语义验收由 Reviewer 执行。
 
 `subject_type` 必须同时通过 Provider JSON Schema 和 Laravel 业务校验。`current_state.world.entities` 中的实体统一引用为 `world_entity`，不得把实体内部的 `concept`、`rule`、`location` 或 `faction` 分类直接作为 `subject_type`。Laravel 还必须校验事件类型与主体类型匹配，例如 `foreshadowing_*` 只能引用 `foreshadowing`。校验失败信息必须包含候选事件序号、字段、错误值和允许值。若候选事件只有 evidence quote 未逐字命中，系统可以在保持事件类型、主体、payload、时间和置信度不变的前提下单独修复 quote；外层引号、空白或省略号差异可以确定性映射回连续原文，模型省略说话人插入语时只保留与原文至少 80% 高度重合且不少于 8 字的连续片段。无法可靠定位的 Evidence Item 丢弃；事件至少保留一项逐字证据，否则拒绝创建 Event Candidate。轻量修复响应被 Token 截断时允许以更高预算重试一次。
 
@@ -424,6 +444,10 @@ rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
 只加载冻结 Commit Inputs 并调用 `CanonicalCommitService`，不调用 Writer、Reviewer、Extractor。
 
 该 Job 只由用户在 PASS 后确认“提交正式章节”时派发；Review PASS、自动生成开关或 Resume 本身都不得自动派发 Commit。
+
+Canonical Commit 的数据库事务只固定 Story Events、Facts、State Version、Chapter 和 Novel 指针。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
+
+投影重建以最新的无章节 State Version 为基线，按 `state_version, id` 重放不晚于目标版本的 Active 伏笔事件，并复核结果与目标 Canonical State 的 `status` 和 `reinforce_count` 一致。`setup_chapter_id` 只取有效 `foreshadowing_planted` 事件，`payoff_chapter_id` 只取有效 `foreshadowing_paid_off` 事件；不存在相应有效事件时字段必须为 `null`。它计算目标值后整体覆盖漂移字段，不在表当前值上执行 `+1`。
 
 前置：
 
@@ -633,12 +657,12 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v6
-scene-writer-v10
-assembler-v8
-event-extractor-v4
-reviewer-v8
-rewrite-v9
+chapter-planner-v7
+scene-writer-v12
+assembler-v10
+event-extractor-v6
+reviewer-v9
+rewrite-v10
 rewrite-length-patch-v1
 summary-v1
 ```

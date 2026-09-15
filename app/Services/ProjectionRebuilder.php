@@ -3,11 +3,14 @@
 namespace App\Services;
 
 use App\Data\ProjectionHealth;
+use App\Enums\EventType;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\WorldEntityType;
 use App\Models\Novel;
+use App\Models\StoryEvent;
 use App\Models\WorldEntity;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -28,6 +31,7 @@ class ProjectionRebuilder
         $characterStates = [];
         $worldEntityStates = [];
         $foreshadowingStatuses = [];
+        $foreshadowingProjections = [];
         $characterDriftIds = [];
         $worldEntityDriftIds = [];
         $foreshadowingDriftIds = [];
@@ -63,6 +67,28 @@ class ProjectionRebuilder
             }
         }
 
+        $baseline = $novel->storyStateVersions()
+            ->whereNull('chapter_id')
+            ->where('version', '<=', $version->version)
+            ->latest('version')
+            ->first()?->state ?? [];
+        $foreshadowingEvents = $novel->storyEvents()
+            ->active()
+            ->where('state_version', '<=', $version->version)
+            ->where(function ($query): void {
+                $query->where('subject_type', 'foreshadowing')
+                    ->whereIn('event_type', array_map(fn (EventType $type): string => $type->value, [
+                        EventType::ForeshadowingPlanted,
+                        EventType::ForeshadowingReinforced,
+                        EventType::ForeshadowingPaidOff,
+                        EventType::ForeshadowingAbandoned,
+                    ]))
+                    ->orWhere('event_type', EventType::ManualCorrection->value);
+            })
+            ->orderBy('state_version')
+            ->orderBy('id')
+            ->get();
+
         foreach ($novel->foreshadowings as $foreshadowing) {
             $value = data_get($state, 'foreshadowings.'.$foreshadowing->getKey().'.status');
 
@@ -78,9 +104,27 @@ class ProjectionRebuilder
                 continue;
             }
 
-            $foreshadowingStatuses[$foreshadowing->getKey()] = $status->value;
+            $projection = $this->foreshadowingProjection(
+                $foreshadowing->getKey(),
+                data_get($baseline, 'foreshadowings.'.$foreshadowing->getKey(), []),
+                data_get($state, 'foreshadowings.'.$foreshadowing->getKey(), []),
+                $foreshadowingEvents,
+            );
+            $canonicalCount = (int) data_get($state, 'foreshadowings.'.$foreshadowing->getKey().'.reinforce_count', 0);
 
-            if ($foreshadowing->status !== $status) {
+            if ($projection['status'] !== $status->value || $projection['reinforce_count'] !== $canonicalCount) {
+                $errors[] = "伏笔 #{$foreshadowing->getKey()} 的 Canonical State 与 Active Story Events 重放结果不一致。";
+
+                continue;
+            }
+
+            $foreshadowingStatuses[$foreshadowing->getKey()] = $projection['status'];
+            $foreshadowingProjections[$foreshadowing->getKey()] = $projection;
+
+            if ($foreshadowing->status->value !== $projection['status']
+                || $foreshadowing->reinforce_count !== $projection['reinforce_count']
+                || $foreshadowing->setup_chapter_id !== $projection['setup_chapter_id']
+                || $foreshadowing->payoff_chapter_id !== $projection['payoff_chapter_id']) {
                 $foreshadowingDriftIds[] = $foreshadowing->getKey();
             }
         }
@@ -97,6 +141,7 @@ class ProjectionRebuilder
             characterStates: $characterStates,
             worldEntityStates: $worldEntityStates,
             foreshadowingStatuses: $foreshadowingStatuses,
+            foreshadowingProjections: $foreshadowingProjections,
         );
     }
 
@@ -118,8 +163,8 @@ class ProjectionRebuilder
                 $lockedNovel->worldEntities()->whereKey($id)->update(['current_state' => $state]);
             }
 
-            foreach (Arr::only($health->foreshadowingStatuses, $health->foreshadowingDriftIds) as $id => $status) {
-                $lockedNovel->foreshadowings()->whereKey($id)->update(['status' => $status]);
+            foreach (Arr::only($health->foreshadowingProjections, $health->foreshadowingDriftIds) as $id => $projection) {
+                $lockedNovel->foreshadowings()->whereKey($id)->update($projection);
             }
 
             $lockedNovel->unsetRelations();
@@ -151,5 +196,116 @@ class ProjectionRebuilder
         $overlay = Arr::except($snapshot, ['name', 'type', 'status', 'attributes', 'rules', 'current_state']);
 
         return array_replace_recursive($current, $overlay);
+    }
+
+    /**
+     * @param  Collection<int, StoryEvent>  $events
+     * @return array{status: string, reinforce_count: int, setup_chapter_id: int|null, payoff_chapter_id: int|null}
+     */
+    private function foreshadowingProjection(int $id, mixed $baseline, mixed $canonical, Collection $events): array
+    {
+        $relevantEvents = $events->filter(fn ($event): bool => ($event->subject_type === 'foreshadowing' && (int) $event->subject_id === $id)
+            || ($event->event_type === EventType::ManualCorrection
+                && str_starts_with((string) data_get($event->payload, 'path'), "foreshadowings.{$id}")));
+        $baseline = is_array($baseline) && $baseline !== []
+            ? $baseline
+            : ($relevantEvents->isEmpty() && is_array($canonical) ? $canonical : []);
+        $projection = [
+            'status' => ForeshadowingStatus::tryFrom((string) ($baseline['status'] ?? ''))?->value ?? ForeshadowingStatus::Idea->value,
+            'reinforce_count' => max(0, (int) ($baseline['reinforce_count'] ?? 0)),
+            'setup_chapter_id' => null,
+            'payoff_chapter_id' => null,
+        ];
+
+        foreach ($relevantEvents as $event) {
+            if ($event->event_type === EventType::ManualCorrection) {
+                $this->applyManualForeshadowingCorrection($projection, $id, $event->payload);
+
+                continue;
+            }
+
+            if ($event->subject_type !== 'foreshadowing' || (int) $event->subject_id !== $id) {
+                continue;
+            }
+
+            switch ($event->event_type) {
+                case EventType::ForeshadowingPlanted:
+                    $this->applyPlant($projection, $event->chapter_id);
+                    break;
+                case EventType::ForeshadowingReinforced:
+                    $this->applyReinforce($projection);
+                    break;
+                case EventType::ForeshadowingPaidOff:
+                    $this->applyPayoff($projection, $event->chapter_id);
+                    break;
+                case EventType::ForeshadowingAbandoned:
+                    $this->applyAbandon($projection);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        return $projection;
+    }
+
+    /** @param array<string, mixed> $projection */
+    private function applyPlant(array &$projection, ?int $chapterId): void
+    {
+        $projection['status'] = ForeshadowingStatus::Planted->value;
+        $projection['setup_chapter_id'] ??= $chapterId;
+    }
+
+    /** @param array<string, mixed> $projection */
+    private function applyReinforce(array &$projection): void
+    {
+        $projection['status'] = ForeshadowingStatus::Reinforced->value;
+        $projection['reinforce_count']++;
+    }
+
+    /** @param array<string, mixed> $projection */
+    private function applyPayoff(array &$projection, ?int $chapterId): void
+    {
+        $projection['status'] = ForeshadowingStatus::PaidOff->value;
+        $projection['payoff_chapter_id'] = $chapterId;
+    }
+
+    /** @param array<string, mixed> $projection */
+    private function applyAbandon(array &$projection): void
+    {
+        $projection['status'] = ForeshadowingStatus::Abandoned->value;
+        $projection['payoff_chapter_id'] = null;
+    }
+
+    /** @param array<string, mixed> $projection @param array<string, mixed> $payload */
+    private function applyManualForeshadowingCorrection(array &$projection, int $id, array $payload): void
+    {
+        $path = (string) ($payload['path'] ?? '');
+        $prefix = "foreshadowings.{$id}";
+
+        if ($path === $prefix && is_array($payload['after'] ?? null)) {
+            $after = $payload['after'];
+            $this->setCorrectedStatus($projection, $after['status'] ?? null);
+            if (array_key_exists('reinforce_count', $after)) {
+                $projection['reinforce_count'] = max(0, (int) $after['reinforce_count']);
+            }
+
+            return;
+        }
+
+        if ($path === $prefix.'.status') {
+            $this->setCorrectedStatus($projection, $payload['after'] ?? null);
+        } elseif ($path === $prefix.'.reinforce_count') {
+            $projection['reinforce_count'] = max(0, (int) ($payload['after'] ?? 0));
+        }
+    }
+
+    /** @param array<string, mixed> $projection */
+    private function setCorrectedStatus(array &$projection, mixed $value): void
+    {
+        $status = is_string($value) ? ForeshadowingStatus::tryFrom($value) : null;
+        if ($status !== null && ! $status->isLegacyDue()) {
+            $projection['status'] = $status->value;
+        }
     }
 }

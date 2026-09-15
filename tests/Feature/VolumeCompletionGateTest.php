@@ -30,13 +30,13 @@ test('completion gate reports every required checklist item', function () {
 });
 
 test('open required arcs critical due foreshadowings and blocking reviews prevent completion', function () {
-    $novel = Novel::factory()->create();
+    $novel = Novel::factory()->create(['current_chapter_sequence' => 20]);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
     $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 20]);
     $arc = StoryArc::factory()->forVolume($volume)->create(['status' => StoryArcStatus::Active]);
     Foreshadowing::factory()->for($novel)->create([
         'owner_arc_id' => $arc->getKey(), 'due_from_chapter' => 10, 'due_to_chapter' => 18,
-        'importance' => ForeshadowingImportance::Critical, 'status' => ForeshadowingStatus::Due,
+        'importance' => ForeshadowingImportance::Critical, 'status' => ForeshadowingStatus::Reinforced,
     ]);
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create();
     Review::factory()->for($run)->create(['decision' => ReviewDecision::Block]);
@@ -64,6 +64,23 @@ test('warnings allow an active volume to complete idempotently', function () {
 
     expect($completed->status)->toBe(VolumeStatus::Completed)
         ->and($again->status)->toBe(VolumeStatus::Completed);
+});
+
+test('a non canonical chapter does not advance foreshadowing timing in the completion gate', function () {
+    $novel = Novel::factory()->create(['current_chapter_sequence' => 8]);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 20]);
+    Foreshadowing::factory()->for($novel)->create([
+        'due_from_chapter' => 10,
+        'due_to_chapter' => 18,
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Reinforced,
+    ]);
+
+    $check = collect(app(VolumeCompletionGate::class)->evaluate($volume)->checks)
+        ->firstWhere('key', 'due_foreshadowings');
+
+    expect($check['status'])->toBe('PASS');
 });
 
 test('a planned volume cannot be completed directly', function () {

@@ -46,7 +46,7 @@ final readonly class StoryEventCandidate
             'additionalProperties' => false,
             'required' => ['event_type', 'subject_type', 'subject_id', 'payload', 'evidence', 'story_time', 'confidence'],
             'properties' => [
-                'event_type' => ['type' => 'string', 'enum' => array_column(EventType::cases(), 'value')],
+                'event_type' => ['type' => 'string', 'enum' => array_column(EventType::generationCases(), 'value')],
                 'subject_type' => [
                     'type' => ['string', 'null'],
                     'enum' => [...self::SUBJECT_TYPES, null],

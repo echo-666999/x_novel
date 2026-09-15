@@ -12,6 +12,7 @@ use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
+use App\Models\StoryStateVersion;
 use App\Services\PlanValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -160,14 +161,14 @@ test('a missing critical due foreshadowing blocks while a normal due item warns'
     Foreshadowing::factory()->for($plan->chapter->novel)->create([
         'title' => '王冠裂痕',
         'importance' => ForeshadowingImportance::Critical,
-        'status' => ForeshadowingStatus::Due,
+        'status' => ForeshadowingStatus::Reinforced,
         'due_from_chapter' => 8,
         'due_to_chapter' => 12,
     ]);
     Foreshadowing::factory()->for($plan->chapter->novel)->create([
         'title' => '旧日钟声',
         'importance' => ForeshadowingImportance::Medium,
-        'status' => ForeshadowingStatus::Due,
+        'status' => ForeshadowingStatus::Reinforced,
         'due_from_chapter' => 9,
         'due_to_chapter' => 11,
     ]);
@@ -179,19 +180,205 @@ test('a missing critical due foreshadowing blocks while a normal due item warns'
         ->and($codes)->toContain('CRITICAL_DUE_FORESHADOWING_MISSING', 'DUE_FORESHADOWING_MISSING');
 });
 
-test('including due foreshadowings clears their findings', function () {
+test('foreshadowing actions reject foreign and terminal references', function () {
+    $plan = validPlan();
+    $foreign = Foreshadowing::factory()->create(['status' => ForeshadowingStatus::Planted]);
+    $terminal = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'status' => ForeshadowingStatus::PaidOff,
+    ]);
+    $plan->update(['foreshadowing_actions' => collect([$foreign, $terminal])
+        ->map(fn (Foreshadowing $foreshadowing): array => [
+            'foreshadowing_id' => $foreshadowing->getKey(),
+            'action' => 'reinforce',
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => '不应接受此引用。',
+            'reason' => null,
+        ])
+        ->all()]);
+
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($codes->filter(fn (string $code): bool => $code === 'INVALID_FORESHADOWING_REFERENCE'))->toHaveCount(2);
+});
+
+test('legacy foreshadowing ids remain readable but do not satisfy critical action coverage', function () {
     $plan = validPlan();
     $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
         'importance' => ForeshadowingImportance::Critical,
-        'status' => ForeshadowingStatus::Due,
+        'status' => ForeshadowingStatus::Reinforced,
         'due_from_chapter' => 8,
         'due_to_chapter' => 12,
     ]);
     $plan->update(['due_foreshadowings' => [$foreshadowing->getKey()]]);
 
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($plan->fresh()->legacyForeshadowingIds())->toBe([$foreshadowing->getKey()])
+        ->and($codes)->toContain('LEGACY_FORESHADOWING_REFERENCES', 'CRITICAL_DUE_FORESHADOWING_MISSING');
+});
+
+test('including a valid due foreshadowing action clears its findings', function () {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 8,
+        'due_to_chapter' => 12,
+    ]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'reinforce',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文再次呈现该线索，并改变角色本章判断。',
+        'reason' => null,
+    ]]]);
+
     $result = app(PlanValidator::class)->validate($plan->fresh());
 
     expect($result->status())->toBe(PlanFindingSeverity::Valid);
+});
+
+test('an idea foreshadowing cannot skip directly to reinforce', function () {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'status' => ForeshadowingStatus::Idea,
+        'due_from_chapter' => 8,
+        'due_to_chapter' => 12,
+    ]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'reinforce',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文强化该线索。',
+        'reason' => null,
+    ]]]);
+
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($codes)->toContain('INVALID_FORESHADOWING_LIFECYCLE');
+});
+
+test('foreshadowing lifecycle validation prefers canonical state over a stale projection', function () {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'status' => ForeshadowingStatus::Idea,
+        'due_from_chapter' => 8,
+        'due_to_chapter' => 12,
+    ]);
+    $state = StoryStateVersion::factory()->for($plan->chapter->novel)->create([
+        'version' => 1,
+        'state' => [
+            'foreshadowings' => [
+                (string) $foreshadowing->getKey() => ['status' => ForeshadowingStatus::Planted->value],
+            ],
+        ],
+    ]);
+    $plan->chapter->novel->update(['canonical_state_version_id' => $state->getKey()]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'reinforce',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文进一步强化已经正式铺设的线索。',
+        'reason' => null,
+    ]]]);
+
+    $result = app(PlanValidator::class)->validate($plan->fresh());
+
+    expect($result->canGenerate())->toBeTrue()
+        ->and(collect($result->findings)->pluck('code'))->not->toContain('INVALID_FORESHADOWING_LIFECYCLE');
+});
+
+test('an idea may be planted and paid off in order within the same chapter', function () {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Idea,
+        'due_from_chapter' => 10,
+        'due_to_chapter' => 10,
+    ]);
+    $plan->update(['foreshadowing_actions' => [
+        [
+            'foreshadowing_id' => $foreshadowing->getKey(),
+            'action' => 'plant',
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => '正文先建立可识别的线索。',
+            'reason' => null,
+        ],
+        [
+            'foreshadowing_id' => $foreshadowing->getKey(),
+            'action' => 'pay_off',
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => '正文随后揭示线索答案及其后果。',
+            'reason' => null,
+        ],
+    ]]);
+
+    expect(app(PlanValidator::class)->validate($plan->fresh())->canGenerate())->toBeTrue();
+});
+
+test('a critical foreshadowing cannot use reinforce at its payoff deadline', function () {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 8,
+        'due_to_chapter' => 10,
+    ]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'reinforce',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文再次出现线索。',
+        'reason' => null,
+    ]]]);
+
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($codes)->toContain('CRITICAL_FORESHADOWING_DEADLINE_REQUIRES_RESOLUTION');
+});
+
+test('defer and abandon require current manual authorization metadata', function (string $action) {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 8,
+        'due_to_chapter' => 12,
+    ]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => $action,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文遵守人工处置结果。',
+        'reason' => '用户决定调整该伏笔。',
+        'new_due_from_chapter' => 13,
+        'new_due_to_chapter' => 16,
+    ]]]);
+
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($codes)->toContain('FORESHADOWING_ACTION_REQUIRES_USER_AUTHORIZATION');
+})->with(['defer', 'abandon']);
+
+test('an overdue critical foreshadowing accepts an explicit payoff repair contract', function () {
+    $plan = validPlan();
+    $foreshadowing = Foreshadowing::factory()->for($plan->chapter->novel)->create([
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 5,
+        'due_to_chapter' => 9,
+    ]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确揭示承诺答案并让角色据此采取行动。',
+        'reason' => null,
+    ]]]);
+
+    $result = app(PlanValidator::class)->validate($plan->fresh());
+
+    expect($result->canGenerate())->toBeTrue()
+        ->and(collect($result->findings)->pluck('code'))->not->toContain('CRITICAL_OVERDUE_REPAIR_REQUIRED');
 });
 
 test('completing novels cannot introduce a high importance idea foreshadowing', function () {
@@ -203,7 +390,13 @@ test('completing novels cannot introduce a high importance idea foreshadowing', 
         'due_from_chapter' => 20,
         'due_to_chapter' => 25,
     ]);
-    $plan->update(['due_foreshadowings' => [$foreshadowing->getKey()]]);
+    $plan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'plant',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文首次明确建立该伏笔。',
+        'reason' => null,
+    ]]]);
 
     $result = app(PlanValidator::class)->validate($plan->fresh());
 

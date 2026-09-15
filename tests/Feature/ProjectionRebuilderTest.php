@@ -1,11 +1,15 @@
 <?php
 
 use App\Actions\Story\InitializeNovelStateAction;
+use App\Enums\EventType;
 use App\Enums\ForeshadowingStatus;
+use App\Enums\StoryEventStatus;
 use App\Enums\WorldEntityType;
+use App\Models\Chapter;
 use App\Models\Character;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
+use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\WorldEntity;
 use App\Services\ProjectionRebuilder;
@@ -42,7 +46,7 @@ test('it inspects projection health against current canonical state', function (
     $fixture = projectionRebuildFixture();
     $fixture['character']->update(['current_state' => ['location' => '错误地点']]);
     $fixture['location']->update(['current_state' => ['weather' => '暴雨']]);
-    $fixture['foreshadowing']->update(['status' => ForeshadowingStatus::Due]);
+    $fixture['foreshadowing']->update(['status' => ForeshadowingStatus::Reinforced]);
 
     $health = app(ProjectionRebuilder::class)->inspect($fixture['novel']->fresh());
 
@@ -140,4 +144,97 @@ test('newer direct world state takes precedence over initialization metadata', f
         'influence' => 12,
         'stance' => '敌对',
     ]);
+});
+
+test('it rebuilds the complete foreshadowing projection from baseline and active events', function () {
+    $fixture = projectionRebuildFixture();
+    $first = Chapter::factory()->for($fixture['novel'])->create(['sequence' => 1]);
+    $second = Chapter::factory()->for($fixture['novel'])->create(['sequence' => 2]);
+    $third = Chapter::factory()->for($fixture['novel'])->create(['sequence' => 3]);
+    foreach ([
+        [$first, EventType::ForeshadowingPlanted, 1],
+        [$second, EventType::ForeshadowingReinforced, 2],
+        [$third, EventType::ForeshadowingPaidOff, 3],
+    ] as [$chapter, $type, $version]) {
+        StoryEvent::factory()->for($fixture['novel'])->for($chapter)->create([
+            'event_type' => $type,
+            'subject_type' => 'foreshadowing',
+            'subject_id' => (string) $fixture['foreshadowing']->getKey(),
+            'state_version' => $version,
+        ]);
+    }
+    $state = $fixture['version']->state;
+    $state['foreshadowings'][(string) $fixture['foreshadowing']->getKey()] = [
+        'status' => ForeshadowingStatus::PaidOff->value,
+        'reinforce_count' => 1,
+    ];
+    $current = StoryStateVersion::factory()->for($fixture['novel'])->for($third)->create([
+        'version' => 3,
+        'state' => $state,
+        'checksum' => app(StoryStateService::class)->checksum($state),
+    ]);
+    $fixture['novel']->update(['canonical_state_version_id' => $current->getKey()]);
+    $fixture['foreshadowing']->update([
+        'status' => ForeshadowingStatus::Idea,
+        'reinforce_count' => 9,
+        'setup_chapter_id' => $third->getKey(),
+        'payoff_chapter_id' => $first->getKey(),
+    ]);
+
+    $health = app(ProjectionRebuilder::class)->rebuild($fixture['novel']->fresh());
+    $projection = $fixture['foreshadowing']->fresh();
+
+    expect($health->isHealthy())->toBeTrue()
+        ->and($projection->status)->toBe(ForeshadowingStatus::PaidOff)
+        ->and($projection->reinforce_count)->toBe(1)
+        ->and($projection->setup_chapter_id)->toBe($first->getKey())
+        ->and($projection->payoff_chapter_id)->toBe($third->getKey());
+});
+
+test('replaying the same foreshadowing projection never increments the stored count twice', function () {
+    $fixture = projectionRebuildFixture();
+    $chapter = Chapter::factory()->for($fixture['novel'])->create(['sequence' => 1]);
+    StoryEvent::factory()->for($fixture['novel'])->for($chapter)->create([
+        'event_type' => EventType::ForeshadowingReinforced,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $fixture['foreshadowing']->getKey(),
+        'state_version' => 1,
+    ]);
+    $state = $fixture['version']->state;
+    $state['foreshadowings'][(string) $fixture['foreshadowing']->getKey()] = [
+        'status' => ForeshadowingStatus::Reinforced->value,
+        'reinforce_count' => 1,
+    ];
+    $current = StoryStateVersion::factory()->for($fixture['novel'])->for($chapter)->create([
+        'version' => 1,
+        'state' => $state,
+        'checksum' => app(StoryStateService::class)->checksum($state),
+    ]);
+    $fixture['novel']->update(['canonical_state_version_id' => $current->getKey()]);
+
+    $service = app(ProjectionRebuilder::class);
+    $service->rebuild($fixture['novel']->fresh());
+    $updatedAt = $fixture['foreshadowing']->fresh()->updated_at;
+    $service->rebuild($fixture['novel']->fresh());
+
+    expect($fixture['foreshadowing']->fresh()->reinforce_count)->toBe(1)
+        ->and($fixture['foreshadowing']->fresh()->updated_at->equalTo($updatedAt))->toBeTrue();
+});
+
+test('invalidated foreshadowing events do not contribute to chapter references', function () {
+    $fixture = projectionRebuildFixture();
+    $chapter = Chapter::factory()->for($fixture['novel'])->create(['sequence' => 1]);
+    StoryEvent::factory()->for($fixture['novel'])->for($chapter)->create([
+        'event_type' => EventType::ForeshadowingPaidOff,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $fixture['foreshadowing']->getKey(),
+        'state_version' => 1,
+        'status' => StoryEventStatus::Invalidated,
+        'invalidated_at' => now(),
+    ]);
+    $fixture['foreshadowing']->update(['payoff_chapter_id' => $chapter->getKey()]);
+
+    app(ProjectionRebuilder::class)->rebuild($fixture['novel']->fresh());
+
+    expect($fixture['foreshadowing']->fresh()->payoff_chapter_id)->toBeNull();
 });

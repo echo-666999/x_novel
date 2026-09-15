@@ -1,7 +1,9 @@
 <?php
 
+use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ChapterStatus;
 use App\Enums\CharacterStatus;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
@@ -177,7 +179,10 @@ test('the owner can create a complete executable chapter plan without ai', funct
     $chapter = Chapter::factory()->for($novel)->create(['sequence' => 4]);
     $pov = Character::factory()->for($novel)->create(['name' => '林舟']);
     $fact = Fact::factory()->for($novel)->create();
-    $foreshadowing = Foreshadowing::factory()->for($novel)->create(['title' => '旧信之谜']);
+    $foreshadowing = Foreshadowing::factory()->for($novel)->create([
+        'title' => '旧信之谜',
+        'due_from_chapter' => 1,
+    ]);
 
     Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
         ->assertTableActionExists('managePlan', fn ($action): bool => $action->isModalSlideOver())
@@ -195,7 +200,13 @@ test('the owner can create a complete executable chapter plan without ai', funct
             'must_not_reveal' => ['幕后主使身份'],
             'required_facts' => [$fact->getKey()],
             'forbidden_conflicts' => ['林舟不得知晓密道出口'],
-            'due_foreshadowings' => [$foreshadowing->getKey()],
+            'foreshadowing_actions' => [[
+                'foreshadowing_id' => $foreshadowing->getKey(),
+                'action' => 'plant',
+                'target_scene_sequence' => 1,
+                'acceptance_criteria' => '正文首次展示旧信印记并建立来源谜团。',
+                'reason' => null,
+            ]],
             'scene_plans' => [[
                 'goal' => '取得旧信原件',
                 'conflict' => '守门人拒绝交付',
@@ -212,9 +223,104 @@ test('the owner can create a complete executable chapter plan without ai', funct
         ->and($plan->chapter_function)->toBe('迫使主角离开安全区')
         ->and($plan->povCharacter->is($pov))->toBeTrue()
         ->and($plan->required_facts)->toBe([$fact->getKey()])
-        ->and($plan->due_foreshadowings)->toBe([$foreshadowing->getKey()])
+        ->and($plan->due_foreshadowings)->toBe([])
+        ->and(data_get($plan->foreshadowing_actions, '0.foreshadowing_id'))->toBe($foreshadowing->getKey())
         ->and($plan->scene_plans[0]['outcome'])->toBe('林舟带走残缺旧信')
         ->and($plan->status)->toBe(PlanStatus::Ready);
+});
+
+test('the chapter plan picker uses canonical progress for foreshadowing timing', function () {
+    $novel = Novel::factory()->create(['current_chapter_sequence' => 8]);
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 9]);
+    $due = Foreshadowing::factory()->for($novel)->create([
+        'title' => '城门暗号',
+        'due_from_chapter' => 9,
+        'due_to_chapter' => 12,
+    ]);
+    $overdue = Foreshadowing::factory()->for($novel)->create([
+        'title' => '断剑来历',
+        'due_from_chapter' => 2,
+        'due_to_chapter' => 8,
+    ]);
+    $upcoming = Foreshadowing::factory()->for($novel)->create([
+        'title' => '王都密令',
+        'due_from_chapter' => 10,
+        'due_to_chapter' => 15,
+    ]);
+    $terminal = Foreshadowing::factory()->for($novel)->create([
+        'title' => '已经兑现',
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 8,
+        'status' => ForeshadowingStatus::PaidOff,
+    ]);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->mountTableAction('managePlan', $chapter)
+        ->assertFormFieldExists('foreshadowing_actions', function ($field) use ($due, $overdue, $upcoming, $terminal): bool {
+            $select = collect($field->getChildComponents())
+                ->first(fn ($component): bool => $component->getName() === 'foreshadowing_id');
+            $options = $select?->getOptions() ?? [];
+
+            return str_contains($options[$due->getKey()] ?? '', '兑现窗口')
+                && str_contains($options[$overdue->getKey()] ?? '', '已逾期')
+                && ! isset($options[$upcoming->getKey()])
+                && ! isset($options[$terminal->getKey()]);
+        });
+});
+
+test('manual defer stores current user and canonical authorization context', function () {
+    $novel = Novel::factory()->create(['current_chapter_sequence' => null]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1]);
+    $pov = Character::factory()->for($novel)->create();
+    $foreshadowing = Foreshadowing::factory()->for($novel)->create([
+        'importance' => 'critical',
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 1,
+    ]);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->callTableAction('managePlan', $chapter, data: [
+            'chapter_function' => '处理伏笔延期',
+            'arc_contribution' => '重新安排兑现时机',
+            'reader_promise' => '说明延期造成的新风险',
+            'target_words' => 3_000,
+            'pov_character_id' => $pov->getKey(),
+            'tone' => '紧张',
+            'time_anchor' => '当日夜间',
+            'hook_type' => '危机升级',
+            'must_reveal' => [],
+            'may_hint' => [],
+            'must_not_reveal' => [],
+            'required_facts' => [],
+            'forbidden_conflicts' => [],
+            'foreshadowing_actions' => [[
+                'foreshadowing_id' => $foreshadowing->getKey(),
+                'action' => 'defer',
+                'target_scene_sequence' => 1,
+                'acceptance_criteria' => '正文不得提前兑现该伏笔。',
+                'reason' => '当前章节需要先解决主角生存危机。',
+                'new_due_from_chapter' => 2,
+                'new_due_to_chapter' => 3,
+            ]],
+            'scene_plans' => [[
+                'goal' => '脱离当前危机',
+                'conflict' => '追兵封锁退路',
+                'turn' => '临时盟友打开暗门',
+                'outcome' => '主角暂时脱险',
+            ]],
+            'status' => PlanStatus::Ready->value,
+        ])
+        ->assertHasNoTableActionErrors();
+
+    $authorization = $chapter->plans()->sole()->foreshadowing_actions[0];
+
+    expect($authorization['authorized_by_user_id'])->toBe(auth()->id())
+        ->and($authorization['authorized_at'])->not->toBeEmpty()
+        ->and($authorization['authorized_at_canonical_chapter'])->toBe(0)
+        ->and($authorization['authorized_at_state_version'])->toBe(0)
+        ->and($authorization['reason'])->toBe('当前章节需要先解决主角生存危机。');
 });
 
 test('the chapter plan form requires all executable fields and at least one scene', function () {
@@ -247,13 +353,13 @@ test('the chapter plan form requires all executable fields and at least one scen
         ]);
 });
 
-test('the owner can edit the current plan without creating a duplicate version', function () {
+test('editing a plan creates a new version and supersedes the ready predecessor', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
     $pov = Character::factory()->for($novel)->create();
     $plan = ChapterPlan::factory()->for($chapter)->create([
         'pov_character_id' => $pov->getKey(),
-        'status' => PlanStatus::Draft,
+        'status' => PlanStatus::Ready,
     ]);
 
     Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
@@ -266,18 +372,20 @@ test('the owner can edit the current plan without creating a duplicate version',
                 'chapter_function', 'arc_contribution', 'reader_promise', 'target_words',
                 'pov_character_id', 'tone', 'time_anchor', 'hook_type', 'must_reveal',
                 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
-                'due_foreshadowings', 'scene_plans',
+                'foreshadowing_actions', 'scene_plans',
             ]),
             'reader_promise' => '更新后的读者承诺',
             'status' => PlanStatus::Ready->value,
         ])
         ->assertHasNoTableActionErrors();
 
-    $plan = $plan->fresh();
+    $latestPlan = $chapter->latestPlan()->firstOrFail();
 
-    expect($chapter->plans()->count())->toBe(1)
-        ->and($plan->reader_promise)->toBe('更新后的读者承诺')
-        ->and($plan->status)->toBe(PlanStatus::Ready);
+    expect($chapter->plans()->count())->toBe(2)
+        ->and($plan->fresh()->status)->toBe(PlanStatus::Superseded)
+        ->and($latestPlan->version)->toBe(2)
+        ->and($latestPlan->reader_promise)->toBe('更新后的读者承诺')
+        ->and($latestPlan->status)->toBe(PlanStatus::Ready);
 });
 
 test('the owner can sync and inspect scenes from a chapter plan', function () {

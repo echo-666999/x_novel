@@ -5,6 +5,7 @@ use App\Actions\Story\ManualCanonicalCorrectionAction;
 use App\Enums\EventType;
 use App\Enums\StoryEventStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelStoryState;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\StoryEvent;
@@ -12,6 +13,7 @@ use App\Models\StoryStateVersion;
 use App\Models\User;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
@@ -38,6 +40,7 @@ function manualCorrectionFixture(): array
 }
 
 test('manual correction appends an event and creates a new immutable state version', function () {
+    Queue::fake();
     $fixture = manualCorrectionFixture();
 
     $version = app(ManualCanonicalCorrectionAction::class)->execute(
@@ -55,6 +58,7 @@ test('manual correction appends an event and creates a new immutable state versi
         ->and($event->payload['reason'])->toBe('此前地点录入错误。')
         ->and($event->payload['before'])->toBe('长安')
         ->and($event->payload['after'])->toBe('洛阳');
+    Queue::assertPushed(RefreshNovelProjectionJob::class, fn (RefreshNovelProjectionJob $job): bool => $job->novelId === $fixture['novel']->getKey() && $job->stateVersionId === $version->getKey());
 });
 
 test('manual correction requires a reason and a declared state path', function (string $path, string $reason) {
@@ -101,5 +105,9 @@ test('story state inspector exposes the reason required manual correction action
         ->assertNotified('Canonical Story State 已修正')
         ->assertSet('selectedVersion', 2);
 
-    expect($fixture['novel']->fresh()->canonicalStateVersion->version)->toBe(2);
+    $event = StoryEvent::query()->latest('id')->firstOrFail();
+
+    expect($fixture['novel']->fresh()->canonicalStateVersion->version)->toBe(2)
+        ->and($event->payload['actor_id'])->toBe(auth()->id())
+        ->and($event->payload['performed_at'])->not->toBeEmpty();
 });

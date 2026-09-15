@@ -32,6 +32,8 @@ class StoryEventExtractor
         private readonly GenerationRunLease $runLease,
         private readonly StoryEventEvidenceRepairer $evidenceRepairer,
         private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
+        private readonly ContextBuilder $contextBuilder,
+        private readonly ForeshadowingEventValidator $foreshadowingEventValidator,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -71,7 +73,7 @@ class StoryEventExtractor
             ];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中该类型已经存在的实体。没有有效主体时必须省略该事件，不能借用角色 ID 充当 relationship、conflict、thread 或其他类型的 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_* 事件必须引用对应的 foreshadowing ID。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中该类型已经存在的实体。没有有效主体时必须省略该事件，不能借用角色 ID 充当 relationship、conflict、thread 或其他类型的 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖该 fulfilled Coverage 的逐字证据，并把 scene_id 设为动作指定的目标 Scene；未列入 actions、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容都不能生成伏笔事件。按正文发生顺序返回同一伏笔的多个事件，使 plant 先于 reinforce/pay_off；defer 不产生正文 Story Event。promised_payoff 和 acceptance_criteria 是验收约束，不能代替正文证据。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
@@ -86,9 +88,17 @@ class StoryEventExtractor
                 $draft,
                 $settings->model,
                 $metadata,
+                $context['foreshadowing_contract'],
             );
 
-            return $this->complete($run, $chapter, $draft, $candidates, $context['state_version']);
+            return $this->complete(
+                $run,
+                $chapter,
+                $draft,
+                $candidates,
+                $context['state_version'],
+                $context['foreshadowing_contract_checksum'],
+            );
         } catch (Throwable $exception) {
             $this->failRun($run, $exception);
 
@@ -139,6 +149,8 @@ class StoryEventExtractor
             throw new AiProviderException('event_context_incomplete', 'Story Event Extraction 缺少 Chapter Plan 或 Story State。', false);
         }
 
+        $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
+
         return [
             'chapter_id' => $chapter->getKey(),
             'chapter_draft' => [
@@ -149,10 +161,14 @@ class StoryEventExtractor
             'chapter_plan' => $chapter->latestPlan->only([
                 'id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise',
                 'must_reveal', 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
+                'foreshadowing_actions',
             ]),
+            'bible_version' => $foreshadowingContract['bible_version'],
             'state_version' => $chapter->novel->canonicalStateVersion->version,
             'current_state' => $chapter->novel->canonicalStateVersion->state,
-            'event_subject_type_rules' => collect(EventType::cases())->mapWithKeys(
+            'foreshadowing_contract_checksum' => $foreshadowingContract['checksum'],
+            'foreshadowing_contract' => $foreshadowingContract,
+            'event_subject_type_rules' => collect(EventType::generationCases())->mapWithKeys(
                 fn (EventType $type): array => [$type->value => $type->allowedSubjectTypes()],
             )->all(),
             'locked_facts' => $chapter->novel->facts()
@@ -207,7 +223,7 @@ class StoryEventExtractor
                 'idempotency_key' => $attempt === 1 ? $baseKey : $baseKey.':attempt:'.$attempt,
                 'input_hash' => $inputHash,
                 'state_version' => $context['state_version'],
-                'bible_version' => $chapter->novel->currentBible?->version,
+                'bible_version' => $context['bible_version'],
                 'prompt_version' => $promptVersion,
                 'model_policy' => $model,
                 'context_snapshot' => [
@@ -220,13 +236,13 @@ class StoryEventExtractor
     }
 
     /** @return array<int, StoryEventCandidate> */
-    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata): array
+    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract): array
     {
         if (array_keys($payload) !== ['events'] || ! is_array($payload['events'])) {
             throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须只返回 events 数组。']);
         }
 
-        return collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata): StoryEventCandidate {
+        $candidates = collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata): StoryEventCandidate {
             if (! is_array($event)) {
                 throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
             }
@@ -261,6 +277,16 @@ class StoryEventExtractor
                 throw $this->withCandidateIndex($exception, $index);
             }
         })->all();
+
+        $violations = $this->foreshadowingEventValidator->violations($chapter, $draft, $candidates, $foreshadowingContract);
+
+        if ($violations !== []) {
+            throw ValidationException::withMessages(collect($violations)->mapWithKeys(fn (array $violation): array => [
+                "events.{$violation['event_index']}.foreshadowing" => $violation['message'],
+            ])->all());
+        }
+
+        return $candidates;
     }
 
     /** @param array<string, mixed> $event
@@ -349,9 +375,9 @@ class StoryEventExtractor
     }
 
     /** @param array<int, StoryEventCandidate> $candidates */
-    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $candidates, int $expectedStateVersion): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $candidates, int $expectedStateVersion, string $foreshadowingContractChecksum): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $chapter, $draft, $candidates, $expectedStateVersion): GenerationArtifact {
+        return DB::transaction(function () use ($run, $chapter, $draft, $candidates, $expectedStateVersion, $foreshadowingContractChecksum): GenerationArtifact {
             $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
 
             if ($chapter->novel->canonicalStateVersion?->version !== $expectedStateVersion) {
@@ -366,6 +392,7 @@ class StoryEventExtractor
             $data = [
                 'status' => 'candidate',
                 'source_artifact_id' => $draft->getKey(),
+                'foreshadowing_contract_checksum' => $foreshadowingContractChecksum,
                 'events' => $events,
             ];
             $artifact = $run->artifacts()->create([

@@ -39,7 +39,7 @@ test('planning preview shows the complete chapter plan in reading order', functi
     $foreshadowing = Foreshadowing::factory()->for($novel)->create([
         'title' => '潮汐钟声',
         'importance' => ForeshadowingImportance::Critical,
-        'status' => ForeshadowingStatus::Due,
+        'status' => ForeshadowingStatus::Reinforced,
         'due_from_chapter' => 10,
         'due_to_chapter' => 14,
     ]);
@@ -52,7 +52,13 @@ test('planning preview shows the complete chapter plan in reading order', functi
         'required_facts' => [$fact->getKey()],
         'forbidden_conflicts' => ['林舟不得突然学会游泳'],
         'must_not_reveal' => ['幕后主使身份'],
-        'due_foreshadowings' => [$foreshadowing->getKey()],
+        'foreshadowing_actions' => [[
+            'foreshadowing_id' => $foreshadowing->getKey(),
+            'action' => 'reinforce',
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => '钟声再次出现并直接迫使主角改变出港方式。',
+            'reason' => null,
+        ]],
         'scene_plans' => [
             [
                 'goal' => '取得出港许可',

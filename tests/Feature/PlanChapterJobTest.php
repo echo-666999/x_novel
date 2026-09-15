@@ -9,14 +9,17 @@ use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
+use App\Exceptions\GenerationPreflightException;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Character;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
@@ -58,7 +61,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
         'must_not_reveal' => ['幕后主使身份'],
         'required_facts' => [],
         'forbidden_conflicts' => [],
-        'due_foreshadowings' => [],
+        'foreshadowing_actions' => [],
         'scene_plans' => [[
             'goal' => '取得出港许可',
             'conflict' => '港务官拒绝放行',
@@ -91,13 +94,34 @@ function plannerResponse(array $payload): AiResponse
 
 test('the chapter plan response schema requires every declared scene field', function () {
     $sceneSchema = ChapterPlanPayload::schema()['properties']['scene_plans']['items'];
+    $foreshadowingSchema = ChapterPlanPayload::schema()['properties']['foreshadowing_actions']['items'];
 
     expect($sceneSchema['required'])
         ->toEqualCanonicalizing(array_keys($sceneSchema['properties']))
         ->and($sceneSchema['properties']['pov_character_id']['type'])->toContain('null')
         ->and($sceneSchema['properties']['location']['type'])->toContain('null')
-        ->and($sceneSchema['properties']['time_anchor']['type'])->toContain('null');
+        ->and($sceneSchema['properties']['time_anchor']['type'])->toContain('null')
+        ->and($foreshadowingSchema['required'])->toEqualCanonicalizing(array_keys($foreshadowingSchema['properties']))
+        ->and($foreshadowingSchema['properties']['action']['enum'])->toBe(['plant', 'reinforce', 'pay_off']);
 });
+
+test('the model payload cannot authorize defer or abandon actions', function (string $action) {
+    [$chapter, $character] = plannerChapter();
+    $foreshadowing = Foreshadowing::factory()->for($chapter->novel)->create([
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 2,
+        'status' => ForeshadowingStatus::Planted,
+    ]);
+    $payload = plannerPayload($character->getKey(), ['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => $action,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '模型不得授权该动作。',
+        'reason' => '模型生成的原因不能作为人工授权。',
+    ]]]);
+
+    expect(fn () => ChapterPlanPayload::validate($payload))->toThrow(ValidationException::class);
+})->with(['defer', 'abandon']);
 
 test('the planner creates a validated plan artifact and succeeds its run', function () {
     [$chapter, $character] = plannerChapter();
@@ -122,7 +146,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v6')
+        ->and($run->prompt_version)->toBe('chapter-planner-v7')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -134,6 +158,68 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []')
         ->and($fake->requests()[0]->prompt)->toContain('outcome_allowed')
         ->and($fake->requests()[0]->prompt)->toContain('outcome_forbidden');
+});
+
+test('the planner selects foreshadowings by the shared target chapter timing rule', function () {
+    [$chapter, $character] = plannerChapter();
+    $due = Foreshadowing::factory()->for($chapter->novel)->create([
+        'title' => '开篇暗号',
+        'status' => ForeshadowingStatus::Planted,
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 2,
+    ]);
+    Foreshadowing::factory()->for($chapter->novel)->create([
+        'title' => '后期暗号',
+        'status' => ForeshadowingStatus::Planted,
+        'due_from_chapter' => 2,
+        'due_to_chapter' => 3,
+    ]);
+    $payload = plannerPayload($character->getKey(), ['foreshadowing_actions' => [[
+        'foreshadowing_id' => $due->getKey(),
+        'action' => 'reinforce',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确再次出现开篇暗号并推动当前冲突。',
+        'reason' => null,
+    ]]]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    $context = $chapter->generationRuns()->sole()->context_snapshot;
+
+    expect(data_get($context, 'foreshadowings_requiring_action'))->toHaveCount(1)
+        ->and(data_get($context, 'foreshadowings_requiring_action.0.id'))->toBe($due->getKey())
+        ->and(data_get($context, 'foreshadowings_requiring_action.0.timing_status'))->toBe('due')
+        ->and(data_get($context, 'foreshadowings_requiring_action.0.allowed_model_actions'))->toBe(['reinforce', 'pay_off'])
+        ->and(data_get($context, 'foreshadowings_requiring_action.0'))->toHaveKeys([
+            'description', 'promised_payoff', 'content_status', 'content_status_source',
+            'projection_status', 'important_events',
+        ]);
+});
+
+test('critical overdue foreshadowing stops the planner before a run or provider call', function () {
+    [$chapter, $character] = plannerChapter();
+    $chapter->update(['sequence' => 2]);
+    Foreshadowing::factory()->for($chapter->novel)->create([
+        'title' => '必须回收的王冠裂痕',
+        'importance' => 'critical',
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 1,
+    ]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
+    app()->instance(AiProvider::class, $fake);
+
+    try {
+        app(ChapterPlanner::class)->generate($chapter->getKey());
+        test()->fail('Expected overdue critical foreshadowing to stop automatic planning.');
+    } catch (GenerationPreflightException $exception) {
+        expect($exception->reason)->toBe('critical_foreshadowing_overdue')
+            ->and($exception->getMessage())->toContain('必须回收的王冠裂痕')
+            ->and($fake->requests())->toHaveCount(0)
+            ->and($chapter->generationRuns()->count())->toBe(0);
+    }
 });
 
 test('a new bible applies only after explicitly restarting the chapter pipeline', function () {

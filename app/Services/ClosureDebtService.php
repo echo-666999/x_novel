@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Data\ClosureDebtItem;
 use App\Data\ClosureDebtResult;
 use App\Enums\ForeshadowingImportance;
+use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\StoryArcStatus;
 use App\Enums\StoryArcType;
 use App\Models\Novel;
@@ -79,8 +80,11 @@ class ClosureDebtService
     private function dueForeshadowings(Novel $novel): array
     {
         return $novel->foreshadowings
-            ->filter(fn ($foreshadowing): bool => $foreshadowing->isDue($novel->current_chapter_sequence)
-                || $foreshadowing->isOverdue($novel->current_chapter_sequence))
+            ->filter(fn ($foreshadowing): bool => in_array(
+                $foreshadowing->timingStatus($novel->current_chapter_sequence),
+                [ForeshadowingTimingStatus::Due, ForeshadowingTimingStatus::Overdue],
+                true,
+            ))
             ->map(fn ($foreshadowing): ClosureDebtItem => new ClosureDebtItem(
                 'due_foreshadowing',
                 '到期伏笔',

@@ -5,10 +5,14 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
-use App\Enums\ForeshadowingStatus;
+use App\Enums\ForeshadowingPlanAction;
+use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\PlanStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
+use App\Models\Foreshadowing;
+use App\Services\ForeshadowingLifecycleResolver;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
@@ -26,6 +30,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
 use Illuminate\Validation\Rules\Unique;
 
@@ -183,13 +188,21 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->schema($this->chapterPlanSchema())
                     ->action(function (Chapter $record, array $data): void {
                         $data['required_facts'] = array_map('intval', $data['required_facts'] ?? []);
-                        $data['due_foreshadowings'] = array_map('intval', $data['due_foreshadowings'] ?? []);
+                        // The prior Plan version preserves legacy IDs; every newly saved version uses contracts only.
+                        $data['due_foreshadowings'] = [];
+                        $data['foreshadowing_actions'] = $this->authorizedForeshadowingActions(
+                            $data['foreshadowing_actions'] ?? [],
+                            $record,
+                        );
+                        $version = ((int) $record->plans()->max('version')) + 1;
+                        $candidate = new ChapterPlan(['version' => $version, ...$data]);
+                        $candidate->setRelation('chapter', $record);
+                        app(PlanValidator::class)->validate($candidate)->assertCanGenerate();
 
-                        if ($record->latestPlan === null) {
-                            $record->plans()->create(['version' => 1, ...$data]);
-                        } else {
-                            $record->latestPlan->update($data);
-                        }
+                        DB::transaction(function () use ($record, $data, $version): void {
+                            $record->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
+                            $record->plans()->create(['version' => $version, ...$data]);
+                        });
 
                         Notification::make()
                             ->title('Chapter Plan 已保存')
@@ -362,16 +375,45 @@ class ManageNovelChapters extends ManageRelatedRecords
                         ->multiple()
                         ->searchable()
                         ->preload(),
-                    Select::make('due_foreshadowings')
-                        ->label('到期伏笔')
-                        ->options(fn (): array => $this->getRecord()->foreshadowings()
-                            ->whereNotIn('status', [ForeshadowingStatus::PaidOff->value, ForeshadowingStatus::Abandoned->value])
-                            ->orderBy('due_to_chapter')
-                            ->pluck('title', 'id')
-                            ->all())
-                        ->multiple()
-                        ->searchable()
-                        ->preload(),
+                    Repeater::make('foreshadowing_actions')
+                        ->label('伏笔动作契约')
+                        ->helperText('延期或放弃由当前登录用户明确授权，必须填写原因；延期还必须填写晚于原窗口的新兑现窗口。')
+                        ->columns(['default' => 1, 'lg' => 2])
+                        ->schema([
+                            Select::make('foreshadowing_id')
+                                ->label('伏笔')
+                                ->options(fn (): array => $this->dueForeshadowingOptions())
+                                ->searchable()
+                                ->preload()
+                                ->required(),
+                            Select::make('action')
+                                ->label('动作')
+                                ->options(ForeshadowingPlanAction::options())
+                                ->required(),
+                            TextInput::make('target_scene_sequence')
+                                ->label('目标 Scene 序号')
+                                ->integer()
+                                ->minValue(1)
+                                ->required(),
+                            Textarea::make('acceptance_criteria')
+                                ->label('正文验收条件')
+                                ->rows(2)
+                                ->required(),
+                            Textarea::make('reason')
+                                ->label('延期/放弃原因')
+                                ->rows(2)
+                                ->helperText('plant、reinforce、pay_off 可留空。'),
+                            TextInput::make('new_due_from_chapter')
+                                ->label('延期后窗口开始章')
+                                ->integer()
+                                ->minValue(1),
+                            TextInput::make('new_due_to_chapter')
+                                ->label('延期后窗口结束章')
+                                ->integer()
+                                ->minValue(1),
+                        ])
+                        ->default([])
+                        ->columnSpanFull(),
                 ]),
             Section::make('场景计划')
                 ->description('按正文顺序拆分场景。每个场景都必须产生明确转折和结果。')
@@ -466,6 +508,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                 'required_facts' => [],
                 'forbidden_conflicts' => [],
                 'due_foreshadowings' => [],
+                'foreshadowing_actions' => [],
                 'scene_plans' => [[]],
                 'status' => PlanStatus::Draft->value,
             ];
@@ -486,6 +529,7 @@ class ManageNovelChapters extends ManageRelatedRecords
             'required_facts',
             'forbidden_conflicts',
             'due_foreshadowings',
+            'foreshadowing_actions',
             'scene_plans',
             'status',
         ]);
@@ -501,6 +545,87 @@ class ManageNovelChapters extends ManageRelatedRecords
             ->mapWithKeys(fn ($fact): array => [
                 $fact->getKey() => $fact->subjectLabel().' · '.$fact->predicate.' · '.$fact->valueSummary(),
             ])
+            ->all();
+    }
+
+    /** @return array<int, string> */
+    private function dueForeshadowingOptions(): array
+    {
+        $chapter = $this->getMountedAction()?->getRecord();
+
+        if (! $chapter instanceof Chapter) {
+            return [];
+        }
+
+        $currentCanonicalChapter = $this->getRecord()->current_chapter_sequence;
+        $targetChapter = Foreshadowing::nextChapterSequence($currentCanonicalChapter);
+        $selectedIds = $chapter->latestPlan?->referencedForeshadowingIds() ?? [];
+        $lifecycleResolver = app(ForeshadowingLifecycleResolver::class);
+        $novel = $this->getRecord()->loadMissing('canonicalStateVersion');
+
+        return $this->getRecord()->foreshadowings()
+            ->where(function (Builder $query) use ($selectedIds, $targetChapter): void {
+                $query->where('due_from_chapter', '<=', $targetChapter);
+
+                if ($selectedIds !== []) {
+                    $query->orWhereIn('id', $selectedIds);
+                }
+            })
+            ->orderBy('due_to_chapter')
+            ->get()
+            ->reject(fn (Foreshadowing $foreshadowing): bool => ! in_array($foreshadowing->getKey(), $selectedIds, true)
+                && $lifecycleResolver->status($foreshadowing, $novel)->isTerminal())
+            ->mapWithKeys(function (Foreshadowing $foreshadowing) use ($lifecycleResolver, $novel, $targetChapter): array {
+                $status = $lifecycleResolver->status($foreshadowing, $novel);
+                $timing = ForeshadowingTimingStatus::forTargetChapter(
+                    $status,
+                    $foreshadowing->due_from_chapter,
+                    $foreshadowing->due_to_chapter,
+                    $targetChapter,
+                );
+                $timingLabel = $timing?->getLabel() ?? '已结束';
+
+                if ($foreshadowing->requiresLegacyStatusMigration()) {
+                    $timingLabel .= '；内容状态待迁移';
+                }
+
+                return [$foreshadowing->getKey() => "{$foreshadowing->title} · {$timingLabel}"];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $actions
+     * @return array<int, array<string, mixed>>
+     */
+    private function authorizedForeshadowingActions(array $actions, Chapter $chapter): array
+    {
+        $chapter->loadMissing('novel.canonicalStateVersion');
+
+        return collect($actions)
+            ->map(function (array $contract) use ($chapter): array {
+                $action = ForeshadowingPlanAction::tryFrom((string) ($contract['action'] ?? ''));
+
+                if (! $action?->requiresUserAuthorization()) {
+                    unset(
+                        $contract['authorized_by_user_id'],
+                        $contract['authorized_at'],
+                        $contract['authorized_at_canonical_chapter'],
+                        $contract['authorized_at_state_version'],
+                    );
+
+                    return $contract;
+                }
+
+                return [
+                    ...$contract,
+                    'authorized_by_user_id' => auth()->id(),
+                    'authorized_at' => now()->toISOString(),
+                    'authorized_at_canonical_chapter' => $chapter->novel->current_chapter_sequence ?? 0,
+                    'authorized_at_state_version' => $chapter->novel->canonicalStateVersion?->version,
+                ];
+            })
+            ->values()
             ->all();
     }
 }

@@ -26,6 +26,7 @@ class ContextBuilder
         private readonly MemoryRetriever $memoryRetriever,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly ForeshadowingContextContract $foreshadowingContextContract,
     ) {}
 
     public function buildForRun(GenerationRun $run, ContextRequest $request): ContextSnapshot
@@ -75,6 +76,7 @@ class ContextBuilder
             ->orderBy('id')
             ->get();
 
+        $foreshadowingContract = $this->foreshadowingContextContract->build($plan, $bible, $state);
         $l0 = [
             'bible_hard_constraints' => $bible->hard_constraints ?? [],
             'ending_contract' => $bible->ending_contract ?? [],
@@ -99,6 +101,7 @@ class ContextBuilder
                 'required_fact_ids' => $requiredFactIds,
                 'forbidden_conflicts' => $plan->forbidden_conflicts ?? [],
             ],
+            'foreshadowing_contract' => $foreshadowingContract,
         ];
         $l1 = ['canonical_story_state' => $state->state];
         $l4 = $this->narrativeStyleProfile->contractForBible($bible);
@@ -169,10 +172,11 @@ class ContextBuilder
             chapterPlanId: $plan->getKey(),
             characterIds: $characterIds,
             worldEntityIds: $worldEntityIds,
-            foreshadowingIds: array_values(array_unique(array_map('intval', $plan->due_foreshadowings ?? []))),
+            foreshadowingIds: $plan->referencedForeshadowingIds(),
             factIds: $facts->pluck('id')->map(fn ($id): int => (int) $id)->all(),
             memoryIds: $memoryIds,
             recentChapterIds: $recentChapterIds,
+            foreshadowingContract: $foreshadowingContract,
             previousArtifactId: $request->previousArtifactId,
             promptVersion: $request->promptVersion,
             model: $request->model,
@@ -213,6 +217,23 @@ class ContextBuilder
         $bible = $chapter->novel->bibles()->where('version', $version)->firstOrFail();
 
         return $this->narrativeStyleProfile->contractForBible($bible);
+    }
+
+    /** @return array<string, mixed> */
+    public function foreshadowingContractForChapter(Chapter $chapter): array
+    {
+        $chapter->loadMissing(['latestPlan', 'novel.canonicalStateVersion']);
+        $plan = $chapter->latestPlan;
+        $state = $chapter->novel->canonicalStateVersion;
+
+        if ($plan === null || $state === null) {
+            throw new InvalidArgumentException('伏笔 Context Contract 缺少 Chapter Plan 或 Canonical State Version。');
+        }
+
+        $bibleVersion = $this->bibleVersionForChapter($chapter);
+        $bible = $chapter->novel->bibles()->where('version', $bibleVersion)->firstOrFail();
+
+        return $this->foreshadowingContextContract->build($plan, $bible, $state);
     }
 
     /**

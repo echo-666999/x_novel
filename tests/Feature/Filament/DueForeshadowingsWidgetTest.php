@@ -8,6 +8,7 @@ use App\Models\Foreshadowing;
 use App\Models\Novel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -16,7 +17,7 @@ beforeEach(function () {
     $this->actingAs(User::factory()->create());
 });
 
-test('the dashboard widget shows due soon critical due and overdue foreshadowings across novels', function () {
+test('the dashboard widget shows due critical due and overdue foreshadowings across novels', function () {
     $firstNovel = Novel::factory()->create([
         'title' => '雾海长明',
         'current_chapter_sequence' => 15,
@@ -42,22 +43,22 @@ test('the dashboard widget shows due soon critical due and overdue foreshadowing
         'title' => '失落坐标',
         'due_from_chapter' => 20,
         'due_to_chapter' => 30,
-        'status' => ForeshadowingStatus::Due,
+        'status' => ForeshadowingStatus::Reinforced,
     ]);
 
     Livewire::test(DueForeshadowingsWidget::class)
         ->assertOk()
         ->assertSeeTextInOrder([
             '待处理伏笔',
-            '即将到期、到期和逾期',
+            '已进入兑现窗口或逾期',
             '星河彼岸',
             '失落坐标',
-            'Overdue',
+            '已逾期',
             '雾海长明',
             '王室血契',
-            'Critical Due',
+            '关键 · 兑现窗口',
             '潮汐钟声',
-            'Due Soon',
+            '兑现窗口',
         ])
         ->assertCanSeeTableRecords([$overdue, $criticalDue, $dueSoon], inOrder: true);
 });
@@ -85,16 +86,20 @@ test('the widget excludes future and terminal foreshadowings', function () {
         ->assertSee('暂无待处理伏笔');
 });
 
-test('status due remains visible before a novel has a current chapter', function () {
+test('legacy due remains readable while timing comes from the payoff window', function () {
     $novel = Novel::factory()->create(['current_chapter_sequence' => null]);
     $due = Foreshadowing::factory()->for($novel)->create([
         'title' => '开篇承诺',
-        'status' => ForeshadowingStatus::Due,
+        'status' => ForeshadowingStatus::Idea,
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 5,
     ]);
+    DB::table($due->getTable())->where('id', $due->getKey())->update(['status' => 'due']);
+    $due = $due->fresh();
 
     Livewire::test(DueForeshadowingsWidget::class)
         ->assertCanSeeTableRecords([$due])
-        ->assertSee('Due Soon')
+        ->assertSee('兑现窗口')
         ->assertSee('尚未开始');
 });
 
@@ -129,5 +134,5 @@ test('the dashboard renders the due foreshadowing widget in its existing slot', 
         ->assertOk()
         ->assertSee('待处理伏笔')
         ->assertSee('灯塔暗号')
-        ->assertSee('Critical Due');
+        ->assertSee('关键 · 兑现窗口');
 });

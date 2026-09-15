@@ -26,6 +26,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'required_facts',
     'forbidden_conflicts',
     'due_foreshadowings',
+    'foreshadowing_actions',
     'scene_plans',
     'status',
 ])]
@@ -46,6 +47,46 @@ class ChapterPlan extends Model
         return $this->belongsTo(Character::class, 'pov_character_id');
     }
 
+    /** @return array<int, array<string, mixed>> */
+    public function foreshadowingActionContracts(): array
+    {
+        return array_values(array_filter(
+            $this->foreshadowing_actions ?? [],
+            fn (mixed $action): bool => is_array($action),
+        ));
+    }
+
+    /** @return array<int, int> */
+    public function legacyForeshadowingIds(): array
+    {
+        return array_values(array_unique(array_map(
+            'intval',
+            array_filter(
+                $this->due_foreshadowings ?? [],
+                fn (mixed $id): bool => is_int($id) || (is_string($id) && ctype_digit($id)),
+            ),
+        )));
+    }
+
+    /** @return array<int, int> */
+    public function referencedForeshadowingIds(): array
+    {
+        $actionIds = array_map(
+            fn (array $action): int => (int) ($action['foreshadowing_id'] ?? 0),
+            $this->foreshadowingActionContracts(),
+        );
+
+        return array_values(array_unique(array_filter([
+            ...$this->legacyForeshadowingIds(),
+            ...$actionIds,
+        ])));
+    }
+
+    public function hasLegacyForeshadowingReferences(): bool
+    {
+        return $this->legacyForeshadowingIds() !== [];
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
@@ -59,6 +100,7 @@ class ChapterPlan extends Model
             'required_facts' => 'array',
             'forbidden_conflicts' => 'array',
             'due_foreshadowings' => 'array',
+            'foreshadowing_actions' => 'array',
             'scene_plans' => 'array',
             'status' => PlanStatus::class,
         ];

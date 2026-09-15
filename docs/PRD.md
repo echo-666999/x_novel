@@ -551,12 +551,15 @@ must_not_reveal JSONB
 required_facts JSONB
 forbidden_conflicts JSONB
 due_foreshadowings JSONB
+foreshadowing_actions JSONB
 scene_plans JSONB
 
 status
 created_at
 updated_at
 ```
+
+`due_foreshadowings` 只保留历史整数 ID；新版本 Plan 使用 `foreshadowing_actions`。人工编辑保存为新的 Plan Version，旧版本不得原地覆盖。
 
 ---
 
@@ -696,16 +699,58 @@ created_at
 updated_at
 ```
 
-状态：
+`status` 只表达内容生命周期：
 
 ```text
 idea
 planted
 reinforced
-due
 paid_off
 abandoned
 ```
+
+允许的基础转换：
+
+```text
+idea → planted
+planted → reinforced
+reinforced → reinforced
+planted/reinforced → paid_off
+idea/planted/reinforced → abandoned（需要人工原因）
+```
+
+禁止 `idea → reinforced`、`idea → paid_off`，也禁止把 `paid_off` 或 `abandoned` 原地改回活跃状态。同章可以依次发生 `planted → paid_off`，但两个事件必须顺序明确，各自拥有能在当前 Canonical 正文中定位的证据，并分别通过状态校验。
+
+`due_from_chapter` 与 `due_to_chapter` 是包含首尾章节的**兑现窗口**，不是铺设窗口。铺设事实由 `foreshadowing_planted` 及 `setup_chapter_id` 表达。时限状态不写入内容生命周期；对未终止伏笔，令 `C` 为最新 Canonical 章节序号（尚无正式章节时为 0），`N=C+1` 为下一个可规划章节：
+
+```text
+upcoming  N < due_from_chapter
+due       due_from_chapter <= N <= due_to_chapter
+overdue   N > due_to_chapter，且仍未 paid_off / abandoned
+```
+
+正在生成或阻塞中的草稿章节只单独展示，不推进正式时限状态。规划目标章仍按其目标序号判断是否处于兑现窗口：目标章等于 `due_to_chapter` 时，Critical 伏笔必须计划 `pay_off`；只计划 `reinforce` 不合格。
+
+Critical 伏笔在兑现窗口内必须进入结构化 Chapter Plan；窗口结束仍未解决时阻止普通下一章规划，只允许用户明确授权的修复章、延期或放弃。High、Medium、Low 到期或逾期产生 Warning，不阻止普通章节，但 Volume Gate 与 Ending Audit 仍按其规则处理，Warning 不等于已经兑现。
+
+延期、放弃和重新开启都是人工操作，模型不得自行决定：
+
+- 延期保留当前内容状态，必须记录原因、旧/新窗口、操作时的 Canonical 章节与 State Version、操作者和时间；新窗口必须晚于旧窗口且有效。
+- 放弃把活跃状态转为 `abandoned`，必须记录原因和相同审计上下文；管理决策不得伪造正文 Story Event 或 evidence。
+- 重新开启不得把终态记录原地回退。应创建引用原记录的新伏笔，重新明确 `promised_payoff`、窗口和验收条件；初始内容状态必须由已有 Canonical 证据决定，不能无证据直接设为 `reinforced`。
+- 具体审计数据的存储方式由后续领域/UI 任务在复用现有设施的前提下实现；本规则不要求新增独立审计系统。
+
+历史持久化的 `due` 状态与 `foreshadowing_due` 事件仅作兼容读取和迁移识别，不再产生新值或新事件，也不得覆盖 `idea`、`planted`、`reinforced`。迁移必须保留历史可解释性。
+
+概念边界：
+
+- Foreshadowing 是指向具体未来揭示或结果的叙事义务，必须有明确承诺、兑现窗口和验收证据。
+- Reader Promise 是对读者建立的期待，可以跨越多个情节或 Arc，不必具备隐藏线索和伏笔生命周期。
+- World Rule 是持续成立的世界规律，不以一次 `paid_off` 结束；需要确定性校验时可再建立引用该规则的 Locked Fact。
+- Locked Fact 是可精确查询、人工锁定且能确定性校验的事实，没有兑现窗口。
+- Character Arc 是角色长期变化及其里程碑；伏笔可以服务于 Character Arc，但两者必须分别追踪。
+
+例如“魔法必有代价”应归为 World Hard Rule；只有“某次具体代价将在何时、以什么结果显现”才是可兑现伏笔。
 
 暂不建立：
 
@@ -1444,6 +1489,28 @@ ContextBuilder
 ```
 
 不必单独建立 Queue Job。
+
+Chapter Plan 之后的 Scene Writer、Assembler、Story Event Extractor、Reviewer 和 Rewriter 必须读取同一份冻结伏笔动作契约。契约记录完整伏笔定义、promised payoff、Canonical 优先的内容状态、时限、兑现窗口、重要度、所属 Arc、本章动作、目标 Scene、验收条件、最近有效事件证据，以及 Bible/State/Plan 版本和 checksum。只有结构化 `foreshadowing_actions` 中的伏笔具有本章处理权限；未选中的未来伏笔不得被模型绑定为本章伏笔事件。该契约属于强制上下文，Token 紧张时先裁剪近期摘要和长期 Memory，不能删除 Critical、Due 或 Overdue 契约。
+
+Scene Writer 必须按目标 Scene 返回契约中每条伏笔动作的 `fulfilled / missing / contradicted` Coverage。`fulfilled` 与 `contradicted` 的 evidence 必须逐字来自当前正文，`missing` 的 evidence 必须为 `null`；Laravel 必须校验伏笔 ID、动作、顺序、Scene 归属和原文引用。只有正文具体结果满足该动作的 `acceptance_criteria` 才能报告 fulfilled；只有主题或意象相近、但没有动作结果时必须报告 missing。缺失或冲突形成可自动 Rewrite 的 Finding，不得修改 Canonical State。
+
+Assembler 必须按 Scene 汇总并重新验证伏笔 Coverage。它不得把 Scene Draft 已报告为 missing/contradicted 的动作提升为 fulfilled，也不得靠组装新增动作结果；若润色删除了唯一有效证据，最终 Coverage 必须降为 missing/contradicted 并形成 Finding。跨多个 Scene 的动作仍按各目标 Scene 保存 Coverage，由 Chapter Draft 聚合后交给后续 Event Extraction 和 Review 判断整体是否满足契约。
+
+Story Event Extractor 只能为冻结契约中已授权且最终 Coverage 为 fulfilled 的伏笔动作生成候选事件。事件类型必须与动作一一对应，事件 evidence 必须覆盖该动作的 Coverage 原文并引用目标 Scene；未选中伏笔、未来伏笔、missing/contradicted 动作、动作类型不匹配和主题相似内容都不得生成伏笔事件。`defer` 不产生正文 Story Event；`abandon` 只有在冻结契约包含与 State Version 一致的人工授权时才能生成事件候选。
+
+伏笔候选事件必须按正文和动作契约顺序执行确定性生命周期校验：`idea → planted`、`planted/reinforced → reinforced`、`planted/reinforced → paid_off`，同章允许依次 `plant → reinforce` 或 `plant → pay_off`。除尚未进入正文的新 `idea` 可以从领域记录开始铺设外，已有 `planted/reinforced/terminal` 状态必须来自冻结 Canonical Story State，不能只凭可能漂移的领域投影生成事件。`paid_off/abandoned` 终态不能被生成事件重新开启。Extractor 在保存 Event Candidate 前执行该规则，StateValidator 再使用 Event Candidate Run 中冻结的契约独立复核；失败只产生候选校验错误或 Hard Finding，不修改 Canonical State。
+
+Reviewer 必须在首轮全量审校中按冻结 Plan 顺序逐项输出伏笔审计，同时对照 promised payoff、动作语义、最终 Coverage、当前草稿对应的 Event Candidate 和正文逐字证据。仅出现相同关键词不能证明 `reinforce` 或 `pay_off`；`pay_off` 必须在语义上完成承诺及验收条件。模型报告 fulfilled 时，Laravel 仍须确认存在 fulfilled Coverage 和匹配事件。正文可修复的问题按伏笔 ID、动作和目标 Scene 合并为一个 Finding，进入一次包含全部修复目标的 Rewrite；需要延期、放弃、改变窗口或 promised payoff 的问题进入 NEEDS_ATTENTION，Rewrite 不得修改伏笔定义或 Canonical State。
+
+整章 Rewrite 必须返回并重新验证全部 Scene Coverage；局部 Scene Rewrite 必须经 Assembly 重新汇总 Coverage。任何 Rewrite 产物都先使旧 Event Candidate 和 State Patch 失效，再依次重新执行 Event Extraction、State Patch 和全量 Review。只有重写稿对应的新 Review PASS 才能停止自动流程，历史 Review、Coverage 或 Event Candidate 不得跨草稿复用。
+
+Canonical Commit、Latest Chapter Rollback 或 Manual Canonical Correction 成功后，必须按当前 Canonical State Version 异步刷新伏笔领域投影。目标 `status` 和 `reinforce_count` 从 Canonical 基线及不晚于目标版本的 Active Events 重放得到，并与 Canonical State 复核；`setup_chapter_id`、`payoff_chapter_id` 只能来源于对应的有效铺设、兑现事件。刷新必须幂等，旧 State Version 的任务不得覆盖新指针；刷新失败可独立重试，不能撤销已经成功的 Canonical 写入。
+
+伏笔管理页必须并列显示 Canonical 内容状态、按下一正式章节计算的时限状态、表投影健康状态、Canonical 强化次数、最近有效伏笔事件及证据、未来 Chapter Plan 中的下一动作，并分别显示最新 Canonical 章节和活跃章节工作流。页面检测到投影漂移时以 Canonical State 为准，并提供 Story State 检查和幂等投影重建入口。Critical 逾期项提供安排修复章、人工延期和人工放弃入口；延期将原因、旧/新窗口、Canonical 章节、State Version、操作者和时间写入伏笔管理审计历史，放弃通过 `ManualCorrection` 创建新 State Version，不伪造正文 `foreshadowing_abandoned` 事件。已有伏笔的内容状态、强化次数、铺设/兑现章节和兑现窗口不得通过普通 Edit 绕过这些受控操作。
+
+历史伏笔修复必须先生成冻结计划并默认 dry-run。计划必须固定小说、完整重建基线、Expected State Version/checksum、待失效或替换的 Event、逐字 Canonical evidence、原因、状态前后差异和未决项；用户审阅后才能显式执行。执行只能追加 correction/invalidation 审计和新的 State Version，不得删除原 Event 或覆盖历史 State Version；无效 Event 的来源 Memory 必须在同一事务中失效，替代 Event 只有在正文证据和摘要不变时才能复用原 Memory/Embedding，最后统一刷新领域投影。相同冻结计划重复执行不得产生重复正式数据。
+
+`promised_payoff` 是作者侧验收信息，不等于允许在本章公开秘密；所有阶段仍必须同时遵守 `must_not_reveal`。
 
 ---
 

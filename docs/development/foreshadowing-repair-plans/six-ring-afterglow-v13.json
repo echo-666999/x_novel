@@ -1,0 +1,63 @@
+{
+    "schema_version": 1,
+    "novel_id": 2,
+    "novel_title": "六环余光",
+    "expected_state_version": 13,
+    "expected_state_checksum": "563dd01246898bd36a8fa0e233869a798a8c45b54aa611059691e6dacc406cfd",
+    "baseline_state_version": 1,
+    "event_repairs": [
+        {
+            "event_id": 15,
+            "action": "replace",
+            "expected_event_type": "foreshadowing_reinforced",
+            "replacement_event_type": "foreshadowing_planted",
+            "reason": "第 1 章正文首次建立魔法代价及其后续影响，原事件从 idea 直接进入 reinforced；改为 planted 以恢复合法生命周期。"
+        },
+        {
+            "event_id": 24,
+            "action": "replace",
+            "expected_event_type": "foreshadowing_reinforced",
+            "replacement_event_type": "foreshadowing_planted",
+            "reason": "第 2 章正文首次出现未知黑影与被注视感，原事件从 idea 直接进入 reinforced；改为 planted，提前铺设不违反兑现窗口规则。"
+        },
+        {
+            "event_id": 41,
+            "action": "invalidate",
+            "expected_event_type": "foreshadowing_reinforced",
+            "replacement_event_type": null,
+            "reason": "第 4 章证据只说明一般魔法代价与停止施法，没有出现原伏笔定义要求的为他人作出牺牲，属于错误绑定。"
+        },
+        {
+            "event_id": 52,
+            "action": "replace",
+            "expected_event_type": "foreshadowing_reinforced",
+            "replacement_event_type": "foreshadowing_planted",
+            "reason": "第 5 章正文首次明确写出林墨在失衡时先推开苏璃并承担自身损耗，符合牺牲伏笔的首次铺设；改为 planted 以恢复合法生命周期。"
+        }
+    ],
+    "state_corrections": [
+        {
+            "path": "foreshadowings.1.status",
+            "value": "abandoned",
+            "reason": "已确认 D-05 将魔法必有代价作为世界硬规则；现有开放式承诺没有可判定的兑现条件，停止把它作为 Critical 伏笔继续累计或伪装成已兑现。"
+        }
+    ],
+    "unresolved_items": [
+        {
+            "id": "UNRESOLVED-001",
+            "description": "伏笔 #1 后续需要另建具有具体结果、兑现窗口和逐字验收条件的新伏笔；当前资料不足以确定具体承诺，计划不自动编造。"
+        },
+        {
+            "id": "UNRESOLVED-002",
+            "description": "伏笔 #1 的第 2～11 章证据分别描述不同章节中的代价或选择，现有证据不能确定性证明其中任何一条只是重复提取，因此本计划全部保留。"
+        },
+        {
+            "id": "UNRESOLVED-003",
+            "description": "伏笔 #2 的第 3～9 章事件均有不同正文证据，提前铺设或强化不违反兑现窗口；是否文学上重复仍无法确定，因此本计划全部保留。"
+        },
+        {
+            "id": "UNRESOLVED-004",
+            "description": "伏笔 #3 的第 7、10、11 章事件均涉及在代价与选择之间收手，是否达到独立强化的文学强度无法确定；本计划保留，不将不确定判断写成事实。"
+        }
+    ]
+}

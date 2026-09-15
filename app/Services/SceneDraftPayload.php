@@ -12,7 +12,7 @@ final class SceneDraftPayload
         return [
             'type' => 'object',
             'additionalProperties' => false,
-            'required' => ['content', 'temporary_state_delta', 'declared_events', 'uncertainties', 'self_check'],
+            'required' => ['content', 'temporary_state_delta', 'declared_events', 'uncertainties', 'self_check', 'foreshadowing_coverage'],
             'properties' => [
                 'content' => ['type' => 'string'],
                 'temporary_state_delta' => [
@@ -31,6 +31,10 @@ final class SceneDraftPayload
                     ...PlanCoverage::schema(),
                     'description' => 'Coverage of the planned goal, conflict, turn, and outcome.',
                 ],
+                'foreshadowing_coverage' => [
+                    ...ForeshadowingCoverage::schema(),
+                    'description' => 'Coverage of every foreshadowing action assigned to this scene, in plan order.',
+                ],
             ],
         ];
     }
@@ -38,10 +42,10 @@ final class SceneDraftPayload
     /** @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    public static function validate(array $payload): array
+    public static function validate(array $payload, array $foreshadowingExpectations = []): array
     {
-        if (! self::hasExactKeys($payload, ['content', 'temporary_state_delta', 'declared_events', 'uncertainties', 'self_check'])) {
-            throw ValidationException::withMessages(['scene_draft' => 'Scene Draft 必须只包含 content、temporary_state_delta、declared_events、uncertainties 和 self_check。']);
+        if (! self::hasExactKeys($payload, ['content', 'temporary_state_delta', 'declared_events', 'uncertainties', 'self_check', 'foreshadowing_coverage'])) {
+            throw ValidationException::withMessages(['scene_draft' => 'Scene Draft 必须只包含 content、temporary_state_delta、declared_events、uncertainties、self_check 和 foreshadowing_coverage。']);
         }
 
         $machineFields = self::validateMachineFields(
@@ -58,6 +62,7 @@ final class SceneDraftPayload
             'uncertainties' => ['present', 'array'],
             'uncertainties.*' => ['string'],
             'self_check' => ['required', 'array'],
+            'foreshadowing_coverage' => ['present', 'array'],
         ])->validate();
 
         if (blank(trim($validated['content']))) {
@@ -65,6 +70,12 @@ final class SceneDraftPayload
         }
 
         $validated['self_check'] = PlanCoverage::validate($validated['self_check'], $validated['content'], 'self_check');
+        $validated['foreshadowing_coverage'] = ForeshadowingCoverage::validate(
+            $validated['foreshadowing_coverage'],
+            $validated['content'],
+            $foreshadowingExpectations,
+            'foreshadowing_coverage',
+        );
 
         return $validated;
     }

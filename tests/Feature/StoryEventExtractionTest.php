@@ -10,6 +10,7 @@ use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
@@ -18,10 +19,14 @@ use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
+use App\Models\Scene;
 use App\Models\StoryStateVersion;
+use App\Services\DeterministicStoryEventApplier;
 use App\Services\StoryEventExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -33,6 +38,7 @@ function eventExtractionFixture(): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     $state = app(InitializeNovelStateAction::class)->handle($novel);
+    NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Generating]);
     ChapterPlan::factory()->for($chapter)->create();
     $character = Character::factory()->for($novel)->create(['name' => '林舟']);
@@ -115,6 +121,81 @@ function truncatedEventEvidenceResponse(): AiResponse
     );
 }
 
+function eventForeshadowingFixture(ForeshadowingStatus $status, array $actions, array $coverages): array
+{
+    $fixture = eventExtractionFixture();
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'title' => '染血地图',
+        'promised_payoff' => '地图最终指向潮汐门。',
+        'status' => $status,
+    ]);
+    $stateData = $fixture['state']->state;
+    data_set($stateData, "foreshadowings.{$foreshadowing->getKey()}.status", $status->value);
+    $fixture['state'] = StoryStateVersion::factory()->for($fixture['novel'])->create([
+        'version' => $fixture['state']->version + 1,
+        'state' => $stateData,
+    ]);
+    $fixture['novel']->update(['canonical_state_version_id' => $fixture['state']->getKey()]);
+    $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $actions = collect($actions)->map(fn (array $action): array => [
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => $action['acceptance_criteria'] ?? '正文明确完成伏笔动作。',
+        'reason' => null,
+        ...$action,
+    ])->all();
+    $fixture['chapter']->latestPlan->update(['foreshadowing_actions' => $actions]);
+    $data = ['scene_coverage' => [[
+        'scene_id' => $scene->getKey(),
+        'foreshadowing_coverage' => collect($coverages)->map(fn (array $coverage): array => [
+            'foreshadowing_id' => $foreshadowing->getKey(),
+            ...$coverage,
+        ])->all(),
+    ]]];
+    $content = '林舟终于抵达洛阳城下。林舟摊开染血地图，地图边缘显出旧王印记。地图最终指向潮汐门。';
+    $fixture['draft'] = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 2,
+        'content' => $content,
+        'data' => $data,
+        'checksum' => hash('sha256', $content),
+    ]);
+    $fixture['foreshadowing'] = $foreshadowing;
+    $fixture['scene'] = $scene;
+
+    return $fixture;
+}
+
+function foreshadowingEventResponse(array $fixture, array $events): AiResponse
+{
+    $payload = ['events' => collect($events)->map(fn (array $event): array => [
+        'event_type' => $event['event_type'],
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $fixture['foreshadowing']->getKey(),
+        'payload' => [],
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => array_key_exists('scene_id', $event) ? $event['scene_id'] : $fixture['scene']->getKey(),
+            'quote' => $event['quote'],
+            'start_offset' => null,
+            'end_offset' => null,
+        ]],
+        'story_time' => null,
+        'confidence' => 0.98,
+    ])->all()];
+
+    return new AiResponse(
+        content: json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $payload,
+        inputTokens: 200,
+        outputTokens: 100,
+        cachedTokens: 0,
+        latencyMs: 300,
+        providerRequestId: 'foreshadowing-event-request',
+        model: 'extractor-test',
+    );
+}
+
 test('story event candidate validates the documented event shape', function () {
     $fixture = eventExtractionFixture();
     $event = eventExtractionResponse($fixture)->structuredData['events'][0];
@@ -134,9 +215,198 @@ test('story event candidate schema supports strict output and restores a JSON pa
     $candidate = StoryEventCandidate::fromArray($event);
 
     expect(data_get(StoryEventCandidate::schema(), 'properties.payload.type'))->toBe('string')
+        ->and(data_get(StoryEventCandidate::schema(), 'properties.event_type.enum'))->not->toContain(EventType::ForeshadowingDue->value)
         ->and(data_get(StoryEventCandidate::schema(), 'properties.subject_type.enum'))->toContain('world_entity', null)
         ->and(data_get(StoryEventCandidate::schema(), 'properties.subject_type.enum'))->not->toContain('concept')
         ->and($candidate->payload)->toBe(['from' => '长安', 'to' => '洛阳']);
+});
+
+test('a historical due event remains readable but cannot overwrite foreshadowing content state', function () {
+    $candidate = StoryEventCandidate::fromArray([
+        'event_type' => EventType::ForeshadowingDue->value,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => '1',
+        'payload' => '{}',
+        'evidence' => [[
+            'artifact_id' => 1,
+            'scene_id' => null,
+            'quote' => '旧时限标记',
+            'start_offset' => null,
+            'end_offset' => null,
+        ]],
+        'story_time' => null,
+        'confidence' => 1,
+    ]);
+
+    expect($candidate->eventType)->toBe(EventType::ForeshadowingDue)
+        ->and(app(DeterministicStoryEventApplier::class)->operations($candidate))->toBe([]);
+});
+
+test('extractor accepts ordered plant and payoff events backed by fulfilled action coverage', function () {
+    $fixture = eventForeshadowingFixture(ForeshadowingStatus::Idea, [
+        ['action' => 'plant'],
+        ['action' => 'pay_off'],
+    ], [
+        ['action' => 'plant', 'status' => 'fulfilled', 'evidence' => '林舟摊开染血地图'],
+        ['action' => 'pay_off', 'status' => 'fulfilled', 'evidence' => '地图最终指向潮汐门'],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [
+        ['event_type' => EventType::ForeshadowingPlanted->value, 'quote' => '林舟摊开染血地图'],
+        ['event_type' => EventType::ForeshadowingPaidOff->value, 'quote' => '地图最终指向潮汐门'],
+    ])));
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.*.event_type'))->toBe([
+        EventType::ForeshadowingPlanted->value,
+        EventType::ForeshadowingPaidOff->value,
+    ])->and(data_get($artifact->data, 'foreshadowing_contract_checksum'))->toHaveLength(64);
+});
+
+test('extractor accepts ordered plant and reinforce events in the same chapter', function () {
+    $fixture = eventForeshadowingFixture(ForeshadowingStatus::Idea, [
+        ['action' => 'plant'],
+        ['action' => 'reinforce'],
+    ], [
+        ['action' => 'plant', 'status' => 'fulfilled', 'evidence' => '林舟摊开染血地图'],
+        ['action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '地图边缘显出旧王印记'],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [
+        ['event_type' => EventType::ForeshadowingPlanted->value, 'quote' => '林舟摊开染血地图'],
+        ['event_type' => EventType::ForeshadowingReinforced->value, 'quote' => '地图边缘显出旧王印记'],
+    ])));
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.*.event_type'))->toBe([
+        EventType::ForeshadowingPlanted->value,
+        EventType::ForeshadowingReinforced->value,
+    ]);
+});
+
+test('extractor rejects unselected mismatched or unfulfilled foreshadowing events', function (array $actions, array $coverages, EventType $eventType, string $message) {
+    $fixture = eventForeshadowingFixture(ForeshadowingStatus::Planted, $actions, $coverages);
+    $canonicalStateVersionId = $fixture['novel']->fresh()->canonical_state_version_id;
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [[
+        'event_type' => $eventType->value,
+        'quote' => '林舟终于抵达洛阳城下。',
+    ]])));
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, $message);
+
+    expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->status)->toBe(RunStatus::Failed)
+        ->and(GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->count())->toBe(0)
+        ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($canonicalStateVersionId)
+        ->and($fixture['novel']->storyEvents()->count())->toBe(0);
+})->with([
+    'unselected future foreshadowing' => [[], [], EventType::ForeshadowingReinforced, '不在本章冻结动作契约中'],
+    'event type differs from plan action' => [
+        [['action' => 'pay_off']],
+        [['action' => 'pay_off', 'status' => 'fulfilled', 'evidence' => '林舟终于抵达洛阳城下。']],
+        EventType::ForeshadowingReinforced,
+        '不在本章冻结动作契约中',
+    ],
+    'coverage is missing' => [
+        [['action' => 'reinforce']],
+        [['action' => 'reinforce', 'status' => 'missing', 'evidence' => null]],
+        EventType::ForeshadowingReinforced,
+        '没有通过当前草稿 Coverage',
+    ],
+    'abandon is missing manual authorization' => [
+        [['action' => 'abandon']],
+        [['action' => 'abandon', 'status' => 'fulfilled', 'evidence' => '林舟终于抵达洛阳城下。']],
+        EventType::ForeshadowingAbandoned,
+        '缺少与冻结 State Version 一致的人工授权',
+    ],
+]);
+
+test('extractor rejects a foreshadowing event whose quote does not cover the fulfilled action evidence', function () {
+    $fixture = eventForeshadowingFixture(ForeshadowingStatus::Planted, [
+        ['action' => 'reinforce'],
+    ], [
+        ['action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '地图最终指向潮汐门'],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [[
+        'event_type' => EventType::ForeshadowingReinforced->value,
+        'quote' => '林舟终于抵达洛阳城下。',
+    ]])));
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '事件证据没有覆盖已通过验收的动作证据');
+});
+
+test('extractor binds foreshadowing evidence to the action target scene', function () {
+    $fixture = eventForeshadowingFixture(ForeshadowingStatus::Planted, [
+        ['action' => 'reinforce'],
+    ], [
+        ['action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '地图最终指向潮汐门'],
+    ]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [[
+        'event_type' => EventType::ForeshadowingReinforced->value,
+        'quote' => '地图最终指向潮汐门',
+        'scene_id' => null,
+    ]])));
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '事件证据没有覆盖已通过验收的动作证据');
+});
+
+test('extractor enforces same chapter foreshadowing event order and terminal states', function (ForeshadowingStatus $status, array $actions, array $coverages, array $events, string $message) {
+    $fixture = eventForeshadowingFixture($status, $actions, $coverages);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, $events)));
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, $message);
+})->with([
+    'idea cannot jump to reinforced' => [
+        ForeshadowingStatus::Idea,
+        [['action' => 'reinforce']],
+        [['action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '林舟终于抵达洛阳城下。']],
+        [['event_type' => EventType::ForeshadowingReinforced->value, 'quote' => '林舟终于抵达洛阳城下。']],
+        '不能从 idea 执行 foreshadowing_reinforced',
+    ],
+    'payoff cannot precede plant' => [
+        ForeshadowingStatus::Idea,
+        [['action' => 'plant'], ['action' => 'pay_off']],
+        [
+            ['action' => 'plant', 'status' => 'fulfilled', 'evidence' => '林舟摊开染血地图'],
+            ['action' => 'pay_off', 'status' => 'fulfilled', 'evidence' => '地图最终指向潮汐门'],
+        ],
+        [
+            ['event_type' => EventType::ForeshadowingPaidOff->value, 'quote' => '地图最终指向潮汐门'],
+            ['event_type' => EventType::ForeshadowingPlanted->value, 'quote' => '林舟摊开染血地图'],
+        ],
+        '不能从 idea 执行 foreshadowing_paid_off',
+    ],
+    'terminal foreshadowing cannot reopen' => [
+        ForeshadowingStatus::PaidOff,
+        [['action' => 'reinforce']],
+        [['action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '林舟终于抵达洛阳城下。']],
+        [['event_type' => EventType::ForeshadowingReinforced->value, 'quote' => '林舟终于抵达洛阳城下。']],
+        '不能从 paid_off 执行 foreshadowing_reinforced',
+    ],
+]);
+
+test('extractor does not treat a non-idea domain projection as canonical lifecycle evidence', function () {
+    $fixture = eventForeshadowingFixture(ForeshadowingStatus::Planted, [
+        ['action' => 'reinforce'],
+    ], [
+        ['action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '地图边缘显出旧王印记'],
+    ]);
+    $stateWithoutForeshadowing = StoryStateVersion::factory()->raw()['state'];
+    $state = StoryStateVersion::factory()->for($fixture['novel'])->create([
+        'version' => $fixture['state']->version + 1,
+        'state' => $stateWithoutForeshadowing,
+    ]);
+    $fixture['novel']->update(['canonical_state_version_id' => $state->getKey()]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [[
+        'event_type' => EventType::ForeshadowingReinforced->value,
+        'quote' => '地图边缘显出旧王印记',
+    ]])));
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '缺少可验证的 Canonical 内容生命周期状态');
 });
 
 test('story event candidate rejects world entity subtypes with an actionable message', function () {
@@ -173,13 +443,14 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v4')
+        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v6')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
         ->and($fake->requests()[0]->systemPrompt)->toContain('内部 type（例如 concept、rule、location、faction）不能作为 subject_type')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_* 事件必须引用对应的 foreshadowing ID')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and($fake->requests()[0]->systemPrompt)->toContain('没有有效主体时必须省略该事件')
         ->and(data_get($run->context_snapshot, 'event_subject_type_rules.promise_made'))->toBe(['relationship'])
+        ->and(data_get($run->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($run->context_snapshot, 'foreshadowing_contract.checksum'))
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
 });

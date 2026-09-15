@@ -11,6 +11,7 @@ final readonly class ContextSnapshot
      * @param  array<int, int>  $factIds
      * @param  array<int, int>  $memoryIds
      * @param  array<int, int>  $recentChapterIds
+     * @param  array<string, mixed>  $foreshadowingContract
      * @param  array<string, mixed>  $l0
      * @param  array<string, mixed>  $l1
      * @param  array<string, mixed>  $l2
@@ -32,6 +33,7 @@ final readonly class ContextSnapshot
         public array $factIds,
         public array $memoryIds,
         public array $recentChapterIds,
+        public array $foreshadowingContract,
         public ?int $previousArtifactId,
         public string $promptVersion,
         public string $model,
@@ -47,7 +49,7 @@ final readonly class ContextSnapshot
     public function toArray(): array
     {
         return [
-            'schema_version' => 2,
+            'schema_version' => 3,
             'novel_id' => $this->novelId,
             'chapter_id' => $this->chapterId,
             'scene_id' => $this->sceneId,
@@ -59,6 +61,7 @@ final readonly class ContextSnapshot
             'character_ids' => $this->characterIds,
             'world_entity_ids' => $this->worldEntityIds,
             'foreshadowing_ids' => $this->foreshadowingIds,
+            'foreshadowing_contract_checksum' => $this->foreshadowingContract['checksum'],
             'fact_ids' => $this->factIds,
             'memory_ids' => $this->memoryIds,
             'recent_chapter_ids' => $this->recentChapterIds,

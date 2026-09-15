@@ -228,10 +228,11 @@ reader_promise_resolved
 ```text
 foreshadowing_planted
 foreshadowing_reinforced
-foreshadowing_due
 foreshadowing_paid_off
 foreshadowing_abandoned
 ```
+
+`foreshadowing_due` 是历史兼容事件类型，不再生成。到期是由 Canonical 章节序号和兑现窗口计算出的调度状态，不是故事中发生的事实，也不应创建 Story Event。
 
 ## World
 
@@ -492,7 +493,25 @@ MVP 使用 JSONB：
 }
 ```
 
-详情仍以 `foreshadowings` 表为主。
+`status` 只允许 `idea / planted / reinforced / paid_off / abandoned`。允许转换：
+
+```text
+idea → planted
+planted → reinforced
+reinforced → reinforced
+planted/reinforced → paid_off
+idea/planted/reinforced → abandoned（人工原因必填）
+```
+
+`due_from`、`due_to` 是兑现窗口元数据，不是内容状态。当前正式进度及 Active Story Events 以 Canonical Story State 为权威；`foreshadowings` 表是完整领域投影，供管理、查询和生成入口快速筛选。两者冲突时必须报告并重建投影。
+
+同章允许先 `planted` 再 `paid_off`。候选事件必须具有稳定顺序，每个事件分别提供当前正文中的可定位证据；顺序或证据不能确定时不得提交。
+
+生成产生的伏笔事件必须先通过冻结 Chapter Plan 动作授权及最终 Scene/Assembly Coverage。事件类型、伏笔 ID、目标 Scene 和逐字 evidence 必须与 fulfilled 动作一致；StateValidator 按事件顺序从冻结 Canonical 内容状态模拟转换。新 `idea` 可从领域记录开始 `plant`，已有内容进度不能只凭领域投影继续推进。未授权目标、missing/contradicted Coverage、`idea → reinforced`、终态再次操作或缺少冻结契约 lineage 都是 Hard Conflict。
+
+延期、放弃与重新开启必须由用户明确执行并保留原因、变更前后窗口、Canonical 章节、State Version、操作者和时间。延期保留内容状态；放弃进入终态；重新开启通过引用原记录的新伏笔表达，不把终态状态原地回退。人工管理操作没有正文证据时不得伪造 Story Event。
+
+管理页读取内容状态和强化次数时优先使用当前 Canonical State，并把 `foreshadowings` 表状态作为可检查的领域投影单独展示。延期只改变兑现窗口，并向 `management_history` 追加结构化审计；放弃属于 Canonical 内容状态变化，必须调用 `ManualCanonicalCorrectionAction` 追加 `ManualCorrection` Event 和新 State Version。普通表单不得直接修改已有记录的生命周期、强化次数、章节引用或兑现窗口。投影漂移使用统一 `ProjectionRebuilder` 修复，不能用表值反向覆盖 Canonical State。
 
 ---
 
@@ -1108,7 +1127,7 @@ Projection 失败时可重建。
 # 45. Rebuild Strategy
 
 ```text
-State Version 0
+完整的 Initial State Version 0
 ↓
 active Story Events
 ↓
@@ -1124,6 +1143,8 @@ active Story Events
 第一版完全重放即可。
 
 数据量很小，不需要复杂 Snapshot Optimization。
+
+新小说的 Version 0 必须按第 31 节包含完整初始化元数据。对不符合该约束的历史小说，重建器不能只因版本号为 0 就把空状态当作基线；必须先修复 Version 0，或显式选择并验证首个待重放事件之前的完整初始化版本，再只重放基线之后的 Active Events。若无法确定完整基线，dry-run 必须报告差异并停止替换；不得用不完整重建结果覆盖当前 Canonical State。
 
 ---
 
@@ -1149,6 +1170,15 @@ dry-run
 ```
 
 不直接覆盖正式状态。
+
+历史伏笔事件修复使用独立冻结计划：
+
+```bash
+php artisan foreshadowing:repair-history path/to/plan.json
+php artisan foreshadowing:repair-history path/to/plan.json --execute --actor=USER_ID
+```
+
+第一条命令始终是只读 dry-run；第二条命令必须由用户在审阅同一 plan hash 的前后差异后显式执行。计划固定 Novel、完整无章节基线、Expected State Version/checksum、原 Event ID/type、替代类型、原因、状态修正及未决项。执行时再次验证 Canonical Artifact 逐字证据，在同一事务内追加 correction/invalidation 审计、创建新 State Version、迁移或失效 Event 来源 Memory，并通过统一 `ProjectionRebuilder` 刷新领域投影。重复执行相同 plan hash 不得产生重复效果。
 
 ---
 
@@ -1204,6 +1234,10 @@ Foreshadowing projection rebuild
 ```
 
 旧数据不物理删除。
+
+Commit、Latest Chapter Rollback 和 Manual Canonical Correction 在各自 Canonical 事务成功后，统一派发当前 State Version 对应的投影刷新任务。Rollback 先在事务内恢复 Canonical 指针并失效最新章事件，投影任务随后只重放仍为 Active 且不晚于恢复版本的事件，因此 `status`、`reinforce_count`、`setup_chapter_id` 和 `payoff_chapter_id` 会一起回到上一正式版本。重复刷新从相同基线与事件集合重新计算，不会重复累计强化次数。
+
+投影刷新失败只留下可重试的 Queue 失败记录，不删除 Story Events、State Version 或 Canonical Chapter。Canonical State 与 Active Story Events 仍是权威来源；管理表在任务完成前可能短暂陈旧，不能反向覆盖 Canonical 数据。这一投影只覆盖已有领域表，不等于引入通用 Event Projection 框架。
 
 ---
 
@@ -1537,19 +1571,25 @@ Locked Facts 必须始终进入 Context。
 
 # 67. Due Foreshadowing
 
-如果：
+对非终态伏笔，`due_from`、`due_to` 是包含首尾的兑现窗口。令 `C` 为最新 Canonical 章节序号、`N=C+1`，正式时限状态与下一章 Planning 都使用 `N` 判断；活跃草稿仅单独展示，不推进 `C`：
 
 ```text
-due_from <= next chapter <= due_to
+N < due_from                  upcoming
+due_from <= N <= due_to       due / in payoff window
+N > due_to                    overdue
 ```
 
-必须进入 Chapter Context。
+窗口内的伏笔必须按重要度进入 Chapter Context 或 Warning。目标章等于 `due_to` 时，Critical 伏笔只能选择 `pay_off`，或使用预先存在的人工延期/放弃授权；只选择 `reinforce` 不合格。
 
-Critical 伏笔还必须进入：
+Critical 伏笔必须进入：
 
 ```text
 Chapter Plan validation
 ```
+
+当 `due_to` 已经成为 Canonical 且伏笔仍未终止时，普通下一章规划必须阻止，只允许带审计依据的修复章、延期或放弃。High、Medium、Low 只产生 Warning，不阻止普通章节；Volume Gate 与 Ending Audit 仍独立执行。
+
+旧 `due` 内容状态和 `foreshadowing_due` Event 只允许兼容读取与迁移，不得继续写入。
 
 ---
 

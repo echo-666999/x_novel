@@ -3,6 +3,7 @@
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\CanonicalCommitData;
+use App\Data\StateValidationResult;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
@@ -17,6 +18,7 @@ use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\CommitChapterJob;
 use App\Jobs\PlanChapterJob;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
@@ -36,6 +38,8 @@ use App\Services\CanonicalCommitService;
 use App\Services\EmergencyStopService;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\MemoryInvalidator;
+use App\Services\ProjectionRebuilder;
+use App\Services\StateValidator;
 use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -46,7 +50,7 @@ use Livewire\Livewire;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    Queue::fake([UpdateMemoryJob::class]);
+    Queue::fake([UpdateMemoryJob::class, RefreshNovelProjectionJob::class]);
 });
 
 /** @return array<string, mixed> */
@@ -138,6 +142,81 @@ test('canonical commit atomically persists events state and pointers', function 
         ->and(StoryEvent::query()->count())->toBe(1)
         ->and(StoryEvent::query()->sole()->state_version)->toBe(1)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
+    Queue::assertPushed(RefreshNovelProjectionJob::class, fn (RefreshNovelProjectionJob $job): bool => $job->novelId === $fixture['novel']->getKey() && $job->stateVersionId === $version->getKey());
+});
+
+test('projection refresh after commit derives every foreshadowing field from canonical inputs', function () {
+    $fixture = canonicalCommitFixture();
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'status' => ForeshadowingStatus::Idea,
+        'reinforce_count' => 0,
+    ]);
+    $initial = $fixture['state']->state;
+    $initial['foreshadowings'][(string) $foreshadowing->getKey()] = [
+        'status' => ForeshadowingStatus::Idea->value,
+        'reinforce_count' => 0,
+    ];
+    $initialChecksum = app(StoryStateService::class)->checksum($initial);
+    DB::table('story_state_versions')->where('id', $fixture['state']->getKey())->update([
+        'state' => json_encode($initial, JSON_THROW_ON_ERROR),
+        'checksum' => $initialChecksum,
+    ]);
+    $event = fn (EventType $type, string $quote): array => [
+        'event_type' => $type->value,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $foreshadowing->getKey(),
+        'payload' => [],
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => null,
+            'quote' => $quote,
+            'start_offset' => null,
+            'end_offset' => null,
+        ]],
+        'story_time' => null,
+        'confidence' => .95,
+    ];
+    $events = [
+        $event(EventType::ForeshadowingPlanted, '星图首次显现'),
+        $event(EventType::ForeshadowingReinforced, '星图再次发光'),
+        $event(EventType::ForeshadowingPaidOff, '星图打开灯塔'),
+    ];
+    $candidateData = [...$fixture['candidate']->data, 'events' => $events];
+    DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
+        'data' => json_encode($candidateData, JSON_THROW_ON_ERROR),
+    ]);
+    $after = $initial;
+    $after['foreshadowings'][(string) $foreshadowing->getKey()] = [
+        'status' => ForeshadowingStatus::PaidOff->value,
+        'reinforce_count' => 1,
+    ];
+    $patchData = [
+        ...$fixture['patch']->data,
+        'before_checksum' => $initialChecksum,
+        'after_checksum' => app(StoryStateService::class)->checksum($after),
+        'operations' => [
+            ['op' => 'set', 'path' => "foreshadowings.{$foreshadowing->getKey()}.status", 'value' => ForeshadowingStatus::Planted->value, 'source_event_index' => 0],
+            ['op' => 'set', 'path' => "foreshadowings.{$foreshadowing->getKey()}.status", 'value' => ForeshadowingStatus::Reinforced->value, 'source_event_index' => 1],
+            ['op' => 'increment', 'path' => "foreshadowings.{$foreshadowing->getKey()}.reinforce_count", 'value' => 1, 'source_event_index' => 1],
+            ['op' => 'set', 'path' => "foreshadowings.{$foreshadowing->getKey()}.status", 'value' => ForeshadowingStatus::PaidOff->value, 'source_event_index' => 2],
+        ],
+    ];
+    DB::table('generation_artifacts')->where('id', $fixture['patch']->getKey())->update([
+        'data' => json_encode($patchData, JSON_THROW_ON_ERROR),
+    ]);
+    $validator = Mockery::mock(StateValidator::class);
+    $validator->shouldReceive('validate')->once()->andReturn(new StateValidationResult([]));
+    app()->instance(StateValidator::class, $validator);
+
+    $version = app(CanonicalCommitService::class)->commit($fixture['data']);
+    (new RefreshNovelProjectionJob($fixture['novel']->getKey(), $version->getKey()))
+        ->handle(app(ProjectionRebuilder::class));
+
+    $projection = $foreshadowing->fresh();
+    expect($projection->status)->toBe(ForeshadowingStatus::PaidOff)
+        ->and($projection->reinforce_count)->toBe(1)
+        ->and($projection->setup_chapter_id)->toBe($fixture['chapter']->getKey())
+        ->and($projection->payoff_chapter_id)->toBe($fixture['chapter']->getKey());
 });
 
 test('latest canonical chapter rollback restores pointers and invalidates derived data', function () {
@@ -164,6 +243,7 @@ test('latest canonical chapter rollback restores pointers and invalidates derive
         ->and($memory->fresh()->status)->toBe(MemoryStatus::Invalid)
         ->and(Fact::query()->sole()->status)->toBe(FactStatus::Invalidated)
         ->and(StoryStateVersion::query()->find($committedState->getKey()))->not->toBeNull();
+    Queue::assertPushed(RefreshNovelProjectionJob::class, fn (RefreshNovelProjectionJob $job): bool => $job->novelId === $fixture['novel']->getKey() && $job->stateVersionId === $fixture['state']->getKey());
 });
 
 test('rollback restores facts superseded by the latest canonical chapter', function () {
@@ -189,6 +269,7 @@ test('rollback restores foreshadowing projection from the previous state', funct
     $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
         'status' => ForeshadowingStatus::PaidOff,
         'reinforce_count' => 3,
+        'setup_chapter_id' => $fixture['chapter']->getKey(),
         'payoff_chapter_id' => $fixture['chapter']->getKey(),
     ]);
     app(CanonicalCommitService::class)->commit($fixture['data']);
@@ -205,9 +286,12 @@ test('rollback restores foreshadowing projection from the previous state', funct
     ]);
 
     app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '恢复伏笔状态');
+    (new RefreshNovelProjectionJob($fixture['novel']->getKey(), $fixture['state']->getKey()))
+        ->handle(app(ProjectionRebuilder::class));
 
     expect($foreshadowing->fresh()->status)->toBe(ForeshadowingStatus::Reinforced)
         ->and($foreshadowing->fresh()->reinforce_count)->toBe(2)
+        ->and($foreshadowing->fresh()->setup_chapter_id)->toBeNull()
         ->and($foreshadowing->fresh()->payoff_chapter_id)->toBeNull();
 });
 

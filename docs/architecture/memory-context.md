@@ -106,6 +106,7 @@ novel_id / chapter_id / scene_id
 task_type
 bible_version
 style_contract_checksum
+foreshadowing_contract_checksum
 state_version
 chapter_plan_id
 character_ids
@@ -123,6 +124,8 @@ truncated_sections
 ```
 
 MVP 存于 `generation_runs.context_snapshot`。
+
+当前 Scene Context Snapshot 使用 Schema v3。完整伏笔动作契约位于不可裁剪的 `l0.foreshadowing_contract`，顶层保存 `foreshadowing_contract_checksum`；Assembler、Extractor、Reviewer 和 Rewriter 的阶段 Snapshot 直接保存同一结构。契约本身记录 Bible Version、State Version、Chapter Plan ID/Version 和 checksum，因此可以核对各阶段是否使用同一冻结输入。
 
 没有 Snapshot 就无法解释模型为什么写出某内容，也无法判断是否使用了过期 State 或错误 Memory。
 
@@ -427,7 +430,9 @@ Static Profile
 
 ## 21. Foreshadowing
 
-分为：
+`due_from`～`due_to` 是兑现窗口。令 `C` 为最新 Canonical 章节序号、`N=C+1`，Context 使用 `N` 判断下一章是否进入兑现窗口；活跃草稿不推进 `C`。Snapshot 必须保留冻结时使用的 Canonical 章节和 State Version。
+
+上下文分为：
 
 ```text
 Due
@@ -438,6 +443,10 @@ Background
 Due/Critical：结构化强注入。
 Relevant：可通过 Retrieval。
 Background：通常不进入 Context。
+
+结构化强注入的伏笔必须包含完整定义、promised payoff、当前内容状态及其来源、计算出的时限状态、兑现窗口、重要度、所属 Arc、本章授权动作、目标 Scene、验收条件和最近有效事件及证据来源，不能只传 ID。最近事件必须是冻结 State Version 以内的 Active Story Event。Critical 逾期时，Context Builder 不得通过普通生成绕过 Planner 门禁。
+
+Foreshadowing 表达具体未来揭示或结果；World Rule 表达持续成立的规律；Locked Fact 表达可精确查询和确定性校验的锁定事实；Character Arc 表达长期人物变化；Reader Promise 表达对读者建立的期待。它们可以互相关联，但不得用同一条模糊文本替代彼此。比如“魔法必有代价”属于 Hard World Rule，具体某次代价的结果与兑现窗口才属于 Foreshadowing。
 
 Open Reader Promise 也应作为 L1/L2 结构化 Context，而非只依赖 Vector Memory。
 
@@ -602,6 +611,8 @@ Debug
 ```
 
 默认支持 dry-run/分批处理。
+
+历史 Event 被 correction/invalidation 后，其来源 Memory 必须同步失效。若 Event 只重分类且正文 evidence 和 Memory summary 不变，可以把原 Memory 标记为 invalid，并为替代 Event 创建指向新 `source_id` 的 Active Memory；原 Embedding 仅在 summary 未变化时可复用。纯失效事件不得保留 Active Memory。该处理必须与 Canonical 历史修复处于同一事务，避免无效 Event 继续被 RAG 召回。
 
 不要让 Rebuild 修改 Canonical Story State。
 

@@ -9,6 +9,7 @@ use App\Data\StoryStateRebuildResult;
 use App\Enums\EventType;
 use App\Models\Novel;
 use App\Models\StoryEvent;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 class StoryStateRebuilder
@@ -21,24 +22,49 @@ class StoryStateRebuilder
 
     public function rebuild(Novel $novel): StoryStateRebuildResult
     {
+        return $this->rebuildFromVersion($novel, 0);
+    }
+
+    public function rebuildFromVersion(Novel $novel, int $baselineVersion): StoryStateRebuildResult
+    {
         $current = $this->storyState->current($novel);
-        $initial = $this->storyState->findVersion($novel, 0);
+        $initial = $this->storyState->findVersion($novel, $baselineVersion);
 
         if ($current === null || $initial === null) {
             throw ValidationException::withMessages([
-                'state' => '小说必须同时存在 State Version 0 与当前 Canonical Story State。',
+                'state' => "小说必须同时存在 State Version {$baselineVersion} 与当前 Canonical Story State。",
             ]);
         }
 
         $events = $novel->storyEvents()
             ->active()
+            ->where('state_version', '>', $initial->version)
             ->where('state_version', '<=', $current->version)
             ->orderBy('state_version')
             ->orderBy('id')
             ->get();
-        $rebuilt = $initial->state;
+        $rebuilt = $this->replay($initial->state, $events);
 
-        foreach ($events as $event) {
+        return new StoryStateRebuildResult(
+            currentVersion: $current->version,
+            currentChecksum: $current->checksum,
+            rebuiltChecksum: $this->storyState->checksum($rebuilt),
+            replayedEventCount: $events->count(),
+            rebuiltState: $rebuilt,
+            changes: $this->storyState->diff($current->state, $rebuilt),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $baseline
+     * @param  Collection<int, StoryEvent>  $events
+     * @return array<string, mixed>
+     */
+    public function replay(array $baseline, Collection $events): array
+    {
+        $rebuilt = $baseline;
+
+        foreach ($events->sortBy([['state_version', 'asc'], ['id', 'asc']]) as $event) {
             $operations = $this->operationsFor($event);
 
             if ($operations !== []) {
@@ -49,14 +75,7 @@ class StoryStateRebuilder
             }
         }
 
-        return new StoryStateRebuildResult(
-            currentVersion: $current->version,
-            currentChecksum: $current->checksum,
-            rebuiltChecksum: $this->storyState->checksum($rebuilt),
-            replayedEventCount: $events->count(),
-            rebuiltState: $rebuilt,
-            changes: $this->storyState->diff($current->state, $rebuilt),
-        );
+        return $rebuilt;
     }
 
     /** @return array<int, array<string, mixed>> */

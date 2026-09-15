@@ -8,7 +8,10 @@ use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
+use App\Enums\ForeshadowingImportance;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
+use App\Enums\MemoryStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
@@ -20,11 +23,13 @@ use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateEmbeddingJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Character;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\Memory;
 use App\Models\Novel;
@@ -37,6 +42,7 @@ use App\Models\User;
 use App\Models\Volume;
 use App\Services\MemoryUpdater;
 use App\Services\NarrativeStyleProfile;
+use App\Services\ProjectionRebuilder;
 use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -55,8 +61,8 @@ function chapterPipelineBaseline(): array
     return require __DIR__.'/../Fixtures/chapter_pipeline_quality_baseline.php';
 }
 
-/** @return array{novel: Novel, bible: NovelBible, character: Character} */
-function chapterPipelineNovel(): array
+/** @return array{novel: Novel, bible: NovelBible, character: Character, foreshadowing: Foreshadowing|null} */
+function chapterPipelineNovel(bool $withForeshadowing = false): array
 {
     $baseline = chapterPipelineBaseline();
     $novel = Novel::factory()->create([
@@ -82,10 +88,20 @@ function chapterPipelineNovel(): array
         'name' => '林舟',
         'current_state' => ['location' => '城内'],
     ]);
+    $foreshadowing = $withForeshadowing
+        ? Foreshadowing::factory()->for($novel)->create([
+            'title' => '铜盘上的潮痕',
+            'promised_payoff' => '潮痕最终指出灯塔暗门并让林舟打开入口。',
+            'importance' => ForeshadowingImportance::Critical,
+            'status' => ForeshadowingStatus::Idea,
+            'due_from_chapter' => 1,
+            'due_to_chapter' => 3,
+        ])
+        : null;
     app(InitializeNovelStateAction::class)->handle($novel);
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
-    return compact('novel', 'bible', 'character');
+    return compact('novel', 'bible', 'character', 'foreshadowing');
 }
 
 function assertChapterPipelineQualityBaseline(Chapter $chapter): void
@@ -139,7 +155,7 @@ function assertFrozenPipelineStyle(Chapter $chapter, NovelBible $bible): void
             ->unique()->values()->all())->toBe([$checksum]);
 }
 
-function runQueuedChapterPipeline(): void
+function runQueuedChapterPipeline(?array &$handled = null): void
 {
     $jobClasses = [
         PlanChapterJob::class,
@@ -149,7 +165,7 @@ function runQueuedChapterPipeline(): void
         ReviewChapterJob::class,
         RewriteChapterJob::class,
     ];
-    $handled = array_fill_keys($jobClasses, 0);
+    $handled ??= array_fill_keys($jobClasses, 0);
 
     for ($iteration = 0; $iteration < 30; $iteration++) {
         $nextJob = null;
@@ -300,6 +316,85 @@ test('one trigger performs a targeted scene rewrite and revalidates fresh downst
     assertFrozenPipelineStyle($chapter, $fixture['bible']);
 });
 
+test('one foreshadowing crosses the full chapter pipeline from idea to paid off and feeds the next chapter', function () {
+    $fixture = chapterPipelineNovel(withForeshadowing: true);
+    $foreshadowing = $fixture['foreshadowing'];
+    $provider = new ChapterPipelineFixtureProvider(
+        $fixture['character']->getKey(),
+        chapterPipelineBaseline(),
+        [ReviewDecision::Pass, ReviewDecision::Pass, ReviewDecision::Pass],
+        $foreshadowing->getKey(),
+    );
+    app()->instance(AiProvider::class, $provider);
+    Queue::fake();
+    $handled = null;
+
+    Livewire::test(ViewNovel::class, ['record' => $fixture['novel']->getRouteKey()])
+        ->callAction('startAutoGenerate')
+        ->assertNotified('自动生成已开启，章节流水线已启动');
+
+    $expected = [
+        1 => [EventType::ForeshadowingPlanted, ForeshadowingStatus::Planted, 0],
+        2 => [EventType::ForeshadowingReinforced, ForeshadowingStatus::Reinforced, 1],
+        3 => [EventType::ForeshadowingPaidOff, ForeshadowingStatus::PaidOff, 1],
+    ];
+
+    foreach ($expected as $sequence => [$eventType, $status, $reinforceCount]) {
+        runQueuedChapterPipeline($handled);
+        $chapter = $fixture['novel']->chapters()->where('sequence', $sequence)->sole();
+        $review = Review::query()
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+            ->latest('id')
+            ->firstOrFail();
+        $contextRun = $chapter->generationRuns()
+            ->where('stage', GenerationStage::SceneGeneration)
+            ->orderBy('id')
+            ->firstOrFail();
+
+        expect($chapter->fresh()->status)->toBe(ChapterStatus::Review)
+            ->and($review->decision)->toBe(ReviewDecision::Pass)
+            ->and($fixture['novel']->storyEvents()->count())->toBe($sequence - 1)
+            ->and($fixture['novel']->fresh()->canonicalStateVersion->version)->toBe($sequence - 1)
+            ->and($contextRun->state_version)->toBe($sequence - 1)
+            ->and(data_get($contextRun->context_snapshot, 'l0.foreshadowing_contract.actions.0.content_status'))
+            ->toBe(match ($sequence) {
+                1 => ForeshadowingStatus::Idea->value,
+                2 => ForeshadowingStatus::Planted->value,
+                3 => ForeshadowingStatus::Reinforced->value,
+            });
+
+        Livewire::test(ViewNovelChapter::class, [
+            'record' => $fixture['novel']->getRouteKey(),
+            'chapter' => $chapter->getRouteKey(),
+        ])->callAction('commitCanonical')->assertNotified('章节已提交为正式版本');
+
+        $novel = $fixture['novel']->fresh();
+        (new RefreshNovelProjectionJob($novel->getKey(), $novel->canonical_state_version_id))
+            ->handle(app(ProjectionRebuilder::class));
+        (new UpdateMemoryJob($chapter->getKey()))->handle(app(MemoryUpdater::class));
+
+        expect($chapter->fresh()->status)->toBe(ChapterStatus::Canonical)
+            ->and($novel->canonicalStateVersion->version)->toBe($sequence)
+            ->and(data_get($novel->canonicalStateVersion->state, "foreshadowings.{$foreshadowing->getKey()}.status"))->toBe($status->value)
+            ->and(data_get($novel->canonicalStateVersion->state, "foreshadowings.{$foreshadowing->getKey()}.reinforce_count"))->toBe($reinforceCount)
+            ->and($foreshadowing->fresh()->status)->toBe($status)
+            ->and($foreshadowing->fresh()->reinforce_count)->toBe($reinforceCount)
+            ->and($chapter->storyEvents()->active()->sole()->event_type)->toBe($eventType)
+            ->and(Memory::query()->where('novel_id', $novel->getKey())
+                ->where('source_type', 'story_event')
+                ->where('source_id', $chapter->storyEvents()->active()->sole()->getKey())
+                ->where('status', MemoryStatus::Active)
+                ->exists())->toBeTrue();
+    }
+
+    expect($foreshadowing->fresh()->setup_chapter_id)->toBe(
+        $fixture['novel']->chapters()->where('sequence', 1)->value('id'),
+    )->and($foreshadowing->fresh()->payoff_chapter_id)->toBe(
+        $fixture['novel']->chapters()->where('sequence', 3)->value('id'),
+    )->and(app(ProjectionRebuilder::class)->inspect($fixture['novel']->fresh())->isHealthy())->toBeTrue()
+        ->and(Memory::query()->where('novel_id', $fixture['novel']->getKey())->where('status', MemoryStatus::Active)->count())->toBe(3);
+});
+
 final class ChapterPipelineFixtureProvider implements AiProvider
 {
     /** @var array<int, AiRequest> */
@@ -312,6 +407,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         private readonly int $characterId,
         private readonly array $baseline,
         private readonly array $reviewDecisions,
+        private readonly ?int $foreshadowingId = null,
     ) {}
 
     public function generate(AiRequest $request): AiResponse
@@ -319,7 +415,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         $this->requests[] = $request;
         $stage = (string) data_get($request->metadata, 'stage');
         $payload = match ($stage) {
-            AiStage::Planner->value => $this->plan(),
+            AiStage::Planner->value => $this->plan((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Writer->value => $this->scene((int) data_get($request->metadata, 'scene_id')),
             AiStage::Assembler->value => $this->assembly((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Extractor->value => $this->events((int) data_get($request->metadata, 'chapter_id')),
@@ -350,8 +446,10 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     }
 
     /** @return array<string, mixed> */
-    private function plan(): array
+    private function plan(int $chapterId): array
     {
+        $chapterSequence = Chapter::query()->findOrFail($chapterId)->sequence;
+
         return [
             'chapter_function' => '迫使主角离开安全区',
             'arc_contribution' => '推进灯塔主线',
@@ -366,7 +464,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'must_not_reveal' => ['幕后主使身份'],
             'required_facts' => [],
             'forbidden_conflicts' => [],
-            'due_foreshadowings' => [],
+            'foreshadowing_actions' => $this->foreshadowingAction($chapterSequence),
             'scene_plans' => collect($this->baseline['scenes'])->map(fn (array $scene, int $index): array => [
                 'goal' => $scene['goal'],
                 'conflict' => $scene['conflict'],
@@ -377,7 +475,9 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'pov_character_id' => $this->characterId,
                 'location' => $scene['location'],
                 'time_anchor' => $scene['time_anchor'],
-                'transition_from_previous' => $index === 0 ? null : '承接上一场景的出港行动',
+                'transition_from_previous' => $index === 0
+                    ? ($chapterSequence > 1 ? '承接上一章抵达灯塔后的行动。' : null)
+                    : '承接上一场景的出港行动',
             ])->all(),
         ];
     }
@@ -386,7 +486,9 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     private function scene(int $sceneId): array
     {
         $scene = Scene::query()->findOrFail($sceneId);
-        $content = $this->baseline['scenes'][$scene->sequence - 1]['content'];
+        $content = $this->foreshadowingId !== null && $scene->sequence === 1
+            ? '我冲进旧港，'.$this->foreshadowingEvidence($scene->chapter->sequence)
+            : $this->baseline['scenes'][$scene->sequence - 1]['content'];
 
         return [
             'content' => $content,
@@ -394,6 +496,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'declared_events' => [],
             'uncertainties' => [],
             'self_check' => $this->coverage($content),
+            'foreshadowing_coverage' => $this->foreshadowingCoverage($scene),
         ];
     }
 
@@ -412,6 +515,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'scene_coverage' => $scenes->map(fn (Scene $scene): array => [
                 'scene_id' => $scene->getKey(),
                 ...$this->coverage((string) $scene->currentArtifact?->content),
+                'foreshadowing_coverage' => $this->foreshadowingCoverage($scene),
             ])->all(),
             'introduced_major_facts' => [],
         ];
@@ -431,6 +535,27 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             ->orderBy('sequence')
             ->firstOrFail()
             ->currentArtifact?->content;
+
+        if ($this->foreshadowingId !== null) {
+            $chapter = Chapter::query()->findOrFail($chapterId);
+            $scene = $chapter->scenes()->orderBy('sequence')->firstOrFail();
+
+            return ['events' => [[
+                'event_type' => $this->foreshadowingEventType($chapter->sequence)->value,
+                'subject_type' => 'foreshadowing',
+                'subject_id' => (string) $this->foreshadowingId,
+                'payload' => '{}',
+                'evidence' => [[
+                    'artifact_id' => $draft->getKey(),
+                    'scene_id' => $scene->getKey(),
+                    'quote' => $this->foreshadowingEvidence($chapter->sequence),
+                    'start_offset' => null,
+                    'end_offset' => null,
+                ]],
+                'story_time' => "第{$chapter->sequence}日夜晚",
+                'confidence' => 0.98,
+            ]]];
+        }
 
         return ['events' => [[
             'event_type' => EventType::CharacterMoved->value,
@@ -492,6 +617,14 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                         : '全量检查未发现需要报告的问题。',
                 ]])
                 ->all(),
+            'foreshadowing_audits' => $this->foreshadowingId === null ? [] : [[
+                'foreshadowing_id' => $this->foreshadowingId,
+                'action' => $this->foreshadowingActionName(Chapter::query()->findOrFail($chapterId)->sequence),
+                'target_scene_sequence' => 1,
+                'status' => 'fulfilled',
+                'summary' => '正文、Coverage 和 Event Candidate 已共同完成本章冻结动作。',
+                'evidence' => $this->foreshadowingEvidence(Chapter::query()->findOrFail($chapterId)->sequence),
+            ]],
             'findings' => $findings,
         ];
     }
@@ -519,5 +652,71 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'turn' => $fulfilled,
             'outcome' => $fulfilled,
         ];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function foreshadowingAction(int $chapterSequence): array
+    {
+        if ($this->foreshadowingId === null) {
+            return [];
+        }
+
+        return [[
+            'foreshadowing_id' => $this->foreshadowingId,
+            'action' => $this->foreshadowingActionName($chapterSequence),
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => match ($chapterSequence) {
+                1 => '正文首次写出铜盘潮痕亮起。',
+                2 => '正文写出潮痕延伸并提供新的方向信息。',
+                3 => '正文写出林舟依照潮痕打开灯塔暗门。',
+            },
+            'reason' => null,
+        ]];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function foreshadowingCoverage(Scene $scene): array
+    {
+        if ($this->foreshadowingId === null || $scene->sequence !== 1) {
+            return [];
+        }
+
+        return [[
+            'foreshadowing_id' => $this->foreshadowingId,
+            'action' => $this->foreshadowingActionName($scene->chapter->sequence),
+            'status' => 'fulfilled',
+            'evidence' => $this->foreshadowingEvidence($scene->chapter->sequence),
+        ]];
+    }
+
+    private function foreshadowingActionName(int $chapterSequence): string
+    {
+        return match ($chapterSequence) {
+            1 => 'plant',
+            2 => 'reinforce',
+            3 => 'pay_off',
+        };
+    }
+
+    private function foreshadowingEventType(int $chapterSequence): EventType
+    {
+        return match ($chapterSequence) {
+            1 => EventType::ForeshadowingPlanted,
+            2 => EventType::ForeshadowingReinforced,
+            3 => EventType::ForeshadowingPaidOff,
+        };
+    }
+
+    private function foreshadowingEvidence(int $chapterSequence): string
+    {
+        if ($this->foreshadowingId === null) {
+            return '';
+        }
+
+        return match ($chapterSequence) {
+            1 => '潮痕在铜盘边缘第一次亮起。',
+            2 => '潮痕延伸成通往暗门的箭头。',
+            3 => '林舟按下潮痕指向的石钮，暗门轰然开启。',
+        };
     }
 }

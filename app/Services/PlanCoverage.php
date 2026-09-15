@@ -190,7 +190,7 @@ final class PlanCoverage
         return $actual === $keys;
     }
 
-    private static function resolveExactEvidence(string $content, string $evidence): string
+    public static function resolveExactEvidence(string $content, string $evidence): string
     {
         $evidence = trim($evidence);
 

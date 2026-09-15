@@ -12,6 +12,7 @@ final readonly class ProjectionHealth
      * @param  array<int, array<string, mixed>>  $characterStates
      * @param  array<int, array<string, mixed>>  $worldEntityStates
      * @param  array<int, string>  $foreshadowingStatuses
+     * @param  array<int, array{status: string, reinforce_count: int, setup_chapter_id: int|null, payoff_chapter_id: int|null}>  $foreshadowingProjections
      */
     public function __construct(
         public int $stateVersion,
@@ -25,6 +26,7 @@ final readonly class ProjectionHealth
         public array $characterStates,
         public array $worldEntityStates,
         public array $foreshadowingStatuses,
+        public array $foreshadowingProjections,
     ) {}
 
     public function driftCount(): int

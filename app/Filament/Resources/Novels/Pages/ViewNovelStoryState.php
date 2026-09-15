@@ -174,6 +174,7 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
                         $data['path'],
                         json_decode($data['value'], true, flags: JSON_THROW_ON_ERROR),
                         $data['reason'],
+                        auth()->id(),
                     );
 
                     $this->getRecord()->refresh();

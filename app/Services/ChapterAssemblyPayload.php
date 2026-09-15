@@ -25,10 +25,11 @@ final class ChapterAssemblyPayload
                     'items' => [
                         'type' => 'object',
                         'additionalProperties' => false,
-                        'required' => ['scene_id', ...PlanCoverage::ELEMENTS],
+                        'required' => ['scene_id', ...PlanCoverage::ELEMENTS, 'foreshadowing_coverage'],
                         'properties' => [
                             'scene_id' => ['type' => 'integer', 'minimum' => 1],
                             ...$coverage['properties'],
+                            'foreshadowing_coverage' => ForeshadowingCoverage::schema(),
                         ],
                     ],
                 ],
@@ -42,7 +43,7 @@ final class ChapterAssemblyPayload
      * @param  Collection<int, GenerationArtifact>  $sourceArtifacts
      * @return array<string, mixed>
      */
-    public static function validate(array $payload, Chapter $chapter, Collection $sourceArtifacts): array
+    public static function validate(array $payload, Chapter $chapter, Collection $sourceArtifacts, array $foreshadowingContract = [], bool $allowCoverageUpgrade = false): array
     {
         if (! self::hasExactKeys($payload, ['content', 'scene_coverage', 'introduced_major_facts'])) {
             throw ValidationException::withMessages(['assembly' => 'Assembly Payload 必须只包含 content、scene_coverage 和 introduced_major_facts。']);
@@ -76,19 +77,30 @@ final class ChapterAssemblyPayload
         $findings = [];
 
         foreach ($validated['scene_coverage'] as $index => $row) {
-            if (! is_array($row) || ! self::hasExactKeys($row, ['scene_id', ...PlanCoverage::ELEMENTS])) {
-                throw ValidationException::withMessages(["scene_coverage.{$index}" => 'Scene Coverage 必须包含 scene_id、goal、conflict、turn 和 outcome。']);
+            if (! is_array($row) || ! self::hasExactKeys($row, ['scene_id', ...PlanCoverage::ELEMENTS, 'foreshadowing_coverage'])) {
+                throw ValidationException::withMessages(["scene_coverage.{$index}" => 'Scene Coverage 必须包含 scene_id、goal、conflict、turn、outcome 和 foreshadowing_coverage。']);
             }
 
             $sceneId = (int) $row['scene_id'];
             $coverage = PlanCoverage::validate(
-                collect($row)->except('scene_id')->all(),
+                collect($row)->except(['scene_id', 'foreshadowing_coverage'])->all(),
                 $validated['content'],
                 "scene_coverage.{$index}",
             );
             $sourceCoverage = data_get($sourceByScene->get($sceneId)?->data, 'self_check');
+            $foreshadowingExpectations = ForeshadowingCoverage::expectationsForScene(
+                $foreshadowingContract,
+                (int) $scenes[$index]->sequence,
+            );
+            $foreshadowingCoverage = ForeshadowingCoverage::validate(
+                $row['foreshadowing_coverage'],
+                $validated['content'],
+                $foreshadowingExpectations,
+                "scene_coverage.{$index}.foreshadowing_coverage",
+            );
+            $sourceForeshadowingCoverage = data_get($sourceByScene->get($sceneId)?->data, 'foreshadowing_coverage');
 
-            if (is_array($sourceCoverage)) {
+            if (! $allowCoverageUpgrade && is_array($sourceCoverage)) {
                 foreach (PlanCoverage::ELEMENTS as $element) {
                     $sourceStatus = data_get($sourceCoverage, "{$element}.status");
 
@@ -96,6 +108,20 @@ final class ChapterAssemblyPayload
                         && $coverage[$element]['status'] === 'fulfilled') {
                         throw ValidationException::withMessages([
                             "scene_coverage.{$index}.{$element}" => 'Assembly 不得把 Scene Draft 中缺失或反转的计划项改写为 fulfilled。',
+                        ]);
+                    }
+                }
+            }
+
+            if (! $allowCoverageUpgrade && is_array($sourceForeshadowingCoverage)) {
+                foreach ($sourceForeshadowingCoverage as $actionIndex => $sourceItem) {
+                    $sourceStatus = is_array($sourceItem) ? ($sourceItem['status'] ?? null) : null;
+                    $assembledStatus = data_get($foreshadowingCoverage, "{$actionIndex}.status");
+
+                    if (in_array($sourceStatus, ['missing', 'contradicted'], true)
+                        && $assembledStatus === 'fulfilled') {
+                        throw ValidationException::withMessages([
+                            "scene_coverage.{$index}.foreshadowing_coverage.{$actionIndex}" => 'Assembly 不得把 Scene Draft 中缺失或反转的伏笔动作改写为 fulfilled。',
                         ]);
                     }
                 }
@@ -111,8 +137,18 @@ final class ChapterAssemblyPayload
                     PlanCoverage::expectations($scene?->only(PlanCoverage::ELEMENTS) ?? [], $scenePlan),
                     'assembly_coverage',
                 ),
+                ...ForeshadowingCoverage::findings(
+                    $sceneId,
+                    $foreshadowingCoverage,
+                    $foreshadowingExpectations,
+                    'assembly_foreshadowing_coverage',
+                ),
             ];
-            $validated['scene_coverage'][$index] = ['scene_id' => $sceneId, ...$coverage];
+            $validated['scene_coverage'][$index] = [
+                'scene_id' => $sceneId,
+                ...$coverage,
+                'foreshadowing_coverage' => $foreshadowingCoverage,
+            ];
         }
 
         $validated['plan_findings'] = $findings;

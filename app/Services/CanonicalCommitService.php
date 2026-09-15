@@ -12,6 +12,7 @@ use App\Enums\FactSourceType;
 use App\Enums\FactStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Fact;
@@ -90,6 +91,7 @@ class CanonicalCommitService
         }, 3);
 
         UpdateMemoryJob::dispatch($data->chapterId)->afterCommit();
+        RefreshNovelProjectionJob::dispatch($stateVersion->novel_id, $stateVersion->getKey())->afterCommit();
 
         if ($committed) {
             $this->checkNextAction->handle($stateVersion->novel, $data->chapterId);

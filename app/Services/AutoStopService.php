@@ -50,7 +50,11 @@ class AutoStopService
             return;
         }
 
-        $errorCode = $exception instanceof AiProviderException ? $exception->errorCode : null;
+        $errorCode = match (true) {
+            $exception instanceof AiProviderException => $exception->errorCode,
+            $exception instanceof GenerationPreflightException => $exception->reason,
+            default => null,
+        };
         [$code, $reason, $action] = match (true) {
             $exception instanceof AiProviderException && $exception->retryable => ['provider_retry_exhausted', 'Provider 重试次数已耗尽。', '检查 Provider 状态后从失败阶段重试。'],
             $errorCode === 'rewrite_exhausted' => ['rewrite_exhausted', 'Rewrite 次数已耗尽。', '人工编辑章节或调整 Review Findings。'],
@@ -58,6 +62,7 @@ class AutoStopService
             $errorCode === 'state_version_conflict' => ['state_version_conflict', 'Canonical Story State 版本已经变化。', '基于最新 Story State 重建 Context 后恢复。'],
             $errorCode === 'blocked_review' => ['review_blocked', '存在被审校阻塞的章节。', '打开 Review Inbox 处理阻塞章节。'],
             in_array($errorCode, ['current_volume_missing', 'volume_gate_failed'], true) => ['volume_gate', '当前分卷不允许继续自动生成。', '检查分卷状态与下一章规划。'],
+            $errorCode === 'critical_foreshadowing_overdue' => ['critical_foreshadowing_overdue', 'Critical 伏笔已经逾期，自动 Planner 已停止。', '在当前章节建立明确兑现的修复计划，或先完成人工授权的延期/放弃。'],
             in_array($errorCode, ['ending_audit_block', 'critical_closure_debt'], true) => ['ending_audit_block', 'Ending Audit 阻止继续生成。', '处理关键 Closure Debt 后重新检查。'],
             default => [null, null, null],
         };

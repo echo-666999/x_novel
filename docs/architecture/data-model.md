@@ -244,6 +244,37 @@ CanonicalCommitService
 
 才能更新正式状态。
 
+### 8.1 Foreshadowing 的权威状态与窗口
+
+`story_state_versions.state.foreshadowings` 与 Active Story Events 是正式伏笔进度的权威来源；`foreshadowings` 表是用于编辑、查询和 UI 的领域投影。发生冲突时以 Canonical Story State 为准，并把表记录标记为投影漂移，不得用表值反向覆盖正式状态。
+
+`foreshadowings.status` 只允许表达内容生命周期：
+
+```text
+idea
+planted
+reinforced
+paid_off
+abandoned
+```
+
+`due_from_chapter`、`due_to_chapter` 是包含首尾的兑现窗口。令 `C` 为最新 Canonical 章节序号、`N=C+1`，则非终态伏笔按 `N < due_from`、`due_from <= N <= due_to`、`N > due_to` 分别计算为 `upcoming / due / overdue`。它不是持久化内容状态；terminal 记录不再参与到期或逾期提醒。活跃草稿不得推进 `C`。
+
+`foreshadowings.management_history` 是低频 JSONB 管理审计，只记录不产生正文 Story Event 的人工元数据操作。当前用于保存延期的原因、旧/新窗口、操作时 Canonical 章节、State Version、操作者和时间。人工放弃会改变 Canonical 内容状态，因此通过 `ManualCorrection` Event 和新 State Version 留痕，不写成虚构的正文伏笔事件。该审计历史不能覆盖 Canonical State 或 Active Story Events。
+
+现有枚举、测试或数据中的 `due` 是兼容迁移对象。实施分离状态时必须先保证旧值可读、可报告，再迁移为其真实内容状态；迁移程序不能在没有 Active Events、Canonical State 或人工证据时猜测应为 `idea`、`planted` 或 `reinforced`。
+
+领域投影至少应能从 Canonical State 恢复：
+
+```text
+status
+reinforce_count
+setup_chapter_id
+payoff_chapter_id
+```
+
+时限状态必须按上述公式实时计算，不另存为 Canonical 内容事实，也不得把它重新混入 `status`。投影刷新失败不回滚已经成功的 Canonical Commit，必须可检测、重试和重建。
+
 ---
 
 ## 9. Story State

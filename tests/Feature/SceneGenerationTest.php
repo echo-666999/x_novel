@@ -9,6 +9,7 @@ use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
@@ -17,12 +18,15 @@ use App\Enums\SceneStatus;
 use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
 use App\Services\DraftLengthPolicy;
+use App\Services\ForeshadowingCoverage;
+use App\Services\ForeshadowingCoverageEvidenceRepairer;
 use App\Services\SceneDraftPayload;
 use App\Services\SceneDraftStructureRepairer;
 use App\Services\SceneGenerator;
@@ -71,7 +75,7 @@ function sceneSelfCheck(string $content, array $overrides = []): array
     ];
 }
 
-function sceneResponse(string $content, array $delta = [], ?array $selfCheck = null): AiResponse
+function sceneResponse(string $content, array $delta = [], ?array $selfCheck = null, array $foreshadowingCoverage = []): AiResponse
 {
     $payload = [
         'content' => $content,
@@ -79,6 +83,7 @@ function sceneResponse(string $content, array $delta = [], ?array $selfCheck = n
         'declared_events' => [],
         'uncertainties' => [],
         'self_check' => $selfCheck ?? sceneSelfCheck($content),
+        'foreshadowing_coverage' => $foreshadowingCoverage,
     ];
 
     return new AiResponse(
@@ -105,6 +110,36 @@ function sceneCoverageResponse(array $coverage): AiResponse
         providerRequestId: 'coverage-repair-request',
         model: 'writer-test',
     );
+}
+
+function sceneForeshadowingAction(array $fixture, int $sceneSequence = 1): Foreshadowing
+{
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'title' => '染血地图',
+        'promised_payoff' => '地图最终指向潮汐门。',
+        'status' => ForeshadowingStatus::Planted,
+        'due_from_chapter' => 18,
+        'due_to_chapter' => 20,
+    ]);
+    $fixture['plan']->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => $sceneSequence,
+        'acceptance_criteria' => '正文明确地图指向潮汐门。',
+        'reason' => null,
+    ]]]);
+
+    return $foreshadowing;
+}
+
+function sceneForeshadowingCoverage(Foreshadowing $foreshadowing, string $status, ?string $evidence): array
+{
+    return [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'status' => $status,
+        'evidence' => $evidence,
+    ]];
 }
 
 function truncatedCoverageResponse(): AiResponse
@@ -166,6 +201,7 @@ test('scene draft schema fixes plan coverage while keeping dynamic state objects
         ->and(data_get($schema, 'properties.declared_events.items.type'))->toBe('string')
         ->and(data_get($schema, 'properties.self_check.type'))->toBe('object')
         ->and(data_get($schema, 'properties.self_check.required'))->toBe(['goal', 'conflict', 'turn', 'outcome'])
+        ->and(data_get($schema, 'properties.foreshadowing_coverage.items.required'))->toBe(['foreshadowing_id', 'action', 'status', 'evidence'])
         ->and(data_get($schema, 'properties.self_check.properties.outcome.properties.status.enum'))->toBe(['fulfilled', 'missing', 'contradicted']);
 
     $payload = SceneDraftPayload::validate([
@@ -174,11 +210,107 @@ test('scene draft schema fixes plan coverage while keeping dynamic state objects
         'declared_events' => ['{"type":"character_moved","subject":"lin_zhou"}'],
         'uncertainties' => [],
         'self_check' => sceneSelfCheck('林舟进入灯塔。'),
+        'foreshadowing_coverage' => [],
     ]);
 
     expect(data_get($payload, 'temporary_state_delta.characters.lin_zhou.location'))->toBe('灯塔')
         ->and(data_get($payload, 'declared_events.0.type'))->toBe('character_moved')
         ->and(data_get($payload, 'self_check.outcome.status'))->toBe('fulfilled');
+});
+
+test('scene foreshadowing coverage validates the assigned action and exact evidence', function () {
+    $content = '林舟摊开染血地图，暗红纹路最终指向潮汐门。';
+    $expectations = [[
+        'foreshadowing_id' => 31,
+        'action' => 'pay_off',
+        'acceptance_criteria' => '正文明确地图指向潮汐门。',
+    ]];
+
+    $coverage = ForeshadowingCoverage::validate([[
+        'foreshadowing_id' => 31,
+        'action' => 'pay_off',
+        'status' => 'fulfilled',
+        'evidence' => '暗红纹路最终指向潮汐门',
+    ]], $content, $expectations, 'foreshadowing_coverage');
+
+    expect(data_get($coverage, '0.evidence'))->toBe('暗红纹路最终指向潮汐门');
+});
+
+test('scene foreshadowing coverage rejects another scene or action target', function () {
+    $content = '地图边缘泛起暗红微光。';
+    $expectations = [['foreshadowing_id' => 31, 'action' => 'pay_off']];
+
+    expect(fn () => ForeshadowingCoverage::validate([[
+        'foreshadowing_id' => 32,
+        'action' => 'reinforce',
+        'status' => 'fulfilled',
+        'evidence' => $content,
+    ]], $content, $expectations, 'foreshadowing_coverage'))
+        ->toThrow(ValidationException::class, '不能引用其他 Scene、其他伏笔或其他动作');
+});
+
+test('missing scene foreshadowing action creates an automatic rewrite finding', function () {
+    $fixture = sceneGenerationFixture(1);
+    $foreshadowing = sceneForeshadowingAction($fixture);
+    $content = '地图边缘泛起暗红微光，但没有显出目的地。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneResponse(
+        $content,
+        foreshadowingCoverage: sceneForeshadowingCoverage($foreshadowing, 'missing', null),
+    )));
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+    $finding = collect($artifact->data['plan_findings'])->firstWhere('code', 'FORESHADOWING_COVERAGE_MISSING');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding['foreshadowing_id'])->toBe($foreshadowing->getKey())
+        ->and($finding['foreshadowing_action'])->toBe('pay_off')
+        ->and($finding['acceptance_criteria'])->toBe('正文明确地图指向潮汐门。')
+        ->and($finding['auto_fixable'])->toBeTrue()
+        ->and($finding['source'])->toBe('scene_foreshadowing_coverage');
+});
+
+test('scene generator repairs only invalid foreshadowing evidence', function () {
+    $fixture = sceneGenerationFixture(1);
+    $foreshadowing = sceneForeshadowingAction($fixture);
+    $content = '林舟确认染血地图指向潮汐门。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '地图指出了潮汐门');
+    $valid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '染血地图指向潮汐门');
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, foreshadowingCoverage: $invalid))
+        ->enqueue(sceneCoverageResponse($valid));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect(data_get($artifact->data, 'foreshadowing_coverage.0'))->toMatchArray([
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'status' => 'fulfilled',
+        'evidence' => '染血地图指向潮汐门',
+    ])->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe(ForeshadowingCoverageEvidenceRepairer::PROMPT_VERSION);
+});
+
+test('foreshadowing evidence repair cannot change the declared action result', function () {
+    $fixture = sceneGenerationFixture(1);
+    $canonicalStateVersionId = $fixture['novel']->fresh()->canonical_state_version_id;
+    $foreshadowing = sceneForeshadowingAction($fixture);
+    $content = '林舟确认染血地图指向潮汐门。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '地图指出了潮汐门');
+    $changed = sceneForeshadowingCoverage($foreshadowing, 'missing', null);
+    app()->instance(AiProvider::class, (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, foreshadowingCoverage: $invalid))
+        ->enqueue(sceneCoverageResponse($changed)));
+
+    expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey()))
+        ->toThrow(ValidationException::class, '不得改变数组顺序、伏笔 ID、动作或原 status');
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::SceneDraft)->count())->toBe(0);
+    expect($fixture['novel']->fresh()->canonical_state_version_id)->toBe($canonicalStateVersionId)
+        ->and($fixture['novel']->storyEvents()->count())->toBe(0);
 });
 
 test('missing or contradicted scene coverage creates stable localized findings', function (string $status, string $code, ?string $evidence) {
@@ -220,6 +352,7 @@ test('scene coverage evidence must quote the generated scene exactly', function 
         'declared_events' => [],
         'uncertainties' => [],
         'self_check' => $selfCheck,
+        'foreshadowing_coverage' => [],
     ]))
         ->toThrow(ValidationException::class, '必须逐字来自当前正文');
 });
@@ -234,6 +367,7 @@ test('scene coverage resolves whitespace-only formatting differences to an exact
         'self_check' => sceneSelfCheck($content, [
             'turn' => ['status' => 'fulfilled', 'evidence' => '林舟推开门。塔内一片漆黑。'],
         ]),
+        'foreshadowing_coverage' => [],
     ]);
 
     expect(data_get($payload, 'self_check.turn.evidence'))->toBe($content)
@@ -254,6 +388,7 @@ test('scene coverage resolves a high confidence transcription difference to an e
                 'evidence' => '林舟沿着生锈的螺旋楼梯一步步走上灯塔顶层，始终没有松开手里的钥匙。',
             ],
         ]),
+        'foreshadowing_coverage' => [],
     ]);
 
     expect(data_get($payload, 'self_check.turn.evidence'))->toBe('林舟沿着生锈的螺旋楼梯一步步走上灯塔顶层，始终没有松开手')
@@ -292,6 +427,7 @@ test('scene generator repairs malformed support fields without rewriting the pro
         'declared_events' => ['{"event":"林舟进入灯塔"}'],
         'uncertainties' => [],
         'self_check' => sceneSelfCheck($content),
+        'foreshadowing_coverage' => [],
     ];
     $fake = (new FakeAiProvider)
         ->enqueue(new AiResponse(
@@ -332,6 +468,7 @@ test('scene support field repair and coverage evidence repair can run in sequenc
         'self_check' => sceneSelfCheck($content, [
             'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
         ]),
+        'foreshadowing_coverage' => [],
     ];
     $fake = (new FakeAiProvider)
         ->enqueue(new AiResponse(
@@ -429,6 +566,7 @@ test('scene self check rejects an incomplete fixed schema', function () {
         'declared_events' => [],
         'uncertainties' => [],
         'self_check' => collect(sceneSelfCheck('林舟进入灯塔。'))->except('outcome')->all(),
+        'foreshadowing_coverage' => [],
     ];
 
     expect(fn () => SceneDraftPayload::validate($payload))
@@ -472,7 +610,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($scene->current_artifact_id)->toBe($artifact->getKey())
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->stage)->toBe(GenerationStage::SceneGeneration)
-        ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'l4', 'style_contract_checksum', 'scene_task', 'temporary_state'])
+        ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'l4', 'style_contract_checksum', 'foreshadowing_contract_checksum', 'scene_task', 'temporary_state'])
         ->and($run->bible_version)->toBe(1)
         ->and($run->input_hash)->toBe($expectedInputHash)
         ->and(data_get($run->context_snapshot, 'l4.checksum'))->toBe(data_get($run->context_snapshot, 'style_contract_checksum'));
@@ -483,7 +621,8 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and(data_get($run->context_snapshot, 'writing_constraints'))->not->toHaveKey('style_profile')
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and(data_get($run->context_snapshot, 'l4.primary_style.instruction'))->toContain('语言直接易读')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约');
 });
 
 test('scene snapshots keep the bible version frozen for the current chapter plan', function () {

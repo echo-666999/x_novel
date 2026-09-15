@@ -9,16 +9,22 @@ use App\Data\ContextRequest;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
+use App\Enums\EventType;
 use App\Enums\FactStatus;
+use App\Enums\ForeshadowingImportance;
+use App\Enums\ForeshadowingStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryArc;
+use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\WorldEntity;
 use App\Services\ContextBuilder;
@@ -81,7 +87,7 @@ test('context builder freezes l0 and the requested canonical l1 with trace metad
     ));
     $data = $snapshot->toArray();
 
-    expect($data['schema_version'])->toBe(2)
+    expect($data['schema_version'])->toBe(3)
         ->and($data['bible_version'])->toBe(3)
         ->and($data['style_contract_checksum'])->toBe($data['l4']['checksum'])
         ->and($data['state_version'])->toBe(0)
@@ -107,6 +113,125 @@ test('context builder freezes l0 and the requested canonical l1 with trace metad
         ->and(data_get($data, 'l4.constraints.hard_constraints'))->toBe(['魔法不能复活死者'])
         ->and($data['token_allocation']['sections'])->toHaveKeys(['l0', 'l1', 'l2', 'l4'])
         ->and($data['truncated_sections'])->toBe([]);
+});
+
+test('context builder freezes complete actionable foreshadowing contracts with canonical lineage and evidence', function () {
+    $fixture = contextFixture();
+    $arc = StoryArc::factory()->for($fixture['novel'])->create(['title' => '旧王遗产']);
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'title' => '染血地图',
+        'description' => '地图边缘藏有旧王印记。',
+        'promised_payoff' => '地图最终指向潮汐门。',
+        'due_from_chapter' => 18,
+        'due_to_chapter' => 20,
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Reinforced,
+        'owner_arc_id' => $arc->getKey(),
+    ]);
+    $unselected = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'title' => '未来王冠',
+        'due_from_chapter' => 80,
+        'due_to_chapter' => 100,
+    ]);
+    $state = $fixture['state']->state;
+    data_set($state, "foreshadowings.{$foreshadowing->getKey()}.status", ForeshadowingStatus::Planted->value);
+    $stateVersion = StoryStateVersion::factory()->for($fixture['novel'])->create([
+        'version' => 1,
+        'state' => $state,
+    ]);
+    $eventChapter = Chapter::factory()->for($fixture['novel'])->create([
+        'sequence' => 19,
+        'status' => ChapterStatus::Canonical,
+    ]);
+    $event = StoryEvent::factory()->for($fixture['novel'])->for($eventChapter)->create([
+        'event_type' => EventType::ForeshadowingPlanted,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $foreshadowing->getKey(),
+        'state_version' => 1,
+        'evidence' => [['artifact_id' => 91, 'scene_id' => null, 'quote' => '地图边缘露出暗红印记。']],
+    ]);
+    $fixture['plan']->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确地图指向潮汐门。',
+        'reason' => null,
+    ]]]);
+
+    $data = app(ContextBuilder::class)->build(new ContextRequest(
+        novelId: $fixture['novel']->getKey(),
+        chapterId: $fixture['chapter']->getKey(),
+        sceneId: null,
+        taskType: 'scene_generation',
+        bibleVersion: $fixture['bible']->version,
+        stateVersion: $stateVersion->version,
+        chapterPlanId: $fixture['plan']->getKey(),
+        tokenBudget: 10_000,
+        promptVersion: 'scene-writer-v12',
+        model: 'writer-test',
+    ))->toArray();
+    $contract = data_get($data, 'l0.foreshadowing_contract');
+    $action = data_get($contract, 'actions.0');
+
+    expect($data['foreshadowing_ids'])->toBe([$foreshadowing->getKey()])
+        ->and($data['foreshadowing_contract_checksum'])->toBe($contract['checksum'])
+        ->and($contract)->toMatchArray([
+            'schema_version' => 'foreshadowing-contract-v1',
+            'bible_version' => $fixture['bible']->version,
+            'state_version' => 1,
+            'chapter_plan_id' => $fixture['plan']->getKey(),
+            'chapter_plan_version' => $fixture['plan']->version,
+        ])
+        ->and($contract['checksum'])->toHaveLength(64)
+        ->and($action['title'])->toBe('染血地图')
+        ->and($action['description'])->toBe('地图边缘藏有旧王印记。')
+        ->and($action['promised_payoff'])->toBe('地图最终指向潮汐门。')
+        ->and($action['content_status'])->toBe(ForeshadowingStatus::Planted->value)
+        ->and($action['content_status_source'])->toBe('canonical_state')
+        ->and($action['timing_status'])->toBe('due')
+        ->and($action['due_window'])->toBe(['from_chapter' => 18, 'to_chapter' => 20])
+        ->and($action['importance'])->toBe(ForeshadowingImportance::Critical->value)
+        ->and($action['owner_arc'])->toBe(['id' => $arc->getKey(), 'title' => '旧王遗产'])
+        ->and(data_get($action, 'plan_action.action'))->toBe('pay_off')
+        ->and(data_get($action, 'latest_effective_event.story_event_id'))->toBe($event->getKey())
+        ->and(data_get($action, 'latest_effective_event.evidence.0.quote'))->toBe('地图边缘露出暗红印记。')
+        ->and(collect($contract['actions'])->pluck('foreshadowing_id')->all())->not->toContain($unselected->getKey());
+});
+
+test('critical foreshadowing contracts remain mandatory when memory and recent story exceed the budget', function () {
+    $fixture = contextFixture();
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'importance' => ForeshadowingImportance::Critical,
+        'status' => ForeshadowingStatus::Planted,
+        'due_from_chapter' => 20,
+        'due_to_chapter' => 20,
+    ]);
+    $fixture['plan']->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '在本章明确兑现。',
+        'reason' => null,
+    ]]]);
+    Chapter::factory()->for($fixture['novel'])->create([
+        'sequence' => 19,
+        'status' => ChapterStatus::Canonical,
+        'summary' => str_repeat('冗长的近期剧情', 500),
+    ]);
+
+    $full = app(ContextBuilder::class)->build(contextRequest($fixture));
+    $mandatory = $full->tokenAllocation->sections['l0']
+        + $full->tokenAllocation->sections['l1']
+        + $full->tokenAllocation->sections['l4'];
+    $tight = app(ContextBuilder::class)->build(contextRequest($fixture, $mandatory));
+
+    expect(data_get($tight->l0, 'foreshadowing_contract.actions.0.foreshadowing_id'))
+        ->toBe($foreshadowing->getKey())
+        ->and(data_get($tight->l0, 'foreshadowing_contract.actions.0.timing_status'))->toBe('due')
+        ->and($tight->foreshadowingContract['checksum'])->toBe($full->foreshadowingContract['checksum'])
+        ->and($tight->recentChapterIds)->toBe([])
+        ->and($tight->memoryIds)->toBe([])
+        ->and($tight->tokenAllocation->truncatedSections)->toContain('l2.recent_story');
 });
 
 test('l2 selects the configured canonical chapter window in chronological order', function () {

@@ -12,6 +12,8 @@ use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ForeshadowingPlanAction;
+use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
@@ -36,6 +38,8 @@ class ChapterPlanner
         private readonly ContextBuilder $contextBuilder,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRunLease $runLease,
+        private readonly ForeshadowingPlanningGate $foreshadowingPlanningGate,
+        private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -46,6 +50,8 @@ class ChapterPlanner
         if ($novel->status->value === 'paused') {
             throw new AiProviderException('novel_paused', '小说已暂停，不能开始新的规划阶段。', false);
         }
+
+        $this->foreshadowingPlanningGate->assertModelPlanningAllowed($chapter);
 
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Planner);
@@ -72,7 +78,8 @@ class ChapterPlanner
                 systemPrompt: $this->systemPrompt($novel),
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
-                    .'due_foreshadowings 只能使用 due_foreshadowings[].id，due_foreshadowings 为空时必须返回 []。'
+                    .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
+                    .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
                     .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。上下文：'
                     .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
@@ -222,7 +229,7 @@ class ChapterPlanner
             'active_arcs' => $novel->storyArcs()->where('status', 'active')->get()->map->only(['id', 'title', 'goal', 'stakes', 'beats', 'completion_conditions', 'progress'])->all(),
             'characters' => $novel->characters()->get()->map->only(['id', 'name', 'role', 'status', 'goals', 'knowledge'])->all(),
             'active_facts' => $novel->facts()->where('status', 'active')->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value', 'locked'])->all(),
-            'due_foreshadowings' => $novel->foreshadowings()->whereNotIn('status', ['paid_off', 'abandoned'])->where('due_from_chapter', '<=', $chapter->sequence)->get()->map->only(['id', 'title', 'description', 'promised_payoff', 'due_from_chapter', 'due_to_chapter', 'importance', 'status'])->all(),
+            'foreshadowings_requiring_action' => $this->foreshadowingContext($chapter),
             'recent_summaries' => $novel->chapters()->where('status', ChapterStatus::Canonical)->whereNotNull('summary')->latest('sequence')->limit(10)->get(['sequence', 'summary'])->reverse()->values()->all(),
             'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
         ];
@@ -249,9 +256,65 @@ class ChapterPlanner
         return $context;
     }
 
+    /** @return array<int, array<string, mixed>> */
+    private function foreshadowingContext(Chapter $chapter): array
+    {
+        $novel = $chapter->novel;
+        $foreshadowings = $novel->foreshadowings()
+            ->where('due_from_chapter', '<=', $chapter->sequence)
+            ->orderBy('due_to_chapter')
+            ->get()
+            ->reject(fn ($foreshadowing): bool => $this->foreshadowingLifecycleResolver
+                ->status($foreshadowing, $novel)
+                ->isTerminal());
+        $events = $novel->storyEvents()
+            ->where('status', 'active')
+            ->where('subject_type', 'foreshadowing')
+            ->whereIn('subject_id', $foreshadowings->modelKeys())
+            ->orderBy('id')
+            ->get()
+            ->groupBy(fn ($event): string => (string) $event->subject_id);
+
+        return $foreshadowings
+            ->map(function ($foreshadowing) use ($chapter, $events, $novel): array {
+                $status = $this->foreshadowingLifecycleResolver->status($foreshadowing, $novel);
+                $timing = ForeshadowingTimingStatus::forTargetChapter(
+                    $status,
+                    $foreshadowing->due_from_chapter,
+                    $foreshadowing->due_to_chapter,
+                    $chapter->sequence,
+                );
+
+                return [
+                    ...$foreshadowing->only([
+                        'id', 'title', 'description', 'promised_payoff', 'due_from_chapter',
+                        'due_to_chapter', 'importance', 'owner_arc_id', 'setup_chapter_id',
+                        'payoff_chapter_id', 'reinforce_count', 'notes',
+                    ]),
+                    'content_status' => $status->value,
+                    'content_status_source' => $this->foreshadowingLifecycleResolver->source($foreshadowing, $novel),
+                    'projection_status' => $foreshadowing->status->value,
+                    'timing_status' => $timing?->value,
+                    'allowed_model_actions' => ForeshadowingPlanAction::modelValuesForStatus($status),
+                    'important_events' => $events->get((string) $foreshadowing->getKey(), collect())
+                        ->map(fn ($event): array => [
+                            'id' => $event->getKey(),
+                            'chapter_id' => $event->chapter_id,
+                            'scene_id' => $event->scene_id,
+                            'event_type' => $event->event_type->value,
+                            'payload' => $event->payload,
+                            'evidence' => $event->evidence,
+                        ])
+                        ->all(),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
     private function systemPrompt(Novel $novel): string
     {
-        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。l4 是本次 Pipeline 唯一的 Style Contract：章节 tone 只能在其基调范围内形成局部变体，主文风决定主体表达，辅助文风不得覆盖主文风，POV 与时态不得改变。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。Scene outcome 必须是明确验收结果，并用 outcome_allowed 与 outcome_forbidden 消除行为边界歧义。';
+        $prompt = '你是 XNovel 章节规划器。只返回符合指定 Schema 的 JSON，不得编造任何实体 ID；所有自然语言内容必须使用简体中文。l4 是本次 Pipeline 唯一的 Style Contract：章节 tone 只能在其基调范围内形成局部变体，主文风决定主体表达，辅助文风不得覆盖主文风，POV 与时态不得改变。计划必须连续承接上一章正式结尾。若时间、地点或行动发生跳跃，必须在第一场景的 transition_from_previous 中写明正文要呈现的过渡过程，不得静默跳过。Scene outcome 必须是明确验收结果，并用 outcome_allowed 与 outcome_forbidden 消除行为边界歧义。foreshadowings_requiring_action 是本章必须明确处理的伏笔契约来源；只能按 allowed_model_actions 规划 plant、reinforce 或 pay_off，不得自行延期或放弃。';
 
         if ($novel->status->value === 'completing') {
             $prompt .= ' 当前处于收束阶段：不得新增核心人物、主线、硬世界规则或高重要度伏笔；计划必须推进结局契约或降低收束债务。';

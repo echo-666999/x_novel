@@ -20,6 +20,13 @@ test('a chapter plan stores executable planning data and casts structured fields
         'must_reveal' => ['真相'],
         'required_facts' => [12],
         'due_foreshadowings' => [8],
+        'foreshadowing_actions' => [[
+            'foreshadowing_id' => 9,
+            'action' => 'pay_off',
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => '正文揭示答案。',
+            'reason' => null,
+        ]],
         'status' => PlanStatus::Ready,
     ])->fresh();
 
@@ -30,9 +37,21 @@ test('a chapter plan stores executable planning data and casts structured fields
         ->and($plan->must_reveal)->toBe(['真相'])
         ->and($plan->required_facts)->toBe([12])
         ->and($plan->due_foreshadowings)->toBe([8])
+        ->and($plan->hasLegacyForeshadowingReferences())->toBeTrue()
+        ->and($plan->referencedForeshadowingIds())->toBe([8, 9])
+        ->and($plan->foreshadowingActionContracts())->toHaveCount(1)
         ->and($plan->scene_plans)->toHaveCount(1)
         ->and($plan->status)->toBe(PlanStatus::Ready)
         ->and($chapter->fresh()->latestPlan->is($plan))->toBeTrue();
+});
+
+test('the foreshadowing actions migration can be rolled back', function () {
+    expect(Schema::hasColumn('chapter_plans', 'foreshadowing_actions'))->toBeTrue();
+
+    $migration = require database_path('migrations/2026_09_15_100000_add_foreshadowing_actions_to_chapter_plans_table.php');
+    $migration->down();
+
+    expect(Schema::hasColumn('chapter_plans', 'foreshadowing_actions'))->toBeFalse();
 });
 
 test('plan version is unique inside a chapter and reusable by another chapter', function () {

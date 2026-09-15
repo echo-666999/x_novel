@@ -50,4 +50,14 @@ class GenerationPreflightException extends RuntimeException
     {
         return new self('active_workflow_exists', '该小说已有另一个活跃章节工作流。');
     }
+
+    /** @param array<int, string> $foreshadowings */
+    public static function criticalForeshadowingOverdue(array $foreshadowings): self
+    {
+        return new self(
+            'critical_foreshadowing_overdue',
+            '存在已逾期的 Critical 伏笔：'.implode('、', $foreshadowings)
+                .'。自动 Planner 已在调用模型前停止；请为当前章节人工建立包含兑现动作的修复计划，或先完成有原因记录的延期/放弃处理。',
+        );
+    }
 }

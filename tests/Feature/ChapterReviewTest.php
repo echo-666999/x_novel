@@ -10,6 +10,9 @@ use App\Data\StateFinding;
 use App\Data\StateValidationResult;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\EventType;
+use App\Enums\ForeshadowingImportance;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
@@ -20,6 +23,7 @@ use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
@@ -62,7 +66,7 @@ function reviewFixture(?Closure $draftDataFactory = null): array
     return compact('novel', 'chapter', 'draft');
 }
 
-function reviewResponse(string $decision = 'PASS', int $score = 90, array $findings = [], ?array $dimensionAudits = null): AiResponse
+function reviewResponse(string $decision = 'PASS', int $score = 90, array $findings = [], ?array $dimensionAudits = null, array $foreshadowingAudits = []): AiResponse
 {
     $dimensionAudits ??= collect(['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'])
         ->mapWithKeys(function (string $dimension) use ($findings): array {
@@ -74,7 +78,7 @@ function reviewResponse(string $decision = 'PASS', int $score = 90, array $findi
             ]];
         })
         ->all();
-    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'dimension_audits' => $dimensionAudits, 'findings' => $findings];
+    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'dimension_audits' => $dimensionAudits, 'foreshadowing_audits' => $foreshadowingAudits, 'findings' => $findings];
 
     return new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'review-request', model: 'review-test');
 }
@@ -110,6 +114,92 @@ function bindStateValidation(StateValidationResult $result): void
     app()->instance(StateValidator::class, $validator);
 }
 
+function reviewForeshadowingFixture(string $coverageStatus = 'missing', bool $withEvent = false): array
+{
+    $scene = null;
+    $foreshadowing = null;
+    $fixture = reviewFixture(function (Chapter $chapter) use (&$scene, &$foreshadowing, $coverageStatus): array {
+        $scene = Scene::factory()->for($chapter)->create(['sequence' => 1]);
+        $foreshadowing = Foreshadowing::factory()->for($chapter->novel)->create([
+            'title' => '染血地图',
+            'promised_payoff' => '地图最终指向潮汐门并让林舟据此打开入口。',
+            'importance' => ForeshadowingImportance::Critical,
+            'status' => ForeshadowingStatus::Planted,
+            'due_from_chapter' => $chapter->sequence,
+            'due_to_chapter' => $chapter->sequence,
+        ]);
+        $chapter->latestPlan->update(['foreshadowing_actions' => [[
+            'foreshadowing_id' => $foreshadowing->getKey(),
+            'action' => 'pay_off',
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => '正文明确地图指向潮汐门，并让林舟据此打开入口。',
+            'reason' => null,
+        ]]]);
+
+        return [
+            'scene_coverage' => [[
+                'scene_id' => $scene->getKey(),
+                'foreshadowing_coverage' => [[
+                    'foreshadowing_id' => $foreshadowing->getKey(),
+                    'action' => 'pay_off',
+                    'status' => $coverageStatus,
+                    'evidence' => $coverageStatus === 'fulfilled' ? '兑现了向同伴作出的承诺' : null,
+                ]],
+            ]],
+            'plan_findings' => $coverageStatus === 'fulfilled' ? [] : [[
+                'code' => 'FORESHADOWING_COVERAGE_MISSING',
+                'dimension' => 'plan',
+                'severity' => 'error',
+                'scene_id' => $scene->getKey(),
+                'scope' => 'scene',
+                'auto_fixable' => true,
+                'requires_human_decision' => false,
+                'foreshadowing_id' => $foreshadowing->getKey(),
+                'foreshadowing_action' => 'pay_off',
+                'coverage_status' => 'missing',
+                'evidence' => null,
+                'message' => '伏笔没有在正文中完成兑现。',
+                'source' => 'assembly_foreshadowing_coverage',
+            ]],
+        ];
+    });
+    $state = $fixture['novel']->fresh()->canonicalStateVersion;
+    $stateData = $state->state;
+    data_set($stateData, "foreshadowings.{$foreshadowing->getKey()}.status", ForeshadowingStatus::Planted->value);
+    $state = StoryStateVersion::factory()->for($fixture['novel'])->create([
+        'version' => $state->version + 1,
+        'state' => $stateData,
+    ]);
+    $fixture['novel']->update(['canonical_state_version_id' => $state->getKey()]);
+
+    $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => $state->version,
+    ]);
+    $events = $withEvent ? [[
+        'event_type' => EventType::ForeshadowingPaidOff->value,
+        'subject_type' => 'foreshadowing',
+        'subject_id' => (string) $foreshadowing->getKey(),
+        'payload' => [],
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => $scene->getKey(),
+            'quote' => '兑现了向同伴作出的承诺',
+            'start_offset' => null,
+            'end_offset' => null,
+        ]],
+        'story_time' => null,
+        'confidence' => .95,
+    ]] : [];
+    GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => ['source_artifact_id' => $fixture['draft']->getKey(), 'events' => $events],
+    ]);
+
+    return [...$fixture, 'scene' => $scene, 'foreshadowing' => $foreshadowing];
+}
+
 test('narrative review persists seven weighted scores and an immutable result artifact', function () {
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));
@@ -125,6 +215,7 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($review->generationRun->status)->toBe(RunStatus::Succeeded)
         ->and($review->generationRun->bible_version)->toBe(1)
         ->and(data_get($review->generationRun->context_snapshot, 'style_contract_checksum'))->toBe(data_get($review->generationRun->context_snapshot, 'l4.checksum'))
+        ->and(data_get($review->generationRun->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($review->generationRun->context_snapshot, 'foreshadowing_contract.checksum'))
         ->and(data_get($review->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
         ->and($fake->requests()[0]->systemPrompt)->toContain('message 与 evidence 必须使用简体中文')
@@ -132,7 +223,70 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($fake->requests()[0]->systemPrompt)->toContain('may_hint 是可选提示')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得发现一个问题后提前停止')
         ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度逐项完成全量检查')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and(data_get($review->artifact->data, 'dimension_audits.continuity.status'))->toBe('pass');
+});
+
+test('review turns one foreshadowing root cause into one complete automatic rewrite finding', function () {
+    $fixture = reviewForeshadowingFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'rewrite_required',
+        'summary' => '正文只写了普通承诺，没有揭示地图指向潮汐门，也没有让林舟据此打开入口；应在同一次重写中补全兑现动作和结果。',
+        'evidence' => '兑现了向同伴作出的承诺',
+    ]];
+    $fake = (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit));
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    $foreshadowingFindings = collect($review->findings)->filter(fn (array $finding): bool => (int) ($finding['foreshadowing_id'] ?? 0) === $fixture['foreshadowing']->getKey());
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and($foreshadowingFindings)->toHaveCount(1)
+        ->and($foreshadowingFindings->first()['code'])->toBe('FORESHADOWING_SEMANTIC_REWRITE_REQUIRED')
+        ->and(data_get($review->artifact->data, 'rewrite_scope.scene_id'))->toBe($fixture['scene']->getKey())
+        ->and(data_get($review->generationRun->context_snapshot, 'event_candidate.events'))->toBe([])
+        ->and($fake->requests()[0]->systemPrompt)->toContain('仅提及关键词不能证明完成强化或兑现');
+});
+
+test('review routes a required foreshadowing promise or window change to needs attention', function () {
+    $fixture = reviewForeshadowingFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'needs_attention',
+        'summary' => '现有剧情无法在不改变兑现窗口或 promised payoff 的情况下完成，需要用户决定延期或修改承诺。',
+        'evidence' => null,
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit)));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(collect($review->findings)->pluck('code'))->toContain('FORESHADOWING_DECISION_REQUIRED')
+        ->and(data_get($review->artifact->data, 'rewrite_scope'))->toBeNull();
+});
+
+test('review cannot pass a foreshadowing action without coverage and matching event proof', function () {
+    $fixture = reviewForeshadowingFixture(coverageStatus: 'fulfilled', withEvent: false);
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'fulfilled',
+        'summary' => '已完成兑现。',
+        'evidence' => '兑现了向同伴作出的承诺',
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit)));
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '缺少匹配 Event Candidate');
 });
 
 test('review rejects dimension audit status that does not match the complete finding set', function () {

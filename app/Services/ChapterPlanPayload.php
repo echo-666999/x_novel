@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Enums\ForeshadowingPlanAction;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
@@ -19,7 +20,7 @@ final class ChapterPlanPayload
                 'chapter_function', 'arc_contribution', 'reader_promise', 'target_words',
                 'pov_character_id', 'tone', 'time_anchor', 'hook_type', 'must_reveal',
                 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
-                'due_foreshadowings', 'scene_plans',
+                'foreshadowing_actions', 'scene_plans',
             ],
             'properties' => [
                 'chapter_function' => ['type' => 'string'],
@@ -35,7 +36,27 @@ final class ChapterPlanPayload
                 'must_not_reveal' => $strings,
                 'required_facts' => ['type' => 'array', 'items' => ['type' => 'integer']],
                 'forbidden_conflicts' => $strings,
-                'due_foreshadowings' => ['type' => 'array', 'items' => ['type' => 'integer']],
+                'foreshadowing_actions' => [
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'object',
+                        'additionalProperties' => false,
+                        'required' => [
+                            'foreshadowing_id',
+                            'action',
+                            'target_scene_sequence',
+                            'acceptance_criteria',
+                            'reason',
+                        ],
+                        'properties' => [
+                            'foreshadowing_id' => ['type' => 'integer', 'minimum' => 1],
+                            'action' => ['type' => 'string', 'enum' => ForeshadowingPlanAction::modelValues()],
+                            'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
+                            'acceptance_criteria' => ['type' => 'string'],
+                            'reason' => ['type' => ['string', 'null']],
+                        ],
+                    ],
+                ],
                 'scene_plans' => [
                     'type' => 'array',
                     'minItems' => 1,
@@ -91,6 +112,14 @@ final class ChapterPlanPayload
             }
         }
 
+        $allowedForeshadowingActionFields = array_keys(self::schema()['properties']['foreshadowing_actions']['items']['properties']);
+
+        foreach ($payload['foreshadowing_actions'] ?? [] as $action) {
+            if (! is_array($action) || array_diff(array_keys($action), $allowedForeshadowingActionFields) !== []) {
+                throw ValidationException::withMessages(['foreshadowing_actions' => '伏笔动作包含未声明字段。']);
+            }
+        }
+
         return Validator::make($payload, [
             'chapter_function' => ['required', 'string'],
             'arc_contribution' => ['required', 'string'],
@@ -105,7 +134,12 @@ final class ChapterPlanPayload
             'must_not_reveal' => ['present', 'array'], 'must_not_reveal.*' => ['string'],
             'required_facts' => ['present', 'array'], 'required_facts.*' => ['integer'],
             'forbidden_conflicts' => ['present', 'array'], 'forbidden_conflicts.*' => ['string'],
-            'due_foreshadowings' => ['present', 'array'], 'due_foreshadowings.*' => ['integer'],
+            'foreshadowing_actions' => ['present', 'array'],
+            'foreshadowing_actions.*.foreshadowing_id' => ['required', 'integer', 'min:1'],
+            'foreshadowing_actions.*.action' => ['required', 'string', 'in:'.implode(',', ForeshadowingPlanAction::modelValues())],
+            'foreshadowing_actions.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
+            'foreshadowing_actions.*.acceptance_criteria' => ['required', 'string'],
+            'foreshadowing_actions.*.reason' => ['present', 'nullable', 'string'],
             'scene_plans' => ['required', 'array', 'min:1'],
             'scene_plans.*.goal' => ['required', 'string'],
             'scene_plans.*.conflict' => ['required', 'string'],

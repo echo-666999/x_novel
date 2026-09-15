@@ -1,0 +1,57 @@
+{
+    "executed_at": "2026-09-15T11:58:38Z",
+    "status": "applied",
+    "repair_key": "foreshadowing-history:edb77716e0e986a10c175002887f592df4afd338d3847884161d837e697f13ab",
+    "novel": {
+        "id": 2,
+        "title": "六环余光"
+    },
+    "actor_id": 1,
+    "canonical_state": {
+        "before_version": 13,
+        "after_version": 14,
+        "after_state_version_id": 15,
+        "after_checksum": "e0367a6534f0650e15d4485f949d22c6163721e4e65f683d8f7f9f4e056e3b15",
+        "baseline_version": 1,
+        "replayed_active_event_count": 93,
+        "replay_matches": true
+    },
+    "invalidated_event_ids": [15, 24, 41, 52],
+    "replacement_events": [
+        {"source_event_id": 15, "replacement_event_id": 99, "event_type": "foreshadowing_planted", "state_version": 3},
+        {"source_event_id": 24, "replacement_event_id": 101, "event_type": "foreshadowing_planted", "state_version": 4},
+        {"source_event_id": 52, "replacement_event_id": 104, "event_type": "foreshadowing_planted", "state_version": 7}
+    ],
+    "audit_event_ids": [100, 102, 103, 105, 106],
+    "memory": {
+        "invalidated_source_event_ids": [15, 24, 41, 52],
+        "active_replacement_source_event_ids": [99, 101, 104],
+        "active_foreshadowing_count": 22,
+        "invalid_foreshadowing_count": 5,
+        "invalidated_by_this_repair_count": 4
+    },
+    "foreshadowing_projection": [
+        {"id": 1, "status": "abandoned", "reinforce_count": 10, "setup_chapter_id": 1, "payoff_chapter_id": null},
+        {"id": 2, "status": "reinforced", "reinforce_count": 6, "setup_chapter_id": 2, "payoff_chapter_id": null},
+        {"id": 3, "status": "reinforced", "reinforce_count": 3, "setup_chapter_id": 5, "payoff_chapter_id": null}
+    ],
+    "projection_health": {
+        "healthy": true,
+        "character_drift_ids": [],
+        "world_entity_drift_ids": [],
+        "foreshadowing_drift_ids": [],
+        "errors": []
+    },
+    "fact_references_to_invalidated_events": 0,
+    "idempotency_check": {
+        "second_execution_status": "already_applied",
+        "before": {"state_version_count": 15, "story_event_count": 106, "memory_count": 101, "canonical_version": 14},
+        "after": {"state_version_count": 15, "story_event_count": 106, "memory_count": 101, "canonical_version": 14}
+    },
+    "unresolved_items_preserved": [
+        "UNRESOLVED-001",
+        "UNRESOLVED-002",
+        "UNRESOLVED-003",
+        "UNRESOLVED-004"
+    ]
+}

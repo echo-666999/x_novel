@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Data\VolumeCompletionResult;
 use App\Enums\EventType;
 use App\Enums\ForeshadowingImportance;
-use App\Enums\ForeshadowingStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
@@ -29,7 +28,7 @@ class VolumeCompletionGate
 
     public function evaluate(Volume $volume): VolumeCompletionResult
     {
-        $volume = Volume::query()->with('storyArcs')->findOrFail($volume->getKey());
+        $volume = Volume::query()->with(['storyArcs', 'novel'])->findOrFail($volume->getKey());
         $checks = [
             $this->definedCheck('goal', 'Volume Goal', $volume->goal, '本卷目标已定义。', '缺少本卷目标。'),
             $this->definedCheck('climax', 'Climax', $volume->climax, '本卷高潮已定义。', '缺少本卷高潮。'),
@@ -113,18 +112,11 @@ class VolumeCompletionGate
     /** @return array{key: string, label: string, status: string, message: string} */
     private function foreshadowingCheck(Volume $volume): array
     {
-        $chapterSequence = $volume->chapters()->max('sequence');
+        $currentCanonicalChapter = $volume->novel->current_chapter_sequence;
         $due = Foreshadowing::query()
             ->where('novel_id', $volume->novel_id)
-            ->whereNotIn('status', [ForeshadowingStatus::PaidOff, ForeshadowingStatus::Abandoned])
-            ->where(function ($query) use ($volume, $chapterSequence): void {
-                $query->whereHas('ownerArc', fn ($arc) => $arc->where('volume_id', $volume->getKey()));
-                if ($chapterSequence !== null) {
-                    $query->orWhere('due_to_chapter', '<=', $chapterSequence);
-                }
-            })
-            ->get()
-            ->filter(fn (Foreshadowing $item): bool => $item->isDue($chapterSequence) || $item->isOverdue($chapterSequence));
+            ->requiringAttentionForTargetChapter(Foreshadowing::nextChapterSequence($currentCanonicalChapter))
+            ->get();
         $critical = $due->where('importance', ForeshadowingImportance::Critical)->count();
         $status = $critical > 0 ? 'BLOCK' : ($due->isNotEmpty() ? 'WARNING' : 'PASS');
         $message = match ($status) {

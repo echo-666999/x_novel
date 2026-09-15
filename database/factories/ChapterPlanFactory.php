@@ -29,6 +29,7 @@ class ChapterPlanFactory extends Factory
             'required_facts' => [],
             'forbidden_conflicts' => [],
             'due_foreshadowings' => [],
+            'foreshadowing_actions' => [],
             'scene_plans' => [[
                 'goal' => fake()->sentence(),
                 'conflict' => fake()->sentence(),

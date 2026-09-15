@@ -4,11 +4,14 @@ namespace App\Models;
 
 use App\Enums\ForeshadowingImportance;
 use App\Enums\ForeshadowingStatus;
+use App\Enums\ForeshadowingTimingStatus;
 use Database\Factories\ForeshadowingFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Validation\ValidationException;
 
 #[Fillable([
     'novel_id',
@@ -24,11 +27,24 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'reinforce_count',
     'payoff_chapter_id',
     'notes',
+    'management_history',
 ])]
 class Foreshadowing extends Model
 {
     /** @use HasFactory<ForeshadowingFactory> */
     use HasFactory;
+
+    protected static function booted(): void
+    {
+        static::saving(function (self $foreshadowing): void {
+            if ($foreshadowing->status === ForeshadowingStatus::Due
+                && (! $foreshadowing->exists || $foreshadowing->isDirty('status'))) {
+                throw ValidationException::withMessages([
+                    'status' => 'due 是待迁移的旧状态；请选择真实的内容生命周期状态。',
+                ]);
+            }
+        });
+    }
 
     /** @return BelongsTo<Novel, $this> */
     public function novel(): BelongsTo
@@ -42,23 +58,39 @@ class Foreshadowing extends Model
         return $this->belongsTo(StoryArc::class, 'owner_arc_id');
     }
 
-    public function isOverdue(?int $currentChapter): bool
+    public function timingStatus(?int $currentCanonicalChapter): ?ForeshadowingTimingStatus
     {
-        return ! $this->status->isTerminal()
-            && $currentChapter !== null
-            && $currentChapter > $this->due_to_chapter;
+        return $this->timingStatusForTargetChapter(self::nextChapterSequence($currentCanonicalChapter));
     }
 
-    public function isDue(?int $currentChapter): bool
+    public function timingStatusForTargetChapter(int $targetChapter): ?ForeshadowingTimingStatus
     {
-        if ($this->status->isTerminal() || $this->isOverdue($currentChapter)) {
-            return false;
-        }
+        return ForeshadowingTimingStatus::forTargetChapter(
+            $this->status,
+            $this->due_from_chapter,
+            $this->due_to_chapter,
+            $targetChapter,
+        );
+    }
 
-        return $this->status === ForeshadowingStatus::Due
-            || ($currentChapter !== null
-                && $currentChapter >= $this->due_from_chapter
-                && $currentChapter <= $this->due_to_chapter);
+    public function isOverdue(?int $currentCanonicalChapter): bool
+    {
+        return $this->timingStatus($currentCanonicalChapter) === ForeshadowingTimingStatus::Overdue;
+    }
+
+    public function isDue(?int $currentCanonicalChapter): bool
+    {
+        return $this->timingStatus($currentCanonicalChapter) === ForeshadowingTimingStatus::Due;
+    }
+
+    public function requiresLegacyStatusMigration(): bool
+    {
+        return $this->status->isLegacyDue();
+    }
+
+    public static function nextChapterSequence(?int $currentCanonicalChapter): int
+    {
+        return max(0, $currentCanonicalChapter ?? 0) + 1;
     }
 
     /** @return array<string> */
@@ -67,16 +99,106 @@ class Foreshadowing extends Model
         $badges = [];
 
         if ($this->importance === ForeshadowingImportance::Critical) {
-            $badges[] = 'Critical';
+            $badges[] = '关键';
         }
 
-        if ($this->isOverdue($currentChapter)) {
-            $badges[] = 'Overdue';
-        } elseif ($this->isDue($currentChapter)) {
-            $badges[] = 'Due';
+        $timing = $this->timingStatus($currentChapter);
+
+        if ($timing === ForeshadowingTimingStatus::Overdue) {
+            $badges[] = $timing->getLabel();
+        } elseif ($timing === ForeshadowingTimingStatus::Due) {
+            $badges[] = $timing->getLabel();
         }
 
         return $badges;
+    }
+
+    public function scopeNonTerminal(Builder $query): Builder
+    {
+        return $query->whereNotIn($query->qualifyColumn('status'), [
+            ForeshadowingStatus::PaidOff->value,
+            ForeshadowingStatus::Abandoned->value,
+        ]);
+    }
+
+    public function scopeWithTimingStatusAt(
+        Builder $query,
+        ForeshadowingTimingStatus $status,
+        ?int $currentCanonicalChapter,
+    ): Builder {
+        return $query->withTimingStatusForTargetChapter(
+            $status,
+            self::nextChapterSequence($currentCanonicalChapter),
+        );
+    }
+
+    public function scopeWithTimingStatusForTargetChapter(
+        Builder $query,
+        ForeshadowingTimingStatus $status,
+        int $targetChapter,
+    ): Builder {
+        $query->nonTerminal();
+
+        return match ($status) {
+            ForeshadowingTimingStatus::Upcoming => $query->where(
+                $query->qualifyColumn('due_from_chapter'),
+                '>',
+                $targetChapter,
+            ),
+            ForeshadowingTimingStatus::Due => $query
+                ->where($query->qualifyColumn('due_from_chapter'), '<=', $targetChapter)
+                ->where($query->qualifyColumn('due_to_chapter'), '>=', $targetChapter),
+            ForeshadowingTimingStatus::Overdue => $query->where(
+                $query->qualifyColumn('due_to_chapter'),
+                '<',
+                $targetChapter,
+            ),
+        };
+    }
+
+    public function scopeRequiringAttentionForTargetChapter(Builder $query, int $targetChapter): Builder
+    {
+        return $query->nonTerminal()
+            ->where($query->qualifyColumn('due_from_chapter'), '<=', $targetChapter);
+    }
+
+    public function scopeRequiringAttentionByNovelProgress(Builder $query): Builder
+    {
+        return $query->nonTerminal()
+            ->whereRaw('due_from_chapter <= COALESCE(current_chapter_sequence, 0) + 1');
+    }
+
+    public function scopeOrderByTimingAt(Builder $query, ?int $currentCanonicalChapter): Builder
+    {
+        $targetChapter = self::nextChapterSequence($currentCanonicalChapter);
+
+        return $query->orderByRaw(
+            'CASE
+                WHEN status IN (?, ?) THEN 3
+                WHEN due_to_chapter < ? THEN 0
+                WHEN due_from_chapter <= ? AND due_to_chapter >= ? THEN 1
+                ELSE 2
+            END',
+            [
+                ForeshadowingStatus::PaidOff->value,
+                ForeshadowingStatus::Abandoned->value,
+                $targetChapter,
+                $targetChapter,
+                $targetChapter,
+            ],
+        );
+    }
+
+    public function scopeOrderByTimingByNovelProgress(Builder $query): Builder
+    {
+        return $query->orderByRaw(
+            'CASE
+                WHEN due_to_chapter < COALESCE(current_chapter_sequence, 0) + 1 THEN 0
+                WHEN importance = ? THEN 1
+                ELSE 2
+            END',
+            [ForeshadowingImportance::Critical->value],
+        );
     }
 
     /** @return array<string, string> */
@@ -90,6 +212,7 @@ class Foreshadowing extends Model
             'status' => ForeshadowingStatus::class,
             'reinforce_count' => 'integer',
             'payoff_chapter_id' => 'integer',
+            'management_history' => 'array',
         ];
     }
 }

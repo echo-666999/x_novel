@@ -57,12 +57,13 @@ class DeterministicStoryEventApplier implements StoryEventApplier
             EventType::ReaderPromiseCreated => $this->set("reader_promises.{$id}", ['status' => 'open', ...$payload]),
             EventType::ReaderPromiseResolved => $this->set("reader_promises.{$id}.status", 'resolved'),
 
-            EventType::ForeshadowingPlanted => $this->set("foreshadowings.{$id}", ['status' => 'planted', ...$payload]),
+            EventType::ForeshadowingPlanted => $this->set("foreshadowings.{$id}.status", 'planted'),
             EventType::ForeshadowingReinforced => [
                 ...$this->set("foreshadowings.{$id}.status", 'reinforced'),
                 ...$this->increment("foreshadowings.{$id}.reinforce_count", 1),
             ],
-            EventType::ForeshadowingDue => $this->set("foreshadowings.{$id}.status", 'due'),
+            // Historical due events are schedule markers and must not overwrite content lifecycle.
+            EventType::ForeshadowingDue => [],
             EventType::ForeshadowingPaidOff => $this->set("foreshadowings.{$id}.status", 'paid_off'),
             EventType::ForeshadowingAbandoned => $this->set("foreshadowings.{$id}.status", 'abandoned'),
 

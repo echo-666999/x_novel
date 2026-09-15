@@ -5,9 +5,9 @@ namespace App\Services;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
-use App\Enums\ForeshadowingStatus;
 use App\Enums\NovelStatus;
 use App\Enums\StoryEventStatus;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Models\Chapter;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
@@ -60,10 +60,6 @@ class LatestCanonicalChapterRollback
             $factsRestored = $this->restoreSupersededFacts($target, $novel);
 
             $events->each->update(['status' => StoryEventStatus::Invalidated, 'invalidated_at' => now()]);
-            $foreshadowingIds = $events
-                ->filter(fn ($event): bool => str_starts_with($event->event_type->value, 'foreshadowing_'))
-                ->pluck('subject_id')->filter()->all();
-            $this->restoreForeshadowings($novel, $foreshadowingIds, $previousState->state);
             $memories = $this->memoryInvalidator->invalidateForChapter($target->getKey());
             $previousSequence = $novel->chapters()
                 ->where('status', ChapterStatus::Canonical)
@@ -92,6 +88,9 @@ class LatestCanonicalChapterRollback
                 'facts_restored' => $factsRestored,
             ];
         }, 3);
+
+        $novel = Novel::query()->findOrFail($chapter->novel_id);
+        RefreshNovelProjectionJob::dispatch($novel->getKey(), (int) $novel->canonical_state_version_id)->afterCommit();
 
         Log::warning('Latest canonical chapter rolled back.', [...$result, 'reason' => trim($reason)]);
 
@@ -127,24 +126,5 @@ class LatestCanonicalChapterRollback
 
         return Fact::query()->where('novel_id', $novel->getKey())->whereIn('id', $ids)
             ->where('status', FactStatus::Superseded)->update(['status' => FactStatus::Active]);
-    }
-
-    /** @param array<int, string> $subjectIds @param array<string, mixed> $state */
-    private function restoreForeshadowings(Novel $novel, array $subjectIds, array $state): void
-    {
-        foreach (array_unique($subjectIds) as $subjectId) {
-            $snapshot = data_get($state, "foreshadowings.{$subjectId}");
-            $status = is_array($snapshot) ? ForeshadowingStatus::tryFrom((string) ($snapshot['status'] ?? '')) : null;
-
-            if ($status === null) {
-                continue;
-            }
-
-            $novel->foreshadowings()->whereKey($subjectId)->update([
-                'status' => $status,
-                'reinforce_count' => (int) ($snapshot['reinforce_count'] ?? 0),
-                'payoff_chapter_id' => $status === ForeshadowingStatus::PaidOff ? ($snapshot['payoff_chapter_id'] ?? null) : null,
-            ]);
-        }
     }
 }

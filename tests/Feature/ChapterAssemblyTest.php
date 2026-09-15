@@ -8,6 +8,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
@@ -15,6 +16,7 @@ use App\Enums\SceneStatus;
 use App\Jobs\AssembleChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
@@ -64,7 +66,7 @@ function chapterAssemblyFixture(int $sceneCount = 2, array $firstSceneCoverageOv
         $artifact = GenerationArtifact::factory()->for($run)->create([
             'type' => ArtifactType::SceneDraft,
             'content' => $content,
-            'data' => ['self_check' => $selfCheck],
+            'data' => ['self_check' => $selfCheck, 'foreshadowing_coverage' => []],
             'checksum' => hash('sha256', $content),
         ]);
         $scene->update(['current_artifact_id' => $artifact->getKey()]);
@@ -86,6 +88,7 @@ function assemblyCoverage(string $content, ?array $overrides = null): array
             'conflict' => $fulfilled,
             'turn' => $fulfilled,
             'outcome' => $fulfilled,
+            'foreshadowing_coverage' => [],
         ];
 
         return $scene->getKey() === data_get($overrides, 'scene_id')
@@ -128,6 +131,44 @@ function assemblyCoverageRepairResponse(array $coverage): AiResponse
     );
 }
 
+function assemblyForeshadowingAction(array $fixture, int $sceneSequence = 1): Foreshadowing
+{
+    $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'title' => '染血地图',
+        'promised_payoff' => '地图最终指向潮汐门。',
+        'status' => ForeshadowingStatus::Planted,
+        'due_from_chapter' => 18,
+        'due_to_chapter' => 20,
+    ]);
+    $fixture['chapter']->latestPlan->update(['foreshadowing_actions' => [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => $sceneSequence,
+        'acceptance_criteria' => '正文明确地图指向潮汐门。',
+        'reason' => null,
+    ]]]);
+
+    return $foreshadowing;
+}
+
+function setSourceForeshadowingCoverage(Scene $scene, array $coverage): void
+{
+    $source = $scene->currentArtifact;
+    $run = GenerationRun::factory()->for($scene->chapter->novel)->for($scene->chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::SceneDraft,
+        'version' => $source->version + 1,
+        'content' => $source->content,
+        'data' => [...$source->data, 'foreshadowing_coverage' => $coverage],
+        'checksum' => $source->checksum,
+    ]);
+    $scene->update(['current_artifact_id' => $artifact->getKey()]);
+    $scene->setRelation('currentArtifact', $artifact->setRelation('generationRun', $run));
+}
+
 test('assembler combines multiple scene drafts in sequence into a chapter draft', function () {
     $fixture = chapterAssemblyFixture(3);
     $fixture['chapter']->latestPlan->update(['target_words' => 12]);
@@ -148,6 +189,7 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
+        ->and(data_get($run->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($run->context_snapshot, 'foreshadowing_contract.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and($run->context_snapshot)->not->toHaveKeys(['style_constraints'])
         ->and(data_get($run->context_snapshot, 'writing_constraints'))->not->toHaveKey('style_profile')
@@ -158,7 +200,8 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($artifact->data['word_count'])->toBe(mb_strlen('第一幕。第二幕。第三幕。'))
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得把正文压缩成摘要')
         ->and($fake->requests()[0]->systemPrompt)->toContain('previous_chapter_ending')
-        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.scene_coverage.items.required'))->toBe(['scene_id', 'goal', 'conflict', 'turn', 'outcome'])
+        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.scene_coverage.items.required'))->toBe(['scene_id', 'goal', 'conflict', 'turn', 'outcome', 'foreshadowing_coverage'])
         ->and(mb_strpos($prompt, 'Scene 1 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 2 正文'))
         ->and(mb_strpos($prompt, 'Scene 2 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 3 正文'));
 });
@@ -200,6 +243,90 @@ test('assembly rejects foreign scene references', function () {
     expect(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(0);
 });
 
+test('assembly detects deletion of the only fulfilled foreshadowing evidence', function () {
+    $fixture = chapterAssemblyFixture(1);
+    $foreshadowing = assemblyForeshadowingAction($fixture);
+    setSourceForeshadowingCoverage($fixture['scenes']->first(), [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'status' => 'fulfilled',
+        'evidence' => '地图指向潮汐门',
+    ]]);
+    $content = '林舟收起地图，继续赶路。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $coverage = assemblyCoverage($content);
+    $coverage[0]['foreshadowing_coverage'] = [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'status' => 'missing',
+        'evidence' => null,
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse($content, $coverage)));
+
+    $artifact = app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey());
+    $finding = collect($artifact->data['plan_findings'])->firstWhere('code', 'FORESHADOWING_COVERAGE_MISSING');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding['foreshadowing_id'])->toBe($foreshadowing->getKey())
+        ->and($finding['source'])->toBe('assembly_foreshadowing_coverage');
+});
+
+test('assembly cannot upgrade a missing scene foreshadowing action to fulfilled', function () {
+    $fixture = chapterAssemblyFixture(1);
+    $foreshadowing = assemblyForeshadowingAction($fixture);
+    setSourceForeshadowingCoverage($fixture['scenes']->first(), [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'status' => 'missing',
+        'evidence' => null,
+    ]]);
+    $content = '林舟确认地图指向潮汐门。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $coverage = assemblyCoverage($content);
+    $coverage[0]['foreshadowing_coverage'] = [[
+        'foreshadowing_id' => $foreshadowing->getKey(),
+        'action' => 'pay_off',
+        'status' => 'fulfilled',
+        'evidence' => '地图指向潮汐门',
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse($content, $coverage)));
+
+    expect(fn () => app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '不得把 Scene Draft 中缺失或反转的伏笔动作改写为 fulfilled');
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(0);
+});
+
+test('assembly aggregates foreshadowing coverage by target scene', function () {
+    $fixture = chapterAssemblyFixture(2);
+    $first = assemblyForeshadowingAction($fixture, 1);
+    $second = Foreshadowing::factory()->for($fixture['novel'])->create([
+        'status' => ForeshadowingStatus::Planted,
+        'due_from_chapter' => 18,
+        'due_to_chapter' => 20,
+    ]);
+    $fixture['chapter']->latestPlan->update(['foreshadowing_actions' => [
+        ['foreshadowing_id' => $first->getKey(), 'action' => 'pay_off', 'target_scene_sequence' => 1, 'acceptance_criteria' => '第一场兑现。', 'reason' => null],
+        ['foreshadowing_id' => $second->getKey(), 'action' => 'reinforce', 'target_scene_sequence' => 2, 'acceptance_criteria' => '第二场强化。', 'reason' => null],
+    ]]);
+    $content = '第一场兑现地图秘密。第二场强化旧钟异响。';
+    $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
+    $firstCoverage = [['foreshadowing_id' => $first->getKey(), 'action' => 'pay_off', 'status' => 'fulfilled', 'evidence' => '第一场兑现地图秘密']];
+    $secondCoverage = [['foreshadowing_id' => $second->getKey(), 'action' => 'reinforce', 'status' => 'fulfilled', 'evidence' => '第二场强化旧钟异响']];
+    setSourceForeshadowingCoverage($fixture['scenes'][0], $firstCoverage);
+    setSourceForeshadowingCoverage($fixture['scenes'][1], $secondCoverage);
+    $coverage = assemblyCoverage($content);
+    $coverage[0]['foreshadowing_coverage'] = $firstCoverage;
+    $coverage[1]['foreshadowing_coverage'] = $secondCoverage;
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(assemblyResponse($content, $coverage)));
+
+    $artifact = app(ChapterAssembler::class)->assemble($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'scene_coverage.0.foreshadowing_coverage.0.foreshadowing_id'))->toBe($first->getKey())
+        ->and(data_get($artifact->data, 'scene_coverage.1.foreshadowing_coverage.0.foreshadowing_id'))->toBe($second->getKey())
+        ->and($artifact->data['plan_findings'])->toBe([]);
+});
+
 test('assembly payload rejects evidence outside the final chapter', function () {
     $fixture = chapterAssemblyFixture(1);
     $content = '林舟进入灯塔。';
@@ -220,7 +347,7 @@ test('assembler repairs invalid coverage evidence without rewriting the chapter'
     $fixture['chapter']->latestPlan->update(['target_words' => mb_strlen($content)]);
     $invalid = assemblyCoverage($content);
     $invalid[0]['outcome'] = ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'];
-    $validCoverage = collect(assemblyCoverage($content)[0])->except('scene_id')->all();
+    $validCoverage = collect(assemblyCoverage($content)[0])->except(['scene_id', 'foreshadowing_coverage'])->all();
     $fake = (new FakeAiProvider)
         ->enqueue(assemblyResponse($content, $invalid))
         ->enqueue(assemblyCoverageRepairResponse($validCoverage));

@@ -50,7 +50,28 @@ function rewriteFixture(): array
 
 function rewriteResponse(string $content = '修订后的章节正文'): AiResponse
 {
-    return new AiResponse(content: $content, structuredData: null, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
+    $data = ['content' => $content, 'scene_coverage' => [], 'introduced_major_facts' => []];
+
+    return new AiResponse(content: json_encode($data, JSON_UNESCAPED_UNICODE), structuredData: $data, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
+}
+
+function chapterRewriteCoverageResponse(Chapter $chapter, string $content = '修订后的完整章节'): AiResponse
+{
+    $fulfilled = ['status' => 'fulfilled', 'evidence' => $content];
+    $data = [
+        'content' => $content,
+        'scene_coverage' => $chapter->scenes()->orderBy('sequence')->get()->map(fn (Scene $scene): array => [
+            'scene_id' => $scene->getKey(),
+            'goal' => $fulfilled,
+            'conflict' => $fulfilled,
+            'turn' => $fulfilled,
+            'outcome' => $fulfilled,
+            'foreshadowing_coverage' => [],
+        ])->all(),
+        'introduced_major_facts' => [],
+    ];
+
+    return new AiResponse(content: json_encode($data, JSON_UNESCAPED_UNICODE), structuredData: $data, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
 }
 
 /** @param array<int, array{search: string, replacement: string}> $edits */
@@ -211,6 +232,7 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.current_words'))->toBe(mb_strlen('原始章节正文'))
         ->and($artifact->generationRun->bible_version)->toBe(1)
         ->and(data_get($artifact->generationRun->context_snapshot, 'style_contract_checksum'))->toBe(data_get($artifact->generationRun->context_snapshot, 'l4.checksum'))
+        ->and(data_get($artifact->generationRun->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($artifact->generationRun->context_snapshot, 'foreshadowing_contract.checksum'))
         ->and(data_get($artifact->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and(data_get($artifact->data, 'plan_acceptance.chapter_function'))->toBe($fixture['chapter']->latestPlan->chapter_function)
         ->and(data_get($artifact->data, 'repair_findings.0.evidence'))->toBe('末段重复')
@@ -219,6 +241,7 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and($fake->requests()[0]->systemPrompt)->toContain('必须一次性解决的完整问题批次')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得只处理第一项')
         ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度进行一次全量自检')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
 });
 
@@ -241,6 +264,35 @@ test('chapter rewrite sends every review finding as one required repair batch', 
         ->and($fake->requests()[0]->prompt)->toContain('压缩重复的流程说明。')
         ->and($fake->requests()[0]->prompt)->toContain('改为直接表达。')
         ->and($fake->requests()[0]->prompt)->toContain('修正物品位置。');
+});
+
+test('chapter rewrite reruns and persists full scene coverage before event extraction', function () {
+    $fixture = sceneRewriteFixture();
+    $fixture['review']->update(['findings' => [[
+        'code' => 'FORESHADOWING_SEMANTIC_REWRITE_REQUIRED',
+        'dimension' => 'plan',
+        'severity' => 'error',
+        'scene_id' => null,
+        'scope' => 'chapter',
+        'auto_fixable' => true,
+        'requires_human_decision' => false,
+        'foreshadowing_id' => 99,
+        'foreshadowing_action' => 'pay_off',
+        'message' => '一次补全伏笔兑现动作和后果。',
+        'evidence' => null,
+        'source' => 'foreshadowing_review',
+    ]]]);
+    $fake = (new FakeAiProvider)->enqueue(chapterRewriteCoverageResponse($fixture['chapter']));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect($artifact->data['scope'])->toBe('chapter')
+        ->and($artifact->data['scene_coverage'])->toHaveCount(2)
+        ->and($artifact->data['plan_findings'])->toBe([])
+        ->and($artifact->data['introduced_major_facts'])->toBe([])
+        ->and($fake->requests()[0]->responseSchema)->not->toBeNull()
+        ->and($fake->requests()[0]->systemPrompt)->toContain('Coverage 必须基于最终重写正文重新判断');
 });
 
 test('chapter rewrite receives the previous canonical ending for continuity repair', function () {

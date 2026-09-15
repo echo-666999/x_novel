@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Data\PlanValidationResult;
+use App\Enums\ForeshadowingPlanAction;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\ChapterPlan;
 use App\Services\PlanValidator;
@@ -159,7 +160,7 @@ class ViewNovelPlanningPreview extends ViewRecord
                 ->visible(fn (): bool => $this->chapterPlan() !== null)
                 ->schema([
                     TextEntry::make('due_foreshadowings')
-                        ->label('到期伏笔')
+                        ->label('伏笔动作')
                         ->state(fn (): array => $this->dueForeshadowings())
                         ->bulleted()
                         ->placeholder('无'),
@@ -247,13 +248,29 @@ class ViewNovelPlanningPreview extends ViewRecord
     /** @return array<int, string> */
     private function dueForeshadowings(): array
     {
-        $ids = array_map('intval', $this->chapterPlan()?->due_foreshadowings ?? []);
+        $plan = $this->chapterPlan();
+        if ($plan === null) {
+            return [];
+        }
 
-        return $this->getRecord()->foreshadowings()
-            ->whereKey($ids)
+        $foreshadowings = $this->getRecord()->foreshadowings()
+            ->whereKey($plan->referencedForeshadowingIds())
             ->get()
-            ->map(fn ($foreshadowing): string => $foreshadowing->title.' · '.$foreshadowing->importance->getLabel().' · '.$foreshadowing->status->getLabel())
-            ->all();
+            ->keyBy('id');
+        $actions = collect($plan->foreshadowingActionContracts())
+            ->map(function (array $contract) use ($foreshadowings): string {
+                $foreshadowing = $foreshadowings->get((int) ($contract['foreshadowing_id'] ?? 0));
+                $action = ForeshadowingPlanAction::tryFrom((string) ($contract['action'] ?? ''));
+                $title = $foreshadowing?->title ?? '未知伏笔 #'.($contract['foreshadowing_id'] ?? '?');
+
+                return $title.' · '.($action?->getLabel() ?? '未知动作')
+                    .' · Scene '.($contract['target_scene_sequence'] ?? '?')
+                    .' · '.($contract['acceptance_criteria'] ?? '未填写验收条件');
+            });
+        $legacy = collect($plan->legacyForeshadowingIds())
+            ->map(fn (int $id): string => ($foreshadowings->get($id)?->title ?? "未知伏笔 #{$id}").' · 旧 ID 引用（待转换动作契约）');
+
+        return $actions->concat($legacy)->values()->all();
     }
 
     /** @return array<int, string> */

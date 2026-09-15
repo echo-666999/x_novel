@@ -2,6 +2,7 @@
 
 use App\Enums\ForeshadowingImportance;
 use App\Enums\ForeshadowingStatus;
+use App\Enums\ForeshadowingTimingStatus;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
 use App\Models\StoryArc;
@@ -9,6 +10,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
@@ -37,20 +39,26 @@ test('a foreshadowing belongs to its novel and optional owner arc and casts doma
         ->and($foreshadowing->payoff_chapter_id)->toBe(28);
 });
 
-test('due overdue and critical attention badges reflect the canonical chapter pointer', function () {
-    $due = Foreshadowing::factory()->make([
-        'status' => ForeshadowingStatus::Planted,
+test('timing status uses the next chapter derived from the canonical pointer at every boundary', function () {
+    $foreshadowing = Foreshadowing::factory()->make([
+        'status' => ForeshadowingStatus::Reinforced,
         'due_from_chapter' => 10,
         'due_to_chapter' => 20,
     ]);
-    $overdue = Foreshadowing::factory()->make([
-        'status' => ForeshadowingStatus::Reinforced,
-        'due_from_chapter' => 1,
-        'due_to_chapter' => 9,
-    ]);
-    $critical = Foreshadowing::factory()->make([
-        'importance' => ForeshadowingImportance::Critical,
+
+    expect($foreshadowing->timingStatus(8))->toBe(ForeshadowingTimingStatus::Upcoming)
+        ->and($foreshadowing->timingStatus(9))->toBe(ForeshadowingTimingStatus::Due)
+        ->and($foreshadowing->timingStatus(19))->toBe(ForeshadowingTimingStatus::Due)
+        ->and($foreshadowing->timingStatus(20))->toBe(ForeshadowingTimingStatus::Overdue)
+        ->and($foreshadowing->timingStatusForTargetChapter(10))->toBe(ForeshadowingTimingStatus::Due)
+        ->and($foreshadowing->timingStatusForTargetChapter(21))->toBe(ForeshadowingTimingStatus::Overdue);
+});
+
+test('terminal content has no timing state and legacy due remains readable without controlling timing', function () {
+    $legacy = Foreshadowing::factory()->make([
         'status' => ForeshadowingStatus::Due,
+        'due_from_chapter' => 10,
+        'due_to_chapter' => 20,
     ]);
     $paidOff = Foreshadowing::factory()->make([
         'importance' => ForeshadowingImportance::Critical,
@@ -58,10 +66,46 @@ test('due overdue and critical attention badges reflect the canonical chapter po
         'due_to_chapter' => 5,
     ]);
 
-    expect($due->attentionBadges(15))->toBe(['Due'])
-        ->and($overdue->attentionBadges(15))->toBe(['Overdue'])
-        ->and($critical->attentionBadges(null))->toBe(['Critical', 'Due'])
-        ->and($paidOff->attentionBadges(15))->toBe(['Critical']);
+    expect($legacy->requiresLegacyStatusMigration())->toBeTrue()
+        ->and($legacy->timingStatus(null))->toBe(ForeshadowingTimingStatus::Upcoming)
+        ->and(ForeshadowingStatus::contentOptions())->not->toHaveKey(ForeshadowingStatus::Due->value)
+        ->and($paidOff->timingStatus(20))->toBeNull()
+        ->and($paidOff->attentionBadges(20))->toBe(['关键']);
+});
+
+test('new legacy due writes are rejected while an existing legacy row can be migrated', function () {
+    expect(fn () => Foreshadowing::factory()->create(['status' => ForeshadowingStatus::Due]))
+        ->toThrow(ValidationException::class, 'due 是待迁移的旧状态');
+
+    $foreshadowing = Foreshadowing::factory()->create(['status' => ForeshadowingStatus::Idea]);
+    DB::table($foreshadowing->getTable())->where('id', $foreshadowing->getKey())->update(['status' => 'due']);
+    $legacy = $foreshadowing->fresh();
+
+    expect($legacy->status)->toBe(ForeshadowingStatus::Due)
+        ->and($legacy->requiresLegacyStatusMigration())->toBeTrue();
+
+    $legacy->update(['status' => ForeshadowingStatus::Reinforced]);
+
+    expect($legacy->fresh()->status)->toBe(ForeshadowingStatus::Reinforced);
+});
+
+test('timing query scopes use the same canonical boundaries as the model', function () {
+    $novel = Novel::factory()->create();
+    $upcoming = Foreshadowing::factory()->for($novel)->create(['due_from_chapter' => 11, 'due_to_chapter' => 20]);
+    $due = Foreshadowing::factory()->for($novel)->create(['due_from_chapter' => 10, 'due_to_chapter' => 20]);
+    $overdue = Foreshadowing::factory()->for($novel)->create(['due_from_chapter' => 1, 'due_to_chapter' => 9]);
+    $terminal = Foreshadowing::factory()->for($novel)->create([
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 9,
+        'status' => ForeshadowingStatus::PaidOff,
+    ]);
+
+    expect(Foreshadowing::query()->withTimingStatusAt(ForeshadowingTimingStatus::Upcoming, 9)->pluck('id')->all())->toBe([$upcoming->getKey()])
+        ->and(Foreshadowing::query()->withTimingStatusAt(ForeshadowingTimingStatus::Due, 9)->pluck('id')->all())->toBe([$due->getKey()])
+        ->and(Foreshadowing::query()->withTimingStatusAt(ForeshadowingTimingStatus::Overdue, 9)->pluck('id')->all())->toBe([$overdue->getKey()])
+        ->and(Foreshadowing::query()->requiringAttentionForTargetChapter(10)->pluck('id')->all())
+        ->toEqualCanonicalizing([$due->getKey(), $overdue->getKey()])
+        ->not->toContain($terminal->getKey());
 });
 
 test('an owner arc must belong to the same novel', function () {

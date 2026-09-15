@@ -37,12 +37,12 @@ test('ai settings shows provider model status and connection action without expo
         ->assertSee('writer-model')
         ->assertSee('Global Default')
         ->assertSee('Prompt Versions')
-        ->assertSee('chapter-planner-v6')
-        ->assertSee('scene-writer-v10')
-        ->assertSee('assembler-v8')
-        ->assertSee('event-extractor-v4')
-        ->assertSee('reviewer-v8')
-        ->assertSee('rewrite-v9')
+        ->assertSee('chapter-planner-v7')
+        ->assertSee('scene-writer-v12')
+        ->assertSee('assembler-v10')
+        ->assertSee('event-extractor-v6')
+        ->assertSee('reviewer-v10')
+        ->assertSee('rewrite-v11')
         ->assertSee('summary-v1')
         ->assertSee('config/prompts.php')
         ->assertSee('Test Connection')
@@ -72,7 +72,7 @@ test('ai settings can run a successful connection test', function () {
 
     expect($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->model)->toBe('planner-model')
-        ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v6')
+        ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v7')
         ->and($fake->requests()[0]->metadata)->toBe(['purpose' => 'connection_test']);
 });
 

@@ -23,6 +23,8 @@ class StateValidator
         'resurrection', 'false_death_revealed', 'illusion', 'flashback', 'dream', 'time_shift',
     ];
 
+    public function __construct(private readonly ForeshadowingEventValidator $foreshadowingEventValidator) {}
+
     public function validate(int $chapterId): StateValidationResult
     {
         $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan'])->findOrFail($chapterId);
@@ -71,11 +73,46 @@ class StateValidator
             ->get();
 
         $this->validateReferences($chapter, $events, $findings);
+        $this->validateForeshadowingEvents($chapter, $candidateArtifact, $latestDraft, $events, $findings);
         $this->validateLockedFacts($lockedFacts, $patchArtifact, $events, $findings);
         $this->validateEvents($chapter, $state, $events, $findings);
         $this->validatePatchRules($state, $patch, $events, $findings);
 
         return new StateValidationResult($this->uniqueFindings($findings));
+    }
+
+    /** @param array<int, StoryEventCandidate> $events @param array<int, StateFinding> $findings */
+    private function validateForeshadowingEvents(Chapter $chapter, GenerationArtifact $candidateArtifact, ?GenerationArtifact $draft, array $events, array &$findings): void
+    {
+        if ($draft === null) {
+            return;
+        }
+
+        $contract = data_get($candidateArtifact->generationRun?->context_snapshot, 'foreshadowing_contract', []);
+        $expectedChecksum = data_get($candidateArtifact->data, 'foreshadowing_contract_checksum');
+        $actualChecksum = is_array($contract) ? ($contract['checksum'] ?? null) : null;
+
+        if (collect($events)->contains(fn (StoryEventCandidate $event): bool => $event->eventType->isForeshadowing())
+            && (! is_string($expectedChecksum) || $expectedChecksum === '' || $expectedChecksum !== $actualChecksum)) {
+            $findings[] = $this->hard(
+                'INVALID_FORESHADOWING_CONTRACT',
+                '伏笔事件候选缺少与 Generation Run 一致的冻结动作契约。',
+                relatedStatePath: 'foreshadowings',
+            );
+
+            return;
+        }
+
+        foreach ($this->foreshadowingEventValidator->violations($chapter, $draft, $events, is_array($contract) ? $contract : []) as $violation) {
+            $event = $events[$violation['event_index']] ?? null;
+            $findings[] = $this->hard(
+                $violation['code'],
+                $violation['message'],
+                $event,
+                relatedStatePath: $violation['related_state_path'],
+                metadata: $violation['metadata'],
+            );
+        }
     }
 
     /** @return array<int, StoryEventCandidate> */
