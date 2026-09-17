@@ -165,7 +165,7 @@ Chapter
 
 - ≥100 万中文字；
 - 数百到数千章；
-- 支持单章一次启动自动运行到 Review PASS；用户确认 Canonical Commit 后，才继续下一章。
+- 支持单章一次启动自动运行到 Review PASS；小说级 `auto_commit` 默认关闭。关闭时由用户确认 Canonical Commit，开启时由 Laravel 在 PASS 后安全派发同一提交服务。
 
 ---
 
@@ -195,12 +195,13 @@ Chapter
 → 自动 Review
 → 自动重写
 → Review PASS
-→ 用户确认 Canonical Commit
+→ 按小说级 auto_commit 选择自动提交或用户确认
+→ Canonical Commit
 ```
 
-自动化边界固定在 Review PASS。PASS 只表示章节通过审校，尚未成为 Canonical Chapter，也不得更新 Story State、Story Events 或正式 Memory。每章必须由用户执行一次“提交正式章节”，系统不得因 `auto_commit` 设置跳过该确认。
+`auto_commit` 是小说级运行策略，默认关闭。恢复该设置前遗留的同名键不自动生效；只有设置页显式保存并写入 `auto_commit_configured=true` 后，运行时才读取 `auto_commit`。PASS 只表示章节通过审校；在 Canonical Commit 事务成功前仍不是 Canonical Chapter，也不得更新 Story State、Story Events 或正式 Memory。关闭时流水线停在 PASS 等待用户确认；开启时 Laravel 只能把真实 PASS 的当前 Draft 派发给现有 `CanonicalCommitService`，并继续执行 Pause、State Version、Artifact 来源、事务和幂等门禁。
 
-除固定的 PASS 后提交确认外，只有以下异常才提前进入人工处理：
+除等待提交或安全自动提交外，只有以下异常才提前进入人工处理：
 
 - 硬事实冲突；
 - 连续多次 Rewrite 失败；
@@ -221,6 +222,8 @@ Chapter
 - 能从最近 Artifact / Run 恢复。
 
 恢复必须以 PostgreSQL 中的 Run、Artifact 和章节状态为依据。Current Bible 的叙事基线或完整 Style Profile 缺失时，生成前置检查必须以 `current_bible_incomplete` 停止；用户在“小说圣经”创建新的完整版本后才能重试，不得回退到旧 Editorial。Rewrite 达到上限后必须停在 NEEDS_ATTENTION，由用户人工修改后重新审校，或在没有 Hard Conflict 且满足 Override 条件时明确填写原因后人工通过。
+
+若已启动章节必须立即采用新的 Bible 内容，恢复操作必须先 dry-run 并冻结 Expected Bible Version、Expected State Version、章节/Plan/Scene 来源链和 Artifact checksum；用户审核同一 plan hash 后才能显式执行。执行时创建新的不可变 Bible Version，保留旧 Run、Artifact、原始响应和 Usage 审计，并从最早受 Bible 变化影响的阶段重新生成。旧 Bible 的 Draft、Review 或 Rewrite Artifact 不得进入新来源链的 Canonical Commit。
 
 ---
 
@@ -318,7 +321,7 @@ Rewrite（必要时）
     ↓
 Review PASS
     ↓
-用户确认提交
+auto_commit 开启时自动派发；否则用户确认提交
     ↓
 Canonical Commit
     ↓
@@ -339,7 +342,7 @@ generating
 review
    ├── rewrite ──→ review
    ├── blocked
-   └── Review PASS ──→ 用户确认 Canonical Commit ──→ canonical
+   └── Review PASS ──→ 自动或用户确认 Canonical Commit ──→ canonical
 ```
 
 `PASS` 是 Review Decision，不新增 Chapter 状态；Commit 前 Chapter 仍不是 Canonical。
@@ -500,6 +503,10 @@ created_at
 updated_at
 ```
 
+`story_arcs.progress` 只由 Canonical Chapter 中经过验证的结构化 Beat 完成记录投影计算。Chapter Plan、Scene Draft、Review 或 Rewrite 只能保存候选贡献，不得直接推进 Arc；最新 Canonical Chapter 回滚时必须用剩余 Canonical 记录重算进度。
+
+新出现的 World Entity 在 Review PASS 前只能作为 Candidate 保存。只有 Canonical Commit 可以在同一事务中把经过验证的候选转为正式 `world_entities`；系统可以显示类型覆盖缺口，但不得要求每本小说机械包含所有实体类型。
+
 ---
 
 ### chapters
@@ -538,6 +545,7 @@ chapter_id
 version
 chapter_function
 arc_contribution
+arc_contributions JSONB
 reader_promise
 target_words
 pov_character_id
@@ -552,6 +560,7 @@ required_facts JSONB
 forbidden_conflicts JSONB
 due_foreshadowings JSONB
 foreshadowing_actions JSONB
+world_entity_candidates JSONB
 scene_plans JSONB
 
 status
@@ -560,6 +569,8 @@ updated_at
 ```
 
 `due_foreshadowings` 只保留历史整数 ID；新版本 Plan 使用 `foreshadowing_actions`。人工编辑保存为新的 Plan Version，旧版本不得原地覆盖。
+
+`arc_contributions` 使用 `arc_id + beat_key + beat_index` 引用当前小说、当前 Volume 或跨卷 Active Arc 的真实 Beat，并记录目标 Scene 与验收条件。`world_entity_candidates` 保存稳定临时键、类型、名称、描述、去重依据、潜在重复实体、引入理由与目标 Scene。二者在 Review PASS 前都只是 Draft 契约。
 
 ---
 
@@ -613,6 +624,8 @@ knowledge JSONB
 current_state JSONB
 locked_fields JSONB
 status
+source_chapter_id nullable
+source_candidate_key nullable
 created_at
 updated_at
 ```
@@ -673,6 +686,8 @@ world_rules
 ```
 
 独立表。
+
+由 Canonical Commit 首次创建的实体使用 `(novel_id, source_chapter_id, source_candidate_key)` 保证幂等。Event 和 Memory 在提交事务完成后只引用正式 Entity ID；Latest Chapter Rollback 在没有其他正式章节引用时删除该章首次引入的实体。
 
 ---
 
@@ -1375,9 +1390,13 @@ Scene
 
 不可提交。
 
-普通 warning 按可执行性分流：可自动修复则 REWRITE；不影响发布且无需修复可 PASS；真正需要用户选择或 Rewrite 耗尽才 NEEDS_ATTENTION。Hard Conflict 仍无条件 BLOCK。
+Review 的 `findings` 是七维问题集合的权威来源，`dimension_audits.*.status` 由 Laravel 根据最终 Findings 确定性派生。原始状态与归一化状态都必须保留；状态声称有问题但没有 Finding 时，只允许执行一次同 Draft、State、Bible 和 Prompt 来源链的单维结构修复。结构修复不消耗正文 Rewrite 配额，失败进入 NEEDS_ATTENTION 并保留 `ai_request_log_id`，不得把 Chapter 标为 blocked。
+
+普通 warning 按分数和可执行性分流：总分达到 `review_pass_score` 且没有其他门禁时允许 PASS，并保留为非阻塞建议；总分未达标且 warning 可执行时进入 REWRITE；auto-fixable error 进入 REWRITE；真正需要用户选择、没有安全修复路径或 Rewrite 耗尽时进入 NEEDS_ATTENTION。Hard Conflict 仍无条件 BLOCK。
 
 每轮 Review 必须先完成全部七个质量维度的全量检查，再一次性返回当前正文中所有有明确证据的问题；不得发现一个问题后提前结束或把同一根因拆到后续轮次。Rewrite 必须把同一 Review 的全部可修复问题作为一个批次一次解决，并在返回前再次全量检查，避免修复旧问题时保留或引入同类问题。
+
+每次 Rewrite 后的 Review 必须为上一轮每个可执行 Finding 保存 `resolved / still_present / replaced` 结果，再执行七维全量检查。`max_rewrite_attempts` 只统计成功创建的自动正文 Rewrite Draft；长度 Repair、Coverage Repair、Review Schema Repair、失败的 Provider 请求和失败的 Schema 输出不计入正文 Rewrite 配额。
 
 ---
 
@@ -1471,11 +1490,11 @@ ReviewChapterJob
         ↓
    ├ REWRITE → RewriteChapterJob → Review
    ├ NEEDS_ATTENTION / BLOCK → 停止
-   └ PASS → 停止并等待用户确认
-              ↓
-          用户确认“提交正式章节”
-              ↓
-         CommitChapterJob
+   └ PASS → 按 novel.settings.auto_commit 判断
+              ├ false → 停止并等待用户确认
+              └ true  → 安全派发
+                         ↓
+                    CommitChapterJob
               ↓
          UpdateMemoryJob
               ↓
@@ -1911,6 +1930,7 @@ novel_total_limit
 chapter_max_cost
 
 rewrite_max_attempts
+auto_commit（小说级，默认 false）
 ```
 
 达到 hard limit：

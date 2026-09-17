@@ -450,6 +450,30 @@ class ManageNovelChapters extends ManageRelatedRecords
                                 ->label('结果禁止行为')
                                 ->helperText('列出会反转或越过该结果的具体行为；没有时留空。')
                                 ->default([]),
+                            Repeater::make('continuity_requirements')
+                                ->label('跨场景连续性契约')
+                                ->helperText('使用稳定 key 表达同一持续状态；首次建立、后续增量、真实变化和章末回扣分别选择对应模式。')
+                                ->schema([
+                                    TextInput::make('key')
+                                        ->label('状态 Key')
+                                        ->required(),
+                                    Select::make('mode')
+                                        ->label('模式')
+                                        ->options([
+                                            'establish' => '首次建立',
+                                            'persist' => '持续状态',
+                                            'change' => '状态变化',
+                                            'callback' => '章末回扣',
+                                        ])
+                                        ->required(),
+                                    Textarea::make('description')
+                                        ->label('本场要求')
+                                        ->rows(2)
+                                        ->required(),
+                                ])
+                                ->columns(['default' => 1, 'lg' => 3])
+                                ->default([])
+                                ->columnSpanFull(),
                         ])
                         ->columns(['default' => 1, 'lg' => 2])
                         ->minItems(1)

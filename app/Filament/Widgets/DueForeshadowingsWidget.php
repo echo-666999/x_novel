@@ -145,15 +145,16 @@ class DueForeshadowingsWidget extends TableWidget
             ->select('foreshadowings.*')
             ->join('novels', 'novels.id', '=', 'foreshadowings.novel_id')
             ->with('novel.canonicalStateVersion')
-            ->whereRaw('foreshadowings.due_from_chapter <= COALESCE(novels.current_chapter_sequence, 0) + 1')
             ->get()
             ->filter(function (Foreshadowing $foreshadowing): bool {
-                return ForeshadowingTimingStatus::forTargetChapter(
+                $timing = ForeshadowingTimingStatus::forTargetChapter(
                     $this->canonicalStatus($foreshadowing),
                     $foreshadowing->due_from_chapter,
                     $foreshadowing->due_to_chapter,
                     Foreshadowing::nextChapterSequence($foreshadowing->novel->current_chapter_sequence),
-                ) !== null;
+                );
+
+                return in_array($timing, [ForeshadowingTimingStatus::Due, ForeshadowingTimingStatus::Overdue], true);
             })
             ->modelKeys();
     }

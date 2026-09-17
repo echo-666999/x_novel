@@ -152,6 +152,11 @@ class ViewNovelPlanningPreview extends ViewRecord
                                 ->label('结果禁止行为')
                                 ->badge()
                                 ->placeholder('未限定'),
+                            TextEntry::make('continuity_requirements')
+                                ->label('跨场景连续性契约')
+                                ->bulleted()
+                                ->placeholder('无')
+                                ->columnSpanFull(),
                         ]),
                 ]),
             Section::make('约束与伏笔')
@@ -241,6 +246,22 @@ class ViewNovelPlanningPreview extends ViewRecord
                 'outcome' => $scene['outcome'] ?? null,
                 'outcome_allowed' => $scene['outcome_allowed'] ?? [],
                 'outcome_forbidden' => $scene['outcome_forbidden'] ?? [],
+                'continuity_requirements' => collect($scene['continuity_requirements'] ?? [])
+                    ->filter(fn (mixed $requirement): bool => is_array($requirement))
+                    ->map(fn (array $requirement): string => sprintf(
+                        '%s · %s · %s',
+                        (string) ($requirement['key'] ?? '未命名'),
+                        match ($requirement['mode'] ?? null) {
+                            'establish' => '首次建立',
+                            'persist' => '持续状态',
+                            'change' => '状态变化',
+                            'callback' => '章末回扣',
+                            default => '未知模式',
+                        },
+                        (string) ($requirement['description'] ?? ''),
+                    ))
+                    ->values()
+                    ->all(),
             ])
             ->all();
     }

@@ -21,10 +21,12 @@ class CreateNovel extends CreateRecord
             'generation' => [
                 'chapter_target_words' => (int) $data['generation_chapter_target_words'],
             ],
+            'auto_commit' => (bool) ($data['workflow_auto_commit'] ?? false),
+            'auto_commit_configured' => true,
         ];
 
         unset($data['generation_chapter_target_words']);
-        unset($data['ai_model_overrides'], $data['budget_limits']);
+        unset($data['ai_model_overrides'], $data['budget_limits'], $data['workflow_auto_commit']);
 
         return $data;
     }

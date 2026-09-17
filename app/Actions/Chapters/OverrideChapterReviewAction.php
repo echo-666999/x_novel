@@ -100,6 +100,10 @@ class OverrideChapterReviewAction
                 'manual_override_reason' => $validated['reason'],
                 'source_review_id' => $source->getKey(),
                 'overridden_findings' => $source->findings,
+                'arc_beat_audits' => data_get($source->artifact->data, 'arc_beat_audits', []),
+                'arc_completion_audits' => data_get($source->artifact->data, 'arc_completion_audits', []),
+                'world_entity_candidate_audits' => data_get($source->artifact->data, 'world_entity_candidate_audits', []),
+                'unapproved_world_entities' => data_get($source->artifact->data, 'unapproved_world_entities', []),
                 'actor_id' => $actorId,
             ];
             $encoded = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

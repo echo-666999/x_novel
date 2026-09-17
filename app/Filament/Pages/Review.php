@@ -132,7 +132,13 @@ class Review extends Page implements HasTable
             Section::make('Findings')->schema([
                 RepeatableEntry::make('findings')->hiddenLabel()->schema([
                     TextEntry::make('message')->label('问题')->columnSpanFull(),
-                    TextEntry::make('severity')->label('级别')->badge(),
+                    TextEntry::make('severity')->label('处理级别')->badge()->formatStateUsing(fn (string $state): string => match ($state) {
+                        'hard' => '阻塞',
+                        'error' => '必须修复',
+                        'warning', 'soft' => '非阻塞建议',
+                        'ambiguous' => '需要人工判断',
+                        default => $state,
+                    }),
                     TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
                     TextEntry::make('code')->label('规则代码')->fontFamily('mono')->placeholder('—'),
                     TextEntry::make('evidence')->label('证据')->placeholder('—')->columnSpanFull(),

@@ -13,15 +13,19 @@ use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
+use App\Models\WorldEntity;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class LatestCanonicalChapterRollback
 {
-    public function __construct(private readonly MemoryInvalidator $memoryInvalidator) {}
+    public function __construct(
+        private readonly MemoryInvalidator $memoryInvalidator,
+        private readonly StoryArcProgressProjector $storyArcProgressProjector,
+    ) {}
 
-    /** @return array{chapter_id: int, from_state_version: int, to_state_version: int, events: int, memories: int, facts_invalidated: int, facts_restored: int} */
+    /** @return array{chapter_id: int, from_state_version: int, to_state_version: int, events: int, memories: int, facts_invalidated: int, facts_restored: int, world_entities_removed: int} */
     public function rollback(Chapter $chapter, string $reason): array
     {
         if (blank(trim($reason))) {
@@ -51,6 +55,17 @@ class LatestCanonicalChapterRollback
                 ->lockForUpdate()
                 ->firstOrFail();
             $events = $target->storyEvents()->where('status', StoryEventStatus::Active)->lockForUpdate()->get();
+            $worldEntityIds = collect(data_get($target->canonical_metadata, 'world_entity_introductions', []))
+                ->pluck('world_entity_id')->map(fn ($id): int => (int) $id)->filter()->values();
+            $laterReference = $novel->storyEvents()
+                ->where('status', StoryEventStatus::Active)
+                ->where('chapter_id', '!=', $target->getKey())
+                ->where('subject_type', 'world_entity')
+                ->whereIn('subject_id', $worldEntityIds->map(fn (int $id): string => (string) $id))
+                ->exists();
+            if ($laterReference) {
+                throw ValidationException::withMessages(['world_entities' => '本章首次引入的世界实体已被其他正式章节引用，不能执行简单回滚；请先重建后续 Canonical 链。']);
+            }
             $eventIds = $events->pluck('id');
             $factsInvalidated = Fact::query()
                 ->where('novel_id', $novel->getKey())
@@ -61,12 +76,17 @@ class LatestCanonicalChapterRollback
 
             $events->each->update(['status' => StoryEventStatus::Invalidated, 'invalidated_at' => now()]);
             $memories = $this->memoryInvalidator->invalidateForChapter($target->getKey());
+            $worldEntitiesRemoved = WorldEntity::query()
+                ->where('novel_id', $novel->getKey())
+                ->where('source_chapter_id', $target->getKey())
+                ->whereIn('id', $worldEntityIds)
+                ->delete();
             $previousSequence = $novel->chapters()
                 ->where('status', ChapterStatus::Canonical)
                 ->where('sequence', '<', $target->sequence)
                 ->max('sequence');
 
-            $target->update(['status' => ChapterStatus::Void, 'canonical_artifact_id' => null]);
+            $target->update(['status' => ChapterStatus::Void, 'canonical_artifact_id' => null, 'canonical_metadata' => null]);
             $novelData = [
                 'canonical_state_version_id' => $previousState->getKey(),
                 'current_chapter_sequence' => $previousSequence,
@@ -77,6 +97,7 @@ class LatestCanonicalChapterRollback
             }
 
             $novel->update($novelData);
+            $this->storyArcProgressProjector->refreshNovel($novel);
 
             return [
                 'chapter_id' => $target->getKey(),
@@ -86,6 +107,7 @@ class LatestCanonicalChapterRollback
                 'memories' => $memories,
                 'facts_invalidated' => $factsInvalidated,
                 'facts_restored' => $factsRestored,
+                'world_entities_removed' => $worldEntitiesRemoved,
             ];
         }, 3);
 

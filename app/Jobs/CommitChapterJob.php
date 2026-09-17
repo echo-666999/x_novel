@@ -4,19 +4,21 @@ namespace App\Jobs;
 
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
+use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\GenerationArtifact;
 use App\Models\Review;
 use App\Services\CanonicalCommitService;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
 
-class CommitChapterJob implements ShouldQueue
+class CommitChapterJob implements ShouldBeUnique, ShouldQueue
 {
-    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
     public int $tries = 1;
 
@@ -27,9 +29,18 @@ class CommitChapterJob implements ShouldQueue
         $this->onQueue('generation');
     }
 
+    public function uniqueId(): string
+    {
+        return 'chapter:'.$this->chapterId;
+    }
+
     public function handle(CanonicalCommitService $canonicalCommit): void
     {
-        $canonicalCommit->commit($this->commitData());
+        try {
+            $canonicalCommit->commit($this->commitData());
+        } finally {
+            $this->releaseGenerationDispatch();
+        }
     }
 
     private function commitData(): CanonicalCommitData

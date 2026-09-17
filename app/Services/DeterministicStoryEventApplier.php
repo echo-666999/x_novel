@@ -68,6 +68,8 @@ class DeterministicStoryEventApplier implements StoryEventApplier
             EventType::ForeshadowingAbandoned => $this->set("foreshadowings.{$id}.status", 'abandoned'),
 
             EventType::WorldRuleRevealed, EventType::WorldRuleChanged, EventType::WorldStateChanged => $this->set("world.{$id}", $payload['state'] ?? $payload),
+            EventType::WorldEntityIntroduced => $this->set("world.{$id}", $payload['state'] ?? $payload),
+            EventType::StoryArcBeatCompleted => [],
             EventType::LocationStateChanged => $this->set("locations.{$id}", $payload['state'] ?? $payload),
             EventType::FactionStateChanged => $this->set("world.factions.{$id}", $payload['state'] ?? $payload),
 

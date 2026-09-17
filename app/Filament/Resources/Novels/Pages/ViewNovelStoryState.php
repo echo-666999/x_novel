@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Story\CreateManualFactAction;
 use App\Actions\Story\ManualCanonicalCorrectionAction;
+use App\Actions\Story\RecoverCanonicalStoryStateAction;
 use App\Actions\Story\SetFactLockAction;
 use App\Actions\Story\SupersedeFactAction;
 use App\Enums\FactHardness;
@@ -19,7 +20,6 @@ use App\Services\ProjectionRebuilder;
 use App\Services\StoryStateRebuilder;
 use App\Services\StoryStateService;
 use Filament\Actions\Action;
-use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -36,7 +36,12 @@ use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Url;
+use Throwable;
 
 class ViewNovelStoryState extends ViewRecord implements HasTable
 {
@@ -78,6 +83,20 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
     #[Url(as: 'event-status')]
     public string $eventStatus = 'active';
 
+    public ?string $storyStateDialog = null;
+
+    public string $manualCorrectionPath = '';
+
+    public string $manualCorrectionValue = '';
+
+    public string $manualCorrectionReason = '';
+
+    public ?int $dialogExpectedStateVersion = null;
+
+    public ?string $dialogExpectedCurrentChecksum = null;
+
+    public ?string $dialogExpectedRebuiltChecksum = null;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -103,92 +122,150 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
 
         return [
             Action::make('verifyRebuild')
-                ->label('校验 / 重建')
+                ->label('校验重建结果')
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
                 ->visible($current !== null)
-                ->modalHeading('校验 Story State 重建结果')
-                ->modalDescription('从 State Version 0 重放当前版本范围内的有效 Story Events。')
-                ->requiresConfirmation()
-                ->modalWidth('4xl')
-                ->modalSubmitAction(false)
-                ->modalCancelActionLabel('关闭')
-                ->action(fn (): null => null)
-                ->modalContent(fn (StoryStateRebuilder $rebuilder) => view(
-                    'filament.resources.novels.pages.story-state-rebuild',
-                    ['result' => $rebuilder->rebuild($this->getRecord())],
-                )),
+                ->action("openStoryStateDialog('verify')"),
+            Action::make('recoverCanonicalState')
+                ->label('恢复 Canonical State')
+                ->icon('heroicon-o-arrow-uturn-left')
+                ->color('danger')
+                ->visible($current !== null)
+                ->action("openStoryStateDialog('recover')"),
             Action::make('rebuildProjections')
                 ->label('重建投影')
                 ->icon('heroicon-o-arrow-path-rounded-square')
                 ->color('warning')
                 ->visible($current !== null)
-                ->requiresConfirmation()
-                ->modalHeading('重建领域投影')
-                ->modalDescription('以当前 Canonical Story State 覆盖人物、世界实体和伏笔的派生投影。正式状态和故事事件不会改变。')
-                ->modalSubmitActionLabel('确认重建')
-                ->action(function (ProjectionRebuilder $rebuilder): void {
-                    $health = $rebuilder->rebuild($this->getRecord());
-                    $this->getRecord()->unsetRelations();
-
-                    Notification::make()
-                        ->title('领域投影已重建')
-                        ->body("已根据 State Version v{$health->stateVersion} 校验 {$health->checkedCount()} 条投影。")
-                        ->success()
-                        ->send();
-                }),
+                ->action("openStoryStateDialog('projections')"),
             Action::make('manualCorrection')
                 ->label('人工修正')
                 ->icon('heroicon-o-wrench-screwdriver')
                 ->color('warning')
                 ->visible($current !== null)
-                ->modalHeading('人工修正 Canonical Story State')
-                ->modalDescription('该操作会追加 Correction Event 并创建新的 State Version，不会修改历史快照。')
-                ->modalSubmitActionLabel('创建修正版本')
-                ->schema([
-                    Hidden::make('expected_state_version')->default($current?->version),
-                    TextInput::make('path')
-                        ->label('状态路径')
-                        ->placeholder('例如 characters.42.location')
-                        ->helperText('必须位于已有 Story State Domain，使用点号分隔。')
-                        ->maxLength(500)
-                        ->required(),
-                    Textarea::make('value')
-                        ->label('新值（JSON）')
-                        ->placeholder('例如 "洛阳"、true 或 {"status":"open"}')
-                        ->helperText('输入合法 JSON；字符串需要包含双引号。')
-                        ->rules(['json'])
-                        ->rows(5)
-                        ->required(),
-                    Textarea::make('reason')
-                        ->label('修正原因')
-                        ->helperText('原因会写入 Correction Event，供后续追踪。')
-                        ->rows(3)
-                        ->maxLength(2000)
-                        ->required(),
-                ])
-                ->action(function (array $data, ManualCanonicalCorrectionAction $manualCorrection): void {
-                    $version = $manualCorrection->execute(
-                        $this->getRecord(),
-                        (int) $data['expected_state_version'],
-                        $data['path'],
-                        json_decode($data['value'], true, flags: JSON_THROW_ON_ERROR),
-                        $data['reason'],
-                        auth()->id(),
-                    );
-
-                    $this->getRecord()->refresh();
-                    $this->selectedVersion = $version->version;
-                    $this->diffToVersion = $version->version;
-                    $this->diffFromVersion = $version->version - 1;
-
-                    Notification::make()
-                        ->title('Canonical Story State 已修正')
-                        ->body('已创建 State Version v'.$version->version.'，历史版本保持不变。')
-                        ->success()
-                        ->send();
-                }),
+                ->action("openStoryStateDialog('manual')"),
         ];
+    }
+
+    public function openStoryStateDialog(string $dialog): void
+    {
+        if (! in_array($dialog, ['verify', 'recover', 'projections', 'manual'], true)) {
+            return;
+        }
+
+        try {
+            $current = app(StoryStateService::class)->current($this->getRecord());
+            if ($current === null) {
+                throw ValidationException::withMessages(['state' => '小说尚未初始化 Canonical Story State。']);
+            }
+
+            $this->dialogExpectedStateVersion = $current->version;
+            $this->dialogExpectedCurrentChecksum = $current->checksum;
+
+            if (in_array($dialog, ['verify', 'recover'], true)) {
+                $result = app(StoryStateRebuilder::class)->rebuild($this->getRecord());
+                $this->dialogExpectedRebuiltChecksum = $result->rebuiltChecksum;
+
+                if ($dialog === 'recover' && $result->matches()) {
+                    throw ValidationException::withMessages(['state' => '当前 Canonical Story State 已与重建结果一致，无需恢复。']);
+                }
+            }
+
+            if ($dialog === 'manual') {
+                $this->manualCorrectionPath = '';
+                $this->manualCorrectionValue = '';
+                $this->manualCorrectionReason = '';
+            }
+
+            $this->storyStateDialog = $dialog;
+        } catch (Throwable $exception) {
+            $this->notifyActionFailure(
+                $exception,
+                $dialog === 'recover' ? '当前不能执行 Canonical 恢复' : '无法打开 Story State 操作',
+                '请刷新页面并检查当前版本与完整基线后重试。',
+            );
+        }
+    }
+
+    public function closeStoryStateDialog(): void
+    {
+        $this->storyStateDialog = null;
+        $this->resetValidation();
+    }
+
+    public function rebuildProjectionsFromDialog(ProjectionRebuilder $rebuilder): void
+    {
+        try {
+            $health = $rebuilder->rebuild($this->getRecord());
+            $this->refreshInspector();
+            $this->closeStoryStateDialog();
+            Notification::make()->title('领域投影已重建')
+                ->body("已根据 State Version v{$health->stateVersion} 校验 {$health->checkedCount()} 条投影。")
+                ->success()->send();
+        } catch (Throwable $exception) {
+            $this->notifyActionFailure($exception, '领域投影重建失败', '请先修复 Canonical Story State 或领域数据后重试。');
+        }
+    }
+
+    public function recoverCanonicalStateFromDialog(RecoverCanonicalStoryStateAction $recover): void
+    {
+        try {
+            $version = $recover->execute(
+                $this->getRecord(),
+                (int) $this->dialogExpectedStateVersion,
+                (string) $this->dialogExpectedCurrentChecksum,
+                (string) $this->dialogExpectedRebuiltChecksum,
+            );
+            $this->refreshInspector($version->version);
+            $this->closeStoryStateDialog();
+            Notification::make()->title('Canonical Story State 已恢复')
+                ->body("已创建无章节恢复基线 v{$version->version}，历史版本保持不变；领域投影已进入现有刷新队列。")
+                ->success()->send();
+        } catch (Throwable $exception) {
+            $this->notifyActionFailure($exception, 'Canonical Story State 恢复失败', '请重新校验当前版本后再试。');
+        }
+    }
+
+    public function saveManualCorrection(ManualCanonicalCorrectionAction $manualCorrection): void
+    {
+        try {
+            $this->validate([
+                'manualCorrectionPath' => ['required', 'string', 'max:500'],
+                'manualCorrectionValue' => ['required', 'json'],
+                'manualCorrectionReason' => ['required', 'string', 'max:2000'],
+            ], [], [
+                'manualCorrectionPath' => '状态路径',
+                'manualCorrectionValue' => '新值',
+                'manualCorrectionReason' => '修正原因',
+            ]);
+
+            $version = $manualCorrection->execute(
+                $this->getRecord(),
+                (int) $this->dialogExpectedStateVersion,
+                $this->manualCorrectionPath,
+                json_decode($this->manualCorrectionValue, true, flags: JSON_THROW_ON_ERROR),
+                $this->manualCorrectionReason,
+                auth()->id(),
+            );
+            $this->refreshInspector($version->version);
+            $this->closeStoryStateDialog();
+            Notification::make()->title('Canonical Story State 已修正')
+                ->body('已创建 State Version v'.$version->version.'，历史版本保持不变。')
+                ->success()->send();
+        } catch (Throwable $exception) {
+            $this->notifyActionFailure($exception, 'Canonical Story State 修正失败', '请刷新页面确认当前版本、路径和值后重试。');
+        }
+    }
+
+    /**
+     * Header actions on this page operate on the workspace Novel, not rows in
+     * the Facts table. Omitting the default record prevents Filament from
+     * serializing a table-record context that cannot be resolved on mount.
+     */
+    public function getDefaultActionRecord(Action $action): ?Model
+    {
+        return null;
     }
 
     public function content(Schema $schema): Schema
@@ -196,6 +273,13 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         return $schema->components([
             View::make('filament.resources.novels.pages.story-state-inspector')
                 ->viewData(fn (): array => $this->inspectorData()),
+            View::make('filament.resources.novels.pages.story-state-dialogs')
+                ->viewData(fn (): array => [
+                    'dialog' => $this->storyStateDialog,
+                    'result' => in_array($this->storyStateDialog, ['verify', 'recover'], true)
+                        ? app(StoryStateRebuilder::class)->rebuild($this->getRecord())
+                        : null,
+                ]),
         ]);
     }
 
@@ -550,5 +634,41 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         return $novel->storyStateVersions()
             ->where('version', '<', $toVersion)
             ->max('version') ?? $toVersion;
+    }
+
+    private function refreshInspector(?int $version = null): void
+    {
+        $this->getRecord()->refresh();
+        $this->getRecord()->unsetRelations();
+        $resolved = $this->resolveSelectedVersion($version);
+        $this->selectedVersion = $resolved;
+        $this->diffToVersion = $resolved;
+        $this->diffFromVersion = $this->resolveDiffFromVersion(null, $resolved);
+    }
+
+    private function notifyActionFailure(Throwable $exception, string $title, string $nextStep): void
+    {
+        $errorId = (string) Str::uuid();
+        $message = $exception instanceof ValidationException
+            ? collect($exception->errors())->flatten()->first()
+            : $exception->getMessage();
+
+        Log::log(
+            $exception instanceof ValidationException ? 'warning' : 'error',
+            'Story State workspace action failed.',
+            [
+                'error_id' => $errorId,
+                'novel_id' => $this->getRecord()->getKey(),
+                'exception' => $exception::class,
+                'message' => $exception->getMessage(),
+            ],
+        );
+
+        Notification::make()
+            ->title($title)
+            ->body(trim((string) $message)." 错误编号：{$errorId}。{$nextStep}")
+            ->danger()
+            ->persistent()
+            ->send();
     }
 }

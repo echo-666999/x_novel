@@ -11,7 +11,7 @@ class RebuildStoryState extends Command
 {
     protected $signature = 'story:rebuild-state {novel : Novel ID} {--dry-run : 仅校验，不写入 Canonical Story State}';
 
-    protected $description = '从 State Version 0 与有效 Story Events 重建并校验 Canonical Story State';
+    protected $description = '从最新完整无章节基线与有效 Story Events 重建并校验 Canonical Story State';
 
     public function handle(StoryStateRebuilder $rebuilder): int
     {
@@ -33,7 +33,14 @@ class RebuildStoryState extends Command
 
         $this->components->twoColumnDetail('小说', "{$novel->title} (#{$novel->getKey()})");
         $this->components->twoColumnDetail('当前版本', 'v'.$result->currentVersion);
+        $this->components->twoColumnDetail('完整基线', 'v'.$result->baselineVersion);
+        $this->components->twoColumnDetail('基线 checksum', $result->baselineChecksum);
         $this->components->twoColumnDetail('重放事件', (string) $result->replayedEventCount);
+        $this->components->twoColumnDetail('事件范围', $result->firstReplayedEventId === null
+            ? '无可应用事件'
+            : "#{$result->firstReplayedEventId} / v{$result->firstReplayedStateVersion} → #{$result->lastReplayedEventId} / v{$result->lastReplayedStateVersion}");
+        $this->components->twoColumnDetail('跳过事件', (string) count($result->skippedEvents));
+        $this->components->twoColumnDetail('跳过基线候选', (string) count($result->skippedBaselines));
         $this->components->twoColumnDetail('当前 checksum', $result->currentChecksum);
         $this->components->twoColumnDetail('重建 checksum', $result->rebuiltChecksum);
         $this->components->twoColumnDetail('状态差异', (string) count($result->changes));

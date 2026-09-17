@@ -17,6 +17,7 @@ class ChapterPlanFactory extends Factory
             'version' => 1,
             'chapter_function' => fake()->sentence(),
             'arc_contribution' => fake()->sentence(),
+            'arc_contributions' => [],
             'reader_promise' => fake()->sentence(),
             'target_words' => 3_000,
             'pov_character_id' => null,
@@ -30,6 +31,7 @@ class ChapterPlanFactory extends Factory
             'forbidden_conflicts' => [],
             'due_foreshadowings' => [],
             'foreshadowing_actions' => [],
+            'world_entity_candidates' => [],
             'scene_plans' => [[
                 'goal' => fake()->sentence(),
                 'conflict' => fake()->sentence(),
@@ -37,6 +39,7 @@ class ChapterPlanFactory extends Factory
                 'outcome' => fake()->sentence(),
                 'outcome_allowed' => [],
                 'outcome_forbidden' => [],
+                'continuity_requirements' => [],
                 'transition_from_previous' => null,
             ]],
             'status' => PlanStatus::Draft,

@@ -61,17 +61,21 @@ test('saving novel model overrides preserves unrelated settings and removes blan
             'custom_option' => true,
             'models' => ['planner' => 'new-planner'],
         ],
+        'auto_commit' => false,
+        'auto_commit_configured' => true,
     ]);
 });
 
-test('novel settings no longer exposes automatic canonical commit', function () {
+test('novel settings exposes explicit automatic canonical commit and ignores the legacy key', function () {
     $novel = Novel::factory()->create(['settings' => ['auto_commit' => true]]);
 
     Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertDontSee('Review 通过后自动提交')
+        ->assertSee('Review 通过后自动提交正式章节')
+        ->assertFormSet(['workflow_auto_commit' => false])
+        ->fillForm(['workflow_auto_commit' => true])
         ->call('save')
         ->assertHasNoFormErrors();
 
-    // 历史键只作为未清理的旧数据保留；运行时与 UI 均不再读取它。
-    expect(data_get($novel->refresh()->settings, 'auto_commit'))->toBeTrue();
+    expect(data_get($novel->refresh()->settings, 'auto_commit'))->toBeTrue()
+        ->and(data_get($novel->settings, 'auto_commit_configured'))->toBeTrue();
 });

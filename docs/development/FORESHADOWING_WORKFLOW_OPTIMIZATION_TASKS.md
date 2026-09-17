@@ -162,6 +162,8 @@ flowchart TD
 
 ### 完成记录（2026-09-15）
 
+> 历史语义说明（2026-09-17）：本完成记录中的“PASS 停止、用户手动 Commit”是 FSO 验证当时的行为。GWQ-001 已把当前权威规则更新为小说级 `auto_commit`（默认关闭）；自动和手动路径都必须经过同一个 `CanonicalCommitService`。原测试数字和版本证据不作追溯改写。
+
 - **Summary：** 已完成本地数据库中全部 1 部小说、3 条伏笔、23 条 Active 伏笔事件及其 Canonical evidence、Plan、Context、Projection 和 Memory 的只读交叉审计；报告见 `docs/development/FORESHADOWING_STATE_AUDIT.md`。
 - **Problems Addressed：** 确认全部伏笔投影漂移、三条非法首次强化、Critical 逾期门禁缺失、动作契约缺失、Extractor 目标过宽、Memory 下游影响；额外确认现有 State Version 0 重建基线不能完整恢复本小说基础元数据。
 - **Files Changed：** 新增审计报告；仅更新本任务文档的状态和完成记录。
@@ -907,6 +909,8 @@ Latest Chapter Rollback 恢复投影
 - 不声称执行了未运行的真实模型测试或线上数据验证。
 
 ### 完成记录（2026-09-15）
+
+> 当前规则覆盖（2026-09-17）：本节中的“PASS 停止、用户手动 Commit”保留为 FSO 端到端验证时的历史行为。GWQ-001 已将当前 Source of Truth 更新为小说级 `auto_commit`（默认关闭）；开启时安全派发，关闭时仍由用户确认，两条路径共用 `CanonicalCommitService`。
 
 - **Summary：** 已新增三章 Fake Provider 端到端用例，使用真实测试数据库记录验证同一条 Critical 伏笔按 `idea → planted → reinforced → paid_off` 跨章推进；每章覆盖 Plan、Scene、Assembly、Event Candidate、State Patch、全量 Review、PASS 停止、用户手动 Canonical Commit、Story Event、State Version、Memory、Projection Refresh 和下一章读取新状态。
 - **Required Scenarios：** 任务卡列出的生命周期、同章顺序、非法跳转、未授权目标、到期/逾期、延期恢复、Coverage/Rewrite、NEEDS_ATTENTION、PASS/Commit 隔离、投影幂等/失败恢复、最新章回滚、历史兼容和失效来源均已有自动测试。完整映射与恢复边界见 `docs/development/FORESHADOWING_WORKFLOW_VERIFICATION.md`。

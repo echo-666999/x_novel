@@ -7,6 +7,7 @@ use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use App\Services\ClosureDebtService;
+use App\Services\StoryArcProgressProjector;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
@@ -94,6 +95,12 @@ class ViewNovelPlanning extends ViewRecord
             ->orderByRaw("CASE WHEN type = 'main' THEN 0 ELSE 1 END")
             ->orderBy('title')
             ->get();
+
+        $projector = app(StoryArcProgressProjector::class);
+        $volumes->each(fn ($volume) => $volume->storyArcs->each(
+            fn ($arc) => $arc->setAttribute('progress_summary', $projector->summary($arc)),
+        ));
+        $globalArcs->each(fn ($arc) => $arc->setAttribute('progress_summary', $projector->summary($arc)));
 
         return [
             'volumes' => $volumes,

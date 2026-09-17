@@ -122,18 +122,21 @@ test('openai provider logs the complete prompt and response with request metadat
             'generation_run_id' => 51,
             'scene_id' => 1,
             'stage' => 'writer',
+            'ai_request_log_id' => 'repair-log-51',
         ],
     ));
 
     $requestLog = $records['AI Provider 完整请求。'];
     $responseLog = $records['AI Provider 完整响应。'];
 
-    expect($requestLog['ai_request_log_id'])->toBe($responseLog['ai_request_log_id'])
+    expect($requestLog['ai_request_log_id'])->toBe('repair-log-51')
+        ->and($responseLog['ai_request_log_id'])->toBe('repair-log-51')
         ->and($requestLog['prompt_version'])->toBe('scene-writer-test')
         ->and($requestLog['metadata'])->toBe([
             'generation_run_id' => 51,
             'scene_id' => 1,
             'stage' => 'writer',
+            'ai_request_log_id' => 'repair-log-51',
         ])
         ->and($requestLog['payload']['messages'])->toBe([
             ['role' => 'system', 'content' => '完整系统提示词'],

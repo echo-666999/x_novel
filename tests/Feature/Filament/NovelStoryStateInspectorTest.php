@@ -132,7 +132,11 @@ test('the inspector exposes a dry run story state rebuild report', function () {
     app(InitializeNovelStateAction::class)->handle($novel);
 
     Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
-        ->assertActionExists('verifyRebuild');
+        ->assertActionExists('verifyRebuild')
+        ->call('openStoryStateDialog', 'verify')
+        ->assertSet('storyStateDialog', 'verify')
+        ->assertSee('故事状态校验通过')
+        ->assertSee('Baseline v0');
 
     $this->view('filament.resources.novels.pages.story-state-rebuild', [
         'result' => app(StoryStateRebuilder::class)->rebuild($novel->fresh()),
@@ -143,6 +147,38 @@ test('the inspector exposes a dry run story state rebuild report', function () {
         ->assertSee('本次仅校验，不写入正式状态');
 
     expect($novel->storyStateVersions()->count())->toBe(1);
+});
+
+test('all story state header actions open their real page dialogs', function () {
+    $incident = require base_path('tests/Fixtures/generation_workflow_quality_incidents.php');
+    $novel = Novel::factory()->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+
+    $component = Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()]);
+    $handlers = collect($component->instance()->getCachedHeaderActions())
+        ->mapWithKeys(fn ($action): array => [$action->getName() => $action->getLivewireClickHandler()]);
+
+    expect($handlers->only(array_keys($incident['header_actions']))->all())->toBe($incident['header_actions']);
+
+    foreach ([
+        'verify' => '校验 Story State 重建结果',
+        'projections' => '重建领域投影',
+        'manual' => '人工修正 Canonical Story State',
+    ] as $dialog => $heading) {
+        Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
+            ->call('openStoryStateDialog', $dialog)
+            ->assertSet('storyStateDialog', $dialog)
+            ->assertSee($heading);
+    }
+});
+
+test('story state dialog failures show a Chinese notification with the next step', function () {
+    $novel = Novel::factory()->create();
+
+    Livewire::test(ViewNovelStoryState::class, ['record' => $novel->getRouteKey()])
+        ->call('openStoryStateDialog', 'verify')
+        ->assertSet('storyStateDialog', null)
+        ->assertNotified('无法打开 Story State 操作');
 });
 
 test('the inspector shows projection health and rebuilds drift through a domain action', function () {
@@ -158,8 +194,8 @@ test('the inspector shows projection health and rebuilds drift through a domain 
         ->assertSee('存在漂移')
         ->assertSee('漂移 1')
         ->assertActionExists('rebuildProjections')
-        ->callAction('rebuildProjections')
-        ->assertHasNoActionErrors()
+        ->call('openStoryStateDialog', 'projections')
+        ->call('rebuildProjectionsFromDialog')
         ->assertNotified('领域投影已重建')
         ->assertSee('健康')
         ->assertSee('漂移 0');

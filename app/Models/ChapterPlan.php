@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'version',
     'chapter_function',
     'arc_contribution',
+    'arc_contributions',
     'reader_promise',
     'target_words',
     'pov_character_id',
@@ -27,6 +28,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'forbidden_conflicts',
     'due_foreshadowings',
     'foreshadowing_actions',
+    'world_entity_candidates',
     'scene_plans',
     'status',
 ])]
@@ -101,6 +103,8 @@ class ChapterPlan extends Model
             'forbidden_conflicts' => 'array',
             'due_foreshadowings' => 'array',
             'foreshadowing_actions' => 'array',
+            'arc_contributions' => 'array',
+            'world_entity_candidates' => 'array',
             'scene_plans' => 'array',
             'status' => PlanStatus::class,
         ];

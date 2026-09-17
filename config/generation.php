@@ -23,6 +23,8 @@ return [
     'event_evidence_repair_max_output_tokens' => 1_000,
     'event_evidence_repair_retry_max_output_tokens' => 4_000,
     'review_max_output_tokens' => (int) env('REVIEW_MAX_OUTPUT_TOKENS', 4_000),
+    'review_schema_repair_max_output_tokens' => 1_500,
+    'coverage_judgment_repair_max_output_tokens' => 1_500,
     'review_pass_score' => (float) env('REVIEW_PASS_SCORE', 80),
     'rewrite_max_output_tokens' => (int) env('REWRITE_MAX_OUTPUT_TOKENS', 12_000),
     'max_rewrite_attempts' => (int) env('MAX_REWRITE_ATTEMPTS', 2),

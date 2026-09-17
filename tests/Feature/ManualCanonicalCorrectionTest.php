@@ -95,13 +95,12 @@ test('story state inspector exposes the reason required manual correction action
 
     Livewire::test(ViewNovelStoryState::class, ['record' => $fixture['novel']->getRouteKey()])
         ->assertActionExists('manualCorrection')
-        ->callAction('manualCorrection', data: [
-            'expected_state_version' => 1,
-            'path' => 'characters.42.location',
-            'value' => '"洛阳"',
-            'reason' => '从正式设定核对后修正。',
-        ])
-        ->assertHasNoActionErrors()
+        ->call('openStoryStateDialog', 'manual')
+        ->set('manualCorrectionPath', 'characters.42.location')
+        ->set('manualCorrectionValue', '"洛阳"')
+        ->set('manualCorrectionReason', '从正式设定核对后修正。')
+        ->call('saveManualCorrection')
+        ->assertHasNoErrors()
         ->assertNotified('Canonical Story State 已修正')
         ->assertSet('selectedVersion', 2);
 

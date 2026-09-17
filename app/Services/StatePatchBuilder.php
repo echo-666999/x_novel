@@ -6,6 +6,7 @@ use App\Contracts\StoryEventApplier;
 use App\Data\StatePatch;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
+use App\Enums\EventType;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use Illuminate\Support\Arr;
@@ -37,6 +38,10 @@ class StatePatchBuilder
         $operations = [];
 
         foreach ($events as $index => $event) {
+            if ($event->eventType === EventType::WorldEntityIntroduced) {
+                continue;
+            }
+
             if (! $this->eventApplier->supports($event->eventType->value)) {
                 continue;
             }

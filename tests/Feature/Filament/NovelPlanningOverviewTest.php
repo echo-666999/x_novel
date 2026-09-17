@@ -55,6 +55,7 @@ test('the planning overview shows active arcs beneath their volumes', function (
             '第 1 卷 · 孤城卷',
             '追查雾潮源头',
             '40%',
+            'Canonical 0/2',
             '关键节拍',
             '发现旧港航海日志',
             '进入沉没灯塔',

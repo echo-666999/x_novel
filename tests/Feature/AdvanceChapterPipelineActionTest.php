@@ -209,7 +209,7 @@ test('a fresh running stage is not dispatched a second time', function () {
     Queue::assertNothingPushed();
 });
 
-test('a rewrite review dispatches its frozen scope while pass ignores auto commit', function () {
+test('a rewrite review dispatches its frozen scope while legacy auto commit remains disabled', function () {
     $fixture = pipelineChapter();
     $draft = pipelineArtifact($fixture['novel'], $fixture['chapter'], ArtifactType::ChapterDraft, GenerationStage::ChapterAssembly);
     pipelineReview($fixture['novel'], $fixture['chapter'], $draft, ReviewDecision::Rewrite, [[
@@ -229,6 +229,56 @@ test('a rewrite review dispatches its frozen scope while pass ignores auto commi
     $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
     $fixture['chapter']->update(['status' => ChapterStatus::Review]);
     expect(app(AdvanceChapterPipelineAction::class)->handle($fixture['chapter']->getKey()))->toBeNull();
+    Queue::assertNotPushed(CommitChapterJob::class);
+});
+
+test('an explicit automatic commit setting dispatches the frozen pass review exactly once', function () {
+    $fixture = pipelineChapter();
+    $chapter = $fixture['chapter'];
+    $novel = $fixture['novel'];
+    $draft = pipelineArtifact($novel, $chapter, ArtifactType::ChapterDraft, GenerationStage::ChapterAssembly);
+    $candidate = pipelineArtifact($novel, $chapter, ArtifactType::EventCandidate, GenerationStage::EventExtraction, [
+        'status' => 'candidate',
+        'source_artifact_id' => $draft->getKey(),
+        'events' => [],
+    ]);
+    pipelineArtifact($novel, $chapter, ArtifactType::StatePatch, GenerationStage::EventExtraction, [
+        'source_artifact_id' => $candidate->getKey(),
+        'expected_state_version' => 0,
+        'operations' => [],
+    ]);
+    $review = pipelineReview($novel, $chapter, $draft, ReviewDecision::Pass);
+    $novel->update(['settings' => ['auto_commit' => true, 'auto_commit_configured' => true]]);
+    $chapter->update(['status' => ChapterStatus::Review]);
+
+    $advance = app(AdvanceChapterPipelineAction::class);
+    expect($advance->handle($chapter->getKey()))->toBe(GenerationStage::Commit)
+        ->and($advance->handle($chapter->getKey()))->toBe(GenerationStage::Commit);
+
+    Queue::assertPushed(CommitChapterJob::class, 1);
+    Queue::assertPushed(CommitChapterJob::class, fn (CommitChapterJob $job): bool => $job->reviewId === $review->getKey());
+});
+
+test('automatic commit stops when the frozen state version is stale', function () {
+    $fixture = pipelineChapter();
+    $chapter = $fixture['chapter'];
+    $novel = $fixture['novel'];
+    $draft = pipelineArtifact($novel, $chapter, ArtifactType::ChapterDraft, GenerationStage::ChapterAssembly);
+    $candidate = pipelineArtifact($novel, $chapter, ArtifactType::EventCandidate, GenerationStage::EventExtraction, [
+        'source_artifact_id' => $draft->getKey(),
+        'events' => [],
+    ]);
+    pipelineArtifact($novel, $chapter, ArtifactType::StatePatch, GenerationStage::EventExtraction, [
+        'source_artifact_id' => $candidate->getKey(),
+        'expected_state_version' => 0,
+        'operations' => [],
+    ]);
+    $review = pipelineReview($novel, $chapter, $draft, ReviewDecision::Pass);
+    $review->generationRun->update(['state_version' => 99]);
+    $novel->update(['settings' => ['auto_commit' => true, 'auto_commit_configured' => true]]);
+    $chapter->update(['status' => ChapterStatus::Review]);
+
+    expect(app(AdvanceChapterPipelineAction::class)->handle($chapter->getKey()))->toBe(GenerationStage::Review);
     Queue::assertNotPushed(CommitChapterJob::class);
 });
 

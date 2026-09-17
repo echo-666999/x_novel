@@ -350,6 +350,8 @@ class ChapterRewriter
             return $chapter->latestPlan->only([
                 'chapter_function',
                 'arc_contribution',
+                'arc_contributions',
+                'world_entity_candidates',
                 'reader_promise',
                 'must_reveal',
                 'must_not_reveal',
@@ -368,6 +370,7 @@ class ChapterRewriter
         return [
             'scene_id' => $scene->getKey(),
             'sequence' => $scene->sequence,
+            'continuity_requirements' => is_array($scenePlan) ? ($scenePlan['continuity_requirements'] ?? []) : [],
             'coverage_expectations' => PlanCoverage::expectations(
                 $scene->only(PlanCoverage::ELEMENTS),
                 is_array($scenePlan) ? $scenePlan : [],

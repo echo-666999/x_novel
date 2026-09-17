@@ -14,6 +14,7 @@ use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Jobs\AssembleChapterJob;
+use App\Jobs\CommitChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
@@ -60,7 +61,7 @@ class AdvanceChapterPipelineAction
             $latestDraft = $this->latestChapterDraft($chapter);
             $review = $latestDraft === null ? null : $this->latestReviewForDraft($chapter, $latestDraft);
             if ($review !== null && $this->reviewStillCurrent($chapter, $latestDraft, $review)) {
-                [$nextStage, $nextJob] = $this->advanceReviewDecision($chapter, $review);
+                [$nextStage, $nextJob] = $this->advanceReviewDecision($chapter, $latestDraft, $review);
 
                 return;
             }
@@ -207,8 +208,12 @@ class AdvanceChapterPipelineAction
     }
 
     /** @return array{?GenerationStage, (ShouldQueue&ShouldBeUnique)|null} */
-    private function advanceReviewDecision(Chapter $chapter, Review $review): array
+    private function advanceReviewDecision(Chapter $chapter, GenerationArtifact $draft, Review $review): array
     {
+        if ($review->decision === ReviewDecision::Pass) {
+            return $this->nextAfterPass($chapter, $draft, $review);
+        }
+
         if ($review->decision !== ReviewDecision::Rewrite) {
             return [null, null];
         }
@@ -230,6 +235,38 @@ class AdvanceChapterPipelineAction
             $chapter->getKey(),
             $scope->scope === 'scene' ? $scope->sceneId : null,
         )];
+    }
+
+    /** @return array{?GenerationStage, (ShouldQueue&ShouldBeUnique)|null} */
+    private function nextAfterPass(Chapter $chapter, GenerationArtifact $draft, Review $review): array
+    {
+        // Historical auto_commit values predate the restored setting and remain
+        // inert until the operator explicitly saves the new control.
+        if (data_get($chapter->novel->settings, 'auto_commit_configured') !== true
+            || data_get($chapter->novel->settings, 'auto_commit') !== true) {
+            return [null, null];
+        }
+
+        $expectedStateVersion = $chapter->novel->canonicalStateVersion?->version;
+        if ($expectedStateVersion === null || $review->generationRun?->state_version !== $expectedStateVersion) {
+            return [null, null];
+        }
+
+        $candidate = $this->latestArtifact($chapter, ArtifactType::EventCandidate);
+        if ($candidate === null
+            || $candidate->generationRun?->state_version !== $expectedStateVersion
+            || (int) data_get($candidate->data, 'source_artifact_id') !== $draft->getKey()) {
+            return [null, null];
+        }
+
+        $patch = $this->latestArtifact($chapter, ArtifactType::StatePatch);
+        if ($patch === null
+            || (int) data_get($patch->data, 'source_artifact_id') !== $candidate->getKey()
+            || (int) data_get($patch->data, 'expected_state_version', -1) !== $expectedStateVersion) {
+            return [null, null];
+        }
+
+        return [GenerationStage::Commit, new CommitChapterJob($chapter->getKey(), $review->getKey())];
     }
 
     private function reviewStillCurrent(Chapter $chapter, GenerationArtifact $draft, Review $review): bool

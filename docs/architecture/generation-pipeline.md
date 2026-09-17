@@ -6,7 +6,7 @@
 
 ## 1. 目标
 
-将 Chapter Plan 稳定转换为通过 Review 的章节候选，并在用户确认后通过 Canonical Commit 成为正式章节。自动流水线到 Review PASS 停止；整个流程必须可追踪、可重试、可恢复、可暂停，且 Draft 永不修改 Canonical State。
+将 Chapter Plan 稳定转换为通过 Review 的章节候选，并按小说级策略自动或经用户确认后，通过 Canonical Commit 成为正式章节。`auto_commit` 默认关闭；整个流程必须可追踪、可重试、可恢复、可暂停，且 Draft 永不修改 Canonical State。
 
 Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、Event Extraction、Summary。不同 Novel 可并行；同一 Novel 的章节 MVP 串行。
 
@@ -39,17 +39,18 @@ GenerateNextChapterAction
 → StateValidator
 → ReviewChapterJob
 → ReviewGate
-   ├ PASS → Stop，等待用户确认“提交正式章节”
+   ├ PASS + auto_commit=false → Stop，等待用户确认“提交正式章节”
+   ├ PASS + auto_commit=true → CommitChapterJob
    ├ REWRITE → RewriteChapterJob → Extract/Validate/Review
    └ NEEDS_ATTENTION/BLOCK → Stop
 
-用户确认提交
+自动策略或用户确认提交
 → CommitChapterJob → CanonicalCommitService
 → UpdateMemoryJob → GenerateEmbeddingJob → RollupSummaryJob
 → CheckNextAction
 ```
 
-`PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 不得因为 `auto_commit` 设置自动派发 Commit；只有用户确认动作可以启动 Canonical Commit。
+`PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 只在 Review Artifact 对应当前 Draft、小说未暂停、`settings.auto_commit_configured=true` 且 `settings.auto_commit=true` 时自动派发 Commit；遗留的未确认 `auto_commit` 键保持惰性。关闭时只允许用户确认动作启动 Commit。两条路径都调用同一 `CommitChapterJob → CanonicalCommitService`，不得复制或绕过提交门禁。
 
 `AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan、Scene、Assembly、Event Extraction、Review 和 Rewrite Job 成功后都调用该动作，不再各自维护后续分支。
 
@@ -198,6 +199,8 @@ Plan 至少包含：
 ```text
 chapter_function
 arc_contribution
+arc_contributions
+world_entity_candidates
 reader_promise
 target_words
 pov_character
@@ -210,7 +213,11 @@ foreshadowing_actions
 scene_plans
 ```
 
-`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v7` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
+`arc_contributions` 以 `arc_id + beat_key + beat_index` 引用当前小说中属于当前 Volume 或跨卷 Active Arc 的真实 Beat，并冻结目标 Scene 和验收条件；自然语言 `arc_contribution` 仅作说明。`world_entity_candidates` 以稳定临时键记录正文确实需要、Canonical World 中尚不存在的地点、物品、阵营、组织、规则或概念，并包含类型、名称、描述、去重依据、潜在重复实体、引入理由和目标 Scene。两组数据在 Review PASS 和 Canonical Commit 前都只是 Draft 契约。
+
+新 Plan 的每个 Scene 使用 `continuity_requirements` 和稳定 `key` 区分 `establish / persist / change / callback`。相同持续状态只能首次建立一次；`persist` 只要求当前 Scene 的增量影响，`change` 要求真实状态变化，`callback` 只允许在章末回扣。Plan Validator 在 Writer 前拒绝跨 Scene 重复的 goal/conflict/turn/outcome 或错误的连续性阶段；历史 Plan 可缺少该字段并保持只读兼容。
+
+`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v8` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
 
 `due_from_chapter`～`due_to_chapter` 是兑现窗口。Planning 以目标章序号选择本章机会，但正式 `upcoming / due / overdue` 只按最新 Canonical 章节计算。Planner 同时接收完整伏笔定义、Canonical 生命周期来源、领域投影状态、允许动作和已发生的重要 Active Events。Critical 在窗口内必须有动作；目标章为 `due_to` 时不能只做 `reinforce`；窗口结束后，`ForeshadowingPlanningGate` 在创建 Planning Run 和调用模型前阻止自动 Planner。此时只有人工建立包含 `pay_off`，或具有有效人工授权的 `defer / abandon` 动作契约，才构成可继续执行的修复计划。非 Critical 逾期只产生 Warning。
 
@@ -257,6 +264,8 @@ Snapshot Schema v3 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Ch
 
 Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Assembler、Event Extractor、Reviewer 和 Rewriter 从各自 Run 的 `foreshadowing_contract` 读取同一结构并保存 checksum。`promised_payoff` 是作者侧约束，仍受 `must_not_reveal` 限制，不能被模型解释为允许提前揭晓。
 
+同一 Context 还必须携带冻结的 `arc_contributions` 和 `world_entity_candidates`。Writer 只能使用这些候选临时键引入重大世界资料；Reviewer 对每个计划 Beat、Arc Completion Condition 和 Entity Candidate 输出逐字证据审计，并单独列出未批准的重大实体。缺少、错序、引用其他小说或 Volume 的 Arc、与现有实体冲突、证据无法逐字命中，都会形成确定性 Finding 并阻止其进入 Canonical Commit。
+
 Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
 
 整章 Rewrite 使用与 Assembly 相同的结构化 `content + scene_coverage + introduced_major_facts` 契约，但允许重写在实际修正文后把原先 missing/contradicted 的 Coverage 重新判为 fulfilled；证据仍须逐字校验，必要时只修复证据引用。整章 Rewrite Artifact 保存新的 `scene_coverage` 和 `plan_findings`，随后推进器因 source artifact 已变化而重新执行 Event Extraction、State Patch 和 Review。Scene 级 Rewrite 仍先回到 Assembly，再执行同一完整下游链。Rewrite 不能写 Story Event、伏笔领域投影或 Canonical State。
@@ -294,7 +303,7 @@ MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_stat
 
 `declared_events` 仅辅助，不是正式 Story Event。
 
-`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用；仅有空白或外层引号差异时，将 evidence 映射回正文中的连续原句，仍无法逐字命中时只修复 Coverage evidence，不重新生成正文，也不得改变原 status。轻量修复响应因输出 Token 用尽而没有正文时，使用提高后的修复预算重试一次；错误信息必须区分输出截断与 Schema 非法。修复后仍不能逐字命中则本次 Scene Run 失败。缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果属于生成质量证据，不是 Canonical Fact，也不单独决定最终 Review Decision。
+`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用；仅有空白或外层引号差异时，将 evidence 映射回正文中的连续原句，仍无法逐字命中时只修复 Coverage evidence，不重新生成正文，也不得改变原 status。轻量修复响应因输出 Token 用尽而没有正文时，使用提高后的修复预算重试一次；错误信息必须区分输出截断与 Schema 非法。修复后仍不能逐字命中则本次 Scene Run 失败。缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果是结构化自报证据，不是不可推翻的语义事实或 Canonical Fact，也不单独决定最终 Review Decision。
 
 `foreshadowing_coverage` 按冻结契约顺序列出分配给当前 Scene 的全部动作，每项固定包含 `foreshadowing_id`、`action`、`status` 和 `evidence`。Laravel 对照 `target_scene_sequence` 校验 ID、动作、顺序与 Scene 归属，并执行同样的逐字证据规则。只有正文具体结果满足 `acceptance_criteria` 时才允许模型声明 fulfilled；主题相近但缺少动作结果时必须声明 missing。证据修复只允许替换 evidence，不得改变 ID、动作、顺序或 status；修复耗尽时，将无法验证证据的声明降为 missing 并生成 `FORESHADOWING_COVERAGE_MISSING` Finding，不伪造正文结果。
 
@@ -324,7 +333,7 @@ MVP 不做 Scene Parallel。
 
 Assembler 使用结构化响应：`content`、按 Scene 顺序返回的 `scene_coverage`，以及必须为空的 `introduced_major_facts`。每个 coverage 固定检查 goal/conflict/turn/outcome，并包含该 Scene 的 `foreshadowing_coverage`；两类 Coverage 都执行原文 evidence 校验。Scene ID 必须完整、顺序一致、不得重复或跨章引用；伏笔 Coverage 必须与冻结契约中的目标 Scene、伏笔 ID、动作和顺序一致。若 Scene Draft 已把普通计划项或伏笔动作报告为 missing/contradicted，Assembler 不得将其直接提升为 fulfilled。若组装删除了 Scene Draft 中唯一的伏笔完成证据，最终状态必须报告 missing/contradicted 并写入 Chapter Draft Artifact 的 `plan_findings`，供后续自动 Rewrite 使用。跨 Scene 的动作以各 Scene Coverage 保留并在 Chapter Draft 中聚合。
 
-上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。本阶段只允许修正无法逐字命中的 evidence quote，不修复 coverage 语义、不改变 status，也不改变最终 Review Decision。
+上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。Evidence Repair 只修正 quote 且不能改变 status；当最终 Coverage 报 missing 时，Review 阶段可以执行一次 `coverage-judgment-repair-v1` 聚焦复核，只允许重判 status/evidence，不得改正文、Plan 或 Canonical State。复核仍不确定或失败时保留原 Finding 和 `ai_request_log_id`；相同输入复用不可变 Context Artifact，不重复付费。
 
 幂等键：
 
@@ -393,11 +402,13 @@ NEEDS_ATTENTION  Rewrite 耗尽、重大歧义、Ending 冲突或需人工决策
 BLOCK            Locked Fact 或其他不可接受硬冲突
 ```
 
-普通 warning 按可执行性分流：可自动修复则 REWRITE；不影响发布且无需修复可 PASS；真正需要用户选择或 Rewrite 耗尽才 NEEDS_ATTENTION。Hard Conflict 必须 BLOCK，模型顶层建议不能覆盖 Laravel 的确定性决策。
+普通 warning 按分数和可执行性分流：评分达标且没有其他门禁时允许 PASS，并作为非阻塞建议保留；评分未达标且 warning 可执行时进入 REWRITE。auto-fixable error 进入 REWRITE；真正需要用户选择、没有安全修复路径或 Rewrite 耗尽时进入 NEEDS_ATTENTION。Hard Conflict 必须 BLOCK，模型顶层建议不能覆盖 Laravel 的确定性决策。
 
 Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
 
-Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。结构化输出为每个维度保存 `dimension_audits.status = pass|issues_found` 与简短结论；状态必须与该维度 Findings 一致，否则拒绝持久化。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Narrative Findings 作为回归清单，逐项确认是否消除，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
+Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。`findings` 是问题集合的权威来源；Laravel 根据最终 Findings 确定性派生 `dimension_audits.status = pass|issues_found`，并同时保存模型原始状态和归一化状态。原状态声称有问题但没有 Finding 时，执行一次 `review-schema-repair-v1` 单维结构修复；修复绑定相同 Draft、State Version、Bible Version 与 Reviewer Prompt 来源链，不重新运行完整 Review，也不消耗正文 Rewrite 配额。修复失败生成带 `ai_request_log_id` 的 NEEDS_ATTENTION，不把 Chapter 标为 blocked。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。
+
+Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Findings 作为回归清单，为每项保存 `resolved / still_present / replaced` 结果，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
 
 Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 使用确定性规则选择最小安全范围：单一有效 `scene_id` 进入 Scene Rewrite；Paragraph Finding 只在 evidence 能唯一命中一个当前 Scene Artifact 时映射到该 Scene；任一 Chapter Finding 或多个 Scene 受影响时进入 Chapter Rewrite。无效 Scene 引用、不支持的 scope 或不唯一的段落证据会追加 `REWRITE_SCOPE_UNRESOLVED` 并转为 `NEEDS_ATTENTION`，不猜测修复位置。Review Artifact 固定保存 `rewrite_scope`，队列派发与暂停恢复均优先使用该不可变路由。
 
@@ -419,7 +430,7 @@ Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止
 
 Scene Rewrite 返回结构化 `content + self_check`，保留 goal/conflict/turn/outcome 验收证据，仅更新目标 Scene 的 `current_artifact_id`；其他 Scene 指针保持不变，然后重新 Assembly 并继续 Event/Patch/Review。Chapter Rewrite 产生整章替换稿，然后直接重新 Event/Patch/Review。
 
-自动 Rewrite 次数只统计当前成功 Chapter Plan 之后生成且不含 `manual_edit = true` 的 `rewrite_draft`；Reviewer、Rewriter 与章节工作台共用同一统计口径。人工修改不会消耗自动次数，但 Artifact 展示版本仍按全部不可变重写稿连续递增。自动派发读取 Review Artifact 中冻结的 `rewrite_scope`，按其选择 Scene 或 Chapter Rewrite。
+自动 Rewrite 次数只统计当前成功 Chapter Plan 之后成功创建、且不含 `manual_edit = true` 的自动正文 `rewrite_draft`；Reviewer、Rewriter 与章节工作台共用同一统计口径。人工修改、长度 Repair、Coverage Repair、Review Schema Repair、Provider 失败与 Schema 失败都不消耗正文 Rewrite 次数。Artifact 展示版本仍按全部不可变重写稿连续递增。自动派发读取 Review Artifact 中冻结的 `rewrite_scope`，按其选择 Scene 或 Chapter Rewrite。
 
 最后一次 Rewrite 后若重新审校仍应为 `REWRITE`，Laravel 必须在该次 Review 中直接将最终决策转为 `NEEDS_ATTENTION`，不得等待一次无法从 UI 发起的额外 Rewrite 才标记耗尽。
 
@@ -443,9 +454,9 @@ rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
 
 只加载冻结 Commit Inputs 并调用 `CanonicalCommitService`，不调用 Writer、Reviewer、Extractor。
 
-该 Job 只由用户在 PASS 后确认“提交正式章节”时派发；Review PASS、自动生成开关或 Resume 本身都不得自动派发 Commit。
+该 Job 由用户在 PASS 后确认“提交正式章节”，或由 `auto_commit=true` 的 Review PASS 安全分支派发。两条路径都必须验证当前 Review/Draft 来源、Pause、Expected State Version 和幂等键，并调用同一 `CanonicalCommitService`；Resume 本身不得绕过这些条件直接提交。
 
-Canonical Commit 的数据库事务只固定 Story Events、Facts、State Version、Chapter 和 Novel 指针。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
+Canonical Commit 的数据库事务固定已验收 World Entity Candidate、Story Events、Facts、State Version、Chapter、Novel 指针和 Story Arc 进度。World Entity 使用 `(novel_id, source_chapter_id, source_candidate_key)` 幂等创建，临时键在写 Event、State 和后续 Memory 前解析为正式 Entity ID。Story Arc Progress 只根据 Active `story_arc_beat_completed` 事件中的唯一 Beat 重算；Draft 贡献不改变正式进度。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；其他领域投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
 
 投影重建以最新的无章节 State Version 为基线，按 `state_version, id` 重放不晚于目标版本的 Active 伏笔事件，并复核结果与目标 Canonical State 的 `status` 和 `reinforce_count` 一致。`setup_chapter_id` 只取有效 `foreshadowing_planted` 事件，`payoff_chapter_id` 只取有效 `foreshadowing_paid_off` 事件；不存在相应有效事件时字段必须为 `null`。它计算目标值后整体覆盖漂移字段，不在表当前值上执行 `+1`。
 
@@ -474,15 +485,20 @@ SELECT novel FOR UPDATE
 Validate state version
 SELECT chapter FOR UPDATE
 Validate review/artifact
+Validate planning acceptance and verbatim evidence
+Create approved World Entities and resolve temporary keys
 Persist Story Events
 Apply Fact Changes
 Create State Version N+1
 Update Chapter
 Update Novel pointers
+Recalculate Story Arc progress
 COMMIT
 ```
 
 相同 Commit 重复执行返回已有结果；不同 Artifact 覆盖已 Canonical Chapter必须 BLOCK。Commit 阶段禁止外部 LLM 调用。
+
+Latest Canonical Chapter Rollback 在同一事务中失效该章事件和记忆、恢复 State 指针、删除只由该章首次引入且没有后续 Active Canonical Event 引用的 Entity，并从剩余 Canonical Arc Events 重算进度。存在后续正式引用时必须阻止简单删除。历史 Plan 没有结构化 Beat 引用时保持可读，但不得据此猜测完成度；`story:rebuild-arc-progress` 默认只输出 dry-run，只有显式 `--execute` 才写入重算结果。
 
 ## 15. Post-Commit
 
@@ -540,9 +556,9 @@ summary:{canonical_artifact_checksum}:{summary_prompt_version}
 
 Auto Generate 不能预先 Queue 100 章。
 
-Auto Generate 只自动推进当前章到 Review PASS，不自动 Canonical Commit。用户手动提交 Chapter N 后，才执行 Post-Commit 并启动 Chapter N+1。
+Auto Generate 自动推进当前章到 Review PASS。`auto_commit=false` 时等待用户提交；`auto_commit=true` 时安全派发 Canonical Commit。Chapter N 提交成功并完成 Post-Commit 后，才启动 Chapter N+1。
 
-Filament 的“生成下一章”会创建或恢复当前目标章，并立即调用 `AdvanceChapterPipelineAction`；“开始自动生成”完成相同的创建或恢复与推进，确认没有前置或断点错误后再开启 `auto_generate`。`auto_generate` 只表示用户手动提交后允许续接下一章，不改变 PASS 的停止规则。设置页不提供 `auto_commit`，历史数据库中尚未清理的同名键不参与运行时判断。
+Filament 的“生成下一章”会创建或恢复当前目标章，并立即调用 `AdvanceChapterPipelineAction`；“开始自动生成”完成相同的创建或恢复与推进，确认没有前置或断点错误后再开启 `auto_generate`。`auto_generate` 表示 Canonical Commit 成功后允许续接下一章；`auto_commit` 单独控制 PASS 后是否自动发起该 Commit，默认关闭并在小说设置中显式展示。
 
 ```text
 Chapter N Commit
@@ -579,7 +595,8 @@ Resume 通过数据库状态和 Artifact 判断恢复点：
 
 ```text
 Chapter canonical → Post-Commit / Next Action
-Review PASS、Commit 未完成 → 停止并等待用户手动 Commit
+Review PASS、Commit 未完成、auto_commit=false → 停止并等待用户手动 Commit
+Review PASS、Commit 未完成、auto_commit=true → 校验来源链与 Pause 后派发 Commit
 Review = REWRITE → Rewrite
 Draft 存在、无有效 Review → Extract/Validate/Review
 Scenes 全部完成、无 Chapter Draft → Assemble
@@ -657,12 +674,14 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v7
-scene-writer-v12
-assembler-v10
+chapter-planner-v8
+scene-writer-v13
+assembler-v11
 event-extractor-v6
-reviewer-v9
-rewrite-v10
+reviewer-v11
+rewrite-v12
+review-schema-repair-v1
+coverage-judgment-repair-v1
 rewrite-length-patch-v1
 summary-v1
 ```
@@ -701,19 +720,31 @@ stage:{stage}
 
 ### 23.1 操作与恢复
 
-正常操作只有两个明确的人工作业点：在小说概览启动“生成下一章”，Laravel 自动推进 Plan、顺序 Scene、Assembly、Event Candidate、State Patch、Review 和必要的 Rewrite；到 Review PASS 后停止。操作人员确认当前草稿、事件和状态变化后，在章节工作台点击“提交正式章节”。PASS 本身不会提交，也不会写入正式 Story State、Story Event 或 Memory。
+正常操作从小说概览启动“生成下一章”，Laravel 自动推进 Plan、顺序 Scene、Assembly、Event Candidate、State Patch、Review 和必要的 Rewrite。`auto_commit=false` 时到 Review PASS 后停止，操作人员确认当前草稿、事件和状态变化后在章节工作台点击“提交正式章节”；`auto_commit=true` 时由系统安全派发同一提交作业。PASS 本身不会写入正式 Story State、Story Event 或 Memory，只有 Canonical Commit 事务成功才会写入。
 
 常见停止原因按以下方式处理：
 
 | 停止状态或错误 | 已确认行为 | 操作入口 |
 |---|---|---|
-| `current_bible_incomplete` | 生成前置检查拒绝启动，不读取旧 `settings.editorial` 兜底 | 打开该小说的“小说圣经”，创建新的完整 Bible Version；明确填写 tone、POV、tense 和全部 Style Profile 后重新启动。当前没有独立的 Bible 迁移 Artisan 命令 |
+| `current_bible_incomplete` | 生成前置检查拒绝启动，不读取旧 `settings.editorial` 兜底 | 打开该小说的“小说圣经”，创建新的完整 Bible Version；明确填写 tone、POV、tense 和全部 Style Profile 后重新启动 |
+| 已启动章节必须立即采用新 Bible | 旧来源链保持不可变，不能把旧 Bible 的 Rewrite/Review 提交到新 Bible | 先执行 `novel:recover-bible-chapter` dry-run；审核完整差异、来源链、State 基线和 plan hash 后，使用相同 Expected Bible/State 与 hash 显式 `--execute`。系统创建新 Bible Version，并从 Chapter Planning 重新推进 |
 | Stage/Provider 失败 | 成功的 Run/Artifact 保留；不得靠重放全部流水线覆盖历史产物 | 在“Generation → 恢复中心”查看错误和可重试性；可重试失败使用“重试”，暂停小说使用“恢复”。章节工作台的分阶段按钮仅用于定位后的调试或恢复 |
 | Rewrite 耗尽 | 最后一次复审转为 `NEEDS_ATTENTION`，不再自动派发 Rewrite | 在章节工作台“审校”中“人工修改正文”并自动重走 Event/Patch/Review；无 Hard Conflict 且符合 Override 条件时可填写原因“人工通过（Override）” |
-| Review PASS | 流水线停止在等待提交，不受 `auto_commit` 影响 | 在章节工作台点击“提交正式章节”；小说仍暂停时先在小说概览执行“继续” |
+| Review PASS | `auto_commit=false` 时等待提交；开启时仅在未暂停且来源链有效时派发 Canonical Commit | 关闭时在章节工作台点击“提交正式章节”；开启时查看 Commit 结果；小说暂停时不会自动提交 |
 | NEEDS_ATTENTION / BLOCK | 自动推进停止；Hard Finding 不允许普通 Override | 按 Findings 修订正文或修复状态前置条件，再重新审校；历史 Review 和 Artifact 保留 |
 
 `php artisan generation:mark-stalled` 只把超时的 queued/running Run 标记为失败，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
+
+Bible 变更恢复命令默认只读：
+
+```bash
+php artisan novel:recover-bible-chapter NOVEL_ID CHAPTER_SEQUENCE \
+  --expected-bible=BIBLE_VERSION \
+  --expected-state=STATE_VERSION \
+  --target-pov=第一人称
+```
+
+输出中的 `plan_hash` 同时覆盖章节状态、Plan 状态、Scene 当前 Artifact 指针、Run 和 Artifact checksum。执行阶段还要求现有 User 的 `--actor`，并在事务锁内重新计算报告；任一来源发生漂移都会拒绝旧 hash。执行只允许当前 Canonical 章的下一章，保留所有旧 Run、Artifact 和 Usage，重置 Draft 指针后派发新的 Chapter Planning。该命令不能绕过 Review 或 Canonical Commit。
 
 ## 24. 测试
 
@@ -837,7 +868,7 @@ docs/architecture/generation-pipeline.md
 
 ```text
 一章可从 Plan 自动运行到 Review PASS
-PASS 后只有用户确认才能启动 Canonical Commit
+PASS 后按小说级 auto_commit 策略自动派发或等待用户确认
 Scene 可从中断点恢复
 成功 Artifact 可复用
 Provider Retry 与 Rewrite 分离

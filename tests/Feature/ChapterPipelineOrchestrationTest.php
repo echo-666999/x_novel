@@ -453,6 +453,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         return [
             'chapter_function' => '迫使主角离开安全区',
             'arc_contribution' => '推进灯塔主线',
+            'arc_contributions' => [],
             'reader_promise' => '主角抵达灯塔水域',
             'target_words' => $this->baseline['chapter_target_words'],
             'pov_character_id' => $this->characterId,
@@ -465,6 +466,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'required_facts' => [],
             'forbidden_conflicts' => [],
             'foreshadowing_actions' => $this->foreshadowingAction($chapterSequence),
+            'world_entity_candidates' => [],
             'scene_plans' => collect($this->baseline['scenes'])->map(fn (array $scene, int $index): array => [
                 'goal' => $scene['goal'],
                 'conflict' => $scene['conflict'],
@@ -472,6 +474,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'outcome' => $scene['outcome'],
                 'outcome_allowed' => $scene['outcome_allowed'],
                 'outcome_forbidden' => $scene['outcome_forbidden'],
+                'continuity_requirements' => [],
                 'pov_character_id' => $this->characterId,
                 'location' => $scene['location'],
                 'time_anchor' => $scene['time_anchor'],
@@ -586,7 +589,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             $findings[] = [
                 'code' => 'PLAN_DEVIATION',
                 'dimension' => 'plan',
-                'severity' => 'warning',
+                'severity' => 'error',
                 'scene_id' => $scene->getKey(),
                 'scope' => 'scene',
                 'auto_fixable' => true,
@@ -625,6 +628,10 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'summary' => '正文、Coverage 和 Event Candidate 已共同完成本章冻结动作。',
                 'evidence' => $this->foreshadowingEvidence(Chapter::query()->findOrFail($chapterId)->sequence),
             ]],
+            'arc_beat_audits' => [],
+            'arc_completion_audits' => [],
+            'world_entity_candidate_audits' => [],
+            'unapproved_world_entities' => [],
             'findings' => $findings,
         ];
     }

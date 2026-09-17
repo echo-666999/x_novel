@@ -42,6 +42,8 @@ enum EventType: string
     case LocationStateChanged = 'location_state_changed';
     case FactionStateChanged = 'faction_state_changed';
     case WorldStateChanged = 'world_state_changed';
+    case WorldEntityIntroduced = 'world_entity_introduced';
+    case StoryArcBeatCompleted = 'story_arc_beat_completed';
     case EventCorrected = 'event_corrected';
     case EventInvalidated = 'event_invalidated';
     case ManualCorrection = 'manual_correction';
@@ -112,7 +114,10 @@ enum EventType: string
 
             self::WorldRuleRevealed,
             self::WorldRuleChanged,
-            self::WorldStateChanged => ['world', 'world_entity'],
+            self::WorldStateChanged,
+            self::WorldEntityIntroduced => ['world', 'world_entity'],
+
+            self::StoryArcBeatCompleted => ['story_arc'],
 
             self::LocationStateChanged => ['location', 'world_entity'],
             self::FactionStateChanged => ['faction', 'world_entity'],

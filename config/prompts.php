@@ -2,12 +2,12 @@
 
 return [
     'versions' => [
-        'planner' => 'chapter-planner-v7',
-        'writer' => 'scene-writer-v12',
-        'assembler' => 'assembler-v10',
+        'planner' => 'chapter-planner-v8',
+        'writer' => 'scene-writer-v13',
+        'assembler' => 'assembler-v11',
         'extractor' => 'event-extractor-v6',
-        'reviewer' => 'reviewer-v10',
-        'rewrite' => 'rewrite-v11',
+        'reviewer' => 'reviewer-v11',
+        'rewrite' => 'rewrite-v12',
         'summary' => 'summary-v1',
     ],
 ];

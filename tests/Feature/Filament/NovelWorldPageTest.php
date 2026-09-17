@@ -76,6 +76,17 @@ test('world workspace tabs map all entity types into five groups', function () {
         ->assertCanSeeTableRecords([$concept]);
 });
 
+test('world workspace shows canonical type coverage without requiring every type', function () {
+    $novel = Novel::factory()->create();
+    WorldEntity::factory()->for($novel)->count(2)->create(['type' => WorldEntityType::Location]);
+
+    Livewire::test(ManageNovelWorld::class, ['record' => $novel->getRouteKey()])
+        ->assertSee('Canonical 覆盖：地点 2')
+        ->assertSee('物品 0')
+        ->assertSee('当前章节 Candidate：0')
+        ->assertSee('空类型无需补齐');
+});
+
 test('the owner can create and edit a world entity', function () {
     $novel = Novel::factory()->create();
 

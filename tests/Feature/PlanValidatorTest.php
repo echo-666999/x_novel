@@ -6,14 +6,19 @@ use App\Enums\ForeshadowingImportance;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanFindingSeverity;
+use App\Enums\StoryArcStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
+use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
+use App\Models\Volume;
+use App\Models\WorldEntity;
 use App\Services\PlanValidator;
+use App\Services\StoryArcBeatContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 
@@ -39,6 +44,106 @@ test('a structurally valid plan returns valid and can enter generation', functio
         ->and($result->canGenerate())->toBeTrue();
 
     $result->assertCanGenerate();
+});
+
+test('structured arc beats and world candidates are scoped to the current novel and volume', function () {
+    $novel = Novel::factory()->create();
+    $volume = Volume::factory()->for($novel)->create();
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 10]);
+    $arc = StoryArc::factory()->for($novel)->forVolume($volume)->create([
+        'status' => StoryArcStatus::Active,
+        'beats' => ['取得通行证'],
+    ]);
+    $beatKey = app(StoryArcBeatContract::class)->key('取得通行证');
+    $plan = validPlan([
+        'chapter' => $chapter,
+        'arc_contributions' => [[
+            'arc_id' => $arc->getKey(), 'beat_key' => $beatKey, 'beat_index' => 1,
+            'target_scene_sequence' => 1, 'acceptance_criteria' => '正文明确取得通行证。',
+        ]],
+        'world_entity_candidates' => [[
+            'candidate_key' => 'wec-north-pass', 'type' => 'item', 'name' => '北门通行证',
+            'description' => '进入北门的凭证。', 'deduplication_basis' => '现有实体没有同名凭证。',
+            'possible_duplicate_entity_ids' => [], 'introduction_reason' => '进入下一地点。', 'target_scene_sequence' => 1,
+        ]],
+    ]);
+
+    expect(app(PlanValidator::class)->validate($plan)->canGenerate())->toBeTrue();
+
+    $foreignArc = StoryArc::factory()->create(['status' => StoryArcStatus::Active, 'beats' => ['错误 Beat']]);
+    $existing = WorldEntity::factory()->for($novel)->create(['name' => '北门通行证']);
+    $plan->update([
+        'arc_contributions' => [[
+            'arc_id' => $foreignArc->getKey(), 'beat_key' => 'beat-invalid', 'beat_index' => 1,
+            'target_scene_sequence' => 1, 'acceptance_criteria' => '错误引用。',
+        ]],
+        'world_entity_candidates' => [[
+            'candidate_key' => 'wec-north-pass', 'type' => 'rule', 'name' => $existing->name,
+            'description' => '冲突候选。', 'deduplication_basis' => '错误判断。',
+            'possible_duplicate_entity_ids' => [$existing->getKey()], 'introduction_reason' => '测试。', 'target_scene_sequence' => 1,
+        ]],
+    ]);
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($codes)->toContain('INVALID_ARC_REFERENCE', 'WORLD_ENTITY_TYPE_CONFLICT');
+});
+
+test('duplicate requirements across scenes are rejected before writing', function () {
+    $plan = validPlan(['scene_plans' => [
+        [
+            'goal' => '等待审核结果',
+            'conflict' => '监管人员拒绝放行',
+            'turn' => '收到补充材料要求',
+            'outcome' => '继续等待审核',
+            'outcome_allowed' => [],
+            'outcome_forbidden' => [],
+            'continuity_requirements' => [],
+            'transition_from_previous' => null,
+        ],
+        [
+            'goal' => '等待审核结果',
+            'conflict' => '伤势限制行动',
+            'turn' => '主角改为提交书面说明',
+            'outcome' => '审核进入复核阶段',
+            'outcome_allowed' => [],
+            'outcome_forbidden' => [],
+            'continuity_requirements' => [],
+            'transition_from_previous' => '承接上一场的补充材料要求。',
+        ],
+    ]]);
+
+    $result = app(PlanValidator::class)->validate($plan);
+
+    expect(collect($result->findings)->pluck('code'))->toContain('DUPLICATE_CROSS_SCENE_REQUIREMENT')
+        ->and($result->canGenerate())->toBeFalse();
+});
+
+test('structured continuity requirements preserve establishment persistence change and callback order', function () {
+    $plan = validPlan(['scene_plans' => [
+        [
+            'goal' => '提交报告', 'conflict' => '材料不全', 'turn' => '找到编号', 'outcome' => '报告受理',
+            'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => null,
+            'continuity_requirements' => [['key' => 'injury', 'mode' => 'establish', 'description' => '首次交代左肩受伤。']],
+        ],
+        [
+            'goal' => '接受询问', 'conflict' => '无法久坐', 'turn' => '改为站立陈述', 'outcome' => '询问完成',
+            'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => '承接报告受理。',
+            'continuity_requirements' => [['key' => 'injury', 'mode' => 'persist', 'description' => '只写伤势对本场动作的新影响。']],
+        ],
+        [
+            'goal' => '离开大厅', 'conflict' => '伤口裂开', 'turn' => '同伴包扎', 'outcome' => '伤势稳定',
+            'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => '承接询问结束。',
+            'continuity_requirements' => [
+                ['key' => 'injury', 'mode' => 'change', 'description' => '伤口裂开后完成包扎。'],
+                ['key' => 'injury', 'mode' => 'callback', 'description' => '章末只回扣包扎后的稳定状态。'],
+            ],
+        ],
+    ]]);
+
+    $result = app(PlanValidator::class)->validate($plan);
+
+    expect(collect($result->findings)->pluck('code'))
+        ->not->toContain('DUPLICATE_CROSS_SCENE_REQUIREMENT', 'INVALID_CONTINUITY_REQUIREMENT', 'CONTINUITY_REQUIREMENT_NOT_ESTABLISHED', 'CONTINUITY_CALLBACK_NOT_AT_CHAPTER_END');
 });
 
 test('invalid entity references and a deceased pov block a plan', function () {

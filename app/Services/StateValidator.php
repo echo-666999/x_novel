@@ -156,7 +156,12 @@ class StateValidator
 
             $valid = match ($event->subjectType) {
                 'character' => $chapter->novel->characters()->whereKey($event->subjectId)->exists(),
-                'world_entity' => $chapter->novel->worldEntities()->whereKey($event->subjectId)->exists(),
+                'world_entity' => $chapter->novel->worldEntities()->whereKey($event->subjectId)->exists()
+                    || ($event->eventType === EventType::WorldEntityIntroduced
+                        && collect($chapter->latestPlan?->world_entity_candidates ?? [])->contains(
+                            fn (array $item): bool => ($item['candidate_key'] ?? null) === $event->subjectId,
+                        )),
+                'story_arc' => $chapter->novel->storyArcs()->whereKey($event->subjectId)->exists(),
                 'foreshadowing' => $chapter->novel->foreshadowings()->whereKey($event->subjectId)->exists(),
                 'chapter' => (string) $chapter->getKey() === $event->subjectId,
                 default => true,

@@ -43,7 +43,13 @@ class ManageNovelWorld extends ManageRelatedRecords
 
     public function getSubheading(): ?string
     {
-        return $this->getRecord()->title;
+        $coverage = collect($this->worldEntityCoverage())
+            ->map(fn (array $item): string => $item['label'].' '.$item['count'])
+            ->join(' · ');
+        $candidates = collect($this->activeWorldEntityCandidates())->pluck('name')->filter()->values();
+        $candidateSummary = $candidates->isEmpty() ? '0' : $candidates->count().'（'.$candidates->take(3)->join('、').'）';
+
+        return $this->getRecord()->title." · Canonical 覆盖：{$coverage} · 当前章节 Candidate：{$candidateSummary} · 空类型无需补齐";
     }
 
     /** @return array<string, Tab> */
@@ -199,6 +205,37 @@ class ManageNovelWorld extends ManageRelatedRecords
                 ->icon('heroicon-o-plus')
                 ->slideOver(),
         ];
+    }
+
+    /** @return array<int, array{label: string, count: int}> */
+    private function worldEntityCoverage(): array
+    {
+        $counts = $this->getRecord()->worldEntities()
+            ->selectRaw('type, count(*) as aggregate')
+            ->groupBy('type')
+            ->pluck('aggregate', 'type');
+
+        return collect(WorldEntityType::cases())->map(fn (WorldEntityType $type): array => [
+            'label' => $type->getLabel(),
+            'count' => (int) ($counts[$type->value] ?? 0),
+        ])->all();
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function activeWorldEntityCandidates(): array
+    {
+        return $this->getRecord()->chapters()
+            ->whereNotIn('status', ['canonical', 'void'])
+            ->with('latestPlan')
+            ->orderBy('sequence')
+            ->get()
+            ->flatMap(fn ($chapter) => collect($chapter->latestPlan?->world_entity_candidates ?? [])->map(
+                fn (array $candidate): array => [
+                    ...$candidate,
+                    'chapter_sequence' => $chapter->sequence,
+                ],
+            ))
+            ->values()->all();
     }
 
     private function stateSummary(WorldEntity $entity): string

@@ -22,7 +22,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
     public function generate(AiRequest $request): AiResponse
     {
         $startedAt = hrtime(true);
-        $requestLogId = (string) Str::uuid();
+        $requestLogId = (string) ($request->metadata['ai_request_log_id'] ?? Str::uuid());
         $payload = $this->payload($request);
 
         Log::debug('AI Provider 完整请求。', [

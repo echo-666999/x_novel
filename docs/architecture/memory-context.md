@@ -55,7 +55,7 @@ L4 Style
 
 首次 AI 小说蓝图生成发生在 Current Bible 创建前，是唯一例外：它生成完整 Bible 候选；采用并创建 Current Bible 后，所有章节相关 Context 必须只读取该版本。迁移期旧 Editorial 只供迁移预览和数据复制，不得成为章节 Context 回退来源。
 
-章节启动前必须验证 Current Bible 的 tone、POV、tense 和完整 Style Profile。缺失或无效时以 `current_bible_incomplete` 停止，操作人员必须在“小说圣经”创建新的完整版本；不得用默认 Style、旧 Editorial 或历史 Bible 填补当前 Context。当前实现没有独立的 Bible 迁移 Artisan 命令。
+章节启动前必须验证 Current Bible 的 tone、POV、tense 和完整 Style Profile。缺失或无效时以 `current_bible_incomplete` 停止，操作人员必须在“小说圣经”创建新的完整版本；不得用默认 Style、旧 Editorial 或历史 Bible 填补当前 Context。
 
 ## 3. Context 优先级
 
@@ -468,7 +468,7 @@ bible_version
 plan_version
 ```
 
-新 Chapter Pipeline 必须绑定启动时的 Current Bible Version。运行中的 Pipeline 继续使用已冻结版本；若用户要求立即采用新 Bible Version，必须显式重启本章，不能静默替换 Context。
+新 Chapter Pipeline 必须绑定启动时的 Current Bible Version。运行中的 Pipeline 继续使用已冻结版本；若用户要求立即采用新 Bible Version，必须通过 `novel:recover-bible-chapter` 的 `dry-run → 审核 plan hash → --execute` 显式重启本章，不能静默替换 Context。恢复从 Chapter Planning 开始，以新 Bible 和执行时仍匹配的 Canonical State 创建全新 Run/Artifact；旧来源链只保留为审计记录。
 
 Commit 前如果 Current State Version 已变化：
 

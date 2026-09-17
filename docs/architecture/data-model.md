@@ -169,7 +169,7 @@ Rewrite if needed
     ↓
 Review PASS
     ↓
-User-confirmed Canonical Commit
+Novel policy controlled Canonical Commit
     ↓
 Story State Update
     ↓
@@ -229,6 +229,8 @@ Character Canonical State
 World Canonical State
 Timeline
 Foreshadowing Progress
+Story Arc Progress
+Formal World Entities
 Novel Canonical Pointer
 ```
 
@@ -237,12 +239,18 @@ Novel Canonical Pointer
 ```text
 Review PASS
 ↓
-用户确认“提交正式章节”
+`auto_commit=true` 的安全自动派发，或用户确认“提交正式章节”
 ↓
 CanonicalCommitService
 ```
 
 才能更新正式状态。
+
+`story_arcs.progress` 是 Canonical 投影：只从已提交章节的结构化 Beat 完成记录计算。Plan、Draft、Review 和 Rewrite 只能携带候选贡献；回滚最新正式章节时必须从剩余 Canonical 记录重算，不能递减一个猜测值。
+
+正文中新出现的世界实体在 PASS 前只能保存为 Candidate。只有 `CanonicalCommitService` 可以在同一事务中验证引用并创建正式 `world_entities`。类型覆盖用于提示缺口，不构成“所有类型必须非空”的约束。
+
+`chapter_plans.arc_contributions` 与 `chapter_plans.world_entity_candidates` 使用 JSONB 承载多项冻结契约，避免新增关系表。`chapters.canonical_metadata` 只固化已经验收并提交的 Beat、Completion Condition 与 Entity 来源；`world_entities.source_chapter_id/source_candidate_key` 提供幂等创建和 Latest Chapter Rollback 来源。
 
 ### 8.1 Foreshadowing 的权威状态与窗口
 
@@ -309,7 +317,7 @@ facts
 
 实现。
 
-`story_state_versions.version` 必须满足 `version >= 0`，其中版本 `0` 是小说进入生成前建立的初始完整状态快照。每部小说的版本号唯一：`unique(novel_id, version)`。
+`story_state_versions.version` 必须满足 `version >= 0`。新小说的版本 `0` 应是进入生成前建立的初始完整状态快照；恢复校验仍必须逐项验证必要 Domain、`schema_version`、无章节来源和 checksum，不能因为版本号为 `0` 就假定历史数据完整。每部小说的版本号唯一：`unique(novel_id, version)`。
 
 不要引入完整 Event Sourcing Framework。
 

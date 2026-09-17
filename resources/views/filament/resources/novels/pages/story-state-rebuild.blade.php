@@ -10,19 +10,48 @@
                     {{ $result->matches() ? '故事状态校验通过' : '故事状态存在差异' }}
                 </p>
                 <p class="text-sm text-gray-600 dark:text-gray-300">
-                    从 State Version 0 重放 {{ $result->replayedEventCount }} 个有效事件；本次仅校验，不写入正式状态。
+                    从完整无章节基线 v{{ $result->baselineVersion }} 重放 {{ $result->replayedEventCount }} 个可应用事件；本次仅校验，不写入正式状态。
                 </p>
             </div>
         </div>
     </div>
 
     <div class="grid gap-4 md:grid-cols-2">
-        @foreach (['当前 checksum' => $result->currentChecksum, '重建 checksum' => $result->rebuiltChecksum] as $label => $checksum)
+        @foreach (['基线 checksum' => $result->baselineChecksum, '当前 checksum' => $result->currentChecksum, '重建 checksum' => $result->rebuiltChecksum] as $label => $checksum)
             <div class="rounded-xl border border-gray-200 p-4 dark:border-white/10">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ $label }}</p>
                 <code class="mt-2 block break-all font-mono text-xs text-gray-800 dark:text-gray-200">{{ $checksum }}</code>
             </div>
         @endforeach
+    </div>
+
+    <div class="rounded-xl border border-gray-200 p-4 text-sm dark:border-white/10">
+        <p class="font-medium text-gray-950 dark:text-white">校验范围</p>
+        <p class="mt-1 text-gray-600 dark:text-gray-300">
+            Baseline v{{ $result->baselineVersion }} → Current v{{ $result->currentVersion }}。
+            @if ($result->firstReplayedEventId !== null)
+                Event #{{ $result->firstReplayedEventId }}（State v{{ $result->firstReplayedStateVersion }}）
+                至 #{{ $result->lastReplayedEventId }}（State v{{ $result->lastReplayedStateVersion }}）。
+            @else
+                该范围内没有可应用事件。
+            @endif
+        </p>
+        @if ($result->skippedEvents !== [])
+            <p class="mt-2 text-gray-600 dark:text-gray-300">跳过 {{ count($result->skippedEvents) }} 个事件：</p>
+            <ul class="mt-1 list-disc space-y-1 pl-5 text-gray-600 dark:text-gray-300">
+                @foreach ($result->skippedEvents as $event)
+                    <li>Event #{{ $event['id'] }} / State v{{ $event['state_version'] }}：{{ $event['reason'] }}</li>
+                @endforeach
+            </ul>
+        @endif
+        @if ($result->skippedBaselines !== [])
+            <p class="mt-2 text-gray-600 dark:text-gray-300">跳过 {{ count($result->skippedBaselines) }} 个较新基线候选：</p>
+            <ul class="mt-1 list-disc space-y-1 pl-5 text-gray-600 dark:text-gray-300">
+                @foreach ($result->skippedBaselines as $baseline)
+                    <li>State v{{ $baseline['version'] }}：{{ implode('；', $baseline['reasons']) }}</li>
+                @endforeach
+            </ul>
+        @endif
     </div>
 
     @if ($result->changes === [])

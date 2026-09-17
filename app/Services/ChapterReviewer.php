@@ -41,7 +41,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly ReviewDimensionAuditRepairer $dimensionAuditRepairer, private readonly PlanCoverageJudgmentRepairer $coverageJudgmentRepairer, private readonly PlanningReviewAudit $planningReviewAudit) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -80,7 +80,7 @@ class ChapterReviewer
             'foreshadowing_contract' => $foreshadowingContract,
             'event_candidate' => $eventCandidate,
             'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum, 'content' => $draft->content],
-            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal', 'foreshadowing_actions', 'scene_plans']),
+            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'arc_contributions', 'world_entity_candidates', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal', 'foreshadowing_actions', 'scene_plans']),
             'scenes' => $chapter->scenes->sortBy('sequence')->map->only(['id', 'sequence', 'goal', 'conflict', 'turn', 'outcome'])->values()->all(),
             'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
             'length_check' => $lengthCheck,
@@ -110,9 +110,24 @@ class ChapterReviewer
         }
 
         try {
+            [$planFindings, $coverageRepairs] = $this->repairCoverageJudgments(
+                $run,
+                $chapter,
+                $draft,
+                $planFindings,
+                $settings->model,
+            );
+            $context['plan_findings'] = $planFindings;
+            $context['coverage_repairs'] = $coverageRepairs;
+            $run->update(['context_snapshot' => [
+                ...($run->context_snapshot ?? []),
+                'plan_findings' => $planFindings,
+                'coverage_repairs' => $coverageRepairs,
+            ]]);
+
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 叙事审校器。必须先完整阅读全部正文、Chapter Plan、上一章结尾、Style Contract 和 foreshadowing_contract。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须在 foreshadowing_audits 中按契约顺序逐项审校全部 actions，同时对照 promised_payoff、plan_action、Scene/Assembly Coverage、event_candidate 和正文逐字证据。必须按动作语义区分 plant、reinforce、pay_off：仅提及关键词不能证明完成强化或兑现，pay_off 必须真正满足 promised_payoff 及 acceptance_criteria。正文可在不改变契约时修复，返回 rewrite_required；若只能通过延期、放弃、改变兑现窗口或 promised_payoff 才能解决，返回 needs_attention；不得建议 Rewrite 自行改变这些 Canonical 约束。fulfilled 必须有 Coverage 和匹配 Event Candidate 支持。检查正文是否主动处理未列入 actions 的未来伏笔。promised_payoff 是作者侧验收信息，不表示非 pay_off 动作可以完整揭晓。随后对 continuity、plan、character、progress、repetition、pacing、style 七个维度逐项完成全量检查；不得发现一个问题后提前停止，也不得把同一根因拆成多轮零散报告。dimension_audits 必须逐项声明 pass 或 issues_found，并用简短中文说明检查结论；issues_found 必须一次列出该维度当前所有有明确证据的新 Narrative Finding，pass 表示该维度没有需要新增的 Narrative Finding。dimension_audits 只对应本次模型输出的 findings；伏笔问题只放入 foreshadowing_audits，由 Laravel 生成一个合并 Finding，不得在 findings 重复报告；state_findings、plan_findings 和 length_check 已由 Laravel 独立处理，不得重复计入。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头，并检查正文内部的时间、地点、人物状态、物品位置和动作因果；发生跳跃、前后矛盾或空间关系无法成立时，必须给出 continuity finding。计划审校必须逐项核对 chapter_function、reader_promise、must_reveal、must_not_reveal 和每个 Scene 的 goal、conflict、turn、outcome，尤其检查正文动作是否真实满足计划边界，而不是只出现相近措辞。repair_verification 非空时，必须逐项确认上一轮全部可修复问题是否已经消除；仍存在的问题必须再次列入对应审计，已解决的问题不得重复报告，同时仍须完成七维及全部伏笔动作的全量检查。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null；scope=paragraph 的 evidence 必须逐字引用草稿短句，能确定所属 Scene 时应同时填写 scene_id。仅当问题可在一个 Scene 内独立修复时使用 scope=scene；涉及两个以上 Scene、上一章结尾与本章开头的连续性、章节整体节奏或全章结构时必须使用 scope=chapter 且 scene_id=null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和全部可执行参数，并在通读全文后一次列出所有实质性偏差；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 dimension_audits.summary、foreshadowing_audits.summary 以及 finding 的 message 与 evidence 必须使用简体中文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。相同根因和相同修复动作应合并为一个 Finding，并在 evidence 中列出代表性原文，不得把同一问题拆成多个近义 Finding。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；plan_findings 是上游结构化覆盖证据，不要重复生成相同 Finding；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。',
+                systemPrompt: '你是 XNovel 叙事审校器。必须先完整阅读全部正文、Chapter Plan、上一章结尾、Style Contract 和 foreshadowing_contract。必须按 Chapter Plan 顺序完整返回 arc_beat_audits、arc_completion_audits 和 world_entity_candidate_audits：只有正文逐字证据满足 acceptance_criteria 才能把 Arc Beat 标记 fulfilled；只有正文真实引入批准候选才标记 introduced；Completion Conditions 只有正文已满足时才标记 fulfilled。所有完成、引入或冲突结果必须引用正文逐字证据，missing/not_met 的 evidence 必须为 null。正文出现未列入 world_entity_candidates 的重大地点、物品、阵营、组织、规则或概念时，必须列入 unapproved_world_entities。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须在 foreshadowing_audits 中按契约顺序逐项审校全部 actions，同时对照 promised_payoff、plan_action、Scene/Assembly Coverage、event_candidate 和正文逐字证据。必须按动作语义区分 plant、reinforce、pay_off：仅提及关键词不能证明完成强化或兑现，pay_off 必须真正满足 promised_payoff 及 acceptance_criteria。正文可在不改变契约时修复，返回 rewrite_required；若只能通过延期、放弃、改变兑现窗口或 promised_payoff 才能解决，返回 needs_attention；不得建议 Rewrite 自行改变这些 Canonical 约束。fulfilled 必须有 Coverage 和匹配 Event Candidate 支持。检查正文是否主动处理未列入 actions 的未来伏笔。promised_payoff 是作者侧验收信息，不表示非 pay_off 动作可以完整揭晓。随后对 continuity、plan、character、progress、repetition、pacing、style 七个维度逐项完成全量检查；不得发现一个问题后提前停止，也不得把同一根因拆成多轮零散报告。dimension_audits 必须逐项声明 pass 或 issues_found，并用简短中文说明检查结论；issues_found 必须一次列出该维度当前所有有明确证据的新 Narrative Finding，pass 表示该维度没有需要新增的 Narrative Finding。dimension_audits 只对应本次模型输出的 findings；伏笔和规划契约问题由 Laravel 生成 Finding，不得在 findings 重复报告；state_findings、plan_findings 和 length_check 已由 Laravel 独立处理，不得重复计入。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头，并检查正文内部的时间、地点、人物状态、物品位置和动作因果；发生跳跃、前后矛盾或空间关系无法成立时，必须给出 continuity finding。计划审校必须逐项核对 chapter_function、reader_promise、must_reveal、must_not_reveal 和每个 Scene 的 goal、conflict、turn、outcome，尤其检查正文动作是否真实满足计划边界，而不是只出现相近措辞。repair_verification 非空时，必须逐项确认上一轮全部可修复问题是否已经消除；仍存在的问题必须再次列入对应审计，已解决的问题不得重复报告，同时仍须完成七维及全部伏笔动作的全量检查。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null；scope=paragraph 的 evidence 必须逐字引用草稿短句，能确定所属 Scene 时应同时填写 scene_id。仅当问题可在一个 Scene 内独立修复时使用 scope=scene；涉及两个以上 Scene、上一章结尾与本章开头的连续性、章节整体节奏或全章结构时必须使用 scope=chapter 且 scene_id=null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和全部可执行参数，并在通读全文后一次列出所有实质性偏差；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 dimension_audits.summary、foreshadowing_audits.summary 以及 finding 的 message 与 evidence 必须使用简体中文；规划验收中的 evidence 必须逐字来自正文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。相同根因和相同修复动作应合并为一个 Finding，并在 evidence 中列出代表性原文，不得把同一问题拆成多个近义 Finding。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；plan_findings 是上游结构化覆盖证据，不要重复生成相同 Finding；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。',
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: (int) config('generation.review_max_output_tokens', 4000), responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
@@ -128,6 +143,7 @@ class ChapterReviewer
                     || collect($stateValidation->findings)->contains(fn ($finding): bool => $finding->severity->value === 'ambiguous')
                     || $planFindings !== [],
             );
+            $payload = $this->normalizeDimensionAudits($payload, $run, $context, $chapter, $settings->model);
 
             $foreshadowingFindings = $this->foreshadowingReviewAudit->findings($payload['foreshadowing_audits'], $chapter, $foreshadowingContract);
             $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $planFindings, $foreshadowingFindings, $lengthCheck, $stateValidation->isBlocked(), $context['state_version']);
@@ -193,11 +209,14 @@ class ChapterReviewer
             ];
         }
 
-        return ['type' => 'object', 'additionalProperties' => false, 'required' => ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', 'findings'], 'properties' => [
+        $planningAuditSchema = PlanningReviewAudit::schema();
+
+        return ['type' => 'object', 'additionalProperties' => false, 'required' => ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', ...array_keys($planningAuditSchema), 'findings'], 'properties' => [
             'recommended_decision' => ['type' => 'string', 'enum' => array_column(ReviewDecision::cases(), 'value')],
             'scores' => ['type' => 'object', 'additionalProperties' => false, 'required' => self::DIMENSIONS, 'properties' => $scores],
             'dimension_audits' => ['type' => 'object', 'additionalProperties' => false, 'required' => self::DIMENSIONS, 'properties' => $dimensionAudits],
             'foreshadowing_audits' => ForeshadowingReviewAudit::schema(),
+            ...$planningAuditSchema,
             'findings' => ['type' => 'array', 'items' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['code', 'dimension', 'severity', 'scene_id', 'scope', 'auto_fixable', 'requires_human_decision', 'message', 'evidence'], 'properties' => [
                 'code' => ['type' => 'string', 'enum' => array_keys(self::NARRATIVE_FINDING_CODES)],
                 'dimension' => ['type' => 'string', 'enum' => self::DIMENSIONS],
@@ -214,7 +233,7 @@ class ChapterReviewer
 
     private function validate(array $payload, Chapter $chapter, GenerationArtifact $draft, array $foreshadowingContract, ?array $eventCandidate, bool $hasDeterministicRoute): array
     {
-        if (! $this->hasExactKeys($payload, ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', 'findings'])
+        if (! $this->hasExactKeys($payload, ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', 'arc_beat_audits', 'arc_completion_audits', 'world_entity_candidate_audits', 'unapproved_world_entities', 'findings'])
             || ! is_array($payload['scores'])
             || ! $this->hasExactKeys($payload['scores'], self::DIMENSIONS)
             || ! is_array($payload['dimension_audits'])
@@ -231,6 +250,7 @@ class ChapterReviewer
             $foreshadowingContract,
             $eventCandidate,
         );
+        $payload = $this->planningReviewAudit->validate($payload, $chapter, $draft);
         foreach ($payload['scores'] as $score) {
             if (! is_numeric($score) || $score < 0 || $score > 100) {
                 throw ValidationException::withMessages(['scores' => '七维评分必须在 0 到 100 之间。']);
@@ -238,25 +258,11 @@ class ChapterReviewer
         }
         $sceneIds = $chapter->scenes->modelKeys();
         foreach ($payload['findings'] as $finding) {
-            if (! is_array($finding)
-                || ! $this->hasExactKeys($finding, ['code', 'dimension', 'severity', 'scene_id', 'scope', 'auto_fixable', 'requires_human_decision', 'message', 'evidence'])
-                || ! isset(self::NARRATIVE_FINDING_CODES[$finding['code']])
-                || self::NARRATIVE_FINDING_CODES[$finding['code']] !== $finding['dimension']
-                || ! in_array($finding['severity'], ['warning', 'error'], true)
-                || ! in_array($finding['scope'], self::FINDING_SCOPES, true)
-                || ! is_bool($finding['auto_fixable'])
-                || ! is_bool($finding['requires_human_decision'])
-                || ($finding['auto_fixable'] && $finding['requires_human_decision'])
-                || ($finding['severity'] === 'error' && ! $finding['auto_fixable'] && ! $finding['requires_human_decision'])
-                || ($finding['scene_id'] !== null && (! is_int($finding['scene_id']) || ! in_array($finding['scene_id'], $sceneIds, true)))
-                || ($finding['scope'] === 'scene' && $finding['scene_id'] === null)
-                || ($finding['scope'] === 'chapter' && $finding['scene_id'] !== null)
-                || ! is_string($finding['message']) || blank($finding['message'])
-                || ! is_string($finding['evidence']) || blank($finding['evidence'])) {
+            if (! is_array($finding) || ! $this->validNarrativeFinding($finding, $chapter, $sceneIds)) {
                 throw ValidationException::withMessages(['findings' => 'Narrative Review Findings 结构无效。']);
             }
         }
-        $this->validateDimensionAudits($payload['dimension_audits'], $payload['findings']);
+        $this->validateDimensionAudits($payload['dimension_audits']);
 
         if (! $hasDeterministicRoute
             && $this->weightedScore($payload['scores']) < (float) config('generation.review_pass_score', 80)
@@ -266,6 +272,27 @@ class ChapterReviewer
         }
 
         return $payload;
+    }
+
+    /** @param array<int, int>|null $sceneIds */
+    private function validNarrativeFinding(array $finding, Chapter $chapter, ?array $sceneIds = null): bool
+    {
+        $sceneIds ??= $chapter->scenes->modelKeys();
+
+        return $this->hasExactKeys($finding, ['code', 'dimension', 'severity', 'scene_id', 'scope', 'auto_fixable', 'requires_human_decision', 'message', 'evidence'])
+            && isset(self::NARRATIVE_FINDING_CODES[$finding['code']])
+            && self::NARRATIVE_FINDING_CODES[$finding['code']] === $finding['dimension']
+            && in_array($finding['severity'], ['warning', 'error'], true)
+            && in_array($finding['scope'], self::FINDING_SCOPES, true)
+            && is_bool($finding['auto_fixable'])
+            && is_bool($finding['requires_human_decision'])
+            && ! ($finding['auto_fixable'] && $finding['requires_human_decision'])
+            && ! ($finding['severity'] === 'error' && ! $finding['auto_fixable'] && ! $finding['requires_human_decision'])
+            && ($finding['scene_id'] === null || (is_int($finding['scene_id']) && in_array($finding['scene_id'], $sceneIds, true)))
+            && ! ($finding['scope'] === 'scene' && $finding['scene_id'] === null)
+            && ! ($finding['scope'] === 'chapter' && $finding['scene_id'] !== null)
+            && is_string($finding['message']) && filled($finding['message'])
+            && is_string($finding['evidence']) && filled($finding['evidence']);
     }
 
     /** @param array<string, mixed> $value @param array<int, string> $keys */
@@ -318,7 +345,9 @@ class ChapterReviewer
                 ...($lengthFinding === null ? [] : [$lengthFinding]),
                 ...$planFindings,
                 ...$foreshadowingFindings,
+                ...$this->planningReviewAudit->findings($payload),
                 ...array_map(fn (array $finding): array => [...$finding, 'source' => 'narrative_review'], $payload['findings']),
+                ...($payload['schema_repair_findings'] ?? []),
             ];
             [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
             $rewriteAttempts = $this->rewriteCounter->countFor($chapter);
@@ -350,7 +379,26 @@ class ChapterReviewer
                     $rewriteScope = $scopeDecision->toArray();
                 }
             }
-            $data = ['decision' => $decision->value, 'decision_basis' => $decisionBasis, 'recommended_decision' => $recommended->value, 'score' => $total, 'scores' => $scores, 'dimension_audits' => $payload['dimension_audits'], 'foreshadowing_audits' => $payload['foreshadowing_audits'], 'findings' => $findings, 'rewrite_scope' => $rewriteScope, 'source_artifact_id' => $draft->getKey()];
+            $data = [
+                'decision' => $decision->value,
+                'decision_basis' => $decisionBasis,
+                'recommended_decision' => $recommended->value,
+                'score' => $total,
+                'scores' => $scores,
+                'dimension_audits' => $payload['dimension_audits'],
+                'dimension_audits_raw' => $payload['dimension_audits_raw'] ?? $payload['dimension_audits'],
+                'schema_repairs' => $payload['schema_repairs'] ?? [],
+                'coverage_repairs' => data_get($run->context_snapshot, 'coverage_repairs', []),
+                'repair_verification' => $this->repairVerificationOutcome($run, $findings),
+                'foreshadowing_audits' => $payload['foreshadowing_audits'],
+                'arc_beat_audits' => $payload['arc_beat_audits'],
+                'arc_completion_audits' => $payload['arc_completion_audits'],
+                'world_entity_candidate_audits' => $payload['world_entity_candidate_audits'],
+                'unapproved_world_entities' => $payload['unapproved_world_entities'],
+                'findings' => $findings,
+                'rewrite_scope' => $rewriteScope,
+                'source_artifact_id' => $draft->getKey(),
+            ];
             $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->max('version');
             $artifact = $run->artifacts()->create(['type' => ArtifactType::ReviewResult, 'version' => (int) $version + 1, 'content' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'data' => $data, 'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))]);
             $review = $run->review()->create(['artifact_id' => $artifact->getKey(), 'decision' => $decision, 'score' => $total, ...collect($scores)->mapWithKeys(fn ($v, $k) => ["{$k}_score" => $v])->all(), 'findings' => $findings]);
@@ -431,11 +479,9 @@ class ChapterReviewer
             ->all();
     }
 
-    /** @param array<string, mixed> $audits @param array<int, array<string, mixed>> $findings */
-    private function validateDimensionAudits(array $audits, array $findings): void
+    /** @param array<string, mixed> $audits */
+    private function validateDimensionAudits(array $audits): void
     {
-        $findingDimensions = collect($findings)->pluck('dimension')->countBy();
-
         foreach (self::DIMENSIONS as $dimension) {
             $audit = $audits[$dimension] ?? null;
             if (! is_array($audit)
@@ -446,11 +492,214 @@ class ChapterReviewer
                 throw ValidationException::withMessages(['dimension_audits' => 'Narrative Review 七维审计结构无效。']);
             }
 
-            $hasFindings = (int) $findingDimensions->get($dimension, 0) > 0;
-            if (($audit['status'] === 'issues_found') !== $hasFindings) {
-                throw ValidationException::withMessages(['dimension_audits' => "Narrative Review {$dimension} 审计状态与 Findings 不一致。"]);
+        }
+    }
+
+    /** @return array<string, mixed> */
+    private function normalizeDimensionAudits(array $payload, GenerationRun $run, array $context, Chapter $chapter, string $model): array
+    {
+        $raw = $payload['dimension_audits'];
+        $repairs = [];
+        $repairFindings = [];
+
+        foreach (self::DIMENSIONS as $dimension) {
+            $hasFinding = collect($payload['findings'])->contains(
+                fn (array $finding): bool => ($finding['dimension'] ?? null) === $dimension,
+            );
+
+            if (($raw[$dimension]['status'] ?? null) === 'issues_found' && ! $hasFinding) {
+                $repair = $this->dimensionAuditRepairer->repair(
+                    $run,
+                    $dimension,
+                    $raw[$dimension],
+                    $context,
+                    self::NARRATIVE_FINDING_CODES,
+                    $model,
+                );
+
+                if (($repair['status'] ?? null) === 'succeeded') {
+                    $candidateFindings = is_array($repair['findings'] ?? null) ? $repair['findings'] : [];
+                    $invalid = collect($candidateFindings)->contains(
+                        fn (mixed $finding): bool => ! is_array($finding) || ! $this->validNarrativeFinding($finding, $chapter),
+                    );
+
+                    if ($invalid) {
+                        $repair = [
+                            ...$repair,
+                            'status' => 'failed',
+                            'error_code' => 'review_schema_repair_invalid',
+                            'error_message' => 'Review Schema Repair 返回了无效 Finding。',
+                            'findings' => [],
+                        ];
+                    } else {
+                        $payload['findings'] = [...$payload['findings'], ...$candidateFindings];
+                        $raw[$dimension]['summary'] = $repair['summary'];
+                    }
+                }
+
+                if (($repair['status'] ?? null) === 'failed') {
+                    $repairFindings[] = [
+                        'code' => 'REVIEW_SCHEMA_REPAIR_FAILED',
+                        'dimension' => 'workflow',
+                        'severity' => 'ambiguous',
+                        'scene_id' => null,
+                        'scope' => 'chapter',
+                        'auto_fixable' => false,
+                        'requires_human_decision' => true,
+                        'message' => "{$dimension} 维度的审校结构修复失败，需要人工检查。",
+                        'evidence' => 'ai_request_log_id='.(string) ($repair['ai_request_log_id'] ?? 'unknown')
+                            .'; '.(string) ($repair['error_message'] ?? '未知错误'),
+                        'source' => 'review_schema_repair',
+                        'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
+                    ];
+                }
+
+                $repairs[$dimension] = $repair;
             }
         }
+
+        $findingDimensions = collect($payload['findings'])->pluck('dimension')->countBy();
+        foreach (self::DIMENSIONS as $dimension) {
+            $raw[$dimension]['status'] = (int) $findingDimensions->get($dimension, 0) > 0
+                ? 'issues_found'
+                : 'pass';
+        }
+
+        return [
+            ...$payload,
+            'dimension_audits_raw' => $payload['dimension_audits'],
+            'dimension_audits' => $raw,
+            'schema_repairs' => $repairs,
+            'schema_repair_findings' => $repairFindings,
+        ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $findings
+     * @return array{0: array<int, array<string, mixed>>, 1: array<int, array<string, mixed>>}
+     */
+    private function repairCoverageJudgments(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $findings, string $model): array
+    {
+        $repairs = [];
+        $scenePlans = array_values($chapter->latestPlan?->scene_plans ?? []);
+
+        foreach (data_get($draft->data, 'scene_coverage', []) as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $sceneId = filter_var($row['scene_id'] ?? null, FILTER_VALIDATE_INT);
+            $coverage = collect($row)->only(PlanCoverage::ELEMENTS)->all();
+            $hasMissingPlanFinding = collect($findings)->contains(
+                fn (array $finding): bool => ($finding['code'] ?? null) === 'SCENE_PLAN_COVERAGE_MISSING'
+                    && (int) ($finding['scene_id'] ?? 0) === $sceneId,
+            );
+
+            if ($sceneId === false || ! $hasMissingPlanFinding || ! is_array($scenePlans[$index] ?? null)) {
+                continue;
+            }
+
+            $repair = $this->coverageJudgmentRepairer->repair(
+                $run,
+                $sceneId,
+                $coverage,
+                $draft->content,
+                $scenePlans[$index],
+                $model,
+            );
+            $repairs[] = ['scene_id' => $sceneId, ...$repair];
+
+            if (($repair['status'] ?? null) !== 'succeeded' || ! is_array($repair['coverage'] ?? null)) {
+                $findings = collect($findings)->map(function (array $finding) use ($sceneId, $repair): array {
+                    if (($finding['code'] ?? null) !== 'SCENE_PLAN_COVERAGE_MISSING'
+                        || (int) ($finding['scene_id'] ?? 0) !== $sceneId) {
+                        return $finding;
+                    }
+
+                    return [...$finding, 'coverage_adjudication' => [
+                        'status' => 'failed',
+                        'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
+                        'error_code' => $repair['error_code'] ?? 'coverage_judgment_repair_failed',
+                    ]];
+                })->all();
+
+                continue;
+            }
+
+            $repairedCoverage = $repair['coverage'];
+            $findings = collect($findings)->flatMap(function (array $finding) use ($sceneId, $repairedCoverage, $repair): array {
+                if (($finding['code'] ?? null) !== 'SCENE_PLAN_COVERAGE_MISSING'
+                    || (int) ($finding['scene_id'] ?? 0) !== $sceneId) {
+                    return [$finding];
+                }
+
+                $element = (string) ($finding['plan_element'] ?? '');
+                $item = $repairedCoverage[$element] ?? null;
+
+                if (! is_array($item)) {
+                    return [$finding];
+                }
+
+                if (($item['status'] ?? null) === 'fulfilled') {
+                    return [];
+                }
+
+                return [[
+                    ...$finding,
+                    'code' => ($item['status'] ?? null) === 'contradicted'
+                        ? 'SCENE_PLAN_COVERAGE_CONTRADICTED'
+                        : 'SCENE_PLAN_COVERAGE_MISSING',
+                    'coverage_status' => $item['status'] ?? 'missing',
+                    'evidence' => $item['evidence'] ?? null,
+                    'coverage_adjudication' => [
+                        'status' => 'succeeded',
+                        'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
+                        'prompt_version' => PlanCoverageJudgmentRepairer::PROMPT_VERSION,
+                    ],
+                ]];
+            })->values()->all();
+        }
+
+        return [$findings, $repairs];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function repairVerificationOutcome(GenerationRun $run, array $currentFindings): array
+    {
+        $required = data_get($run->context_snapshot, 'repair_verification.required_findings');
+
+        if (! is_array($required)) {
+            return [];
+        }
+
+        return collect($required)->filter(fn (mixed $finding): bool => is_array($finding))->values()
+            ->map(function (array $finding, int $index) use ($currentFindings): array {
+                $same = collect($currentFindings)->first(fn (array $current): bool => ($current['code'] ?? null) === ($finding['code'] ?? null)
+                    && ($current['scene_id'] ?? null) === ($finding['scene_id'] ?? null)
+                    && ($current['scope'] ?? null) === ($finding['scope'] ?? null));
+                $replacement = $same === null
+                    ? collect($currentFindings)->first(fn (array $current): bool => ($current['dimension'] ?? null) === ($finding['dimension'] ?? null)
+                        && ($current['scene_id'] ?? null) === ($finding['scene_id'] ?? null))
+                    : null;
+
+                return [
+                    'finding_ref' => $this->findingRef($finding, $index),
+                    'code' => $finding['code'] ?? null,
+                    'result' => $same !== null ? 'still_present' : ($replacement !== null ? 'replaced' : 'resolved'),
+                    'current_code' => $same['code'] ?? $replacement['code'] ?? null,
+                ];
+            })->all();
+    }
+
+    private function findingRef(array $finding, int $index): string
+    {
+        return 'finding-'.($index + 1).'-'.substr(hash('sha256', json_encode([
+            $finding['code'] ?? null,
+            $finding['dimension'] ?? null,
+            $finding['scene_id'] ?? null,
+            $finding['scope'] ?? null,
+            $finding['message'] ?? null,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)), 0, 12);
     }
 
     /** @return array<string, mixed>|null */
@@ -537,7 +786,7 @@ class ChapterReviewer
 
     /**
      * @param  array<int, array<string, mixed>>  $findings
-     * @return array{ReviewDecision, array{rule: string, finding_codes: array<int, string>, score: float, pass_score: float}}
+     * @return array{ReviewDecision, array<string, mixed>}
      */
     private function decide(array $findings, float $score, bool $stateBlocked): array
     {
@@ -551,22 +800,38 @@ class ChapterReviewer
             return [ReviewDecision::NeedsAttention, $this->decisionBasis('human_decision_required', $humanCodes, $score)];
         }
 
-        $rewriteCodes = collect($findings)->filter(fn (array $finding): bool => (bool) ($finding['auto_fixable'] ?? false))->pluck('code')->unique()->values()->all();
-        if ($rewriteCodes !== []) {
-            return [ReviewDecision::Rewrite, $this->decisionBasis('auto_fixable_finding', $rewriteCodes, $score)];
+        $autoFixableErrors = collect($findings)->filter(fn (array $finding): bool => (bool) ($finding['auto_fixable'] ?? false)
+            && ($finding['severity'] ?? null) === 'error')->values();
+        if ($autoFixableErrors->isNotEmpty()) {
+            return [ReviewDecision::Rewrite, $this->decisionBasis('auto_fixable_error', $autoFixableErrors->all(), $score)];
         }
 
-        $nonBlockingCodes = collect($findings)->pluck('code')->unique()->values()->all();
+        $actionableWarnings = collect($findings)->filter(fn (array $finding): bool => (bool) ($finding['auto_fixable'] ?? false)
+            && in_array($finding['severity'] ?? null, ['warning', 'soft'], true))->values();
+        if ($score < (float) config('generation.review_pass_score', 80) && $actionableWarnings->isNotEmpty()) {
+            return [ReviewDecision::Rewrite, $this->decisionBasis('below_threshold_actionable_warning', $actionableWarnings->all(), $score)];
+        }
 
-        return [ReviewDecision::Pass, $this->decisionBasis('score_and_non_blocking_findings', $nonBlockingCodes, $score)];
+        if ($score < (float) config('generation.review_pass_score', 80)) {
+            return [ReviewDecision::NeedsAttention, $this->decisionBasis('below_threshold_without_rewrite_path', $findings, $score)];
+        }
+
+        return [ReviewDecision::Pass, $this->decisionBasis('score_and_advisory_findings', $findings, $score)];
     }
 
-    /** @param array<int, string> $findingCodes @return array{rule: string, finding_codes: array<int, string>, score: float, pass_score: float} */
-    private function decisionBasis(string $rule, array $findingCodes, float $score): array
+    /** @param array<int, array<string, mixed>|string> $triggerFindings @return array<string, mixed> */
+    private function decisionBasis(string $rule, array $triggerFindings, float $score): array
     {
+        $findings = collect($triggerFindings)->values();
+
         return [
             'rule' => $rule,
-            'finding_codes' => $findingCodes,
+            'finding_codes' => $findings->map(fn (array|string $finding): ?string => is_array($finding)
+                ? ($finding['code'] ?? null)
+                : $finding)->filter()->unique()->values()->all(),
+            'finding_refs' => $findings->map(fn (array|string $finding, int $index): ?string => is_array($finding)
+                ? $this->findingRef($finding, $index)
+                : null)->filter()->values()->all(),
             'score' => $score,
             'pass_score' => (float) config('generation.review_pass_score', 80),
         ];

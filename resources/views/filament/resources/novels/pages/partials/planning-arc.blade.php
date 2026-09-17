@@ -22,6 +22,12 @@
         <p class="mt-1 text-lg font-semibold tabular-nums text-gray-950 dark:text-white">
             {{ round($arc->progress * 100) }}%
         </p>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Canonical {{ data_get($arc->progress_summary, 'canonical_completed', 0) }}/{{ data_get($arc->progress_summary, 'total', count($arc->beats ?? [])) }}
+            @if (data_get($arc->progress_summary, 'draft_pending', 0) > 0)
+                · 活跃草稿预计 +{{ data_get($arc->progress_summary, 'draft_pending') }} Beat
+            @endif
+        </p>
         <div
             class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-white/10"
             role="progressbar"

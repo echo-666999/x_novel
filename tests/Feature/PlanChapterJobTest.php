@@ -50,6 +50,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
     return [
         'chapter_function' => '迫使主角离开安全区',
         'arc_contribution' => '推进失踪船队主线',
+        'arc_contributions' => [],
         'reader_promise' => '揭示灯塔的第一层秘密',
         'target_words' => 3000,
         'pov_character_id' => $characterId,
@@ -62,6 +63,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
         'required_facts' => [],
         'forbidden_conflicts' => [],
         'foreshadowing_actions' => [],
+        'world_entity_candidates' => [],
         'scene_plans' => [[
             'goal' => '取得出港许可',
             'conflict' => '港务官拒绝放行',
@@ -69,6 +71,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
             'outcome' => '主角决定偷船',
             'outcome_allowed' => ['寻找无人看守的小船'],
             'outcome_forbidden' => ['取得港务官正式许可'],
+            'continuity_requirements' => [],
             'pov_character_id' => $characterId,
             'location' => '旧港',
             'time_anchor' => '黄昏',
@@ -146,7 +149,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v7')
+        ->and($run->prompt_version)->toBe('chapter-planner-v8')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')

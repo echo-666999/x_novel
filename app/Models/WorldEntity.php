@@ -20,6 +20,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'current_state',
     'locked_fields',
     'status',
+    'source_chapter_id',
+    'source_candidate_key',
 ])]
 class WorldEntity extends Model
 {
@@ -30,6 +32,12 @@ class WorldEntity extends Model
     public function novel(): BelongsTo
     {
         return $this->belongsTo(Novel::class);
+    }
+
+    /** @return BelongsTo<Chapter, $this> */
+    public function sourceChapter(): BelongsTo
+    {
+        return $this->belongsTo(Chapter::class, 'source_chapter_id');
     }
 
     /** @return array<string, string> */

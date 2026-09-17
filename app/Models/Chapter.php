@@ -21,6 +21,7 @@ use Illuminate\Database\Eloquent\Relations\HasOneThrough;
     'canonical_artifact_id',
     'word_count',
     'summary',
+    'canonical_metadata',
 ])]
 class Chapter extends Model
 {
@@ -108,6 +109,7 @@ class Chapter extends Model
             'status' => ChapterStatus::class,
             'canonical_artifact_id' => 'integer',
             'word_count' => 'integer',
+            'canonical_metadata' => 'array',
         ];
     }
 }

@@ -100,6 +100,8 @@ class ContextBuilder
                 'must_not_reveal' => $plan->must_not_reveal ?? [],
                 'required_fact_ids' => $requiredFactIds,
                 'forbidden_conflicts' => $plan->forbidden_conflicts ?? [],
+                'arc_contributions' => $plan->arc_contributions ?? [],
+                'world_entity_candidates' => $plan->world_entity_candidates ?? [],
             ],
             'foreshadowing_contract' => $foreshadowingContract,
         ];

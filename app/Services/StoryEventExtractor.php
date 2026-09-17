@@ -73,7 +73,7 @@ class StoryEventExtractor
             ];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中该类型已经存在的实体。没有有效主体时必须省略该事件，不能借用角色 ID 充当 relationship、conflict、thread 或其他类型的 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖该 fulfilled Coverage 的逐字证据，并把 scene_id 设为动作指定的目标 Scene；未列入 actions、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容都不能生成伏笔事件。按正文发生顺序返回同一伏笔的多个事件，使 plant 先于 reinforce/pay_off；defer 不产生正文 Story Event。promised_payoff 和 acceptance_criteria 是验收约束，不能代替正文证据。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 chapter_plan.world_entity_candidates 中的 candidate_key。正文确实引入批准候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=candidate_key，payload 包含 candidate_key；不得为未批准实体生成该事件。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
@@ -162,6 +162,7 @@ class StoryEventExtractor
                 'id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise',
                 'must_reveal', 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
                 'foreshadowing_actions',
+                'arc_contributions', 'world_entity_candidates',
             ]),
             'bible_version' => $foreshadowingContract['bible_version'],
             'state_version' => $chapter->novel->canonicalStateVersion->version,
@@ -363,7 +364,12 @@ class StoryEventExtractor
 
         $valid = match ($candidate->subjectType) {
             'character' => $chapter->novel->characters()->whereKey($candidate->subjectId)->exists(),
-            'world_entity' => $chapter->novel->worldEntities()->whereKey($candidate->subjectId)->exists(),
+            'world_entity' => $chapter->novel->worldEntities()->whereKey($candidate->subjectId)->exists()
+                || ($candidate->eventType === EventType::WorldEntityIntroduced
+                    && collect($chapter->latestPlan?->world_entity_candidates ?? [])->contains(
+                        fn (array $item): bool => ($item['candidate_key'] ?? null) === $candidate->subjectId,
+                    )),
+            'story_arc' => $chapter->novel->storyArcs()->whereKey($candidate->subjectId)->exists(),
             'foreshadowing' => $chapter->novel->foreshadowings()->whereKey($candidate->subjectId)->exists(),
             'chapter' => (string) $chapter->getKey() === $candidate->subjectId,
             default => true,

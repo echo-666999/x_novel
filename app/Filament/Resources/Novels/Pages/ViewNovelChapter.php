@@ -513,13 +513,24 @@ class ViewNovelChapter extends ViewRecord
                     'continuity_score' => '事实 / 连续性 · 25%', 'plan_score' => '计划遵循 · 15%', 'character_score' => '人物一致性 · 15%',
                     'progress_score' => '剧情推进 · 15%', 'repetition_score' => '重复度 · 10%', 'pacing_score' => '节奏 / 悬念 · 10%', 'style_score' => '文风 / 可读性 · 10%',
                 ])->map(fn ($label, $field) => TextEntry::make("review_{$field}")->label($label)->state(fn () => $this->latestReview()?->{$field} ?? '—'))->values()->all()),
+            Section::make('规划验收')
+                ->description('Story Arc Beat 和 World Entity Candidate 只有通过正文逐字证据验收后才会进入 Canonical Commit。')
+                ->visible(fn (): bool => $this->planningReviewRows() !== [])
+                ->schema([
+                    RepeatableEntry::make('planning_review_rows')->hiddenLabel()->state(fn (): array => $this->planningReviewRows())->schema([
+                        TextEntry::make('kind')->label('类型')->badge(),
+                        TextEntry::make('reference')->label('计划项'),
+                        TextEntry::make('status')->label('验收结果')->badge(),
+                        TextEntry::make('evidence')->label('正文证据')->placeholder('无')->columnSpanFull(),
+                    ])->columns(3),
+                ]),
             Section::make('问题清单')
                 ->description('包含叙事审校发现和状态校验器的确定性检查结果。')
                 ->schema([
                     RepeatableEntry::make('review_findings')->hiddenLabel()->state(fn (): array => $this->localizedReviewFindings())->schema([
                         TextEntry::make('message')->label('问题'),
                         TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
-                        TextEntry::make('severity')->label('级别')->badge(),
+                        TextEntry::make('severity')->label('处理级别')->badge(),
                         TextEntry::make('evidence')->label('证据')->placeholder('—')->columnSpanFull(),
                     ])->columns(3),
                     TextEntry::make('review_empty')->hiddenLabel()->state('暂无审校问题。')->visible(fn (): bool => empty($this->latestReview()?->findings)),
@@ -753,7 +764,7 @@ class ViewNovelChapter extends ViewRecord
             'pacing' => '节奏 / 悬念',
             'style' => '文风 / 可读性',
         ];
-        $severities = ['warning' => '警告', 'error' => '错误', 'hard' => '阻断', 'soft' => '提醒'];
+        $severities = ['warning' => '非阻塞建议', 'error' => '必须修复', 'hard' => '阻塞', 'soft' => '非阻塞建议', 'ambiguous' => '需要人工判断'];
 
         return collect($this->latestReview()?->findings ?? [])
             ->map(fn (array $finding): array => [
@@ -761,6 +772,26 @@ class ViewNovelChapter extends ViewRecord
                 'dimension' => $dimensions[(string) ($finding['dimension'] ?? '')] ?? ($finding['dimension'] ?? '状态一致性'),
                 'severity' => $severities[(string) ($finding['severity'] ?? '')] ?? ($finding['severity'] ?? '—'),
             ])->all();
+    }
+
+    /** @return array<int, array{kind: string, reference: string, status: string, evidence: mixed}> */
+    private function planningReviewRows(): array
+    {
+        $data = $this->latestReview()?->artifact?->data ?? [];
+        $arcRows = collect(data_get($data, 'arc_beat_audits', []))->map(fn (array $audit): array => [
+            'kind' => 'Story Arc Beat',
+            'reference' => 'Arc #'.($audit['arc_id'] ?? '?').' · '.($audit['beat_key'] ?? '?'),
+            'status' => $audit['status'] ?? 'unknown',
+            'evidence' => $audit['evidence'] ?? null,
+        ]);
+        $worldRows = collect(data_get($data, 'world_entity_candidate_audits', []))->map(fn (array $audit): array => [
+            'kind' => 'World Entity',
+            'reference' => $audit['candidate_key'] ?? '?',
+            'status' => $audit['status'] ?? 'unknown',
+            'evidence' => $audit['evidence'] ?? null,
+        ]);
+
+        return $arcRows->concat($worldRows)->values()->all();
     }
 
     private function canonicalCommitContext(): ?CanonicalCommitData
@@ -1059,6 +1090,12 @@ class ViewNovelChapter extends ViewRecord
                     TextEntry::make('arc_contribution')
                         ->label('故事线贡献')
                         ->state(fn (): ?string => $this->chapter()->latestPlan?->arc_contribution),
+                    TextEntry::make('structured_arc_contributions')
+                        ->label('结构化 Arc Beat')
+                        ->state(fn (): string => count($this->chapter()->latestPlan?->arc_contributions ?? []).' 项'),
+                    TextEntry::make('world_entity_candidates')
+                        ->label('世界实体候选')
+                        ->state(fn (): string => count($this->chapter()->latestPlan?->world_entity_candidates ?? []).' 项'),
                     TextEntry::make('reader_promise')
                         ->label('读者承诺')
                         ->state(fn (): ?string => $this->chapter()->latestPlan?->reader_promise),

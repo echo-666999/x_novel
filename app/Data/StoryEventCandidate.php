@@ -19,6 +19,7 @@ final readonly class StoryEventCandidate
         'foreshadowing',
         'world',
         'world_entity',
+        'story_arc',
         'location',
         'faction',
         'chapter',

@@ -237,12 +237,21 @@ foreshadowing_abandoned
 ## World
 
 ```text
+world_entity_introduced
 world_rule_revealed
 world_rule_changed
 location_state_changed
 faction_state_changed
 world_state_changed
 ```
+
+## Planning
+
+```text
+story_arc_beat_completed
+```
+
+`world_entity_introduced` 的候选 `subject_id` 可以是 Chapter Plan 冻结的 Entity Candidate 临时键；只有 Canonical Commit 验证 Review 逐字证据并创建正式实体后，才把它解析为正式 `world_entities.id`。`story_arc_beat_completed` 必须引用当前小说有效 Arc 和该 Arc 的稳定 Beat Key，Arc Progress 只从正式 Active Event 投影。
 
 ## Correction
 
@@ -933,6 +942,8 @@ Expected State Version matches
 Idempotency valid
 ```
 
+Commit 的触发可以来自小说级 `auto_commit=true` 的安全自动派发，也可以来自用户确认；两条路径必须构建同一份冻结输入并调用同一个 `CanonicalCommitService`。触发方式不得改变上述前置条件、事务、行锁、版本校验或 exactly-once 语义。小说暂停后不得开始 Commit。
+
 ---
 
 # 36. Canonical Commit Transaction
@@ -954,6 +965,12 @@ Validate Review PASS
 
 Validate Artifact
 
+Validate Arc / World planning audits and verbatim evidence
+
+Create approved World Entities idempotently
+
+Resolve Candidate keys to formal Entity IDs
+
 Persist Story Events
 
 Apply Fact Changes
@@ -964,10 +981,14 @@ Update Chapter canonical pointer
 
 Update Novel current pointers
 
+Recalculate Story Arc progress from Active Canonical Events
+
 COMMIT
 ```
 
 这个事务中不调用 LLM。
+
+World Entity 使用 `(novel_id, source_chapter_id, source_candidate_key)` 唯一约束保证重复提交不重复创建。Entity、解析后的 Event、补充 State Operations、下一 State Version、Chapter 指针和 Arc Progress 属于同一个事务；任何一步失败都必须完整回滚。
 
 ---
 
@@ -1127,7 +1148,7 @@ Projection 失败时可重建。
 # 45. Rebuild Strategy
 
 ```text
-完整的 Initial State Version 0
+适用于目标版本、且已经验证包含完整 Canonical 初始化元数据的基线版本
 ↓
 active Story Events
 ↓
@@ -1144,7 +1165,7 @@ active Story Events
 
 数据量很小，不需要复杂 Snapshot Optimization。
 
-新小说的 Version 0 必须按第 31 节包含完整初始化元数据。对不符合该约束的历史小说，重建器不能只因版本号为 0 就把空状态当作基线；必须先修复 Version 0，或显式选择并验证首个待重放事件之前的完整初始化版本，再只重放基线之后的 Active Events。若无法确定完整基线，dry-run 必须报告差异并停止替换；不得用不完整重建结果覆盖当前 Canonical State。
+新小说的 Version 0 必须按第 31 节包含完整初始化元数据。对不符合该约束的历史小说，重建器不能只因版本号为 0 就把空状态当作基线；必须选择并验证适用于目标版本、且位于首个待重放事件之前的完整 Canonical Baseline，再只重放基线之后的 Active Events。若无法确定完整基线，dry-run 必须报告差异并停止替换；不得用不完整重建结果覆盖当前 Canonical State。
 
 ---
 
@@ -1231,11 +1252,17 @@ Memory from Chapter 51 invalidated
 Fact projection rebuild
 ↓
 Foreshadowing projection rebuild
+↓
+Story Arc progress rebuild
+↓
+Delete entities first introduced by Chapter 51 when no later Active Canonical Event references them
 ```
 
 旧数据不物理删除。
 
 Commit、Latest Chapter Rollback 和 Manual Canonical Correction 在各自 Canonical 事务成功后，统一派发当前 State Version 对应的投影刷新任务。Rollback 先在事务内恢复 Canonical 指针并失效最新章事件，投影任务随后只重放仍为 Active 且不晚于恢复版本的事件，因此 `status`、`reinforce_count`、`setup_chapter_id` 和 `payoff_chapter_id` 会一起回到上一正式版本。重复刷新从相同基线与事件集合重新计算，不会重复累计强化次数。
+
+Arc Progress 同样从剩余 Active `story_arc_beat_completed` 事件中的唯一 Beat 重算，并且只有全部 Beat 与 Completion Conditions 都有正式验收记录时才进入 completed。若后续 Canonical Chapter 已引用本章首次引入的 World Entity，Latest Chapter Rollback 必须阻止简单删除并要求先处理后续引用。历史 Plan 缺少结构化 Beat 时不得根据章节数或自然语言猜测进度；`story:rebuild-arc-progress` 默认仅 dry-run，显式 `--execute` 才更新投影。
 
 投影刷新失败只留下可重试的 Queue 失败记录，不删除 Story Events、State Version 或 Canonical Chapter。Canonical State 与 Active Story Events 仍是权威来源；管理表在任务完成前可能短暂陈旧，不能反向覆盖 Canonical 数据。这一投影只覆盖已有领域表，不等于引入通用 Event Projection 框架。
 
@@ -1826,6 +1853,10 @@ Validate
 ↓
 New State Version
 ```
+
+Story State 重建校验始终是 dry-run。它从不晚于目标版本的无章节 State Version 中，选择最新且同时满足以下条件的基线：必要 Domain 均为数组、`schema_version` 有效、checksum 与快照内容一致。报告必须包含基线版本/checksum、实际重放的 Event ID 与 State Version 范围，以及失效或不产生状态操作的 Event 跳过原因；没有完整基线时直接失败，不生成误导性 diff。
+
+需要用重建结果替换当前 Canonical Story State 时，只能调用独立的 `RecoverCanonicalStoryStateAction`。该 Action 在事务内锁定 Novel，复核 Expected State Version、当前 checksum 与重建 checksum，然后创建新的无章节恢复基线并更新 Canonical Pointer；不得覆盖历史 State Version。成功后复用统一 Projection 刷新任务。
 
 保证历史可追踪。
 

@@ -12,6 +12,9 @@ use App\Enums\ForeshadowingStatus;
 use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanFindingSeverity;
+use App\Enums\StoryArcStatus;
+use App\Enums\WorldEntityStatus;
+use App\Enums\WorldEntityType;
 use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
@@ -21,7 +24,10 @@ use Illuminate\Support\Collection;
 
 class PlanValidator
 {
-    public function __construct(private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver) {}
+    public function __construct(
+        private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
+        private readonly StoryArcBeatContract $storyArcBeatContract,
+    ) {}
 
     public function validate(ChapterPlan $plan): PlanValidationResult
     {
@@ -36,6 +42,7 @@ class PlanValidator
         $foreshadowings = $novel->foreshadowings()->get()->keyBy('id');
 
         $this->validatePlanShape($plan, $findings);
+        $this->validateCrossSceneRequirements($plan, $findings);
         $this->validatePov($plan->pov_character_id, 'Chapter Plan', $characters, $findings);
 
         foreach (array_values($plan->scene_plans ?? []) as $index => $scenePlan) {
@@ -50,12 +57,117 @@ class PlanValidator
         $requiredFacts = $this->validateFactReferences($plan, $activeFacts, $findings);
         $this->validateLockedFactsAndKnowledge($requiredFacts, $lockedFacts, $characters, $findings);
         $this->validateForeshadowings($plan, $foreshadowings, $findings);
+        $this->validateArcContributions($plan, $findings);
+        $this->validateWorldEntityCandidates($plan, $findings);
 
         if ($novel->status === NovelStatus::Completing) {
             $this->validateCompletingRestrictions($plan, $foreshadowings, $findings);
         }
 
         return new PlanValidationResult($findings);
+    }
+
+    /** @param array<int, PlanFinding> $findings */
+    private function validateArcContributions(ChapterPlan $plan, array &$findings): void
+    {
+        $arcs = $plan->chapter->novel->storyArcs()->get()->keyBy('id');
+        $seen = [];
+
+        foreach ($plan->arc_contributions ?? [] as $index => $contribution) {
+            $position = $index + 1;
+            if (! is_array($contribution)) {
+                $findings[] = $this->blocked('INVALID_ARC_CONTRIBUTION', "Story Arc 推进项 {$position} 结构无效。");
+
+                continue;
+            }
+
+            $arcId = filter_var($contribution['arc_id'] ?? null, FILTER_VALIDATE_INT);
+            $beatIndex = filter_var($contribution['beat_index'] ?? null, FILTER_VALIDATE_INT);
+            $sceneSequence = filter_var($contribution['target_scene_sequence'] ?? null, FILTER_VALIDATE_INT);
+            $beatKey = trim((string) ($contribution['beat_key'] ?? ''));
+            $criteria = trim((string) ($contribution['acceptance_criteria'] ?? ''));
+            $arc = $arcId === false ? null : $arcs->get($arcId);
+
+            if ($arc === null || $arc->status !== StoryArcStatus::Active) {
+                $findings[] = $this->blocked('INVALID_ARC_REFERENCE', "Story Arc 推进项 {$position} 引用了其他小说或非推进中的 Arc。");
+
+                continue;
+            }
+
+            if ($arc->volume_id !== null && $arc->volume_id !== $plan->chapter->volume_id) {
+                $findings[] = $this->blocked('ARC_VOLUME_MISMATCH', "Story Arc「{$arc->title}」不属于当前 Chapter 的 Volume。");
+            }
+
+            $beat = collect($this->storyArcBeatContract->forArc($arc))->first(
+                fn (array $candidate): bool => $candidate['beat_key'] === $beatKey,
+            );
+            if ($beat === null || $beatIndex === false || $beat['beat_index'] !== $beatIndex) {
+                $findings[] = $this->blocked('INVALID_ARC_BEAT_REFERENCE', "Story Arc「{$arc->title}」的 Beat 标识或索引无效。");
+            }
+
+            if ($sceneSequence === false || $sceneSequence < 1 || $sceneSequence > count($plan->scene_plans ?? []) || $criteria === '') {
+                $findings[] = $this->blocked('INVALID_ARC_BEAT_ACCEPTANCE', "Story Arc 推进项 {$position} 缺少有效目标 Scene 或验收条件。");
+            }
+
+            $fingerprint = $arcId.':'.$beatKey;
+            if (isset($seen[$fingerprint])) {
+                $findings[] = $this->blocked('DUPLICATE_ARC_BEAT_REFERENCE', '同一 Story Arc Beat 在 Plan 中只能声明一次。');
+            }
+            $seen[$fingerprint] = true;
+        }
+    }
+
+    /** @param array<int, PlanFinding> $findings */
+    private function validateWorldEntityCandidates(ChapterPlan $plan, array &$findings): void
+    {
+        $entities = $plan->chapter->novel->worldEntities()->get();
+        $entityIds = $entities->keyBy('id');
+        $seenKeys = [];
+
+        foreach ($plan->world_entity_candidates ?? [] as $index => $candidate) {
+            $position = $index + 1;
+            if (! is_array($candidate)) {
+                $findings[] = $this->blocked('INVALID_WORLD_ENTITY_CANDIDATE', "世界实体候选 {$position} 结构无效。");
+
+                continue;
+            }
+
+            $key = trim((string) ($candidate['candidate_key'] ?? ''));
+            $type = WorldEntityType::tryFrom((string) ($candidate['type'] ?? ''));
+            $name = trim((string) ($candidate['name'] ?? ''));
+            $scene = filter_var($candidate['target_scene_sequence'] ?? null, FILTER_VALIDATE_INT);
+            $possibleDuplicates = collect($candidate['possible_duplicate_entity_ids'] ?? [])->map(fn ($id): int => (int) $id);
+
+            if (! preg_match('/^wec-[a-z0-9-]+$/', $key) || $type === null || $name === ''
+                || blank($candidate['description'] ?? null) || blank($candidate['deduplication_basis'] ?? null)
+                || blank($candidate['introduction_reason'] ?? null)) {
+                $findings[] = $this->blocked('INVALID_WORLD_ENTITY_CANDIDATE', "世界实体候选 {$position} 缺少稳定键、类型、名称、描述、去重依据或引入理由。");
+            }
+
+            if (isset($seenKeys[$key])) {
+                $findings[] = $this->blocked('DUPLICATE_WORLD_ENTITY_CANDIDATE_KEY', "世界实体候选键 {$key} 重复。");
+            }
+            $seenKeys[$key] = true;
+
+            if ($scene === false || $scene < 1 || $scene > count($plan->scene_plans ?? [])) {
+                $findings[] = $this->blocked('INVALID_WORLD_ENTITY_TARGET_SCENE', "世界实体候选「{$name}」指向不存在的 Scene。");
+            }
+
+            foreach ($possibleDuplicates as $entityId) {
+                if (! $entityIds->has($entityId)) {
+                    $findings[] = $this->blocked('INVALID_WORLD_ENTITY_DUPLICATE_REFERENCE', "世界实体候选「{$name}」引用了其他小说的去重实体 #{$entityId}。");
+                }
+            }
+
+            $sameName = $entities->first(fn ($entity): bool => $entity->status === WorldEntityStatus::Active
+                && mb_strtolower(trim($entity->name)) === mb_strtolower($name));
+            if ($sameName !== null) {
+                $findings[] = $this->blocked(
+                    $sameName->type === $type ? 'DUPLICATE_WORLD_ENTITY' : 'WORLD_ENTITY_TYPE_CONFLICT',
+                    "世界实体候选「{$name}」与现有 {$sameName->type->getLabel()} #{$sameName->getKey()} 重复或类型冲突，应直接引用现有实体。",
+                );
+            }
+        }
     }
 
     /** @param array<int, PlanFinding> $findings */
@@ -86,6 +198,77 @@ class PlanValidator
                 '第一场景必须说明如何承接上一章正式结尾；如有时间、地点或行动跳跃，需要写明正文中的过渡过程。',
             );
         }
+    }
+
+    /** @param array<int, PlanFinding> $findings */
+    private function validateCrossSceneRequirements(ChapterPlan $plan, array &$findings): void
+    {
+        $scenePlans = array_values($plan->scene_plans ?? []);
+        $seenCoreRequirements = [];
+        $seenContracts = [];
+        $lastScene = count($scenePlans);
+
+        foreach ($scenePlans as $index => $scenePlan) {
+            $sceneNumber = $index + 1;
+
+            foreach (['goal', 'conflict', 'turn', 'outcome', 'outcome_allowed', 'outcome_forbidden'] as $field) {
+                $values = is_array($scenePlan[$field] ?? null) ? $scenePlan[$field] : [$scenePlan[$field] ?? null];
+
+                foreach ($values as $value) {
+                    $normalized = $this->normalizedRequirement($value);
+                    if ($normalized === '') {
+                        continue;
+                    }
+
+                    if (isset($seenCoreRequirements[$normalized]) && $seenCoreRequirements[$normalized] !== $sceneNumber) {
+                        $findings[] = $this->blocked(
+                            'DUPLICATE_CROSS_SCENE_REQUIREMENT',
+                            "Scene {$sceneNumber} 的 {$field} 与 Scene {$seenCoreRequirements[$normalized]} 重复；持续状态应改用 continuity_requirements，并只在首次、变化或章末回扣时写入正文要求。",
+                        );
+                    }
+                    $seenCoreRequirements[$normalized] ??= $sceneNumber;
+                }
+            }
+
+            foreach (($scenePlan['continuity_requirements'] ?? []) as $contract) {
+                if (! is_array($contract)) {
+                    $findings[] = $this->blocked('INVALID_CONTINUITY_REQUIREMENT', "Scene {$sceneNumber} 的 continuity_requirements 结构无效。");
+
+                    continue;
+                }
+
+                $key = trim((string) ($contract['key'] ?? ''));
+                $mode = (string) ($contract['mode'] ?? '');
+                $description = trim((string) ($contract['description'] ?? ''));
+                if ($key === '' || $description === '' || ! in_array($mode, ['establish', 'persist', 'change', 'callback'], true)) {
+                    $findings[] = $this->blocked('INVALID_CONTINUITY_REQUIREMENT', "Scene {$sceneNumber} 的 continuity requirement 缺少合法 key、mode 或 description。");
+
+                    continue;
+                }
+
+                $previous = $seenContracts[$key] ?? [];
+                if ($mode === 'establish' && $previous !== []) {
+                    $findings[] = $this->blocked('DUPLICATE_CONTINUITY_ESTABLISHMENT', "持续状态 {$key} 只能首次建立一次。");
+                } elseif ($mode !== 'establish' && $previous === []) {
+                    $findings[] = $this->blocked('CONTINUITY_REQUIREMENT_NOT_ESTABLISHED', "持续状态 {$key} 在 {$mode} 前必须先由较早 Scene establish。");
+                }
+
+                if ($mode === 'callback' && $sceneNumber !== $lastScene) {
+                    $findings[] = $this->blocked('CONTINUITY_CALLBACK_NOT_AT_CHAPTER_END', "持续状态 {$key} 的 callback 只能放在章末 Scene。");
+                }
+
+                $seenContracts[$key][] = ['scene' => $sceneNumber, 'mode' => $mode];
+            }
+        }
+    }
+
+    private function normalizedRequirement(mixed $value): string
+    {
+        if (! is_string($value)) {
+            return '';
+        }
+
+        return mb_strtolower((string) preg_replace('/[\p{P}\p{S}\s]+/u', '', trim($value)));
     }
 
     /**
