@@ -4,7 +4,7 @@
 > 来源：2026-09-15 对《六环余光》章节生成、Review/Rewrite、Canonical State、Story Arc 和 World Entity 的现状检查  
 > 参考：`docs/development/CHAPTER_GENERATION_OPTIMIZATION_TASKS.md`、`docs/development/FORESHADOWING_WORKFLOW_OPTIMIZATION_TASKS.md`  
 > 用途：把检查中确认的问题与建议拆成可逐项实施、测试、验收和回滚的任务。  
-> 当前状态：Batch A（GWQ-001～GWQ-006）、Batch B（GWQ-007～GWQ-009）与 Batch C（GWQ-010～GWQ-013）已完成；GWQ-014 已解除依赖，Batch D 尚未实施。
+> 当前状态：Batch A～D（GWQ-001～GWQ-015）已完成；Chapter 12 已使用 Bible v6 重建来源链并通过 Review 门禁，Canonical Commit 仍由用户控制。
 
 ## 1. 使用规则
 
@@ -161,8 +161,8 @@ flowchart TD
 | GWQ-011 | Canonical Story Arc 进度投影 | P1 | DONE | GWQ-010 |
 | GWQ-012 | 世界资料覆盖检查与 Entity Candidate | P1 | DONE | GWQ-001 |
 | GWQ-013 | World Entity Canonical 落库与回滚 | P1 | DONE | GWQ-012 |
-| GWQ-014 | 《六环余光》Bible 修正与第12章安全恢复 | P0 | IN_PROGRESS | GWQ-002、004～006、008、009、013 |
-| GWQ-015 | 真实缺陷夹具、浏览器回归与发布收尾 | P0 | IN_PROGRESS | GWQ-006、007、009、011、014 |
+| GWQ-014 | 《六环余光》Bible 修正与第12章安全恢复 | P0 | DONE | GWQ-002、004～006、008、009、013 |
+| GWQ-015 | 真实缺陷夹具、浏览器回归与发布收尾 | P0 | DONE | GWQ-006、007、009、011、014 |
 
 ## 6. Task Cards
 
@@ -744,7 +744,7 @@ flowchart TD
 
 **Skills：** `generation-pipeline`, `story-engine`, `memory-context`  
 **优先级：** P0  
-**状态：** IN_PROGRESS  
+**状态：** DONE
 **依赖：** GWQ-002、GWQ-004、GWQ-005、GWQ-006、GWQ-008、GWQ-009、GWQ-013
 
 ### 实现功能
@@ -778,15 +778,16 @@ flowchart TD
 ### 阶段记录（2026-09-17）
 
 - 已实现默认只读的 `novel:recover-bible-chapter` 和受 Expected Bible/State、来源链及 plan hash 保护的显式执行路径。
-- 《六环余光》最新 dry-run 的冻结 hash 为 `1e29a14191465d04021bdb325c96fabe2192e0db5ca5de99857dd6799a836b3f`；当前只确认 POV 从“第三人称全知”改为“第一人称”，未写入业务数据。
+- 《六环余光》使用冻结 hash `1e29a14191465d04021bdb325c96fabe2192e0db5ca5de99857dd6799a836b3f` 完成显式恢复；Bible v6 将 POV 从“第三人称全知”改为“第一人称”，保留热血、过去时和其余已确认内容。
 - Story State 从完整 baseline v1 重放到 current v14，无差异；Projection 无漂移。World/Arc 历史缺少可验证的结构化证据，因此只报告候选，不写入推断数据。
-- 等待用户审核冻结报告后显式执行；在新 Bible 和第 12 章新来源链完成前，本任务不能标记 DONE。
+- Run 352～360 与 Artifact 231～240 构成 Bible v6 / State v14 新来源链；旧 Run 350 和 v5 Artifact 保留。Run 360 已成功持久化 Review，不再因冗余审计结构直接失败。
+- 用户随后通过产品内 Manual Override 创建 Run 361 / Review 47，决策为 PASS；自动提交关闭，Chapter 12 尚未进入 Canonical，未产生重复正式数据。
 
 ## GWQ-015 — 真实缺陷夹具、浏览器回归与发布收尾
 
 **Skills：** `generation-pipeline`, `story-engine`, `memory-context`, `filament-ui`  
 **优先级：** P0  
-**状态：** IN_PROGRESS  
+**状态：** DONE
 **依赖：** GWQ-006、GWQ-007、GWQ-009、GWQ-011、GWQ-014
 
 ### 实现功能
@@ -809,16 +810,16 @@ flowchart TD
 
 - Review/Rewrite、Canonical Commit、Story State、Arc、World Entity 和 Filament 浏览器回归分别报告结果。
 - 完整测试、Pint、PHP 语法、Migration 状态和 `git diff --check` 真实执行并记录。
-- 不存在真实 Provider 调用、未授权数据写入或服务重启。
+- 自动测试和浏览器验收不调用真实 Provider；另行获得用户明确批准的恢复执行、Provider 调用和 Horizon 重启必须保留 Run、Artifact、Usage 与操作审计。
 - 《六环余光》当前 Canonical、Bible、Chapter 12、Projection、Arc 和 World Entity 状态形成最终只读验证报告。
 
 ### 阶段记录（2026-09-17）
 
 - 已将五类生产事故转为共享脱敏夹具，并由 Review、Coverage、Rewrite、Story State 与 Filament 测试消费。
 - 分组回归结果：Review/Rewrite 86 passed；Canonical/Pipeline 40 passed；State/Recovery 45 passed；Arc/World 56 项中 52 passed、4 skipped；Filament 服务端/Livewire 66 passed。
-- 完整回归 820 项，其中 799 passed、21 skipped，4938 assertions，另有 2 个测试框架未提供明细的 warnings；Pint、变更 PHP 语法、27 项 Migration 状态和 `git diff --check` 均通过。
+- 完整回归 821 项，其中 800 passed、21 skipped，4948 assertions，另有 2 个测试框架未提供明细的 warnings；本次相关 PHP 文件 Pint、PHP 语法、27 项 Migration 状态和 `git diff --check` 均通过。全仓 Pint 另报告既有 `bootstrap/providers.php` 格式差异，该文件不在本次变更中。
 - 登录态真实浏览器已验证 Dashboard、Story State Header Actions、自动提交开关、Review/Commit 门禁和持久通知；未确认任何投影、修正或 Canonical 写操作。浏览器同时发现并修复了 Dashboard 伏笔 Widget 忽略 PostgreSQL `x_` table prefix 导致的 500。
-- 发布验收报告见 `docs/development/GENERATION_WORKFLOW_QUALITY_VERIFICATION.md`。真实 Provider 未调用，真实业务数据未写入；GWQ-014 显式执行及其新来源链核对仍待完成。
+- 发布验收报告见 `docs/development/GENERATION_WORKFLOW_QUALITY_VERIFICATION.md`。经用户明确批准，真实恢复与 Provider 来源链已执行并核对；Chapter 12 的 Canonical Commit 保持未执行。
 
 ## 7. 推荐实施批次
 
