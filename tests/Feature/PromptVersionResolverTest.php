@@ -6,11 +6,11 @@ use App\Enums\AiStage;
 
 test('prompt versions follow the documented convention', function () {
     expect(app(PromptVersionResolver::class)->all())->toBe([
-        'planner' => 'chapter-planner-v8',
+        'planner' => 'chapter-planner-v9',
         'writer' => 'scene-writer-v13',
         'assembler' => 'assembler-v11',
         'extractor' => 'event-extractor-v6',
-        'reviewer' => 'reviewer-v11',
+        'reviewer' => 'reviewer-v13',
         'rewrite' => 'rewrite-v12',
         'summary' => 'summary-v1',
     ]);
@@ -19,11 +19,11 @@ test('prompt versions follow the documented convention', function () {
 test('each prompt stage resolves its current version', function (AiStage $stage, string $version) {
     expect(app(PromptVersionResolver::class)->resolve($stage))->toBe($version);
 })->with([
-    'planner' => [AiStage::Planner, 'chapter-planner-v8'],
+    'planner' => [AiStage::Planner, 'chapter-planner-v9'],
     'writer' => [AiStage::Writer, 'scene-writer-v13'],
     'assembler' => [AiStage::Assembler, 'assembler-v11'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v6'],
-    'reviewer' => [AiStage::Reviewer, 'reviewer-v11'],
+    'reviewer' => [AiStage::Reviewer, 'reviewer-v13'],
     'rewrite' => [AiStage::Rewrite, 'rewrite-v12'],
     'summary' => [AiStage::Summary, 'summary-v1'],
 ]);
@@ -36,5 +36,5 @@ test('ai requests retain the resolved prompt version for run tracking', function
     $version = app(PromptVersionResolver::class)->resolve(AiStage::Planner);
     $request = new AiRequest(model: 'test-model', promptVersion: $version);
 
-    expect($request->promptVersion)->toBe('chapter-planner-v8');
+    expect($request->promptVersion)->toBe('chapter-planner-v9');
 });

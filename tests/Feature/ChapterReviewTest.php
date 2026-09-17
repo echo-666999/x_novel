@@ -33,6 +33,7 @@ use App\Models\Review;
 use App\Models\Scene;
 use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
+use App\Services\ArcCompletionAuditRepairer;
 use App\Services\ChapterReviewer;
 use App\Services\PlanningReviewAudit;
 use App\Services\StateValidator;
@@ -282,7 +283,84 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得发现一个问题后提前停止')
         ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度逐项完成全量检查')
         ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('普通窗口、走廊、查阅区、训练位、报告、凭据、记录、清单和练习道具不是重大世界实体')
+        ->and(data_get($review->generationRun->context_snapshot, 'existing_world_entities'))->toBe([])
         ->and(data_get($review->artifact->data, 'dimension_audits.continuity.status'))->toBe('pass');
+});
+
+test('review provides the ordered arc completion contract and requires one audit per arc', function () {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $arc = StoryArc::factory()->for($fixture['novel'])->create([
+        'status' => StoryArcStatus::Active,
+        'beats' => ['守住城门'],
+        'completion_conditions' => ['主角守住城门并解除围城危机。'],
+    ]);
+    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $fixture['chapter']->latestPlan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $beatKey,
+        'beat_index' => 1,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确守住城门。',
+    ]]]);
+    $base = reviewResponse();
+    $payload = $base->structuredData;
+    $payload['arc_beat_audits'] = [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $beatKey,
+        'status' => 'fulfilled',
+        'evidence' => '守住城门',
+        'scene_id' => $scene->getKey(),
+    ]];
+    $payload['arc_completion_audits'] = [
+        ['arc_id' => $arc->getKey(), 'status' => 'fulfilled', 'evidence' => '守住城门'],
+        ['arc_id' => $arc->getKey(), 'status' => 'fulfilled', 'evidence' => '兑现了向同伴作出的承诺'],
+    ];
+    $response = new AiResponse(
+        content: json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $payload,
+        inputTokens: $base->inputTokens,
+        outputTokens: $base->outputTokens,
+        cachedTokens: $base->cachedTokens,
+        latencyMs: $base->latencyMs,
+        providerRequestId: $base->providerRequestId,
+        model: $base->model,
+    );
+    bindStateValidation(new StateValidationResult([]));
+    $repairResponse = new AiResponse(
+        content: json_encode(['arc_completion_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'status' => 'not_met',
+            'evidence' => null,
+        ]]], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: ['arc_completion_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'status' => 'not_met',
+            'evidence' => null,
+        ]]],
+        inputTokens: 20,
+        outputTokens: 10,
+        cachedTokens: 0,
+        latencyMs: 10,
+        providerRequestId: 'arc-completion-repair-request',
+        model: 'review-test',
+    );
+    $fake = (new FakeAiProvider)->enqueue($response)->enqueue($repairResponse);
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect(data_get($review->generationRun->context_snapshot, 'arc_completion_contract'))->toBe([[
+        'arc_id' => $arc->getKey(),
+        'title' => $arc->title,
+        'completion_conditions' => ['主角守住城门并解除围城危机。'],
+    ]])
+        ->and($fake->requests()[0]->systemPrompt)->toContain('即使本章没有完成整个 Arc 也不能省略')
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe(ArcCompletionAuditRepairer::PROMPT_VERSION)
+        ->and(data_get($review->artifact->data, 'schema_repairs.arc_completion.status'))->toBe('succeeded')
+        ->and(data_get($review->artifact->data, 'arc_completion_audits.0.status'))->toBe('not_met');
 });
 
 test('review turns one foreshadowing root cause into one complete automatic rewrite finding', function () {

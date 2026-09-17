@@ -149,7 +149,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v8')
+        ->and($run->prompt_version)->toBe('chapter-planner-v9')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -160,7 +160,9 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($fake->requests()[0]->prompt)->not->toContain('冷峻克制')
         ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []')
         ->and($fake->requests()[0]->prompt)->toContain('outcome_allowed')
-        ->and($fake->requests()[0]->prompt)->toContain('outcome_forbidden');
+        ->and($fake->requests()[0]->prompt)->toContain('outcome_forbidden')
+        ->and($fake->requests()[0]->prompt)->toContain('每个 key 按本章 Scene 顺序首次出现时必须使用 establish')
+        ->and($fake->requests()[0]->prompt)->toContain('即使该状态继承自 previous_chapter_ending 或 Canonical Story State');
 });
 
 test('the planner selects foreshadowings by the shared target chapter timing rule', function () {
