@@ -8,6 +8,7 @@ use App\Models\Novel;
 use App\Models\User;
 use App\Models\WorldEntity;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -80,11 +81,22 @@ test('world workspace shows canonical type coverage without requiring every type
     $novel = Novel::factory()->create();
     WorldEntity::factory()->for($novel)->count(2)->create(['type' => WorldEntityType::Location]);
 
+    DB::enableQueryLog();
+
     Livewire::test(ManageNovelWorld::class, ['record' => $novel->getRouteKey()])
         ->assertSee('Canonical 覆盖：地点 2')
         ->assertSee('物品 0')
         ->assertSee('当前章节 Candidate：0')
         ->assertSee('空类型无需补齐');
+
+    $coverageQuery = collect(DB::getQueryLog())
+        ->pluck('query')
+        ->first(fn (string $query): bool => str_contains($query, 'count(*) as aggregate')
+            && str_contains($query, 'group by "type"'));
+
+    expect($coverageQuery)
+        ->not->toBeNull()
+        ->not->toContain('order by "name"');
 });
 
 test('the owner can create and edit a world entity', function () {

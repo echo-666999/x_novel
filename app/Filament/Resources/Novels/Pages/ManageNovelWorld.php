@@ -211,6 +211,7 @@ class ManageNovelWorld extends ManageRelatedRecords
     private function worldEntityCoverage(): array
     {
         $counts = $this->getRecord()->worldEntities()
+            ->reorder()
             ->selectRaw('type, count(*) as aggregate')
             ->groupBy('type')
             ->pluck('aggregate', 'type');

@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Actions\AdministratorAccountAction;
 use App\Filament\Pages\Dashboard;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -28,6 +29,9 @@ class XPanelProvider extends PanelProvider
             ->path('x')
             ->viteTheme('resources/css/filament/x/theme.css')
             ->login()
+            ->userMenuItems([
+                'profile' => fn () => AdministratorAccountAction::make(),
+            ])
             ->brandName((string) config('app.name'))
             ->darkMode()
             ->sidebarCollapsibleOnDesktop()
