@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\AI\AiSettingsResolver;
+use App\Enums\AiStage;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
 use App\Enums\GenerationStage;
@@ -23,6 +25,8 @@ use Throwable;
 class MemoryUpdater
 {
     public const POLICY_VERSION = 'memory-policy-v1';
+
+    public function __construct(private readonly AiSettingsResolver $settingsResolver) {}
 
     /** @return Collection<int, Memory> */
     public function update(int $chapterId): Collection
@@ -96,9 +100,11 @@ class MemoryUpdater
     /** @param Collection<int, Memory> $memories */
     private function dispatchPendingEmbeddings(Collection $memories): void
     {
+        $model = $this->settingsResolver->modelFor(AiStage::Embedding);
+
         $memories
             ->reject(fn (Memory $memory): bool => $memory->hasEmbedding()
-                && $memory->embedding_model === (string) config('ai.embedding.model'))
+                && $memory->embedding_model === $model)
             ->each(fn (Memory $memory) => GenerateEmbeddingJob::dispatch($memory->getKey())->afterCommit());
     }
 

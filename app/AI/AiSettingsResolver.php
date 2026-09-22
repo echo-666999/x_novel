@@ -9,7 +9,10 @@ use InvalidArgumentException;
 
 class AiSettingsResolver
 {
-    public function __construct(private readonly AiSettingsService $settingsService) {}
+    public function __construct(
+        private readonly AiSettingsService $settingsService,
+        private readonly AiModelRouteService $modelRoutes,
+    ) {}
 
     public function resolve(AiStage|string $stage, ?Novel $novel = null): ResolvedAiSettings
     {
@@ -19,17 +22,29 @@ class AiSettingsResolver
             throw new InvalidArgumentException('Unsupported AI stage.');
         }
 
+        $route = $this->modelRoutes->find($stage);
         if ($stage === AiStage::Embedding) {
-            return $this->environmentSettings($stage);
+            if ($route === null) {
+                return $this->environmentSettings($stage);
+            }
+
+            $this->assertProviderIsUsable($route->provider);
+
+            return new ResolvedAiSettings(
+                stage: $stage,
+                provider: $route->provider,
+                model: $route->model,
+                source: 'database',
+            );
         }
 
         $current = $this->settingsService->current();
         $databaseStage = data_get($current['settings'], "stages.{$stage->value}");
-        $baseProvider = is_array($databaseStage)
+        $baseProvider = $route?->provider ?? (is_array($databaseStage)
             ? trim((string) ($databaseStage['provider'] ?? ''))
-            : trim((string) data_get($current['settings'], 'default_provider'));
-        $baseModel = is_array($databaseStage) ? trim((string) ($databaseStage['model'] ?? '')) : '';
-        $baseSource = str_starts_with($current['source'], 'database') ? 'database' : 'environment';
+            : trim((string) data_get($current['settings'], 'default_provider')));
+        $baseModel = $route?->model ?? (is_array($databaseStage) ? trim((string) ($databaseStage['model'] ?? '')) : '');
+        $baseSource = $route !== null || str_starts_with($current['source'], 'database') ? 'database' : 'environment';
 
         $novelStage = data_get($novel?->settings, "ai.stages.{$stage->value}");
         $providerOverride = is_array($novelStage) ? ($novelStage['provider'] ?? null) : null;
@@ -45,7 +60,6 @@ class AiSettingsResolver
             $model = $hasModelOverride ? trim($modelOverride) : $baseModel;
             $this->assertProviderIsUsable(
                 $provider,
-                $current['settings'],
                 requireCredential: $baseSource === 'database' || $hasProviderOverride,
             );
 
@@ -57,7 +71,7 @@ class AiSettingsResolver
             );
         }
 
-        $this->assertProviderIsUsable($baseProvider, $current['settings'], requireCredential: $baseSource === 'database');
+        $this->assertProviderIsUsable($baseProvider, requireCredential: $baseSource === 'database');
 
         return new ResolvedAiSettings(
             stage: $stage,
@@ -74,7 +88,9 @@ class AiSettingsResolver
 
     private function environmentSettings(AiStage $stage): ResolvedAiSettings
     {
-        $stageModel = config("ai.models.{$stage->value}");
+        $stageModel = $stage === AiStage::Embedding
+            ? config('ai.embedding.model')
+            : config("ai.models.{$stage->value}");
         $model = is_string($stageModel) && trim($stageModel) !== ''
             ? trim($stageModel)
             : trim((string) config('ai.model'));
@@ -85,20 +101,19 @@ class AiSettingsResolver
 
         return new ResolvedAiSettings(
             stage: $stage,
-            provider: (string) config('ai.provider'),
+            provider: (string) ($stage === AiStage::Embedding ? config('ai.embedding.provider', 'openai') : config('ai.provider')),
             model: $model,
             source: 'environment',
         );
     }
 
-    /** @param array<string, mixed> $settings */
-    private function assertProviderIsUsable(string $provider, array $settings, bool $requireCredential = true): void
+    private function assertProviderIsUsable(string $provider, bool $requireCredential = true): void
     {
         if (! in_array($provider, $this->settingsService->registeredProviders(), true)) {
             throw new InvalidArgumentException("AI provider [{$provider}] is not registered.");
         }
 
-        if (data_get($settings, "providers.{$provider}.enabled") !== true) {
+        if (data_get($this->settingsService->providerSettings($provider), 'enabled') !== true) {
             throw new InvalidArgumentException("AI provider [{$provider}] is disabled.");
         }
 

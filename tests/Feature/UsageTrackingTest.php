@@ -63,6 +63,7 @@ test('tracking provider records tokens latency cost request id and run context',
 });
 
 test('tracking provider calculates cost from database pricing', function () {
+    config()->set('ai.providers.openai.api_key', 'usage-test-key');
     config()->set('ai.cost.input_per_million', 100);
     config()->set('ai.cost.cached_input_per_million', 100);
     config()->set('ai.cost.output_per_million', 100);

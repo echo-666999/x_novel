@@ -3,7 +3,9 @@
 namespace App\Console\Commands;
 
 use App\AI\AiSettingsService;
+use App\Enums\AiStage;
 use App\Models\AIModelPrice;
+use App\Models\AIModelRoute;
 use App\Models\AIProviderConnection;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -13,16 +15,18 @@ use Throwable;
 class ImportAiEnvironmentSettings extends Command
 {
     protected $signature = 'ai:import-environment-settings
-        {--force : Update existing provider connections and model prices with current environment values}';
+        {--force : Update existing provider connections, model prices, and model routes with current environment values}';
 
-    protected $description = 'Import current AI environment settings into provider connections and model prices';
+    protected $description = 'Import current AI environment settings into provider connections, model prices, and model routes';
 
     public function handle(AiSettingsService $settingsService): int
     {
         try {
-            $hasData = AIProviderConnection::query()->exists() || AIModelPrice::query()->exists();
+            $hasData = AIProviderConnection::query()->exists()
+                || AIModelPrice::query()->exists()
+                || AIModelRoute::query()->exists();
             if ($hasData && ! $this->option('force')) {
-                $this->error('供应商连接或模型价格已存在；为避免覆盖后台配置，本次未导入。确认更新时使用 --force。');
+                $this->error('供应商连接、模型价格或模型路由已存在；为避免覆盖后台配置，本次未导入。确认更新时使用 --force。');
 
                 return self::FAILURE;
             }
@@ -45,9 +49,9 @@ class ImportAiEnvironmentSettings extends Command
                     ])->save();
                 }
 
-                $provider = strtolower(trim((string) config('ai.provider', 'openai')));
                 $currency = strtoupper(trim((string) config('ai.cost.currency', 'USD')));
-                foreach ($this->textModels() as $model) {
+                foreach ($this->stageRoutes() as $role => $route) {
+                    ['provider' => $provider, 'model' => $model] = $route;
                     AIModelPrice::query()->updateOrCreate(
                         compact('provider', 'model', 'currency'),
                         [
@@ -57,6 +61,11 @@ class ImportAiEnvironmentSettings extends Command
                             'output_price' => (float) config('ai.cost.output_per_million', 0),
                             'is_enabled' => true,
                         ],
+                    );
+
+                    AIModelRoute::query()->updateOrCreate(
+                        ['role' => $role],
+                        compact('provider', 'model'),
                     );
                 }
             });
@@ -71,22 +80,30 @@ class ImportAiEnvironmentSettings extends Command
             return self::FAILURE;
         }
 
-        $this->info('AI 环境配置已写入供应商连接和模型价格；API Key 已加密且未输出。');
+        $this->info('AI 环境配置已写入供应商连接、模型价格和模型路由；API Key 已加密且未输出。');
 
         return self::SUCCESS;
     }
 
-    /** @return array<int, string> */
-    private function textModels(): array
+    /** @return array<string, array{provider: string, model: string}> */
+    private function stageRoutes(): array
     {
-        return collect([
-            config('ai.model'),
-            ...collect((array) config('ai.models', []))->except('embedding')->values()->all(),
-        ])->filter(fn (mixed $model): bool => is_string($model) && trim($model) !== '')
-            ->map(fn (string $model): string => trim($model))
-            ->unique()
-            ->values()
-            ->all();
+        $defaultProvider = strtolower(trim((string) config('ai.provider', 'openai')));
+        $defaultModel = trim((string) config('ai.model'));
+
+        return collect(AiStage::cases())->mapWithKeys(function (AiStage $stage) use ($defaultProvider, $defaultModel): array {
+            $provider = $stage === AiStage::Embedding
+                ? strtolower(trim((string) config('ai.embedding.provider', 'openai')))
+                : $defaultProvider;
+            $configuredModel = $stage === AiStage::Embedding
+                ? config('ai.embedding.model')
+                : config("ai.models.{$stage->value}");
+            $model = is_string($configuredModel) && trim($configuredModel) !== ''
+                ? trim($configuredModel)
+                : $defaultModel;
+
+            return [$stage->value => compact('provider', 'model')];
+        })->all();
     }
 
     private function providerLabel(string $provider): string

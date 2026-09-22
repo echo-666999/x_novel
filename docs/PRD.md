@@ -1999,7 +1999,7 @@ rewrite_max_attempts
 auto_commit（小说级，默认 false）
 ```
 
-Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位及输入、缓存输入、输出价格。页面不得回显 API Key，日志不得记录密钥明文或密文。环境配置只作为升级兼容回退，成本硬限制继续由全局 config 和小说设置控制。
+Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个导航入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位及输入、缓存输入、输出价格。“模型价格”页面同时维护各 AI Stage 的 Provider + Model 路由，并写入独立的 `ai_model_routes` 表。页面不得回显 API Key，日志不得记录密钥明文或密文。环境模型配置只作为数据库路由缺失时的兼容回退，成本硬限制继续由全局 config 和小说设置控制。
 
 达到 hard limit：
 

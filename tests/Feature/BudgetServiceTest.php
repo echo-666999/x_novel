@@ -16,6 +16,7 @@ use InvalidArgumentException as TestInvalidArgumentException;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    config()->set('ai.providers.openai.api_key', 'budget-test-key');
     config()->set('ai.budget.daily_hard_limit', null);
     config()->set('ai.budget.novel_total_limit', null);
     config()->set('ai.budget.chapter_max_cost', null);

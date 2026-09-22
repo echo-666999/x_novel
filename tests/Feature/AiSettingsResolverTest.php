@@ -25,6 +25,7 @@ beforeEach(function () {
     foreach (AiStage::cases() as $stage) {
         config()->set("ai.models.{$stage->value}", "environment-{$stage->value}-model");
     }
+    config()->set('ai.embedding.model', 'environment-embedding-model');
 });
 
 test('missing ai database settings preserve the environment behavior', function () {

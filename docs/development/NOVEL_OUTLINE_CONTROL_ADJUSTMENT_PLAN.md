@@ -103,7 +103,7 @@ Novel
 - 项目已经有 `system_settings` 表，`key` 为主键、`value` 为 JSONB；目前用于保存 `emergency_stop`。
 - `usage_records.provider` 当前从全局配置读取。增加运行时切换后，这种写法会记录错误 Provider，必须改为记录本次请求实际使用的 Provider。
 
-结论：参照 EasyPay 的“AI 与成本”，XNovel 只增加“供应商连接”和“模型价格”两个管理 Resource。连接和价格是需要查询、约束和独立维护的业务数据，分别保存到 `ai_provider_connections` 与 `ai_model_prices`，不再塞入 `system_settings.ai`。API Key 使用 Eloquent `encrypted` cast 加密保存且后台绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
+结论：参照 EasyPay 的“AI 与成本”，XNovel 只增加“供应商连接”和“模型价格”两个管理 Resource。连接、价格和模型路由分别保存到 `ai_provider_connections`、`ai_model_prices` 与 `ai_model_routes`，不再把连接或价格塞入 `system_settings.ai`；模型路由在“模型价格”页面内维护，不增加第三个导航入口。API Key 使用 Eloquent `encrypted` cast 加密保存且后台绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
 
 ## 3. 用户期望的大纲示例
 
@@ -860,7 +860,7 @@ is_enabled
 - Provider 运行配置解析优先级为 `ai_provider_connections` 启用记录 → `config/ai.php` 环境兼容值；不得跨 Provider 静默回退。
 - 模型价格按 `provider + model + currency` 唯一，至少填写输入、缓存输入、输出价格之一，`billing_unit` 默认一百万 Token。
 - `UsageRecorder` 按本次实际 Provider 和响应 Model 查找启用价格；没有匹配价格时才使用旧全局环境单价兼容回退。`usage_records.estimated_cost` 保存请求发生时计算出的成本快照。
-- Stage Model 和小说级 Model Override 继续按现有 `config/ai.php` / Novel Settings 解析，本任务不新增第三个后台配置入口。
+- Stage Model 路由由“模型价格”页面的“模型路由”操作维护并保存到 `ai_model_routes`；`config/ai.php` 只作为数据库路由缺失时的兼容回退。小说级 Model Override 仍保持最高优先级，不新增第三个后台导航入口。
 
 ### 10.3 Filament “AI 与成本”
 
@@ -1304,10 +1304,11 @@ flowchart TD
 
 **实现内容**
 
-- 新增 `ai_provider_connections` 与 `ai_model_prices` 两张表，不再使用 `system_settings.ai` 保存连接或价格。
+- 新增 `ai_provider_connections`、`ai_model_prices` 与 `ai_model_routes` 三张表，不再使用 `system_settings.ai` 保存连接或价格；旧 Stage 配置仅保留兼容读取。
 - Filament 新增“AI 与成本”导航组，且只包含“供应商连接”和“模型价格”两个 Resource。
 - 供应商连接保存固定 Provider、名称、Base URL、加密 API Key、Timeout、启用状态和最近验证时间，并提供 `/models` 连接测试。
 - 模型价格按 Provider + Model + Currency 保存计费单位、输入、缓存输入和输出 Token 价格。
+- “模型价格”页面提供“模型路由”操作，按 Stage 保存 Provider + Model 映射；不增加第三个导航入口。
 - Provider 请求优先读取启用的数据库连接；费用计算优先读取匹配的启用模型价格；缺失时兼容回退 `config/ai.php`。
 - 提供 `php artisan ai:import-environment-settings`，用于首次把当前环境中的连接与文本模型价格写入两张新表；已有记录时默认拒绝覆盖，只有显式 `--force` 才更新。
 

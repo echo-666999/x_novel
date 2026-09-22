@@ -723,7 +723,7 @@ rewrite-length-patch-v1
 summary-v1
 ```
 
-文本模型按 Stage 从 Novel Settings / `system_settings.ai` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库 Stage 配置 → 环境默认配置。每个新 Run 在创建时冻结 `provider` 与 `model_policy`；Provider 或 Model 参与 `input_hash`，因此跨 Provider 不复用旧 Artifact。后台设置变更只影响之后创建的 Run，历史 Run 不改写。
+文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider。每个新 Run 在创建时冻结 `provider` 与 `model_policy`；Provider 或 Model 参与 `input_hash`，因此跨 Provider 不复用旧 Artifact。后台设置变更只影响之后创建的 Run，历史 Run 不改写。
 
 文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。Base URL、API Key 和 Timeout 优先读取 `ai_provider_connections` 中对应的启用连接，API Key 使用 Eloquent `encrypted` cast，后台不回显；连接不存在时才兼容回退环境配置。成本按实际 Provider 和响应 Model 从 `ai_model_prices` 读取启用价格，按 `billing_unit` 计算并保存到 Usage；没有匹配价格时才回退旧全局环境单价。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema。Embedding 固定使用 OpenAI 配置，不随文本 Stage 切换。
 

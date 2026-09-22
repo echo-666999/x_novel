@@ -36,7 +36,7 @@ test('memory embedder stores the fixed model and vector', function () {
     expect($result->embedding)->not->toBeNull()
         ->and($result->embedding_model)->toBe('embedding-fixed-v1')
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toBe("embedding:{$memory->getKey()}:embedding-fixed-v1")
+        ->and($run->idempotency_key)->toBe("embedding:{$memory->getKey()}:openai:embedding-fixed-v1")
         ->and($run->context_snapshot['embedding_dimensions'])->toBe(3)
         ->and($provider->requests())->toHaveCount(1)
         ->and($provider->requests()[0]->input)->toBe('灯塔钟声将在第三卷回收。')
@@ -80,8 +80,8 @@ test('duplicate delivery does not call the provider while the same embedding run
         'scope_id' => $memory->getKey(),
         'stage' => GenerationStage::Embedding,
         'status' => RunStatus::Running,
-        'idempotency_key' => "embedding:{$memory->getKey()}:embedding-fixed-v1",
-        'input_hash' => hash('sha256', $memory->summary."\0embedding-fixed-v1\0".'3'),
+        'idempotency_key' => "embedding:{$memory->getKey()}:openai:embedding-fixed-v1",
+        'input_hash' => hash('sha256', $memory->summary."\0openai\0embedding-fixed-v1\0".'3'),
     ]);
     $provider = new FakeEmbeddingProvider;
     app()->instance(EmbeddingProvider::class, $provider);

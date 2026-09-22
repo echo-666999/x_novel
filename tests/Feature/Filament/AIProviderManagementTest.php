@@ -1,6 +1,7 @@
 <?php
 
 use App\AI\AiCostCalculator;
+use App\AI\AiSettingsResolver;
 use App\AI\AiProviderConnectionTester;
 use App\AI\AiSettingsService;
 use App\AI\Data\AiResponse;
@@ -11,7 +12,9 @@ use App\Filament\Resources\AIProviderConnections\Pages\CreateAIProviderConnectio
 use App\Filament\Resources\AIProviderConnections\Pages\EditAIProviderConnection;
 use App\Filament\Resources\AIProviderConnections\Pages\ListAIProviderConnections;
 use App\Models\AIModelPrice;
+use App\Models\AIModelRoute;
 use App\Models\AIProviderConnection;
+use App\Enums\AiStage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -145,4 +148,42 @@ test('model price can be maintained and drives cost calculation', function () {
         ->and($price->cached_input_price)->toBe('0.500000000000')
         ->and($price->output_price)->toBe('8.000000000000')
         ->and($cost)->toBe(0.0057);
+});
+
+test('model routes are maintained from the model price page and override environment models', function () {
+    AIProviderConnection::query()->create([
+        'provider' => 'openai',
+        'name' => 'OpenAI',
+        'base_url' => 'https://api.openai.com/v1',
+        'api_key' => 'database-key',
+        'connect_timeout' => 10,
+        'timeout' => 60,
+        'is_enabled' => true,
+    ]);
+    $price = AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'database-routed-model',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'input_price' => 1,
+        'cached_input_price' => null,
+        'output_price' => 2,
+        'is_enabled' => true,
+    ]);
+    $routes = collect(AiStage::cases())->mapWithKeys(
+        fn (AiStage $stage): array => [$stage->value => $price->getKey()],
+    )->all();
+
+    Livewire::test(ListAIModelPrices::class)
+        ->assertActionExists('configureModelRoutes')
+        ->callAction('configureModelRoutes', data: ['routes' => $routes])
+        ->assertHasNoActionErrors();
+
+    expect(AIModelRoute::query()->count())->toBe(count(AiStage::cases()))
+        ->and(app(AiSettingsResolver::class)->resolve(AiStage::Writer))
+        ->provider->toBe('openai')
+        ->model->toBe('database-routed-model')
+        ->source->toBe('database')
+        ->and(app(AiSettingsResolver::class)->resolve(AiStage::Embedding)->model)
+        ->toBe('database-routed-model');
 });

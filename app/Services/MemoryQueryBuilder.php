@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\AI\AiSettingsResolver;
 use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Data\EmbeddingRequest;
 use App\AI\Exceptions\AiProviderException;
@@ -9,6 +10,7 @@ use App\Data\MemoryQuery;
 use App\Data\MemorySearchResult;
 use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
+use App\Enums\AiStage;
 use App\Models\Memory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -17,7 +19,10 @@ use InvalidArgumentException;
 
 class MemoryQueryBuilder
 {
-    public function __construct(private readonly EmbeddingProvider $provider) {}
+    public function __construct(
+        private readonly EmbeddingProvider $provider,
+        private readonly AiSettingsResolver $settingsResolver,
+    ) {}
 
     /** @return Collection<int, MemorySearchResult> */
     public function search(MemoryQuery $query): Collection
@@ -35,7 +40,8 @@ class MemoryQueryBuilder
     /** @return Collection<int, MemorySearchResult> */
     public function candidates(MemoryQuery $query): Collection
     {
-        $model = (string) config('ai.embedding.model');
+        $settings = $this->settingsResolver->resolve(AiStage::Embedding);
+        $model = $settings->model;
         $dimensions = (int) config('ai.embedding.dimensions');
         $candidateK = $query->candidateK ?? (int) config('context.memory_candidate_k', 30);
         $finalK = $query->finalK ?? (int) config('context.memory_final_k', 10);
@@ -54,7 +60,11 @@ class MemoryQueryBuilder
             model: $model,
             input: $query->queryText,
             dimensions: $dimensions,
-            metadata: ['novel_id' => $query->novelId, 'task_type' => 'memory_retrieval'],
+            metadata: [
+                'novel_id' => $query->novelId,
+                'task_type' => 'memory_retrieval',
+                'provider' => $settings->provider,
+            ],
         ));
 
         if ($response->model !== $model || count($response->embedding) !== $dimensions) {

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\AIModelPrice;
+use App\Models\AIModelRoute;
 use App\Models\AIProviderConnection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -11,6 +12,7 @@ beforeEach(function () {
     config()->set('ai.provider', 'openai');
     config()->set('ai.model', 'environment-default-model');
     config()->set('ai.models.writer', 'environment-writer-model');
+    config()->set('ai.embedding.model', 'environment-embedding-model');
     config()->set('ai.providers.openai.api_key', 'environment-import-key');
     config()->set('ai.providers.openai.base_url', 'https://environment.example/v1');
     config()->set('ai.providers.openai.connect_timeout', 12);
@@ -21,9 +23,9 @@ beforeEach(function () {
     config()->set('ai.cost.output_per_million', 8);
 });
 
-test('the environment import command creates a provider connection and model prices', function () {
+test('the environment import command creates a provider connection, model prices, and model routes', function () {
     $this->artisan('ai:import-environment-settings')
-        ->expectsOutput('AI 环境配置已写入供应商连接和模型价格；API Key 已加密且未输出。')
+        ->expectsOutput('AI 环境配置已写入供应商连接、模型价格和模型路由；API Key 已加密且未输出。')
         ->assertSuccessful();
 
     $connection = AIProviderConnection::query()->where('provider', 'openai')->sole();
@@ -36,7 +38,10 @@ test('the environment import command creates a provider connection and model pri
         ->and($rawApiKey)->toBeString()
         ->not->toBe('environment-import-key')
         ->and(AIModelPrice::query()->where('provider', 'openai')->where('model', 'environment-default-model')->exists())->toBeTrue()
-        ->and(AIModelPrice::query()->where('provider', 'openai')->where('model', 'environment-writer-model')->exists())->toBeTrue();
+        ->and(AIModelPrice::query()->where('provider', 'openai')->where('model', 'environment-writer-model')->exists())->toBeTrue()
+        ->and(AIModelPrice::query()->where('provider', 'openai')->where('model', 'environment-embedding-model')->exists())->toBeTrue()
+        ->and(AIModelRoute::query()->where('role', 'writer')->where('model', 'environment-writer-model')->exists())->toBeTrue()
+        ->and(AIModelRoute::query()->where('role', 'embedding')->where('model', 'environment-embedding-model')->exists())->toBeTrue();
 
     $price = AIModelPrice::query()->where('model', 'environment-default-model')->sole();
     expect($price->currency)->toBe('CNY')
@@ -50,7 +55,7 @@ test('the environment import command does not overwrite existing data by default
     createExistingProviderConnection();
 
     $this->artisan('ai:import-environment-settings')
-        ->expectsOutput('供应商连接或模型价格已存在；为避免覆盖后台配置，本次未导入。确认更新时使用 --force。')
+        ->expectsOutput('供应商连接、模型价格或模型路由已存在；为避免覆盖后台配置，本次未导入。确认更新时使用 --force。')
         ->assertFailed();
 
     expect(AIProviderConnection::query()->sole()->base_url)->toBe('https://database.example/v1');

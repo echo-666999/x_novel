@@ -8,6 +8,7 @@ return [
         'prompts' => env('AI_LOG_PROMPTS', false),
     ],
 
+    // Compatibility fallback. Database model routes maintained in Filament take precedence.
     'models' => [
         'planner' => env('AI_MODEL_PLANNER', env('AI_MODEL', 'gpt-5.6-luna')),
         'writer' => env('AI_MODEL_WRITER', env('AI_MODEL', 'gpt-5.6-luna')),
@@ -16,7 +17,6 @@ return [
         'reviewer' => env('AI_MODEL_REVIEWER', env('AI_MODEL', 'gpt-5.6-luna')),
         'rewrite' => env('AI_MODEL_REWRITE', env('AI_MODEL', 'gpt-5.6-luna')),
         'summary' => env('AI_MODEL_SUMMARY', env('AI_MODEL', 'gpt-5.6-luna')),
-        'embedding' => env('AI_MODEL_EMBEDDING', env('AI_MODEL', 'gpt-5.6-luna')),
     ],
 
     'cost' => [

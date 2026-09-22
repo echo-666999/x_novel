@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\AI\AiSettingsResolver;
 use App\AI\Exceptions\AiProviderException;
 use App\Data\MemoryQuery;
+use App\Enums\AiStage;
 use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
 use App\Models\Memory;
@@ -12,7 +14,10 @@ use InvalidArgumentException;
 
 class MemoryRetrievalEvaluator
 {
-    public function __construct(private readonly MemoryRetriever $retriever) {}
+    public function __construct(
+        private readonly MemoryRetriever $retriever,
+        private readonly AiSettingsResolver $settingsResolver,
+    ) {}
 
     /** @return array<int, array<string, mixed>> */
     public function evaluate(int $novelId): array
@@ -27,12 +32,13 @@ class MemoryRetrievalEvaluator
     /** @return array<int, array<string, mixed>> */
     private function cases(int $novelId): array
     {
+        $model = $this->settingsResolver->modelFor(AiStage::Embedding);
         $active = fn (MemoryType $type): ?Memory => Memory::query()
             ->where('novel_id', $novelId)
             ->where('status', MemoryStatus::Active)
             ->where('type', $type)
             ->whereNotNull('embedding')
-            ->where('embedding_model', config('ai.embedding.model'))
+            ->where('embedding_model', $model)
             ->orderBy('valid_from_chapter')
             ->orderBy('id')
             ->first();

@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\AI\AiSettingsResolver;
 use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Data\EmbeddingRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
+use App\Enums\AiStage;
 use App\Enums\RunStatus;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
@@ -15,20 +17,25 @@ use Throwable;
 
 class MemoryEmbedder
 {
-    public function __construct(private readonly EmbeddingProvider $provider) {}
+    public function __construct(
+        private readonly EmbeddingProvider $provider,
+        private readonly AiSettingsResolver $settingsResolver,
+    ) {}
 
     public function embed(int $memoryId): Memory
     {
         $memory = Memory::query()->findOrFail($memoryId);
-        $model = (string) config('ai.embedding.model');
+        $settings = $this->settingsResolver->resolve(AiStage::Embedding);
+        $provider = $settings->provider;
+        $model = $settings->model;
         $dimensions = (int) config('ai.embedding.dimensions');
-        $key = "embedding:{$memory->getKey()}:{$model}";
-        $inputHash = hash('sha256', $memory->summary."\0{$model}\0{$dimensions}");
+        $key = "embedding:{$memory->getKey()}:{$provider}:{$model}";
+        $inputHash = hash('sha256', $memory->summary."\0{$provider}\0{$model}\0{$dimensions}");
         $chapterId = Chapter::query()
             ->where('novel_id', $memory->novel_id)
             ->where('sequence', $memory->valid_from_chapter)
             ->value('id');
-        [$run, $shouldRequest] = $this->startRun($memory, $chapterId, $key, $inputHash, $model, $dimensions);
+        [$run, $shouldRequest] = $this->startRun($memory, $chapterId, $key, $inputHash, $provider, $model, $dimensions);
 
         if (! $shouldRequest) {
             return $memory;
@@ -44,6 +51,7 @@ class MemoryEmbedder
                     'novel_id' => $memory->novel_id,
                     'chapter_id' => $chapterId,
                     'memory_id' => $memory->getKey(),
+                    'provider' => $provider,
                 ],
             ));
 
@@ -98,9 +106,9 @@ class MemoryEmbedder
     }
 
     /** @return array{GenerationRun, bool} */
-    private function startRun(Memory $memory, mixed $chapterId, string $key, string $inputHash, string $model, int $dimensions): array
+    private function startRun(Memory $memory, mixed $chapterId, string $key, string $inputHash, string $provider, string $model, int $dimensions): array
     {
-        return DB::transaction(function () use ($memory, $chapterId, $key, $inputHash, $model, $dimensions): array {
+        return DB::transaction(function () use ($memory, $chapterId, $key, $inputHash, $provider, $model, $dimensions): array {
             Memory::query()->lockForUpdate()->findOrFail($memory->getKey());
             $run = GenerationRun::query()->where('idempotency_key', $key)->first();
 
@@ -137,7 +145,7 @@ class MemoryEmbedder
                 'idempotency_key' => $key,
                 'input_hash' => $inputHash,
                 'prompt_version' => null,
-                'provider' => (string) config('ai.embedding.provider', 'openai'),
+                'provider' => $provider,
                 'model_policy' => $model,
                 'context_snapshot' => [
                     'memory_id' => $memory->getKey(),
