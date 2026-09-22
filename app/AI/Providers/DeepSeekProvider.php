@@ -108,11 +108,10 @@ class DeepSeekProvider implements AiProvider
     private function client(): PendingRequest
     {
         $apiKey = $this->settingsService->apiKey(self::PROVIDER);
+        $providerSettings = $this->settingsService->providerSettings(self::PROVIDER);
         if ($apiKey === '') {
             throw new AiProviderException('provider_not_configured', 'DeepSeek API Key 尚未配置。', false);
         }
-
-        $providerSettings = $this->settingsService->providerSettings(self::PROVIDER);
 
         return Http::baseUrl(rtrim((string) ($providerSettings['base_url'] ?? config('ai.providers.deepseek.base_url')), '/'))
             ->withToken($apiKey)->acceptJson()->asJson()

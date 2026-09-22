@@ -1999,7 +1999,7 @@ rewrite_max_attempts
 auto_commit（小说级，默认 false）
 ```
 
-全局 Provider Base URL、API Key、Timeout、Token 单价和成本硬限制通过 Filament Settings 维护并保存到 `system_settings.ai`。API Key 必须使用 Laravel `Crypt` 加密，页面只能替换或显式清除且不得回显；日志不得记录密钥明文或密文。环境配置只作为升级兼容回退。
+Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位及输入、缓存输入、输出价格。页面不得回显 API Key，日志不得记录密钥明文或密文。环境配置只作为升级兼容回退，成本硬限制继续由全局 config 和小说设置控制。
 
 达到 hard limit：
 

@@ -4,6 +4,7 @@ namespace App\AI;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\AiStage;
+use App\Models\AIProviderConnection;
 use App\Models\SystemSetting;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Crypt;
@@ -122,6 +123,16 @@ class AiSettingsService
     /** @return array<string, mixed> */
     public function providerSettings(string $provider): array
     {
+        $connection = $this->providerConnection($provider);
+        if ($connection !== null) {
+            return [
+                'enabled' => $connection->is_enabled,
+                'base_url' => $connection->base_url,
+                'connect_timeout' => $connection->connect_timeout,
+                'timeout' => $connection->timeout,
+            ];
+        }
+
         $settings = data_get($this->settings(), "providers.{$provider}");
 
         return is_array($settings) ? collect($settings)->except('credential')->all() : [];
@@ -141,6 +152,11 @@ class AiSettingsService
 
     public function apiKey(string $provider): string
     {
+        $connection = $this->providerConnection($provider);
+        if ($connection !== null && filled($connection->api_key)) {
+            return $connection->api_key;
+        }
+
         $credential = data_get($this->settings(), "providers.{$provider}.credential");
         if (is_string($credential) && $credential !== '') {
             try {
@@ -163,7 +179,9 @@ class AiSettingsService
         if (! in_array($provider, $this->registeredProviders(), true)) {
             throw new AiProviderException('provider_unsupported', "AI provider [{$provider}] is not registered.", false);
         }
-        if ($requireEnabled && data_get($this->settings(), "providers.{$provider}.enabled") !== true) {
+        $connection = $this->providerConnection($provider);
+        $enabled = $connection?->is_enabled ?? data_get($this->settings(), "providers.{$provider}.enabled");
+        if ($requireEnabled && $enabled !== true) {
             throw new AiProviderException('provider_disabled', "AI provider [{$provider}] is disabled.", false);
         }
         if (! $this->isCredentialConfigured($provider)) {
@@ -442,6 +460,15 @@ class AiSettingsService
     private function normalizedProvider(mixed $provider): string
     {
         return is_string($provider) ? strtolower(trim($provider)) : '';
+    }
+
+    private function providerConnection(string $provider): ?AIProviderConnection
+    {
+        if (! Schema::hasTable('ai_provider_connections')) {
+            return null;
+        }
+
+        return AIProviderConnection::query()->where('provider', $provider)->first();
     }
 
     /** @param array<string, mixed> $settings @return array<string, mixed> */

@@ -103,7 +103,7 @@ Novel
 - 项目已经有 `system_settings` 表，`key` 为主键、`value` 为 JSONB；目前用于保存 `emergency_stop`。
 - `usage_records.provider` 当前从全局配置读取。增加运行时切换后，这种写法会记录错误 Provider，必须改为记录本次请求实际使用的 Provider。
 
-结论：无需为了 AI 配置再新增一张通用设置表。复用 `system_settings` 保存 AI 运行配置；API Key 由 Laravel `Crypt` 加密后保存，后台只接受替换或显式清除且绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
+结论：参照 EasyPay 的“AI 与成本”，XNovel 只增加“供应商连接”和“模型价格”两个管理 Resource。连接和价格是需要查询、约束和独立维护的业务数据，分别保存到 `ai_provider_connections` 与 `ai_model_prices`，不再塞入 `system_settings.ai`。API Key 使用 Eloquent `encrypted` cast 加密保存且后台绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
 
 ## 3. 用户期望的大纲示例
 
@@ -820,104 +820,58 @@ AI_LOG_PROMPTS=false
 
 ### 10.2 AI 配置保存位置和字段
 
-复用现有 `system_settings` 表，使用固定 Key：
+只新增两张表：
 
 ```text
-key = ai
+ai_provider_connections
+ai_model_prices
 ```
 
-`value` 保存运行配置。`credential` 是 Laravel `Crypt` 生成的密文，不是明文：
+`ai_provider_connections` 保存：
 
-```json
-{
-  "schema_version": 1,
-  "default_provider": "openai",
-  "providers": {
-    "openai": {
-      "enabled": true,
-      "base_url": "https://api.openai.com/v1",
-      "credential": "Laravel Crypt ciphertext or null",
-      "connect_timeout": 10,
-      "timeout": 60
-    },
-    "deepseek": {
-      "enabled": false,
-      "base_url": "https://api.deepseek.com",
-      "credential": null,
-      "connect_timeout": 10,
-      "timeout": 60
-    }
-  },
-  "stages": {
-    "planner": {"provider": "openai", "model": "现有 planner 模型"},
-    "writer": {"provider": "openai", "model": "现有 writer 模型"},
-    "assembler": {"provider": "openai", "model": "现有 assembler 模型"},
-    "extractor": {"provider": "openai", "model": "现有 extractor 模型"},
-    "reviewer": {"provider": "openai", "model": "现有 reviewer 模型"},
-    "rewrite": {"provider": "openai", "model": "现有 rewrite 模型"},
-    "summary": {"provider": "openai", "model": "现有 summary 模型"}
-  },
-  "cost": {
-    "currency": "USD",
-    "input_per_million": 0,
-    "cached_input_per_million": 0,
-    "output_per_million": 0
-  },
-  "budget": {
-    "daily_hard_limit": null,
-    "novel_total_limit": null,
-    "chapter_max_cost": null
-  }
-}
+```text
+provider
+name
+base_url
+api_key（encrypted cast）
+connect_timeout
+timeout
+is_enabled
+last_verified_at
+```
+
+`ai_model_prices` 保存：
+
+```text
+provider
+model
+currency
+billing_unit
+input_price
+cached_input_price
+output_price
+is_enabled
 ```
 
 约束：
 
-- API Key 只以 Laravel `Crypt` 密文保存；数据库、页面、校验错误和日志均不得出现明文，页面和日志也不得出现密文。
-- OpenAI 和 DeepSeek 的 Base URL、API Key、Timeout、Token 单价与全局预算由后台维护；`config/ai.php` 的环境值仅在数据库记录不存在或数据库密钥被显式清除时作为兼容回退。
-- API Key 输入留空表示保留数据库现有密钥；填写新值表示替换；显式清除开关表示删除数据库密钥。页面重新加载时只显示配置状态，绝不回填原值。
-- `provider` 只能是代码已经注册的 Provider，不能通过后台输入任意类名或任意 URL。
-- Model 使用字符串保存，保存时去除首尾空格并限制长度；不把短期可能变化的模型列表做成数据库枚举。
-- Stage 只能使用现有 `AiStage` 枚举值。
-- Provider 未启用或缺少 Key 时，保存配置或连接测试必须给出明确错误，不得静默回退到另一家 Provider。
-- 配置更新使用数据库事务，保存前校验完整 JSON；`system_settings` 中无 `ai` 记录或记录无效时，读取当前 `config/ai.php` 默认值，避免升级后立即中断生成。
+- 每个 Provider 只允许一条连接记录，固定支持代码已注册的 `openai` 与 `deepseek`。
+- API Key 使用 Eloquent `encrypted` cast；编辑时空输入不 dehydrated，因此保留现有密钥。模型 `hidden`、列表、日志和异常均不得暴露明文或密文。
+- Provider 运行配置解析优先级为 `ai_provider_connections` 启用记录 → `config/ai.php` 环境兼容值；不得跨 Provider 静默回退。
+- 模型价格按 `provider + model + currency` 唯一，至少填写输入、缓存输入、输出价格之一，`billing_unit` 默认一百万 Token。
+- `UsageRecorder` 按本次实际 Provider 和响应 Model 查找启用价格；没有匹配价格时才使用旧全局环境单价兼容回退。`usage_records.estimated_cost` 保存请求发生时计算出的成本快照。
+- Stage Model 和小说级 Model Override 继续按现有 `config/ai.php` / Novel Settings 解析，本任务不新增第三个后台配置入口。
 
-配置解析优先级：
+### 10.3 Filament “AI 与成本”
 
-```text
-小说级某 Stage 的 provider + model 覆盖
-    ↓
-system_settings.ai.stages.{stage}
-    ↓
-system_settings.ai.default_provider + 对应默认模型
-    ↓
-config/ai.php 当前环境变量默认值
-```
+导航组只包含：
 
-每次创建 `GenerationRun` 时冻结解析后的实际 Provider、Model 和配置来源。已经运行或已经完成的 Run 不因后台设置变化而改变。
+1. 供应商连接：创建或编辑连接、加密保存 API Key、启用或停用、测试 `/models` 连接、显示最近验证时间。
+2. 模型价格：创建或编辑 Provider + Model 的币种、计费单位、输入、缓存输入和输出价格。
 
-### 10.3 Filament Settings 页面
+明确不增加 EasyPay 中的供应商目录、模型同步目录、Token 账户、预算策略、请求日志、余额流水或团队隔离。XNovel 是单用户项目，不复制 EasyPay 的多租户结构。
 
-将当前只读 AI 区块改为可编辑表单，提供：
-
-- 默认文本生成 Provider；
-- OpenAI / DeepSeek 启用状态；
-- Planner、Writer、Assembler、Extractor、Reviewer、Rewrite、Summary 各阶段的 Provider 和 Model；
-- 两个 Provider 各自的连接超时和请求超时；
-- 两个 Provider 各自的 Base URL、API Key 替换输入、显式清除开关和已配置状态；
-- Token 成本货币及输入、缓存输入、输出单价；
-- 每日、单小说和单章成本限制；
-- 按 Provider 执行的“测试连接”操作。
-
-保存时：
-
-1. 先校验 Provider、Stage、Model、Base URL、超时、单价、预算和密钥操作；
-2. 再写入 `system_settings.ai`；
-3. 保存成功后清除应用内对应缓存；MVP 可以先不缓存，直接读取单行设置；
-4. 使用 Laravel Log 写一条设置变更记录，包含操作者 ID 和变更前后的 Provider / Model / Base URL / Timeout / Cost / Budget，只记录 `credential_configured` 布尔状态，不记录密钥明文或密文；当前项目未安装 Activity Log 包，本任务不为此新增依赖；
-5. 页面重新读取数据库，展示最终生效值和来源。
-
-后台切换只影响之后创建的 Generation Run。正在执行的 Run 使用创建时冻结的 Provider 和 Model，不能运行到一半自动换 Provider。
+后台连接变化只影响之后发出的 Provider 请求；已经创建的 Generation Run 继续使用冻结的 Provider 与 Model，不运行到一半自动换 Provider。
 
 ### 10.4 DeepSeek Provider 和运行时路由
 
@@ -945,13 +899,13 @@ DeepSeek 官方文档在 2026-09-21 的核实结果：标准 Base URL 为 `https
 - <https://api-docs.deepseek.com/api/create-chat-completion/>
 - <https://api-docs.deepseek.com/guides/json_mode/>
 
-`.env.example` 不再要求配置 Provider Base URL、API Key、Timeout、Token 单价和预算；这些值由后台维护。`config/ai.php` 暂时保留旧环境变量读取，仅用于已有部署升级期间的兼容回退：
+`.env.example` 不再要求配置 Provider Base URL、API Key、Timeout 和 Token 单价；这些值由“AI 与成本”维护。`config/ai.php` 暂时保留旧环境变量读取，仅用于已有部署升级期间的兼容回退：
 
 ```dotenv
-# Provider runtime settings are maintained in Settings / system_settings.ai.
+# Provider connections and model prices are maintained under AI and Costs.
 ```
 
-兼容迁移：数据库没有 `system_settings.ai` 时从当前 `config/ai.php` 构造默认值；数据库 Provider 没有密钥时允许回退到现有环境密钥。管理员在后台保存后，以数据库配置为主。任何迁移和弃用日志都不得打印密钥值。
+兼容迁移：执行 `php artisan ai:import-environment-settings`，把当前环境中的连接和各文本模型价格写入两张新表。已有数据时默认拒绝覆盖，显式 `--force` 才更新。任何导入和弃用日志都不得打印密钥值。
 
 DeepSeek 切换范围只包含小说文本生成阶段：Planner、Writer、Assembler、Extractor、Reviewer、Rewrite、Summary。Embedding 继续使用当前独立配置和现有 Provider，除非以后确认 DeepSeek 提供并选定兼容的 Embedding 接口；后台不得把 DeepSeek 文本模型误配为 Embedding 模型。
 
@@ -1350,47 +1304,45 @@ flowchart TD
 
 **实现内容**
 
-- 复用 `system_settings`，以 `ai` 为固定 Key 保存 Provider、Stage、成本和预算配置。
-- 增加单一的 AI 配置读取、校验和保存服务，避免 Filament、Resolver 和 Provider 各自解析 JSON。
-- `AiSettingsResolver` 按“小说 Stage 覆盖 → 数据库 Stage → 数据库默认值 → 环境默认值”解析。
-- Filament `Settings` 页面增加 Provider、Base URL、API Key、Stage Model、Timeout、Token 单价和预算的编辑与保存。
-- API Key 使用 Laravel `Crypt` 加密保存；页面只接受替换或显式清除，空输入保留现值，页面不回显密钥。
-- 提供 `php artisan ai:import-environment-settings`，用于首次把当前环境中的 Provider、Model、Base URL、Timeout、Token 单价、预算和加密 API Key 写入 `system_settings.ai`；记录已存在时默认拒绝覆盖，只有显式 `--force` 才替换。
-- 配置保存写入 Laravel 操作日志，只记录是否已配置密钥，不记录明文、密文或 Prompt，不新增审计 Package。
+- 新增 `ai_provider_connections` 与 `ai_model_prices` 两张表，不再使用 `system_settings.ai` 保存连接或价格。
+- Filament 新增“AI 与成本”导航组，且只包含“供应商连接”和“模型价格”两个 Resource。
+- 供应商连接保存固定 Provider、名称、Base URL、加密 API Key、Timeout、启用状态和最近验证时间，并提供 `/models` 连接测试。
+- 模型价格按 Provider + Model + Currency 保存计费单位、输入、缓存输入和输出 Token 价格。
+- Provider 请求优先读取启用的数据库连接；费用计算优先读取匹配的启用模型价格；缺失时兼容回退 `config/ai.php`。
+- 提供 `php artisan ai:import-environment-settings`，用于首次把当前环境中的连接与文本模型价格写入两张新表；已有记录时默认拒绝覆盖，只有显式 `--force` 才更新。
 
 **涉及文件**
 
-- `app/Models/SystemSetting.php`
-- `app/AI/AiSettingsResolver.php`
-- `app/AI/Data/ResolvedAiSettings.php`
+- `app/Models/AIProviderConnection.php`
+- `app/Models/AIModelPrice.php`
+- `app/AI/AiProviderConnectionTester.php`
+- `app/AI/AiCostCalculator.php`
 - `app/Console/Commands/ImportAiEnvironmentSettings.php`
-- `app/Filament/Pages/Settings.php`
+- `app/Filament/Resources/AIProviderConnections/`
+- `app/Filament/Resources/AIModelPrices/`
+- `database/migrations/2026_09_22_104000_create_ai_provider_connections_table.php`
+- `database/migrations/2026_09_22_105000_create_ai_model_prices_table.php`
 - `config/ai.php`
-- `tests/Feature/AiSettingsResolverTest.php`
-- `tests/Feature/Filament/AiSettingsTest.php`
+- `tests/Feature/Filament/AIProviderManagementTest.php`
 - `tests/Feature/ImportAiEnvironmentSettingsTest.php`
 
 **测试**
 
-- 没有 `system_settings.ai` 时行为与当前环境配置一致。
-- 数据库默认 Provider / Model 能覆盖环境默认值。
-- 小说级 Stage 覆盖只影响该小说和该 Stage。
-- 非法 Provider、未知 Stage、空 Model、非法 Timeout 保存失败且原配置不变。
-- 未启用或缺少 Key 的 Provider 不能成为生效配置。
-- API Key 在 JSONB 中是可解密密文，空值保存不覆盖，显式清除后使用环境兼容回退。
-- 页面、Laravel 操作日志和校验错误都不出现 API Key 明文或密文。
-- Provider 请求使用数据库 Base URL 和解密后的 Key；费用和预算服务使用数据库单价与限制。
-- 环境导入命令能创建加密配置、默认拒绝覆盖已有后台配置，并支持显式 `--force`。
-- 两次相同保存不产生不必要的配置变化。
+- 两个 Resource 可访问，导航组中没有其他 AI 与成本菜单。
+- 创建连接时 API Key 以密文保存，模型序列化、列表和日志不包含密钥；编辑留空保留原密钥。
+- 同一 Provider 不能创建重复连接；禁用连接不能被运行时使用。
+- 连接测试使用数据库 Base URL、解密密钥和 Timeout，并更新 `last_verified_at`。
+- 模型价格至少有一种 Token 价格；匹配 Provider + Model + Currency 后按 `billing_unit` 计算 Usage 成本。
+- 环境导入命令能创建连接与模型价格、默认拒绝覆盖已有后台数据，并支持显式 `--force`。
 
 **数据库 / Canonical State**
 
-- 只新增或更新 `system_settings.ai`，不新增设置表。
+- 新增 `ai_provider_connections` 与 `ai_model_prices`；不引入 EasyPay 的其他 AI 管理表。
 - 不修改 Story Event、Story State、Fact 或 Canonical Chapter。
 
 **回滚**
 
-- 删除 `system_settings.ai` 后自动回退到 `config/ai.php` 默认值；这也会删除其中保存的加密密钥，执行前必须确认环境回退凭据或重新录入路径可用。
+- 回滚两张表前必须确认环境回退连接和价格仍可用；Migration 回滚会删除后台维护的数据。
 - 回滚 UI 和 Resolver 不删除历史 Generation Run 或 Usage。
 
 ## OUT-013 — DeepSeek Provider 与运行时切换

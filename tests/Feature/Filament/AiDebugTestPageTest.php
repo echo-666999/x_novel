@@ -7,7 +7,6 @@ use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
 use App\Filament\Pages\AiDebugTest;
-use App\Filament\Pages\Settings;
 use App\Models\UsageRecord;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -26,10 +25,9 @@ beforeEach(function () {
     config()->set('ai.cost.output_per_million', 2.0);
 });
 
-test('settings links to the ai debug page without adding top level navigation', function () {
-    Livewire::test(Settings::class)
-        ->assertSee('AI Debug')
-        ->assertSeeHtml(AiDebugTest::getUrl());
+test('ai debug remains directly accessible without adding top level navigation', function () {
+    $this->get(AiDebugTest::getUrl())
+        ->assertOk();
 
     expect(AiDebugTest::shouldRegisterNavigation())->toBeFalse();
 });

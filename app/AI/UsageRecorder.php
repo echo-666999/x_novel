@@ -28,7 +28,7 @@ class UsageRecorder
             'output_tokens' => $response->outputTokens,
             'cached_tokens' => $response->cachedTokens,
             'latency_ms' => $response->latencyMs,
-            'estimated_cost' => $this->costCalculator->estimate($response),
+            'estimated_cost' => $this->costCalculator->estimate($response, $request->provider),
             'request_id' => $response->providerRequestId,
         ]);
     }
@@ -38,13 +38,14 @@ class UsageRecorder
         $generationRunId = $request->metadata['generation_run_id'] ?? null;
         $novelId = $request->metadata['novel_id'] ?? null;
         $chapterId = $request->metadata['chapter_id'] ?? null;
-        $estimatedCost = $this->costCalculator->estimateInputOnly($response->inputTokens);
+        $provider = (string) config('ai.embedding.provider', 'openai');
+        $estimatedCost = $this->costCalculator->estimateInputOnly($response->inputTokens, $provider, $response->model);
 
         return UsageRecord::query()->create([
             'generation_run_id' => is_numeric($generationRunId) ? (int) $generationRunId : null,
             'novel_id' => is_numeric($novelId) ? (int) $novelId : null,
             'chapter_id' => is_numeric($chapterId) ? (int) $chapterId : null,
-            'provider' => (string) config('ai.embedding.provider', 'openai'),
+            'provider' => $provider,
             'model' => $response->model,
             'input_tokens' => $response->inputTokens,
             'output_tokens' => 0,
