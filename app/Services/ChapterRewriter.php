@@ -112,8 +112,8 @@ class ChapterRewriter
             ],
             'content' => $source->content,
         ];
-        $inputHash = hash('sha256', json_encode([$brief, $settings->model, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        [$run, $reused] = $this->startRun($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $settings->model, $promptVersion);
+        $inputHash = hash('sha256', json_encode([$brief, $settings->provider, $settings->model, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        [$run, $reused] = $this->startRun($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $settings->provider, $settings->model, $promptVersion);
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::RewriteDraft)->first();
         }
@@ -122,6 +122,7 @@ class ChapterRewriter
             $metadata = ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
+                provider: $settings->provider,
                 systemPrompt: $this->systemPrompt($sceneId !== null),
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
@@ -457,9 +458,9 @@ class ChapterRewriter
         }
     }
 
-    private function startRun(Chapter $chapter, ?int $sceneId, GenerationArtifact $source, string $findingHash, int $attempt, string $inputHash, array $brief, string $model, string $promptVersion): array
+    private function startRun(Chapter $chapter, ?int $sceneId, GenerationArtifact $source, string $findingHash, int $attempt, string $inputHash, array $brief, string $provider, string $model, string $promptVersion): array
     {
-        return DB::transaction(function () use ($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $model, $promptVersion) {
+        return DB::transaction(function () use ($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $provider, $model, $promptVersion) {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $key = "rewrite:{$source->getKey()}:{$findingHash}:{$attempt}:{$promptVersion}";
             $existing = GenerationRun::query()->where('idempotency_key', $key)->first();
@@ -485,7 +486,7 @@ class ChapterRewriter
                 'idempotency_key' => $key, 'input_hash' => $inputHash,
                 'state_version' => $chapter->novel->canonicalStateVersion()->value('version'),
                 'bible_version' => $brief['bible_version'],
-                'prompt_version' => $promptVersion, 'model_policy' => $model,
+                'prompt_version' => $promptVersion, 'provider' => $provider, 'model_policy' => $model,
                 'context_snapshot' => [...collect($brief)->except('content')->all(), 'finding_hash' => $findingHash], 'started_at' => now(),
             ]), false];
         });

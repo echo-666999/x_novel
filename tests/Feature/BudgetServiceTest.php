@@ -1,5 +1,6 @@
 <?php
 
+use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
@@ -37,6 +38,18 @@ test('daily hard limit blocks a new provider request before it is sent', functio
     }
 
     expect($fake->requests())->toBe([]);
+});
+
+test('daily hard limit from database settings overrides the environment limit', function () {
+    config()->set('ai.budget.daily_hard_limit', 100);
+    $settingsService = app(AiSettingsService::class);
+    $settings = $settingsService->editableSettings();
+    $settings['budget']['daily_hard_limit'] = 1.5;
+    $settingsService->save($settings, 7);
+    UsageRecord::factory()->create(['estimated_cost' => 1.5, 'created_at' => now()]);
+
+    expect(fn () => app(BudgetService::class)->assertCanRequest(new AiRequest(model: 'model')))
+        ->toThrow(BudgetExceededException::class, 'AI daily hard limit 已达到。');
 });
 
 test('novel override limit takes precedence over the global novel limit', function () {

@@ -11,6 +11,7 @@ final readonly class AiRequest
      */
     public function __construct(
         public string $model,
+        public ?string $provider = null,
         public ?string $systemPrompt = null,
         public array $messages = [],
         public ?string $prompt = null,
@@ -20,6 +21,22 @@ final readonly class AiRequest
         public ?string $promptVersion = null,
         public array $metadata = [],
     ) {}
+
+    public function withProvider(string $provider): self
+    {
+        return new self(
+            model: $this->model,
+            provider: $provider,
+            systemPrompt: $this->systemPrompt,
+            messages: $this->messages,
+            prompt: $this->prompt,
+            temperature: $this->temperature,
+            maxTokens: $this->maxTokens,
+            responseSchema: $this->responseSchema,
+            promptVersion: $this->promptVersion,
+            metadata: $this->metadata,
+        );
+    }
 
     /** @return array<int, array{role: string, content: string}> */
     public function resolvedMessages(): array

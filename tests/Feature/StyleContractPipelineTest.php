@@ -103,7 +103,9 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
         'foreshadowing_audits' => [],
         'arc_beat_audits' => [],
         'arc_completion_audits' => [],
+        'character_candidate_audits' => [],
         'world_entity_candidate_audits' => [],
+        'unapproved_characters' => [],
         'unapproved_world_entities' => [],
         'findings' => [[
             'code' => 'STYLE_MISMATCH',

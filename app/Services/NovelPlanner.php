@@ -55,6 +55,7 @@ class NovelPlanner
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
+            'provider' => $settings->provider,
             'model' => $settings->model,
             'prompt_version' => self::PROMPT_VERSION,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -94,6 +95,7 @@ class NovelPlanner
             'idempotency_key' => "novel-plan:{$novel->getKey()}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
             'prompt_version' => self::PROMPT_VERSION,
+            'provider' => $settings->provider,
             'model_policy' => $settings->model,
             'context_snapshot' => $context,
             'started_at' => now(),
@@ -102,6 +104,7 @@ class NovelPlanner
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
+                provider: $settings->provider,
                 systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat 嵌套，所有节点使用全局唯一稳定 key 和从 1 连续的 sequence。每个 Main Arc 至少一个结构化 Beat；Beat 必须给出章节预算、验收条件和必须/禁止内容。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。',
                 prompt: '请根据以下小说信息生成初始小说圣经、初始角色、初始世界实体、全书 Outline 和伏笔候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.5,
@@ -178,6 +181,7 @@ class NovelPlanner
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
+            'provider' => $settings->provider,
             'model' => $settings->model,
             'prompt_version' => self::REGENERATION_PROMPT_VERSION,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -193,6 +197,7 @@ class NovelPlanner
             'idempotency_key' => "outline-regenerate:{$novel->getKey()}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
             'prompt_version' => self::REGENERATION_PROMPT_VERSION,
+            'provider' => $settings->provider,
             'model_policy' => $settings->model,
             'context_snapshot' => collect($context)->except('outline')->all(),
             'started_at' => now(),
@@ -201,6 +206,7 @@ class NovelPlanner
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
+                provider: $settings->provider,
                 systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的完整 Outline JSON。仅允许修改 target_node_key 对应节点及其后代；节点外的字段、顺序、key 和语义必须保持不变。不得把 Candidate 写入正式人物或世界资料。',
                 prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,

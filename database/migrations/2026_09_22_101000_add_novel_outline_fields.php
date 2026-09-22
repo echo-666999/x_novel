@@ -9,9 +9,13 @@ return new class extends Migration
 {
     public function up(): void
     {
+        $grammar = DB::connection()->getSchemaGrammar();
+
         if (DB::getDriverName() === 'sqlite') {
+            $novels = $grammar->wrapTable('novels');
+            $outlines = $grammar->wrapTable('novel_outlines');
             DB::statement(
-                'ALTER TABLE novels ADD COLUMN current_outline_id INTEGER NULL REFERENCES novel_outlines(id) ON DELETE SET NULL'
+                "ALTER TABLE {$novels} ADD COLUMN current_outline_id INTEGER NULL REFERENCES {$outlines}(id) ON DELETE SET NULL"
             );
         } else {
             Schema::table('novels', function (Blueprint $table) {
@@ -48,11 +52,15 @@ return new class extends Migration
                     ->update(['sequence' => $sequences[$group]]);
             });
 
+        $volumes = $grammar->wrapTable('volumes');
+        $storyArcs = $grammar->wrapTable('story_arcs');
+        $volumeIndex = $grammar->wrap('volumes_novel_outline_key_unique');
+        $storyArcIndex = $grammar->wrap('story_arcs_novel_outline_key_unique');
         DB::statement(
-            'CREATE UNIQUE INDEX volumes_novel_outline_key_unique ON volumes (novel_id, outline_key) WHERE outline_key IS NOT NULL'
+            "CREATE UNIQUE INDEX {$volumeIndex} ON {$volumes} (novel_id, outline_key) WHERE outline_key IS NOT NULL"
         );
         DB::statement(
-            'CREATE UNIQUE INDEX story_arcs_novel_outline_key_unique ON story_arcs (novel_id, outline_key) WHERE outline_key IS NOT NULL'
+            "CREATE UNIQUE INDEX {$storyArcIndex} ON {$storyArcs} (novel_id, outline_key) WHERE outline_key IS NOT NULL"
         );
 
         Schema::table('story_arcs', function (Blueprint $table) {
@@ -77,7 +85,6 @@ return new class extends Migration
         });
 
         if (DB::getDriverName() === 'pgsql') {
-            $storyArcs = DB::connection()->getSchemaGrammar()->wrapTable('story_arcs');
             DB::statement("ALTER TABLE {$storyArcs} ADD CONSTRAINT story_arcs_sequence_check CHECK (sequence > 0)");
         }
     }

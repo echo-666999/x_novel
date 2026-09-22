@@ -137,6 +137,7 @@ class MemoryEmbedder
                 'idempotency_key' => $key,
                 'input_hash' => $inputHash,
                 'prompt_version' => null,
+                'provider' => (string) config('ai.embedding.provider', 'openai'),
                 'model_policy' => $model,
                 'context_snapshot' => [
                     'memory_id' => $memory->getKey(),

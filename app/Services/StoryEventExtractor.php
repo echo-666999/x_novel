@@ -54,11 +54,12 @@ class StoryEventExtractor
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Extractor);
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
+            'provider' => $settings->provider,
             'model' => $settings->model,
             'prompt_version' => $promptVersion,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $baseKey = "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}";
-        [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->model, $promptVersion, $regenerate);
+        [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate);
 
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::EventCandidate)->latest('version')->first();
@@ -73,7 +74,8 @@ class StoryEventExtractor
             ];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 chapter_plan.world_entity_candidates 中的 candidate_key。正文确实引入批准候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=candidate_key，payload 包含 candidate_key；不得为未批准实体生成该事件。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                provider: $settings->provider,
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
@@ -161,7 +163,7 @@ class StoryEventExtractor
             'chapter_plan' => $chapter->latestPlan->only([
                 'id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise',
                 'must_reveal', 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
-                'foreshadowing_actions',
+                'foreshadowing_actions', 'character_candidates',
                 'arc_contributions', 'world_entity_candidates',
             ]),
             'bible_version' => $foreshadowingContract['bible_version'],
@@ -182,9 +184,9 @@ class StoryEventExtractor
     }
 
     /** @return array{0: GenerationRun, 1: bool} */
-    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate): array
+    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate): array {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate): array {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::EventExtraction);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
@@ -226,6 +228,7 @@ class StoryEventExtractor
                 'state_version' => $context['state_version'],
                 'bible_version' => $context['bible_version'],
                 'prompt_version' => $promptVersion,
+                'provider' => $provider,
                 'model_policy' => $model,
                 'context_snapshot' => [
                     ...$context,
@@ -363,7 +366,11 @@ class StoryEventExtractor
         }
 
         $valid = match ($candidate->subjectType) {
-            'character' => $chapter->novel->characters()->whereKey($candidate->subjectId)->exists(),
+            'character' => $chapter->novel->characters()->whereKey($candidate->subjectId)->exists()
+                || ($candidate->eventType === EventType::CharacterIntroduced
+                    && collect($chapter->latestPlan?->character_candidates ?? [])->contains(
+                        fn (array $item): bool => ($item['candidate_key'] ?? null) === $candidate->subjectId,
+                    )),
             'world_entity' => $chapter->novel->worldEntities()->whereKey($candidate->subjectId)->exists()
                 || ($candidate->eventType === EventType::WorldEntityIntroduced
                     && collect($chapter->latestPlan?->world_entity_candidates ?? [])->contains(

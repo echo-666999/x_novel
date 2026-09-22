@@ -4,6 +4,7 @@ namespace App\Filament\Pages;
 
 use App\AI\AiDebugService;
 use App\AI\AiSettingsResolver;
+use App\AI\AiSettingsService;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
@@ -142,7 +143,7 @@ class AiDebugTest extends Page
                                     TextEntry::make('debug_cost')
                                         ->label('Cost')
                                         ->state(fn (): ?string => isset($this->result['cost'])
-                                            ? config('ai.cost.currency').' '.number_format((float) $this->result['cost'], 4)
+                                            ? data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $this->result['cost'], 4)
                                             : null)
                                         ->placeholder('—'),
                                     TextEntry::make('debug_latency')

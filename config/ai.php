@@ -4,6 +4,10 @@ return [
     'provider' => env('AI_PROVIDER', 'openai'),
     'model' => env('AI_MODEL', 'gpt-5.6-luna'),
 
+    'logging' => [
+        'prompts' => env('AI_LOG_PROMPTS', false),
+    ],
+
     'models' => [
         'planner' => env('AI_MODEL_PLANNER', env('AI_MODEL', 'gpt-5.6-luna')),
         'writer' => env('AI_MODEL_WRITER', env('AI_MODEL', 'gpt-5.6-luna')),
@@ -29,16 +33,27 @@ return [
     ],
 
     'embedding' => [
+        'provider' => 'openai',
         'model' => env('AI_EMBEDDING_MODEL', 'text-embedding-3-small'),
         'dimensions' => (int) env('AI_EMBEDDING_DIMENSIONS', 1536),
     ],
 
     'providers' => [
         'openai' => [
-            'base_url' => env('AI_BASE_URL', 'https://api.openai.com/v1'),
-            'api_key' => env('AI_API_KEY'),
-            'connect_timeout' => (int) env('AI_CONNECT_TIMEOUT', 10),
-            'timeout' => (int) env('AI_TIMEOUT', 60),
+            'enabled' => true,
+            'base_url' => env('OPENAI_BASE_URL') ?: env('AI_BASE_URL', 'https://api.openai.com/v1'),
+            'api_key' => env('OPENAI_API_KEY') ?: env('AI_API_KEY'),
+            'connect_timeout' => (int) (env('OPENAI_CONNECT_TIMEOUT') ?: env('AI_CONNECT_TIMEOUT', 10)),
+            'timeout' => (int) (env('OPENAI_TIMEOUT') ?: env('AI_TIMEOUT', 60)),
+            'using_legacy_base_url' => ! env('OPENAI_BASE_URL') && filled(env('AI_BASE_URL')),
+            'using_legacy_api_key' => ! env('OPENAI_API_KEY') && filled(env('AI_API_KEY')),
+        ],
+        'deepseek' => [
+            'enabled' => false,
+            'base_url' => env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com'),
+            'api_key' => env('DEEPSEEK_API_KEY'),
+            'connect_timeout' => (int) env('DEEPSEEK_CONNECT_TIMEOUT', 10),
+            'timeout' => (int) env('DEEPSEEK_TIMEOUT', 60),
         ],
     ],
 ];

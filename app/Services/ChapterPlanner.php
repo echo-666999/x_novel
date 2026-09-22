@@ -61,6 +61,7 @@ class ChapterPlanner
         $context = $this->context($chapter, $regenerate);
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
+            'provider' => $settings->provider,
             'model' => $settings->model,
             'prompt_version' => $promptVersion,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -68,7 +69,7 @@ class ChapterPlanner
             ($context['novel_outline_id'] ?? 'legacy').':'.($context['outline_checksum'] ?? 'legacy').":{$promptVersion}:".
             hash('sha256', $settings->provider.'|'.$settings->model.'|'.$settings->source);
 
-        [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->model, $promptVersion, $regenerate);
+        [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate);
 
         if ($reused) {
             $planId = data_get($run->context_snapshot, 'chapter_plan_id');
@@ -79,12 +80,13 @@ class ChapterPlanner
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
+                provider: $settings->provider,
                 systemPrompt: $this->systemPrompt($novel),
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
                     .'存在 current_outline_target 时，novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence，再指定目标 Scene 与 acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，不能替代 Main Primary Beat。历史上下文没有 current_outline_target 时 novel_outline_id 返回 null，arc_contributions 继续从 active_arcs[].beats 复制并标记 role=secondary，没有推进项时返回 []。'
-                    .'存在 current_outline_target 时，world_entity_candidates 只能从对应数组中选择并逐字段复制，当前节点没有 Candidate 时必须返回 []；Beat 的 must_include 必须合并到 must_reveal，must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
+                    .'存在 current_outline_target 时，character_candidates 和 world_entity_candidates 只能从对应数组中选择并逐字段复制，当前节点没有 Candidate 时必须返回 []；历史上下文没有 current_outline_target 时 character_candidates 必须返回 []。Beat 的 must_include 必须合并到 must_reveal，must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
                     .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据和目标 Scene，不需要新实体时返回 []。'
                     .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
@@ -119,9 +121,9 @@ class ChapterPlanner
     }
 
     /** @return array{0: GenerationRun, 1: bool} */
-    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate): array
+    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate): array {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate): array {
             Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = GenerationRun::query()->where('chapter_id', $chapter->getKey())->where('stage', GenerationStage::ChapterPlanning);
 
@@ -160,6 +162,7 @@ class ChapterPlanner
                 'state_version' => $context['state_version'],
                 'bible_version' => $context['bible_version'],
                 'prompt_version' => $promptVersion,
+                'provider' => $provider,
                 'model_policy' => $model,
                 'context_snapshot' => $context,
                 'started_at' => now(),
@@ -272,7 +275,16 @@ class ChapterPlanner
             'characters' => $novel->characters()->get()->map->only(['id', 'name', 'role', 'status', 'goals', 'knowledge'])->all(),
             'active_facts' => $novel->facts()->where('status', 'active')->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value', 'locked'])->all(),
             'foreshadowings_requiring_action' => $this->foreshadowingContext($chapter),
-            'recent_summaries' => $novel->chapters()->where('status', ChapterStatus::Canonical)->whereNotNull('summary')->latest('sequence')->limit(10)->get(['sequence', 'summary'])->reverse()->values()->all(),
+            'recent_summaries' => $novel->chapters()
+                ->where('status', ChapterStatus::Canonical)
+                ->where('sequence', '<', $chapter->sequence)
+                ->whereNotNull('summary')
+                ->reorder('sequence', 'desc')
+                ->limit(10)
+                ->get(['sequence', 'summary'])
+                ->reverse()
+                ->values()
+                ->all(),
             'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
         ];
 

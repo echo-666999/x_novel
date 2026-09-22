@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Schemas;
 
+use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Data\BudgetUsage;
 use App\Enums\NovelStatus;
@@ -208,6 +209,6 @@ class NovelOverview
     {
         $limit = $usage->limit === null ? '无限制' : number_format($usage->limit, 4);
 
-        return config('ai.cost.currency').' '.number_format($usage->used, 4).' / '.$limit;
+        return data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format($usage->used, 4).' / '.$limit;
     }
 }

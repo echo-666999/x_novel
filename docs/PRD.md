@@ -1936,19 +1936,14 @@ interface AiProvider
 }
 ```
 
-MVP：
+当前实现两个文本生成 Provider：
 
 ```text
-只实现当前实际使用的一个 Provider
+OpenAI
+DeepSeek
 ```
 
-以后增加第二个 Provider 时：
-
-```text
-实现同一接口即可
-```
-
-不提前实现复杂 Router。
+Laravel 按 Stage 已解析并冻结到 Generation Run 的 Provider 进行固定路由。不得实现动态选型、按价格自动路由或失败后跨 Provider 自动切换。Embedding 继续固定使用 OpenAI，不随文本生成 Provider 切换。
 
 ---
 
@@ -2003,6 +1998,8 @@ chapter_max_cost
 rewrite_max_attempts
 auto_commit（小说级，默认 false）
 ```
+
+全局 Provider Base URL、API Key、Timeout、Token 单价和成本硬限制通过 Filament Settings 维护并保存到 `system_settings.ai`。API Key 必须使用 Laravel `Crypt` 加密，页面只能替换或显式清除且不得回显；日志不得记录密钥明文或密文。环境配置只作为升级兼容回退。
 
 达到 hard limit：
 

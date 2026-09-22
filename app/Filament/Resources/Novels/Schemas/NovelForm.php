@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Schemas;
 
 use App\AI\AiSettingsResolver;
+use App\AI\AiSettingsService;
 use App\Enums\AiStage;
 use App\Models\Novel;
 use Filament\Forms\Components\Textarea;
@@ -106,7 +107,11 @@ class NovelForm
                             }
 
                             $resolved = app(AiSettingsResolver::class)->resolve($stage, $record);
-                            $source = $resolved->source === 'novel' ? 'Novel Override' : 'Global Default';
+                            $source = match ($resolved->source) {
+                                'novel' => 'Novel Override',
+                                'database' => 'Database Default',
+                                default => 'Environment Default',
+                            };
 
                             return $resolved->model.' · '.$source;
                         })
@@ -118,10 +123,11 @@ class NovelForm
 
     private static function globalBudgetPlaceholder(string $key): string
     {
-        $limit = config("ai.budget.{$key}");
+        $settings = app(AiSettingsService::class);
+        $limit = data_get($settings->budgetSettings(), $key);
 
         return is_numeric($limit)
-            ? config('ai.cost.currency').' '.number_format((float) $limit, 4)
+            ? data_get($settings->costSettings(), 'currency', 'USD').' '.number_format((float) $limit, 4)
             : '无限制';
     }
 }

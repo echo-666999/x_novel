@@ -1,0 +1,963 @@
+{
+    "report_type": "six_ring_outline_migration_dry_run",
+    "schema_version": 1,
+    "generated_at": "2026-09-22T09:25:46.715623Z",
+    "read_only": true,
+    "plan_hash": "47d78d86c3c0a0f0b10a8d9a8d8334f1c37d15e1d718e50af4a6618c0bb2c533",
+    "novel": {
+        "id": 2,
+        "title": "六环余光",
+        "status": "generating",
+        "current_chapter_sequence": 11
+    },
+    "expected_state_version": 14,
+    "expected_state_id": 15,
+    "expected_state_checksum": "e0367a6534f0650e15d4485f949d22c6163721e4e65f683d8f7f9f4e056e3b15",
+    "current_outline_id": null,
+    "current_outline_version": null,
+    "current_outline_checksum": null,
+    "chapter_12_artifact_id": 241,
+    "chapter_12_artifact_checksum": "316ae8597bfd2658adf34441a3b1023d76df242448184777e53b4037ba640862",
+    "chapter_12_artifact_selection": "latest_review_artifact",
+    "source_snapshot": {
+        "schema_version": 1,
+        "novel": {
+            "id": 2,
+            "title": "六环余光",
+            "status": "generating",
+            "current_chapter_sequence": 11
+        },
+        "expected_state": {
+            "id": 15,
+            "version": 14,
+            "checksum": "e0367a6534f0650e15d4485f949d22c6163721e4e65f683d8f7f9f4e056e3b15"
+        },
+        "current_outline": {
+            "id": null,
+            "version": null,
+            "checksum": null
+        },
+        "canonical_chapters": [
+            {
+                "chapter_id": 1,
+                "sequence": 1,
+                "canonical_artifact_id": 36,
+                "canonical_artifact_checksum": "5cda960285408d7f8b0c75f3fbfc494d3afa83b44cb61b818719e00adaca9076",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 2,
+                "sequence": 2,
+                "canonical_artifact_id": 62,
+                "canonical_artifact_checksum": "7d98c9d7f3b851ced3d6e680a6e7eb29d8693c706fdccdf07116264a19886850",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 3,
+                "sequence": 3,
+                "canonical_artifact_id": 84,
+                "canonical_artifact_checksum": "f4040ae768320dfc22f657c0d2987d40f7c4ae0cf9c3fd432954d38bc9cb279b",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 4,
+                "sequence": 4,
+                "canonical_artifact_id": 93,
+                "canonical_artifact_checksum": "ab2ab1726b47a053e91b50a075ce39fea764e7b2e9cde7f5db1945d70613da11",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 5,
+                "sequence": 5,
+                "canonical_artifact_id": 102,
+                "canonical_artifact_checksum": "8bd0fbddb17cde1b546e2fb263983b861063a7771ed5ad59231241ce30eae451",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 6,
+                "sequence": 6,
+                "canonical_artifact_id": 127,
+                "canonical_artifact_checksum": "e36a8efa3f8d5b413291a4920965778b24c68e018f737a61d39b50406f529a0e",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 7,
+                "sequence": 7,
+                "canonical_artifact_id": 146,
+                "canonical_artifact_checksum": "ea5cb3add2e418d63a8b18d10c2b37ea38ebf961a6c5d2672215b25a65cd3be5",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 8,
+                "sequence": 8,
+                "canonical_artifact_id": 159,
+                "canonical_artifact_checksum": "2f598792126af8c5d70cf5fd76c58607bc366de03e146da41c9208f357fc9ac8",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 9,
+                "sequence": 9,
+                "canonical_artifact_id": 172,
+                "canonical_artifact_checksum": "9dccbce121f8d99b96685397d76b7c212c17c62655b900434f33827cef44bc26",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 10,
+                "sequence": 10,
+                "canonical_artifact_id": 199,
+                "canonical_artifact_checksum": "f2ebecd12973bf9eeff8a4b6e66348110ab1bbcab1ae566acff4672b399c6321",
+                "summary_checksum": null
+            },
+            {
+                "chapter_id": 11,
+                "sequence": 11,
+                "canonical_artifact_id": 215,
+                "canonical_artifact_checksum": "8465ae29eb8375225f5ecaa4a894e705ca172713cc66aa48c44dc0882d7616eb",
+                "summary_checksum": null
+            }
+        ],
+        "chapter_12": {
+            "chapter_id": 12,
+            "sequence": 12,
+            "status": "review",
+            "canonical_artifact_id": null,
+            "selected_artifact_id": 241,
+            "selected_artifact_type": "review_result",
+            "selected_artifact_checksum": "316ae8597bfd2658adf34441a3b1023d76df242448184777e53b4037ba640862",
+            "selected_artifact_basis": "latest_review_artifact",
+            "plans": [
+                {
+                    "id": 16,
+                    "version": 1,
+                    "status": "superseded",
+                    "novel_outline_id": null
+                },
+                {
+                    "id": 17,
+                    "version": 2,
+                    "status": "ready",
+                    "novel_outline_id": null
+                }
+            ],
+            "scenes": [
+                {
+                    "id": 40,
+                    "sequence": 1,
+                    "status": "draft",
+                    "current_artifact_id": 232
+                },
+                {
+                    "id": 41,
+                    "sequence": 2,
+                    "status": "draft",
+                    "current_artifact_id": 233
+                },
+                {
+                    "id": 42,
+                    "sequence": 3,
+                    "status": "draft",
+                    "current_artifact_id": 234
+                }
+            ],
+            "runs": [
+                {
+                    "id": 341,
+                    "stage": "chapter_planning",
+                    "status": "succeeded",
+                    "input_hash": "0324561270ede38ecaf4233b76db806de00964ded9ef6f022e8843d32dc1d9aa",
+                    "artifact_ids": [
+                        220
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 342,
+                    "stage": "scene_generation",
+                    "status": "succeeded",
+                    "input_hash": "bccd01d3f7b3ffb31a8b1f5cdaa5bda3ad9c56887bd57fb672034473d256f108",
+                    "artifact_ids": [
+                        221
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 343,
+                    "stage": "scene_generation",
+                    "status": "succeeded",
+                    "input_hash": "abfa43c1b9d5c43276e0a20a5e8c732a9ea6f470031e20ddda0fa6e45573b8e8",
+                    "artifact_ids": [
+                        222
+                    ],
+                    "usage_records": 2
+                },
+                {
+                    "id": 344,
+                    "stage": "scene_generation",
+                    "status": "succeeded",
+                    "input_hash": "dcaabd33a3448ba72d50a8ea1c47459f46df7fcc1fd01c6043ecdb194a3c1281",
+                    "artifact_ids": [
+                        223
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 345,
+                    "stage": "chapter_assembly",
+                    "status": "succeeded",
+                    "input_hash": "6161f730bae6ca778b009d87b5a955924f16777752283a130e79bd712362e494",
+                    "artifact_ids": [
+                        224
+                    ],
+                    "usage_records": 3
+                },
+                {
+                    "id": 346,
+                    "stage": "event_extraction",
+                    "status": "succeeded",
+                    "input_hash": "82c91bb45ac96f0d08333a63c98649e43e916607c903abe64c19a76e0cf09f2c",
+                    "artifact_ids": [
+                        226,
+                        225
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 347,
+                    "stage": "review",
+                    "status": "succeeded",
+                    "input_hash": "c090b49ff01675a20e4a6894a72dda6c8f39d90019f2400a9d7d8a00fb3522af",
+                    "artifact_ids": [
+                        227
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 348,
+                    "stage": "rewrite",
+                    "status": "succeeded",
+                    "input_hash": "94595cbdb71daea1f460dff64c034888e4ad9e8e86d94d1cd00c1fec67ab2d00",
+                    "artifact_ids": [
+                        228
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 349,
+                    "stage": "event_extraction",
+                    "status": "succeeded",
+                    "input_hash": "97a2c736b86581be8c436e170beb738ed0f91e633ae1b436d48770b4ee3b69c1",
+                    "artifact_ids": [
+                        230,
+                        229
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 350,
+                    "stage": "review",
+                    "status": "failed",
+                    "input_hash": "a59f2d79a85ba21335e342da29892ef07fd808d033bf4eafb9dba8e56632d5db",
+                    "artifact_ids": [],
+                    "usage_records": 1
+                },
+                {
+                    "id": 351,
+                    "stage": "chapter_planning",
+                    "status": "failed",
+                    "input_hash": "63aff10572ff80ae59474aca01575e35d9c924bd2f6f030999d57388e68f58f9",
+                    "artifact_ids": [],
+                    "usage_records": 1
+                },
+                {
+                    "id": 352,
+                    "stage": "chapter_planning",
+                    "status": "succeeded",
+                    "input_hash": "18658726c2985c0dd735a4b89c35e7ff28d2c0db4c244bd9a63d9673b3d4c623",
+                    "artifact_ids": [
+                        231
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 353,
+                    "stage": "scene_generation",
+                    "status": "succeeded",
+                    "input_hash": "6c18a4a782e09443a5e571af2ad65e7287f2c14ea3fc1d9a3139e16f06812d2b",
+                    "artifact_ids": [
+                        232
+                    ],
+                    "usage_records": 3
+                },
+                {
+                    "id": 354,
+                    "stage": "scene_generation",
+                    "status": "succeeded",
+                    "input_hash": "56d5eeb45072be853893e357a0c73c09589b2223faffbb379a07b38d38d129dc",
+                    "artifact_ids": [
+                        233
+                    ],
+                    "usage_records": 2
+                },
+                {
+                    "id": 355,
+                    "stage": "scene_generation",
+                    "status": "succeeded",
+                    "input_hash": "f6c3ce6523b32432b137e994115284fdb7013c8f98493223a9c0744fc56693c3",
+                    "artifact_ids": [
+                        234
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 356,
+                    "stage": "chapter_assembly",
+                    "status": "succeeded",
+                    "input_hash": "28958e9c982a59a30dd261207932c7120475df67d12d1b0370fb9332c7183d69",
+                    "artifact_ids": [
+                        235
+                    ],
+                    "usage_records": 2
+                },
+                {
+                    "id": 357,
+                    "stage": "event_extraction",
+                    "status": "succeeded",
+                    "input_hash": "dddbfb165374c5269fe672d4bef53b30e67107f5672e46daa00553655bb121bc",
+                    "artifact_ids": [
+                        237,
+                        236
+                    ],
+                    "usage_records": 1
+                },
+                {
+                    "id": 358,
+                    "stage": "review",
+                    "status": "failed",
+                    "input_hash": "b1b07479a6732fe418c557826680fbcc28806c80ac432b581c44b008460dec28",
+                    "artifact_ids": [],
+                    "usage_records": 1
+                },
+                {
+                    "id": 359,
+                    "stage": "review",
+                    "status": "failed",
+                    "input_hash": "85d23695755397d969f1158a261254f02d35886de59640f28d248b5d0ab4ac49",
+                    "artifact_ids": [],
+                    "usage_records": 1
+                },
+                {
+                    "id": 360,
+                    "stage": "review",
+                    "status": "succeeded",
+                    "input_hash": "001664be6aef5a181e7a3f1f04db8a45d247bfd829877b4e17670c0cbc7a609b",
+                    "artifact_ids": [
+                        238,
+                        240,
+                        239
+                    ],
+                    "usage_records": 3
+                },
+                {
+                    "id": 361,
+                    "stage": "review",
+                    "status": "succeeded",
+                    "input_hash": "e04e289194e6b94375ce40d8979756fbe33d47d611e3bc5f4300422de21719b5",
+                    "artifact_ids": [
+                        241
+                    ],
+                    "usage_records": 0
+                }
+            ],
+            "reviews": [
+                {
+                    "id": 45,
+                    "decision": "REWRITE",
+                    "artifact_id": 227
+                },
+                {
+                    "id": 46,
+                    "decision": "NEEDS_ATTENTION",
+                    "artifact_id": 240
+                },
+                {
+                    "id": 47,
+                    "decision": "PASS",
+                    "artifact_id": 241
+                }
+            ]
+        },
+        "target_outline_nodes": [
+            {
+                "beat_key": "academy-meet-su-li",
+                "volume": 1,
+                "sequence": 1,
+                "title": "与苏璃结识",
+                "uncertainties": [
+                    "需要确认是否存在正式见面及明确的后续联系，不能因两人共同出现就判定完成。"
+                ]
+            },
+            {
+                "beat_key": "academy-professor-training",
+                "volume": 1,
+                "sequence": 2,
+                "title": "教授指导",
+                "uncertainties": [
+                    "需要确认教授正式登场、先考察、指出问题、带代价训练及可验证提升。"
+                ]
+            },
+            {
+                "beat_key": "academy-examination",
+                "volume": 1,
+                "sequence": 3,
+                "title": "学院考核",
+                "uncertainties": [
+                    "需要确认考核结果及其对学院成长阶段的推进。"
+                ]
+            },
+            {
+                "beat_key": "academy-shopping-cultivation-item",
+                "volume": 1,
+                "sequence": 4,
+                "title": "购物获得修炼物品",
+                "uncertainties": [
+                    "物品名称、能力、代价和限制尚未由用户确认。"
+                ]
+            },
+            {
+                "beat_key": "field-accept-academy-mission",
+                "volume": 2,
+                "sequence": 1,
+                "title": "接受学院任务",
+                "uncertainties": [
+                    "需要确认任务由学院正式发布且林墨明确接受。"
+                ]
+            },
+            {
+                "beat_key": "field-help-bullied-stranger",
+                "volume": 2,
+                "sequence": 2,
+                "title": "途中拔刀相助",
+                "uncertainties": [
+                    "需要确认发生在任务途中，且确有弱者受到欺凌。"
+                ]
+            },
+            {
+                "beat_key": "field-conflict-other-academy",
+                "volume": 2,
+                "sequence": 3,
+                "title": "与其他学院学员冲突",
+                "uncertainties": [
+                    "其他学院名称、涉事学员与冲突原因尚未确认。"
+                ]
+            },
+            {
+                "beat_key": "field-fight-other-academy",
+                "volume": 2,
+                "sequence": 4,
+                "title": "双方互斗",
+                "uncertainties": [
+                    "需要确认冲突确已升级为双方互斗，而不是普通争执。"
+                ]
+            },
+            {
+                "beat_key": "field-complete-first-mission",
+                "volume": 2,
+                "sequence": 5,
+                "title": "经历磨难并完成任务",
+                "uncertainties": [
+                    "需要确认磨难、任务目标和完成结果均有正式正文 Evidence。"
+                ]
+            }
+        ],
+        "characters": [
+            {
+                "id": 1,
+                "name": "林墨",
+                "role": "主角",
+                "status": "active"
+            },
+            {
+                "id": 2,
+                "name": "苏璃",
+                "role": "配角",
+                "status": "active"
+            },
+            {
+                "id": 3,
+                "name": "黑曜",
+                "role": "反派",
+                "status": "active"
+            }
+        ],
+        "world_entities": [
+            {
+                "id": 1,
+                "type": "location",
+                "name": "六环城",
+                "status": "active"
+            },
+            {
+                "id": 2,
+                "type": "location",
+                "name": "魔法学院",
+                "status": "active"
+            },
+            {
+                "id": 3,
+                "type": "faction",
+                "name": "魔法议会",
+                "status": "active"
+            },
+            {
+                "id": 4,
+                "type": "concept",
+                "name": "魔法代价",
+                "status": "active"
+            }
+        ]
+    },
+    "historical_evidence_mapping": [
+        {
+            "beat_key": "academy-meet-su-li",
+            "volume": 1,
+            "sequence": 1,
+            "title": "与苏璃结识",
+            "candidate_status": "partial",
+            "canonical_chapter_ids": [
+                1,
+                2,
+                3
+            ],
+            "evidence": [
+                {
+                    "chapter_id": 1,
+                    "chapter_sequence": 1,
+                    "canonical_artifact_id": 36,
+                    "canonical_artifact_checksum": "5cda960285408d7f8b0c75f3fbfc494d3afa83b44cb61b818719e00adaca9076",
+                    "text": "苏璃抱着两本厚得能砸晕人的魔法教材，站在卖面饼的摊子旁。"
+                },
+                {
+                    "chapter_id": 1,
+                    "chapter_sequence": 1,
+                    "canonical_artifact_id": 36,
+                    "canonical_artifact_checksum": "5cda960285408d7f8b0c75f3fbfc494d3afa83b44cb61b818719e00adaca9076",
+                    "text": "苏璃很快察觉到我的异样，把书放到旁边的木箱上，伸手抓住我的手腕。"
+                },
+                {
+                    "chapter_id": 1,
+                    "chapter_sequence": 1,
+                    "canonical_artifact_id": 36,
+                    "canonical_artifact_checksum": "5cda960285408d7f8b0c75f3fbfc494d3afa83b44cb61b818719e00adaca9076",
+                    "text": "”\n\n苏璃睁开眼：“为什么？"
+                },
+                {
+                    "chapter_id": 2,
+                    "chapter_sequence": 2,
+                    "canonical_artifact_id": 62,
+                    "canonical_artifact_checksum": "7d98c9d7f3b851ced3d6e680a6e7eb29d8693c706fdccdf07116264a19886850",
+                    "text": "”\n\n苏璃的声音从门口传来。"
+                },
+                {
+                    "chapter_id": 2,
+                    "chapter_sequence": 2,
+                    "canonical_artifact_id": 62,
+                    "canonical_artifact_checksum": "7d98c9d7f3b851ced3d6e680a6e7eb29d8693c706fdccdf07116264a19886850",
+                    "text": "”\n\n苏璃走到床边，放下记录板。"
+                },
+                {
+                    "chapter_id": 2,
+                    "chapter_sequence": 2,
+                    "canonical_artifact_id": 62,
+                    "canonical_artifact_checksum": "7d98c9d7f3b851ced3d6e680a6e7eb29d8693c706fdccdf07116264a19886850",
+                    "text": "苏璃皱着眉扶住我的手臂，却没有阻止。"
+                },
+                {
+                    "chapter_id": 3,
+                    "chapter_sequence": 3,
+                    "canonical_artifact_id": 84,
+                    "canonical_artifact_checksum": "f4040ae768320dfc22f657c0d2987d40f7c4ae0cf9c3fd432954d38bc9cb279b",
+                    "text": "”苏璃按住我的肩膀。"
+                },
+                {
+                    "chapter_id": 3,
+                    "chapter_sequence": 3,
+                    "canonical_artifact_id": 84,
+                    "canonical_artifact_checksum": "f4040ae768320dfc22f657c0d2987d40f7c4ae0cf9c3fd432954d38bc9cb279b",
+                    "text": "苏璃翻开记录册：“施法前，掌心裂纹是什么颜色？"
+                }
+            ],
+            "uncertainties": [
+                "需要确认是否存在正式见面及明确的后续联系，不能因两人共同出现就判定完成。",
+                "命中词句只支持 partial 候选，不能自动证明全部验收条件已经满足。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "academy-professor-training",
+            "volume": 1,
+            "sequence": 2,
+            "title": "教授指导",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "需要确认教授正式登场、先考察、指出问题、带代价训练及可验证提升。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "academy-examination",
+            "volume": 1,
+            "sequence": 3,
+            "title": "学院考核",
+            "candidate_status": "partial",
+            "canonical_chapter_ids": [
+                1
+            ],
+            "evidence": [
+                {
+                    "chapter_id": 1,
+                    "chapter_sequence": 1,
+                    "canonical_artifact_id": 36,
+                    "canonical_artifact_checksum": "5cda960285408d7f8b0c75f3fbfc494d3afa83b44cb61b818719e00adaca9076",
+                    "text": "没有掌声，也没有谁宣布我通过了考核，只有掌心的伤提醒我，刚才确实做过一个选择。"
+                }
+            ],
+            "uncertainties": [
+                "需要确认考核结果及其对学院成长阶段的推进。",
+                "命中词句只支持 partial 候选，不能自动证明全部验收条件已经满足。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "academy-shopping-cultivation-item",
+            "volume": 1,
+            "sequence": 4,
+            "title": "购物获得修炼物品",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "物品名称、能力、代价和限制尚未由用户确认。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "field-accept-academy-mission",
+            "volume": 2,
+            "sequence": 1,
+            "title": "接受学院任务",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "需要确认任务由学院正式发布且林墨明确接受。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "field-help-bullied-stranger",
+            "volume": 2,
+            "sequence": 2,
+            "title": "途中拔刀相助",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "需要确认发生在任务途中，且确有弱者受到欺凌。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "field-conflict-other-academy",
+            "volume": 2,
+            "sequence": 3,
+            "title": "与其他学院学员冲突",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "其他学院名称、涉事学员与冲突原因尚未确认。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "field-fight-other-academy",
+            "volume": 2,
+            "sequence": 4,
+            "title": "双方互斗",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "需要确认冲突确已升级为双方互斗，而不是普通争执。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        },
+        {
+            "beat_key": "field-complete-first-mission",
+            "volume": 2,
+            "sequence": 5,
+            "title": "经历磨难并完成任务",
+            "candidate_status": "not_started",
+            "canonical_chapter_ids": [],
+            "evidence": [],
+            "uncertainties": [
+                "需要确认磨难、任务目标和完成结果均有正式正文 Evidence。",
+                "关键词检索未找到逐字 Evidence；这不能证明剧情从未发生，仍需人工阅读确认。"
+            ],
+            "automatic_completion": false
+        }
+    ],
+    "missing_canonical_summaries": [
+        {
+            "chapter_id": 1,
+            "sequence": 1,
+            "canonical_artifact_id": 36,
+            "canonical_artifact_checksum": "5cda960285408d7f8b0c75f3fbfc494d3afa83b44cb61b818719e00adaca9076"
+        },
+        {
+            "chapter_id": 2,
+            "sequence": 2,
+            "canonical_artifact_id": 62,
+            "canonical_artifact_checksum": "7d98c9d7f3b851ced3d6e680a6e7eb29d8693c706fdccdf07116264a19886850"
+        },
+        {
+            "chapter_id": 3,
+            "sequence": 3,
+            "canonical_artifact_id": 84,
+            "canonical_artifact_checksum": "f4040ae768320dfc22f657c0d2987d40f7c4ae0cf9c3fd432954d38bc9cb279b"
+        },
+        {
+            "chapter_id": 4,
+            "sequence": 4,
+            "canonical_artifact_id": 93,
+            "canonical_artifact_checksum": "ab2ab1726b47a053e91b50a075ce39fea764e7b2e9cde7f5db1945d70613da11"
+        },
+        {
+            "chapter_id": 5,
+            "sequence": 5,
+            "canonical_artifact_id": 102,
+            "canonical_artifact_checksum": "8bd0fbddb17cde1b546e2fb263983b861063a7771ed5ad59231241ce30eae451"
+        },
+        {
+            "chapter_id": 6,
+            "sequence": 6,
+            "canonical_artifact_id": 127,
+            "canonical_artifact_checksum": "e36a8efa3f8d5b413291a4920965778b24c68e018f737a61d39b50406f529a0e"
+        },
+        {
+            "chapter_id": 7,
+            "sequence": 7,
+            "canonical_artifact_id": 146,
+            "canonical_artifact_checksum": "ea5cb3add2e418d63a8b18d10c2b37ea38ebf961a6c5d2672215b25a65cd3be5"
+        },
+        {
+            "chapter_id": 8,
+            "sequence": 8,
+            "canonical_artifact_id": 159,
+            "canonical_artifact_checksum": "2f598792126af8c5d70cf5fd76c58607bc366de03e146da41c9208f357fc9ac8"
+        },
+        {
+            "chapter_id": 9,
+            "sequence": 9,
+            "canonical_artifact_id": 172,
+            "canonical_artifact_checksum": "9dccbce121f8d99b96685397d76b7c212c17c62655b900434f33827cef44bc26"
+        },
+        {
+            "chapter_id": 10,
+            "sequence": 10,
+            "canonical_artifact_id": 199,
+            "canonical_artifact_checksum": "f2ebecd12973bf9eeff8a4b6e66348110ab1bbcab1ae566acff4672b399c6321"
+        },
+        {
+            "chapter_id": 11,
+            "sequence": 11,
+            "canonical_artifact_id": 215,
+            "canonical_artifact_checksum": "8465ae29eb8375225f5ecaa4a894e705ca172713cc66aa48c44dc0882d7616eb"
+        }
+    ],
+    "actual_current_beat": {
+        "beat_key": null,
+        "reason": "当前没有 Current Outline。"
+    },
+    "proposed_current_beat": {
+        "if_academy_meet_su_li_confirmed": "academy-professor-training",
+        "otherwise": "academy-meet-su-li",
+        "automatic_baseline_completion": false,
+        "reason": "历史 Evidence 只形成候选映射；用户确认 Baseline Completion 前不得把 academy-meet-su-li 当成已完成。"
+    },
+    "professor_candidate": {
+        "candidate_key": "character-professor-mentor",
+        "name": "待用户命名的教授",
+        "role": "导师",
+        "motivation": "确认林墨的特殊性并训练其控制魔法代价",
+        "unresolved_fields": [
+            "name",
+            "profile",
+            "personality",
+            "abilities",
+            "knowledge",
+            "limitations"
+        ],
+        "possible_existing_characters": [],
+        "will_write": false
+    },
+    "future_world_entity_candidates": [
+        {
+            "candidate_key": "item-cultivation-accelerator",
+            "type": "item",
+            "source_beat_key": "academy-shopping-cultivation-item",
+            "known_requirement": "外出购物时意外获得能够加快魔法修行的神奇物品。",
+            "unresolved_fields": [
+                "name",
+                "description",
+                "abilities",
+                "rules",
+                "cost",
+                "limitations"
+            ],
+            "will_write": false
+        },
+        {
+            "candidate_key": "location-first-academy-mission",
+            "type": "location",
+            "source_beat_key": "field-arrive-mission-location",
+            "known_requirement": "第一次学院任务的目标地点。",
+            "unresolved_fields": [
+                "name",
+                "description",
+                "rules",
+                "current_state"
+            ],
+            "will_write": false
+        },
+        {
+            "candidate_key": "organization-other-academy",
+            "type": "organization",
+            "source_beat_key": "field-conflict-other-academy",
+            "known_requirement": "在任务地点与林墨一方发生矛盾的其他学院。",
+            "unresolved_fields": [
+                "name",
+                "description",
+                "rules",
+                "relationship_to_current_academy"
+            ],
+            "will_write": false
+        }
+    ],
+    "existing_world_entities": [
+        {
+            "id": 1,
+            "type": "location",
+            "name": "六环城",
+            "status": "active"
+        },
+        {
+            "id": 2,
+            "type": "location",
+            "name": "魔法学院",
+            "status": "active"
+        },
+        {
+            "id": 3,
+            "type": "faction",
+            "name": "魔法议会",
+            "status": "active"
+        },
+        {
+            "id": 4,
+            "type": "concept",
+            "name": "魔法代价",
+            "status": "active"
+        }
+    ],
+    "chapter_12_options": [
+        {
+            "key": "A",
+            "title": "保留第 12 章现有来源链，新 Outline 从第 13 章生效",
+            "effects": [
+                "第 12 章保持 review；不覆盖现有 Plan、Scene、Run、Artifact、Review 或 Usage。",
+                "先按现有来源链处理第 12 章，再让新 Outline 从第 13 章开始约束 Planner。",
+                "第 12 章不会自动补写新 Outline 的 Primary Beat 来源；需人工确认其内容与新大纲是否兼容。"
+            ],
+            "preserved_run_ids": [
+                341,
+                342,
+                343,
+                344,
+                345,
+                346,
+                347,
+                348,
+                349,
+                350,
+                351,
+                352,
+                353,
+                354,
+                355,
+                356,
+                357,
+                358,
+                359,
+                360,
+                361
+            ],
+            "will_write": false
+        },
+        {
+            "key": "B",
+            "title": "废弃第 12 章当前 Draft，从 Canonical Chapter 11 和新 Outline 重建",
+            "effects": [
+                "采用新 Outline 后，将当前 Draft/Ready Plan 标记为 superseded，并清空 Scene current_artifact_id。",
+                "第 12 章进入 void 后从 Chapter Planning 重新开始；旧 Run、Artifact、Review 和 Usage 保留审计。",
+                "重新生成会产生新的 Provider 调用和费用；本次 Dry Run 不派发 Job。"
+            ],
+            "preserved_run_ids": [
+                341,
+                342,
+                343,
+                344,
+                345,
+                346,
+                347,
+                348,
+                349,
+                350,
+                351,
+                352,
+                353,
+                354,
+                355,
+                356,
+                357,
+                358,
+                359,
+                360,
+                361
+            ],
+            "will_write": false
+        }
+    ],
+    "outline_scope_decision": {
+        "provided_volumes": 2,
+        "provided_beats": 9,
+        "blocker": "用户尚未提供其余 Volume；OUT-010 前必须确认只先采用已提供的两个 Volume，或补齐完整大纲。"
+    },
+    "unresolved_decisions": [
+        "确认 academy-meet-su-li 的历史 Baseline Completion 及逐字 Evidence。",
+        "选择第 12 章保留现有来源链，或废弃并按新 Outline 重建。",
+        "确认教授姓名、能力、动机限制及是否与现有角色重复。",
+        "确认未来物品、任务地点和其他学院的 Candidate 细节。",
+        "确认只先采用两个 Volume，或继续提供其余 Volume。"
+    ],
+    "database_writes": [],
+    "provider_calls": 0
+}

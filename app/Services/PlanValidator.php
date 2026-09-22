@@ -62,6 +62,7 @@ class PlanValidator
         $this->validateForeshadowings($plan, $foreshadowings, $findings);
         $this->validateOutlineContract($plan, $findings);
         $this->validateArcContributions($plan, $findings);
+        $this->validateCharacterCandidates($plan, $findings);
         $this->validateWorldEntityCandidates($plan, $findings);
 
         if ($novel->status === NovelStatus::Completing) {
@@ -148,6 +149,13 @@ class PlanValidator
         }
 
         $this->validateOutlineCandidates(
+            $plan->character_candidates ?? [],
+            $target->beat['character_candidates'] ?? [],
+            'INVALID_CHARACTER_CANDIDATE',
+            '人物',
+            $findings,
+        );
+        $this->validateOutlineCandidates(
             $plan->world_entity_candidates ?? [],
             $target->beat['world_entity_candidates'] ?? [],
             'INVALID_WORLD_ENTITY_CANDIDATE',
@@ -171,6 +179,55 @@ class PlanValidator
             $contract = $contracts->get($key);
             if ($contract === null || $this->outlineChecksum->for($candidate) !== $this->outlineChecksum->for($contract)) {
                 $findings[] = $this->blocked($code, "{$label} Candidate {$key} 不属于当前 Outline Beat 或内容与冻结契约不一致。");
+            }
+        }
+    }
+
+    /** @param array<int, PlanFinding> $findings */
+    private function validateCharacterCandidates(ChapterPlan $plan, array &$findings): void
+    {
+        $characters = $plan->chapter->novel->characters()->get();
+        $characterIds = $characters->keyBy('id');
+        $seen = [];
+
+        foreach ($plan->character_candidates ?? [] as $index => $candidate) {
+            $position = $index + 1;
+            if (! is_array($candidate)) {
+                $findings[] = $this->blocked('INVALID_CHARACTER_CANDIDATE', "人物候选 {$position} 结构无效。");
+
+                continue;
+            }
+
+            $key = trim((string) ($candidate['candidate_key'] ?? ''));
+            $name = trim((string) ($candidate['name'] ?? ''));
+            $scene = filter_var($candidate['target_scene_sequence'] ?? null, FILTER_VALIDATE_INT);
+            $possibleDuplicates = collect($candidate['possible_duplicate_character_ids'] ?? [])->map(fn ($id): int => (int) $id);
+
+            if (! preg_match('/^[a-z0-9][a-z0-9-]*$/', $key) || $name === ''
+                || blank($candidate['role'] ?? null) || blank($candidate['motivation'] ?? null)
+                || blank($candidate['deduplication_basis'] ?? null) || blank($candidate['introduction_reason'] ?? null)
+                || collect(['profile', 'personality', 'abilities', 'knowledge', 'possible_duplicate_character_ids'])
+                    ->contains(fn (string $field): bool => ! is_array($candidate[$field] ?? null))) {
+                $findings[] = $this->blocked('INVALID_CHARACTER_CANDIDATE', "人物候选 {$position} 缺少完整冻结字段。");
+            }
+
+            if (isset($seen[$key])) {
+                $findings[] = $this->blocked('INVALID_CHARACTER_CANDIDATE', "人物候选键 {$key} 重复。");
+            }
+            $seen[$key] = true;
+
+            if ($scene === false || $scene < 1 || $scene > count($plan->scene_plans ?? [])) {
+                $findings[] = $this->blocked('INVALID_CHARACTER_CANDIDATE', "人物候选「{$name}」指向不存在的 Scene。");
+            }
+
+            foreach ($possibleDuplicates as $characterId) {
+                if (! $characterIds->has($characterId)) {
+                    $findings[] = $this->blocked('INVALID_CHARACTER_CANDIDATE', "人物候选「{$name}」引用了其他小说的去重人物 #{$characterId}。");
+                }
+            }
+
+            if ($characters->contains(fn ($character): bool => mb_strtolower(trim($character->name)) === mb_strtolower($name))) {
+                $findings[] = $this->blocked('INVALID_CHARACTER_CANDIDATE', "人物候选「{$name}」与现有正式人物重名，应直接引用现有人物。");
             }
         }
     }

@@ -4,6 +4,7 @@ namespace App\Enums;
 
 enum EventType: string
 {
+    case CharacterIntroduced = 'character_introduced';
     case CharacterStatusChanged = 'character_status_changed';
     case CharacterMoved = 'character_moved';
     case CharacterInjured = 'character_injured';
@@ -72,6 +73,7 @@ enum EventType: string
     public function allowedSubjectTypes(): array
     {
         return match ($this) {
+            self::CharacterIntroduced,
             self::CharacterStatusChanged,
             self::CharacterMoved,
             self::CharacterInjured,

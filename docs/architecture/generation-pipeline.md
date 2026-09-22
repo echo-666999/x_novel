@@ -723,9 +723,11 @@ rewrite-length-patch-v1
 summary-v1
 ```
 
-模型按 Stage 从 Novel Settings / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 全局非空 Stage Override → 全局 `AI_MODEL`。小说表单或 `.env` 中的 Stage Override 为空时必须继承全局模型，空字符串不是独立模型值。
+文本模型按 Stage 从 Novel Settings / `system_settings.ai` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库 Stage 配置 → 环境默认配置。每个新 Run 在创建时冻结 `provider` 与 `model_policy`；Provider 或 Model 参与 `input_hash`，因此跨 Provider 不复用旧 Artifact。后台设置变更只影响之后创建的 Run，历史 Run 不改写。
 
-当前只注册 `AI_PROVIDER=openai`，Provider 通过可配置的 `AI_BASE_URL` 调用 OpenAI-compatible Chat Completions 与 Embeddings。代码和 `.env.example` 当前将 `gpt-5.6-luna` 作为生成阶段默认模型，将 `text-embedding-3-small` 作为 Embedding 默认模型。仓库配置本身不能证明任意 `AI_BASE_URL`、账户或兼容服务都提供这些模型；部署者必须按实际端点核实可用性。示例值不代表历史 Run，历史实际模型以 `generation_runs.model_policy` 和 `usage_records.model` 为准。
+文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。两个 Provider 的 Base URL、API Key、Timeout 以及 Token 单价和全局预算从 `system_settings.ai` 读取；API Key 使用 Laravel `Crypt` 密文保存，后台不回显，运行时只在发起请求前解密。现有环境变量暂时保留为数据库记录缺失或数据库密钥被清除时的兼容回退。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema。Embedding 固定使用 OpenAI 配置，不随文本 Stage 切换。
+
+代码和 `.env.example` 当前将 `gpt-5.6-luna` 作为文本生成默认模型，将 `text-embedding-3-small` 作为 Embedding 默认模型。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
 
 ## 23. Observability
 

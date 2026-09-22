@@ -2,9 +2,12 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Novels\ApplyNovelBlueprintAction;
+use App\Actions\Novels\ApplyNovelOutlineRevisionAction;
 use App\Actions\Novels\CreateNovelOutlineVersionAction;
 use App\Enums\ArtifactType;
+use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
@@ -159,6 +162,90 @@ class ManageNovelOutline extends ViewRecord
                     $this->getRecord()->refresh();
                     Notification::make()->title('Current Novel Outline 已采用')->success()->send();
                 }),
+            Action::make('applyOutlineRevision')
+                ->label('从下一章生效')
+                ->icon('heroicon-o-arrow-right-circle')
+                ->color('primary')
+                ->visible(fn (): bool => $this->getRecord()->current_outline_id !== null)
+                ->modalHeading('修订未来大纲并从下一章生效')
+                ->modalDescription('保存会创建并采用新的不可变 Outline Version。当前非正式章继续使用其已冻结的旧 Chapter Plan；正式内容和正在使用的节点不会被改写。')
+                ->modalWidth('7xl')
+                ->fillForm(function (): array {
+                    $current = $this->getRecord()->currentOutline()->firstOrFail();
+
+                    return [
+                        ...$current->content,
+                        'expected_current_outline_id' => $current->getKey(),
+                        'expected_current_outline_checksum' => $current->checksum,
+                    ];
+                })
+                ->schema([
+                    Hidden::make('expected_current_outline_id')->required(),
+                    Hidden::make('expected_current_outline_checksum')->required(),
+                    ...self::outlineForm(),
+                ])
+                ->action(function (array $data, ApplyNovelOutlineRevisionAction $apply): void {
+                    $expectedId = (int) $data['expected_current_outline_id'];
+                    $expectedChecksum = (string) $data['expected_current_outline_checksum'];
+                    unset($data['expected_current_outline_id'], $data['expected_current_outline_checksum']);
+
+                    try {
+                        $apply->handle(
+                            novel: $this->getRecord(),
+                            content: $this->synchronizeSequences($data),
+                            expectedCurrentOutlineId: $expectedId,
+                            expectedCurrentChecksum: $expectedChecksum,
+                            creator: auth()->user(),
+                        );
+                    } catch (ValidationException $exception) {
+                        Notification::make()->title('无法修订大纲')->body(collect($exception->errors())->flatten()->first())->danger()->send();
+
+                        return;
+                    }
+
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('新 Outline Version 已从下一章生效')->success()->send();
+                }),
+            Action::make('restartChapterFromOutline')
+                ->label('重建当前非正式章')
+                ->icon('heroicon-o-arrow-path')
+                ->color('warning')
+                ->visible(fn (): bool => $this->currentNonCanonicalChapterNeedsRestart())
+                ->requiresConfirmation()
+                ->modalHeading('按 Current Outline 重建当前非正式章')
+                ->modalDescription('旧 Chapter Plan、Generation Run、Artifact、Review 和 Usage 会完整保留。系统只替代当前执行指针，并从 Chapter Planning 创建新的来源链。')
+                ->fillForm(function (): array {
+                    $current = $this->getRecord()->currentOutline()->firstOrFail();
+
+                    return [
+                        'expected_outline_id' => $current->getKey(),
+                        'expected_outline_checksum' => $current->checksum,
+                    ];
+                })
+                ->schema([
+                    Hidden::make('expected_outline_id')->required(),
+                    Hidden::make('expected_outline_checksum')->required(),
+                ])
+                ->action(function (array $data, RestartChapterFromOutlineAction $restart): void {
+                    try {
+                        $result = $restart->handle(
+                            novel: $this->getRecord(),
+                            expectedOutlineId: (int) $data['expected_outline_id'],
+                            expectedOutlineChecksum: (string) $data['expected_outline_checksum'],
+                            actorId: auth()->id(),
+                        );
+                    } catch (ValidationException $exception) {
+                        Notification::make()->title('无法重建当前章')->body(collect($exception->errors())->flatten()->first())->danger()->send();
+
+                        return;
+                    }
+
+                    $this->getRecord()->refresh();
+                    Notification::make()
+                        ->title($result['dispatched'] ? '当前章已进入重新规划' : '当前章已重置，规划任务已存在')
+                        ->success()
+                        ->send();
+                }),
         ];
     }
 
@@ -266,6 +353,23 @@ class ManageNovelOutline extends ViewRecord
         return $this->getRecord()->current_outline_id !== null
             || $this->getRecord()->volumes()->exists()
             || $this->getRecord()->storyArcs()->exists();
+    }
+
+    private function currentNonCanonicalChapterNeedsRestart(): bool
+    {
+        $novel = $this->getRecord();
+        if ($novel->current_outline_id === null) {
+            return false;
+        }
+
+        $chapter = $novel->chapters()
+            ->where('sequence', ((int) $novel->current_chapter_sequence) + 1)
+            ->where('status', '!=', ChapterStatus::Canonical->value)
+            ->with('latestPlan')
+            ->first();
+
+        return $chapter?->latestPlan !== null
+            && $chapter->latestPlan->novel_outline_id !== $novel->current_outline_id;
     }
 
     private function aiRoot(?NovelOutline $outline): bool

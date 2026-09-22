@@ -59,6 +59,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
         'chapter_function' => '迫使主角离开安全区',
         'arc_contribution' => '推进失踪船队主线',
         'arc_contributions' => [],
+        'character_candidates' => [],
         'reader_promise' => '揭示灯塔的第一层秘密',
         'target_words' => 3000,
         'pov_character_id' => $characterId,
@@ -494,6 +495,42 @@ test('the planner receives the previous canonical ending and requires a scene tr
     expect(data_get($snapshot, 'previous_chapter_ending.text'))->toBe('林舟与苏离沿石阶向魔法学院走去。')
         ->and($fake->requests()[0]->prompt)->toContain('transition_from_previous')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得静默跳过');
+});
+
+test('the planner reads recent canonical chapter summaries in sequence order', function () {
+    [$chapter, $character] = plannerChapter();
+    $chapter->update(['sequence' => 3]);
+    Chapter::factory()->for($chapter->novel)->create([
+        'sequence' => 2,
+        'status' => ChapterStatus::Canonical,
+        'summary' => '第二章：主角取得港口通行证。',
+    ]);
+    Chapter::factory()->for($chapter->novel)->create([
+        'sequence' => 1,
+        'status' => ChapterStatus::Canonical,
+        'summary' => '第一章：主角抵达旧港。',
+    ]);
+    Chapter::factory()->for($chapter->novel)->create([
+        'sequence' => 99,
+        'status' => ChapterStatus::Review,
+        'summary' => '非正式章节摘要不得进入 Planner。',
+    ]);
+    $payload = plannerPayload($character->getKey());
+    $payload['scene_plans'][0]['transition_from_previous'] = '承接上一章取得通行证的结果，写出主角从港务处前往码头。';
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    $summaries = $chapter->generationRuns()
+        ->where('stage', GenerationStage::ChapterPlanning)
+        ->sole()
+        ->context_snapshot['recent_summaries'];
+
+    expect($summaries)->toBe([
+        ['sequence' => 1, 'summary' => '第一章：主角抵达旧港。'],
+        ['sequence' => 2, 'summary' => '第二章：主角取得港口通行证。'],
+    ])->and($fake->requests()[0]->prompt)->not->toContain('非正式章节摘要不得进入 Planner');
 });
 
 test('duplicate delivery reuses the successful run and does not call the provider twice', function () {

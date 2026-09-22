@@ -166,6 +166,32 @@ test('a structurally valid plan returns valid and can enter generation', functio
     $result->assertCanGenerate();
 });
 
+test('character candidates reject duplicate names and foreign duplicate references', function (string $mode) {
+    $plan = validPlan();
+    $foreign = Character::factory()->create();
+    $name = $mode === 'duplicate_name'
+        ? $plan->chapter->novel->characters()->firstOrFail()->name
+        : '顾青岚';
+    $plan->update(['character_candidates' => [[
+        'candidate_key' => 'character-gu-qinglan',
+        'name' => $name,
+        'role' => '向导',
+        'motivation' => '寻找失踪的商队。',
+        'profile' => ['age' => 30],
+        'personality' => ['trait' => '冷静'],
+        'abilities' => ['skill' => '辨认山路'],
+        'knowledge' => ['route' => '北境商道'],
+        'deduplication_basis' => '现有正式人物中没有相同身份。',
+        'possible_duplicate_character_ids' => $mode === 'foreign_reference' ? [$foreign->getKey()] : [],
+        'introduction_reason' => '带领主角穿越北境。',
+        'target_scene_sequence' => 1,
+    ]]]);
+
+    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
+
+    expect($codes)->toContain('INVALID_CHARACTER_CANDIDATE');
+})->with(['duplicate_name', 'foreign_reference']);
+
 test('structured arc beats and world candidates are scoped to the current novel and volume', function () {
     $novel = Novel::factory()->create();
     $volume = Volume::factory()->for($novel)->create();

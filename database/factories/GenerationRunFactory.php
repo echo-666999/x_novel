@@ -29,6 +29,7 @@ class GenerationRunFactory extends Factory
             'state_version' => 0,
             'bible_version' => 1,
             'prompt_version' => 'chapter-planner-v1',
+            'provider' => null,
             'model_policy' => 'global',
             'context_snapshot' => [],
             'error_code' => null,

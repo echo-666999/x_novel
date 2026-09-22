@@ -80,10 +80,12 @@ class ChapterReviewer
             'foreshadowing_contract' => $foreshadowingContract,
             'event_candidate' => $eventCandidate,
             'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum, 'content' => $draft->content],
-            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'arc_contributions', 'world_entity_candidates', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal', 'foreshadowing_actions', 'scene_plans']),
+            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'arc_contributions', 'character_candidates', 'world_entity_candidates', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal', 'foreshadowing_actions', 'scene_plans']),
             'arc_completion_contract' => $this->arcCompletionContract($chapter),
             'existing_world_entities' => $chapter->novel->worldEntities()->where('status', 'active')->get()
                 ->map->only(['id', 'type', 'name', 'description'])->values()->all(),
+            'existing_characters' => $chapter->novel->characters()->get()
+                ->map->only(['id', 'name', 'aliases', 'role', 'status'])->values()->all(),
             'scenes' => $chapter->scenes->sortBy('sequence')->map->only(['id', 'sequence', 'goal', 'conflict', 'turn', 'outcome'])->values()->all(),
             'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
             'length_check' => $lengthCheck,
@@ -101,13 +103,14 @@ class ChapterReviewer
         $reviewOperationId = $regenerate ? $operationId : null;
         $input = [
             'context' => $context,
+            'provider' => $settings->provider,
             'model' => $settings->model,
             'prompt_version' => $promptVersion,
             'pass_score' => config('generation.review_pass_score', 80),
             ...($reviewOperationId === null ? [] : ['operation_id' => $reviewOperationId]),
         ];
         $inputHash = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        [$run, $reused] = $this->startRun($chapter, "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}", $inputHash, $context, $settings->model, $promptVersion, $regenerate, $reviewOperationId);
+        [$run, $reused] = $this->startRun($chapter, "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}", $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate, $reviewOperationId);
         if ($reused) {
             return $run->review;
         }
@@ -130,7 +133,8 @@ class ChapterReviewer
 
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
-                systemPrompt: '你是 XNovel 叙事审校器。必须先完整阅读全部正文、Chapter Plan、上一章结尾、Style Contract 和 foreshadowing_contract。必须按 Chapter Plan 顺序完整返回 arc_beat_audits、arc_completion_audits 和 world_entity_candidate_audits：只有正文逐字证据满足 acceptance_criteria 才能把 Arc Beat 标记 fulfilled；只有正文真实引入批准候选才标记 introduced。arc_completion_audits 必须严格逐项复制 arc_completion_contract 中的 arc_id，数量和顺序完全一致；即使本章没有完成整个 Arc 也不能省略，而应返回 not_met 且 evidence=null。只有正文已满足对应 completion_conditions 时才标记 fulfilled。所有完成、引入或冲突结果必须引用正文逐字证据，missing/not_met 的 evidence 必须为 null。unapproved_world_entities 只报告正文新引入、会持续影响后续故事且未获计划批准的重大世界实体。existing_world_entities、previous_chapter_ending 已存在的内容，以及 Chapter Plan 的场景地点、目标、冲突、转折、结果和允许行为均视为已知或已批准；普通窗口、走廊、查阅区、训练位、报告、凭据、记录、清单和练习道具不是重大世界实体，不得报告。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须在 foreshadowing_audits 中按契约顺序逐项审校全部 actions，同时对照 promised_payoff、plan_action、Scene/Assembly Coverage、event_candidate 和正文逐字证据。必须按动作语义区分 plant、reinforce、pay_off：仅提及关键词不能证明完成强化或兑现，pay_off 必须真正满足 promised_payoff 及 acceptance_criteria。正文可在不改变契约时修复，返回 rewrite_required；若只能通过延期、放弃、改变兑现窗口或 promised_payoff 才能解决，返回 needs_attention；不得建议 Rewrite 自行改变这些 Canonical 约束。fulfilled 必须有 Coverage 和匹配 Event Candidate 支持。检查正文是否主动处理未列入 actions 的未来伏笔。promised_payoff 是作者侧验收信息，不表示非 pay_off 动作可以完整揭晓。随后对 continuity、plan、character、progress、repetition、pacing、style 七个维度逐项完成全量检查；不得发现一个问题后提前停止，也不得把同一根因拆成多轮零散报告。dimension_audits 必须逐项声明 pass 或 issues_found，并用简短中文说明检查结论；issues_found 必须一次列出该维度当前所有有明确证据的新 Narrative Finding，pass 表示该维度没有需要新增的 Narrative Finding。dimension_audits 只对应本次模型输出的 findings；伏笔和规划契约问题由 Laravel 生成 Finding，不得在 findings 重复报告；state_findings、plan_findings 和 length_check 已由 Laravel 独立处理，不得重复计入。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头，并检查正文内部的时间、地点、人物状态、物品位置和动作因果；发生跳跃、前后矛盾或空间关系无法成立时，必须给出 continuity finding。计划审校必须逐项核对 chapter_function、reader_promise、must_reveal、must_not_reveal 和每个 Scene 的 goal、conflict、turn、outcome，尤其检查正文动作是否真实满足计划边界，而不是只出现相近措辞。repair_verification 非空时，必须逐项确认上一轮全部可修复问题是否已经消除；仍存在的问题必须再次列入对应审计，已解决的问题不得重复报告，同时仍须完成七维及全部伏笔动作的全量检查。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null；scope=paragraph 的 evidence 必须逐字引用草稿短句，能确定所属 Scene 时应同时填写 scene_id。仅当问题可在一个 Scene 内独立修复时使用 scope=scene；涉及两个以上 Scene、上一章结尾与本章开头的连续性、章节整体节奏或全章结构时必须使用 scope=chapter 且 scene_id=null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和全部可执行参数，并在通读全文后一次列出所有实质性偏差；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 dimension_audits.summary、foreshadowing_audits.summary 以及 finding 的 message 与 evidence 必须使用简体中文；规划验收中的 evidence 必须逐字来自正文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。相同根因和相同修复动作应合并为一个 Finding，并在 evidence 中列出代表性原文，不得把同一问题拆成多个近义 Finding。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；plan_findings 是上游结构化覆盖证据，不要重复生成相同 Finding；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。',
+                provider: $settings->provider,
+                systemPrompt: '你是 XNovel 叙事审校器。必须先完整阅读全部正文、Chapter Plan、上一章结尾、Style Contract 和 foreshadowing_contract。必须按 Chapter Plan 顺序完整返回 arc_beat_audits、arc_completion_audits、character_candidate_audits 和 world_entity_candidate_audits：只有正文逐字证据满足 acceptance_criteria 才能把 Arc Beat 标记 fulfilled；只有正文真实引入批准候选才标记 introduced。arc_completion_audits 必须严格逐项复制 arc_completion_contract 中的 arc_id，数量和顺序完全一致；即使本章没有完成整个 Arc 也不能省略，而应返回 not_met 且 evidence=null。只有正文已满足对应 completion_conditions 时才标记 fulfilled。所有完成、引入或冲突结果必须引用正文逐字证据，missing/not_met 的 evidence 必须为 null。unapproved_characters 与 unapproved_world_entities 只报告正文新引入、会持续影响后续故事且未获计划批准的人物或重大世界实体。existing_characters、existing_world_entities、previous_chapter_ending 已存在的内容，以及 Chapter Plan 的场景地点、目标、冲突、转折、结果和允许行为均视为已知或已批准；普通窗口、走廊、查阅区、训练位、报告、凭据、记录、清单和练习道具不是重大世界实体，不得报告。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须在 foreshadowing_audits 中按契约顺序逐项审校全部 actions，同时对照 promised_payoff、plan_action、Scene/Assembly Coverage、event_candidate 和正文逐字证据。必须按动作语义区分 plant、reinforce、pay_off：仅提及关键词不能证明完成强化或兑现，pay_off 必须真正满足 promised_payoff 及 acceptance_criteria。正文可在不改变契约时修复，返回 rewrite_required；若只能通过延期、放弃、改变兑现窗口或 promised_payoff 才能解决，返回 needs_attention；不得建议 Rewrite 自行改变这些 Canonical 约束。fulfilled 必须有 Coverage 和匹配 Event Candidate 支持。检查正文是否主动处理未列入 actions 的未来伏笔。promised_payoff 是作者侧验收信息，不表示非 pay_off 动作可以完整揭晓。随后对 continuity、plan、character、progress、repetition、pacing、style 七个维度逐项完成全量检查；不得发现一个问题后提前停止，也不得把同一根因拆成多轮零散报告。dimension_audits 必须逐项声明 pass 或 issues_found，并用简短中文说明检查结论；issues_found 必须一次列出该维度当前所有有明确证据的新 Narrative Finding，pass 表示该维度没有需要新增的 Narrative Finding。dimension_audits 只对应本次模型输出的 findings；伏笔和规划契约问题由 Laravel 生成 Finding，不得在 findings 重复报告；state_findings、plan_findings 和 length_check 已由 Laravel 独立处理，不得重复计入。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头，并检查正文内部的时间、地点、人物状态、物品位置和动作因果；发生跳跃、前后矛盾或空间关系无法成立时，必须给出 continuity finding。计划审校必须逐项核对 chapter_function、reader_promise、must_reveal、must_not_reveal 和每个 Scene 的 goal、conflict、turn、outcome，尤其检查正文动作是否真实满足计划边界，而不是只出现相近措辞。repair_verification 非空时，必须逐项确认上一轮全部可修复问题是否已经消除；仍存在的问题必须再次列入对应审计，已解决的问题不得重复报告，同时仍须完成七维及全部伏笔动作的全量检查。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null；scope=paragraph 的 evidence 必须逐字引用草稿短句，能确定所属 Scene 时应同时填写 scene_id。仅当问题可在一个 Scene 内独立修复时使用 scope=scene；涉及两个以上 Scene、上一章结尾与本章开头的连续性、章节整体节奏或全章结构时必须使用 scope=chapter 且 scene_id=null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和全部可执行参数，并在通读全文后一次列出所有实质性偏差；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 dimension_audits.summary、foreshadowing_audits.summary 以及 finding 的 message 与 evidence 必须使用简体中文；规划验收中的 evidence 必须逐字来自正文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。相同根因和相同修复动作应合并为一个 Finding，并在 evidence 中列出代表性原文，不得把同一问题拆成多个近义 Finding。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；plan_findings 是上游结构化覆盖证据，不要重复生成相同 Finding；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。',
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: (int) config('generation.review_max_output_tokens', 4000), responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
@@ -266,7 +270,7 @@ class ChapterReviewer
 
     private function validate(array $payload, Chapter $chapter, GenerationArtifact $draft, array $foreshadowingContract, ?array $eventCandidate, bool $hasDeterministicRoute): array
     {
-        if (! $this->hasExactKeys($payload, ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', 'arc_beat_audits', 'arc_completion_audits', 'world_entity_candidate_audits', 'unapproved_world_entities', 'findings'])
+        if (! $this->hasExactKeys($payload, ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', 'arc_beat_audits', 'arc_completion_audits', 'character_candidate_audits', 'world_entity_candidate_audits', 'unapproved_characters', 'unapproved_world_entities', 'findings'])
             || ! is_array($payload['scores'])
             || ! $this->hasExactKeys($payload['scores'], self::DIMENSIONS)
             || ! is_array($payload['dimension_audits'])
@@ -338,9 +342,9 @@ class ChapterReviewer
         return $actual === $keys;
     }
 
-    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $model, string $promptVersion, bool $regenerate, ?string $operationId): array
+    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate, ?string $operationId): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $model, $promptVersion, $regenerate, $operationId) {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate, $operationId) {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::Review);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
@@ -355,7 +359,7 @@ class ChapterReviewer
                 return [$done, true];
             }
             $attempt = (int) $runs->clone()->max('attempt') + 1;
-            $run = GenerationRun::query()->create(['novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Running, 'attempt' => $attempt, 'idempotency_key' => $attempt === 1 ? $baseKey : "$baseKey:attempt:$attempt", 'input_hash' => $inputHash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'], 'prompt_version' => $promptVersion, 'model_policy' => $model, 'context_snapshot' => [...$context, 'draft' => collect($context['draft'])->except('content')->all(), ...($operationId === null ? [] : ['operation_id' => $operationId])], 'started_at' => now()]);
+            $run = GenerationRun::query()->create(['novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Running, 'attempt' => $attempt, 'idempotency_key' => $attempt === 1 ? $baseKey : "$baseKey:attempt:$attempt", 'input_hash' => $inputHash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'], 'prompt_version' => $promptVersion, 'provider' => $provider, 'model_policy' => $model, 'context_snapshot' => [...$context, 'draft' => collect($context['draft'])->except('content')->all(), ...($operationId === null ? [] : ['operation_id' => $operationId])], 'started_at' => now()]);
 
             return [$run, false];
         });
@@ -426,7 +430,9 @@ class ChapterReviewer
                 'foreshadowing_audits' => $payload['foreshadowing_audits'],
                 'arc_beat_audits' => $payload['arc_beat_audits'],
                 'arc_completion_audits' => $payload['arc_completion_audits'],
+                'character_candidate_audits' => $payload['character_candidate_audits'],
                 'world_entity_candidate_audits' => $payload['world_entity_candidate_audits'],
+                'unapproved_characters' => $payload['unapproved_characters'],
                 'unapproved_world_entities' => $payload['unapproved_world_entities'],
                 'findings' => $findings,
                 'rewrite_scope' => $rewriteScope,

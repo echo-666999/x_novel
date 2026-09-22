@@ -88,6 +88,7 @@ test('openai provider maps a successful response to the provider dto', function 
 test('openai provider logs the complete prompt and response with request metadata', function () {
     config()->set('ai.providers.openai.api_key', 'secret-test-key');
     config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+    config()->set('ai.logging.prompts', true);
 
     Http::fake([
         'llm.example/*' => Http::response([
@@ -120,23 +121,35 @@ test('openai provider logs the complete prompt and response with request metadat
         promptVersion: 'scene-writer-test',
         metadata: [
             'generation_run_id' => 51,
+            'novel_id' => 8,
+            'chapter_id' => 13,
             'scene_id' => 1,
             'stage' => 'writer',
             'ai_request_log_id' => 'repair-log-51',
+            'authorization' => 'Bearer secret-test-key',
+            'nested' => ['api_key' => 'secret-test-key'],
         ],
     ));
 
-    $requestLog = $records['AI Provider 完整请求。'];
+    $requestLog = $records['AI Provider 请求。'];
     $responseLog = $records['AI Provider 完整响应。'];
 
     expect($requestLog['ai_request_log_id'])->toBe('repair-log-51')
         ->and($responseLog['ai_request_log_id'])->toBe('repair-log-51')
+        ->and($requestLog['provider'])->toBe('openai')
+        ->and($responseLog['provider'])->toBe('openai')
+        ->and($requestLog['model'])->toBe('current-model')
+        ->and($responseLog['model'])->toBe('current-model-2026-09-01')
         ->and($requestLog['prompt_version'])->toBe('scene-writer-test')
         ->and($requestLog['metadata'])->toBe([
             'generation_run_id' => 51,
+            'novel_id' => 8,
+            'chapter_id' => 13,
             'scene_id' => 1,
             'stage' => 'writer',
             'ai_request_log_id' => 'repair-log-51',
+            'authorization' => '[REDACTED]',
+            'nested' => ['api_key' => '[REDACTED]'],
         ])
         ->and($requestLog['payload']['messages'])->toBe([
             ['role' => 'system', 'content' => '完整系统提示词'],
@@ -146,8 +159,121 @@ test('openai provider logs the complete prompt and response with request metadat
         ->and(json_encode($requestLog, JSON_THROW_ON_ERROR))->not->toContain('secret-test-key')
         ->and($responseLog['status'])->toBe(200)
         ->and($responseLog['provider_request_id'])->toBe('header-request-123')
+        ->and($responseLog['input_tokens'])->toBe(12)
+        ->and($responseLog['output_tokens'])->toBe(4)
+        ->and($responseLog['cached_tokens'])->toBe(0)
+        ->and(json_encode($responseLog, JSON_THROW_ON_ERROR))->not->toContain('secret-test-key')
         ->and(json_decode($responseLog['body'], true, flags: JSON_THROW_ON_ERROR)['choices'][0]['message']['content'])
         ->toBe('{"answer":"完整响应"}');
+});
+
+test('openai provider does not log prompts when the prompt logging environment setting is absent', function () {
+    expect(file_get_contents(config_path('ai.php')))
+        ->toContain("'prompts' => env('AI_LOG_PROMPTS', false)");
+    config()->set('ai.logging.prompts', false);
+
+    config()->set('ai.providers.openai.api_key', 'default-disabled-secret-key');
+    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+
+    Http::fake(['llm.example/*' => Http::response([
+        'id' => 'request-default-disabled',
+        'model' => 'current-model-resolved',
+        'choices' => [['message' => ['content' => 'OK']]],
+        'usage' => [
+            'prompt_tokens' => 21,
+            'completion_tokens' => 5,
+            'prompt_tokens_details' => ['cached_tokens' => 7],
+        ],
+    ])]);
+
+    $records = [];
+    Log::shouldReceive('debug')
+        ->twice()
+        ->andReturnUsing(function (string $message, array $context) use (&$records): void {
+            $records[$message] = $context;
+        });
+
+    app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'current-model',
+        systemPrompt: 'default-disabled-system-prompt',
+        prompt: 'default-disabled-user-prompt',
+        responseSchema: ['type' => 'object', 'example' => 'default-disabled-json-example'],
+        promptVersion: 'default-disabled-v1',
+        metadata: [
+            'generation_run_id' => 91,
+            'novel_id' => 92,
+            'chapter_id' => 93,
+            'scene_id' => 94,
+            'stage' => 'writer',
+            'private_context' => 'default-disabled-metadata-prompt',
+        ],
+    ));
+
+    $requestLog = $records['AI Provider 请求。'];
+    $responseLog = $records['AI Provider 完整响应。'];
+    $serializedLogs = json_encode($records, JSON_THROW_ON_ERROR);
+
+    expect($requestLog)->not->toHaveKeys(['payload', 'metadata', 'messages', 'system_prompt', 'prompt'])
+        ->and($requestLog)->toMatchArray([
+            'provider' => 'openai',
+            'model' => 'current-model',
+            'generation_run_id' => 91,
+            'novel_id' => 92,
+            'chapter_id' => 93,
+            'scene_id' => 94,
+            'stage' => 'writer',
+            'prompt_version' => 'default-disabled-v1',
+        ])
+        ->and($responseLog)->toMatchArray([
+            'provider' => 'openai',
+            'model' => 'current-model-resolved',
+            'status' => 200,
+            'input_tokens' => 21,
+            'output_tokens' => 5,
+            'cached_tokens' => 7,
+            'provider_request_id' => 'request-default-disabled',
+        ])
+        ->and($serializedLogs)->not->toContain('default-disabled-system-prompt')
+        ->and($serializedLogs)->not->toContain('default-disabled-user-prompt')
+        ->and($serializedLogs)->not->toContain('default-disabled-json-example')
+        ->and($serializedLogs)->not->toContain('default-disabled-metadata-prompt')
+        ->and($serializedLogs)->not->toContain('default-disabled-secret-key');
+});
+
+test('openai provider obeys the cached prompt logging config when explicitly disabled', function () {
+    config()->set('ai.logging.prompts', false);
+    config()->set('ai.providers.openai.api_key', 'explicit-disabled-secret-key');
+    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
+
+    Http::fake(['llm.example/*' => Http::response([
+        'id' => 'request-explicit-disabled',
+        'model' => 'current-model',
+        'choices' => [['message' => ['content' => 'OK']]],
+        'usage' => [],
+    ])]);
+
+    $records = [];
+    Log::shouldReceive('debug')
+        ->twice()
+        ->andReturnUsing(function (string $message, array $context) use (&$records): void {
+            $records[$message] = $context;
+        });
+
+    app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'current-model',
+        systemPrompt: 'explicit-disabled-system-prompt',
+        prompt: 'explicit-disabled-user-prompt',
+    ));
+
+    $providerSource = file_get_contents(app_path('AI/Providers/OpenAiProvider.php'));
+    $serializedLogs = json_encode($records, JSON_THROW_ON_ERROR);
+
+    expect($records['AI Provider 请求。'])->not->toHaveKeys(['payload', 'metadata'])
+        ->and($serializedLogs)->not->toContain('explicit-disabled-system-prompt')
+        ->and($serializedLogs)->not->toContain('explicit-disabled-user-prompt')
+        ->and($serializedLogs)->not->toContain('explicit-disabled-secret-key')
+        ->and($providerSource)->toContain("config('ai.logging.prompts', false)")
+        ->and($providerSource)->not->toContain('env(');
 });
 
 test('openai provider uses the default temperature for gpt 5.6 models', function () {
@@ -256,7 +382,9 @@ test('openai provider logs the complete rejected response body', function () {
         expect($exception->errorCode)->toBe('provider_request_failed')
             ->and($responseLog['status'])->toBe(400)
             ->and($responseLog['provider_request_id'])->toBe('failed-request-400')
-            ->and($responseLog['metadata'])->toBe(['generation_run_id' => 51, 'scene_id' => 1])
+            ->and($responseLog['generation_run_id'])->toBe(51)
+            ->and($responseLog['scene_id'])->toBe(1)
+            ->and($responseLog)->not->toHaveKey('metadata')
             ->and($body['error'])->toBe([
                 'message' => 'Unsupported parameter: max_tokens',
                 'type' => 'invalid_request_error',

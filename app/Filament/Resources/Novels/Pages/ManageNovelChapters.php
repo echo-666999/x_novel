@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
+use App\AI\AiSettingsService;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\ForeshadowingPlanAction;
@@ -143,7 +144,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->placeholder('未审校'),
                 TextColumn::make('usage_records_sum_estimated_cost')
                     ->label('成本')
-                    ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 4))
+                    ->formatStateUsing(fn (mixed $state): string => data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $state, 4))
                     ->placeholder('—')
                     ->alignEnd(),
                 TextColumn::make('latestStateVersion.version')

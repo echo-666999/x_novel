@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
+use App\AI\AiSettingsService;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\ReviewDecision;
@@ -167,6 +168,11 @@ class Generation extends Page implements HasTable
                     ->color('danger')
                     ->placeholder('—')
                     ->toggleable(),
+                TextColumn::make('provider')
+                    ->label('Provider')
+                    ->formatStateUsing(fn (?string $state): string => $state === null ? '旧记录未保存 Provider' : $state)
+                    ->badge()
+                    ->color('gray'),
                 TextColumn::make('model_policy')->label('模型')->placeholder('—'),
                 TextColumn::make('duration')
                     ->label('耗时')
@@ -176,7 +182,7 @@ class Generation extends Page implements HasTable
                     ->alignEnd(),
                 TextColumn::make('usage_records_sum_estimated_cost')
                     ->label('成本')
-                    ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 4))
+                    ->formatStateUsing(fn (mixed $state): string => data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $state, 4))
                     ->alignEnd(),
                 TextColumn::make('created_at')->label('创建时间')->dateTime('Y-m-d H:i:s')->sortable(),
             ])
@@ -323,7 +329,7 @@ class Generation extends Page implements HasTable
                         TextEntry::make('latency_ms')->label('Latency')->suffix(' ms')->numeric(),
                         TextEntry::make('estimated_cost')
                             ->label('Cost')
-                            ->formatStateUsing(fn (mixed $state): string => config('ai.cost.currency').' '.number_format((float) $state, 4)),
+                            ->formatStateUsing(fn (mixed $state): string => data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $state, 4)),
                     ]),
             ]),
         ];

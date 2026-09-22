@@ -2,13 +2,16 @@
 
 namespace App\Providers;
 
+use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Providers\BudgetGuardAiProvider;
+use App\AI\Providers\DeepSeekProvider;
 use App\AI\Providers\EmergencyStopAiProvider;
 use App\AI\Providers\EmergencyStopEmbeddingProvider;
 use App\AI\Providers\OpenAiProvider;
+use App\AI\Providers\RoutingAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\Providers\TrackingEmbeddingProvider;
 use App\AI\UsageRecorder;
@@ -16,7 +19,6 @@ use App\Contracts\StoryEventApplier;
 use App\Services\DeterministicStoryEventApplier;
 use App\Services\EmergencyStopService;
 use Illuminate\Support\ServiceProvider;
-use InvalidArgumentException;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -27,14 +29,12 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(StoryEventApplier::class, DeterministicStoryEventApplier::class);
         $this->app->bind(AiProvider::class, function (): AiProvider {
-            $provider = match (config('ai.provider')) {
-                'openai' => app(OpenAiProvider::class),
-                default => throw new InvalidArgumentException('Unsupported AI provider: '.config('ai.provider')),
-            };
+            $provider = new RoutingAiProvider([
+                'openai' => new TrackingAiProvider(app(OpenAiProvider::class), app(UsageRecorder::class)),
+                'deepseek' => new TrackingAiProvider(app(DeepSeekProvider::class), app(UsageRecorder::class)),
+            ], app(AiSettingsService::class));
 
-            $trackedProvider = new TrackingAiProvider($provider, app(UsageRecorder::class));
-
-            $budgetedProvider = new BudgetGuardAiProvider($trackedProvider, app(BudgetService::class));
+            $budgetedProvider = new BudgetGuardAiProvider($provider, app(BudgetService::class));
 
             return new EmergencyStopAiProvider($budgetedProvider, app(EmergencyStopService::class));
         });

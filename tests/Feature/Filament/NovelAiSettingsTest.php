@@ -14,7 +14,7 @@ beforeEach(function () {
     config()->set('ai.models.writer', 'global-writer');
 });
 
-test('novel settings shows global and overridden resolved models', function () {
+test('novel settings shows environment and overridden resolved models', function () {
     $novel = Novel::factory()->create([
         'settings' => ['ai' => ['models' => ['writer' => 'novel-writer']]],
     ]);
@@ -23,7 +23,7 @@ test('novel settings shows global and overridden resolved models', function () {
         ->assertOk()
         ->assertSee('AI Model Overrides')
         ->assertSee('章节规划 Resolved Model')
-        ->assertSee('global-planner · Global Default')
+        ->assertSee('global-planner · Environment Default')
         ->assertSee('场景写作 Resolved Model')
         ->assertSee('novel-writer · Novel Override')
         ->assertFormSet([

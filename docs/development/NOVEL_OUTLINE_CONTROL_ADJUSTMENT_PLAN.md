@@ -1,7 +1,7 @@
 # 人工全书大纲与受控章节生成调整方案
 
 > 日期：2026-09-21
-> 状态：实施中（OUT-001、OUT-002、OUT-003、OUT-004、OUT-005 已完成）
+> 状态：实施中（OUT-001、OUT-002、OUT-003、OUT-004、OUT-005、OUT-006、OUT-007、OUT-008、OUT-009 已完成）
 > 范围：新建小说的全书大纲、连载中的未来大纲修订、Chapter Planner 按大纲生成、AI Prompt 日志开关、AI 配置后台维护、DeepSeek 生成支持、《六环余光》迁移准备
 > 不包含：本文件不修改业务代码，不调用 AI Provider，不修改《六环余光》的小说数据
 
@@ -103,7 +103,7 @@ Novel
 - 项目已经有 `system_settings` 表，`key` 为主键、`value` 为 JSONB；目前用于保存 `emergency_stop`。
 - `usage_records.provider` 当前从全局配置读取。增加运行时切换后，这种写法会记录错误 Provider，必须改为记录本次请求实际使用的 Provider。
 
-结论：无需为了 AI 配置再新增一张通用设置表。复用 `system_settings` 保存非敏感 AI 配置；API Key 继续只放在 `.env`。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
+结论：无需为了 AI 配置再新增一张通用设置表。复用 `system_settings` 保存 AI 运行配置；API Key 由 Laravel `Crypt` 加密后保存，后台只接受替换或显式清除且绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
 
 ## 3. 用户期望的大纲示例
 
@@ -826,7 +826,7 @@ AI_LOG_PROMPTS=false
 key = ai
 ```
 
-`value` 保存非敏感运行配置，建议结构：
+`value` 保存运行配置。`credential` 是 Laravel `Crypt` 生成的密文，不是明文：
 
 ```json
 {
@@ -835,11 +835,15 @@ key = ai
   "providers": {
     "openai": {
       "enabled": true,
+      "base_url": "https://api.openai.com/v1",
+      "credential": "Laravel Crypt ciphertext or null",
       "connect_timeout": 10,
       "timeout": 60
     },
     "deepseek": {
       "enabled": false,
+      "base_url": "https://api.deepseek.com",
+      "credential": null,
       "connect_timeout": 10,
       "timeout": 60
     }
@@ -852,14 +856,26 @@ key = ai
     "reviewer": {"provider": "openai", "model": "现有 reviewer 模型"},
     "rewrite": {"provider": "openai", "model": "现有 rewrite 模型"},
     "summary": {"provider": "openai", "model": "现有 summary 模型"}
+  },
+  "cost": {
+    "currency": "USD",
+    "input_per_million": 0,
+    "cached_input_per_million": 0,
+    "output_per_million": 0
+  },
+  "budget": {
+    "daily_hard_limit": null,
+    "novel_total_limit": null,
+    "chapter_max_cost": null
   }
 }
 ```
 
 约束：
 
-- 数据库不保存任何 API Key。
-- OpenAI 和 DeepSeek 的 Base URL、API Key 由 `config/ai.php` 从环境变量读取，后台只显示“已配置 / 未配置”，不显示原值。
+- API Key 只以 Laravel `Crypt` 密文保存；数据库、页面、校验错误和日志均不得出现明文，页面和日志也不得出现密文。
+- OpenAI 和 DeepSeek 的 Base URL、API Key、Timeout、Token 单价与全局预算由后台维护；`config/ai.php` 的环境值仅在数据库记录不存在或数据库密钥被显式清除时作为兼容回退。
+- API Key 输入留空表示保留数据库现有密钥；填写新值表示替换；显式清除开关表示删除数据库密钥。页面重新加载时只显示配置状态，绝不回填原值。
 - `provider` 只能是代码已经注册的 Provider，不能通过后台输入任意类名或任意 URL。
 - Model 使用字符串保存，保存时去除首尾空格并限制长度；不把短期可能变化的模型列表做成数据库枚举。
 - Stage 只能使用现有 `AiStage` 枚举值。
@@ -888,15 +904,17 @@ config/ai.php 当前环境变量默认值
 - OpenAI / DeepSeek 启用状态；
 - Planner、Writer、Assembler、Extractor、Reviewer、Rewrite、Summary 各阶段的 Provider 和 Model；
 - 两个 Provider 各自的连接超时和请求超时；
-- API Key 是否已配置的只读状态；
+- 两个 Provider 各自的 Base URL、API Key 替换输入、显式清除开关和已配置状态；
+- Token 成本货币及输入、缓存输入、输出单价；
+- 每日、单小说和单章成本限制；
 - 按 Provider 执行的“测试连接”操作。
 
 保存时：
 
-1. 先校验 Provider、Stage、Model 和超时范围；
+1. 先校验 Provider、Stage、Model、Base URL、超时、单价、预算和密钥操作；
 2. 再写入 `system_settings.ai`；
 3. 保存成功后清除应用内对应缓存；MVP 可以先不缓存，直接读取单行设置；
-4. 使用 Laravel Log 写一条设置变更记录，包含操作者 ID 和变更前后的 Provider / Model / Timeout，不记录密钥；当前项目未安装 Activity Log 包，本任务不为此新增依赖；
+4. 使用 Laravel Log 写一条设置变更记录，包含操作者 ID 和变更前后的 Provider / Model / Base URL / Timeout / Cost / Budget，只记录 `credential_configured` 布尔状态，不记录密钥明文或密文；当前项目未安装 Activity Log 包，本任务不为此新增依赖；
 5. 页面重新读取数据库，展示最终生效值和来源。
 
 后台切换只影响之后创建的 Generation Run。正在执行的 Run 使用创建时冻结的 Provider 和 Model，不能运行到一半自动换 Provider。
@@ -927,16 +945,13 @@ DeepSeek 官方文档在 2026-09-21 的核实结果：标准 Base URL 为 `https
 - <https://api-docs.deepseek.com/api/create-chat-completion/>
 - <https://api-docs.deepseek.com/guides/json_mode/>
 
-`.env.example` 增加：
+`.env.example` 不再要求配置 Provider Base URL、API Key、Timeout、Token 单价和预算；这些值由后台维护。`config/ai.php` 暂时保留旧环境变量读取，仅用于已有部署升级期间的兼容回退：
 
 ```dotenv
-OPENAI_API_KEY=
-OPENAI_BASE_URL=https://api.openai.com/v1
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com
+# Provider runtime settings are maintained in Settings / system_settings.ai.
 ```
 
-兼容迁移：如果 `OPENAI_API_KEY` 或 `OPENAI_BASE_URL` 未配置，第一阶段允许回退到现有 `AI_API_KEY`、`AI_BASE_URL`；日志打印弃用提示但不打印值。确认部署环境完成迁移后，再通过单独任务移除旧变量兼容。
+兼容迁移：数据库没有 `system_settings.ai` 时从当前 `config/ai.php` 构造默认值；数据库 Provider 没有密钥时允许回退到现有环境密钥。管理员在后台保存后，以数据库配置为主。任何迁移和弃用日志都不得打印密钥值。
 
 DeepSeek 切换范围只包含小说文本生成阶段：Planner、Writer、Assembler、Extractor、Reviewer、Rewrite、Summary。Embedding 继续使用当前独立配置和现有 Provider，除非以后确认 DeepSeek 提供并选定兼容的 Embedding 接口；后台不得把 DeepSeek 文本模型误配为 Embedding 模型。
 
@@ -978,14 +993,14 @@ flowchart TD
 | OUT-003 | Outline 校验、版本和进度解析服务 | P0 | DONE | OUT-002 |
 | OUT-004 | 新建小说大纲编辑与首次采用 | P0 | DONE | OUT-003 |
 | OUT-005 | Chapter Planner 当前节点选择与顺序门禁 | P0 | DONE | OUT-003 |
-| OUT-006 | Review、Canonical Commit、人物 Candidate 与回滚 | P0 | TODO | OUT-005 |
-| OUT-007 | 连载中未来大纲修订与当前章安全重建 | P1 | TODO | OUT-004～006 |
-| OUT-008 | Canonical Chapter Summary 幂等补齐 | P1 | TODO | OUT-005 |
-| OUT-009 | 《六环余光》大纲迁移 Dry Run | P0 | TODO | OUT-007、008 |
+| OUT-006 | Review、Canonical Commit、人物 Candidate 与回滚 | P0 | DONE | OUT-005 |
+| OUT-007 | 连载中未来大纲修订与当前章安全重建 | P1 | DONE | OUT-004～006 |
+| OUT-008 | Canonical Chapter Summary 幂等补齐 | P1 | DONE | OUT-005 |
+| OUT-009 | 《六环余光》大纲迁移 Dry Run | P0 | DONE | OUT-007、008 |
 | OUT-010 | 《六环余光》执行与端到端验收 | P0 | BLOCKED_BY_DECISION | OUT-009、OUT-013、用户确认第 12 章处理方式与完整大纲 |
-| OUT-011 | Prompt 日志环境开关 | P0 | TODO | 无 |
-| OUT-012 | AI 配置入库与后台维护 | P0 | TODO | 无 |
-| OUT-013 | DeepSeek Provider 与运行时切换 | P0 | TODO | OUT-011、012 |
+| OUT-011 | Prompt 日志环境开关 | P0 | DONE | 无 |
+| OUT-012 | AI 配置入库与后台维护 | P0 | DONE | 无 |
+| OUT-013 | DeepSeek Provider 与运行时切换 | P0 | DONE | OUT-011、012 |
 
 ## 12. Task Cards
 
@@ -1335,22 +1350,25 @@ flowchart TD
 
 **实现内容**
 
-- 复用 `system_settings`，以 `ai` 为固定 Key 保存非敏感配置。
+- 复用 `system_settings`，以 `ai` 为固定 Key 保存 Provider、Stage、成本和预算配置。
 - 增加单一的 AI 配置读取、校验和保存服务，避免 Filament、Resolver 和 Provider 各自解析 JSON。
 - `AiSettingsResolver` 按“小说 Stage 覆盖 → 数据库 Stage → 数据库默认值 → 环境默认值”解析。
-- Filament `Settings` 页面增加 Provider、Stage Model、Timeout 的编辑与保存。
-- API Key 只显示是否配置，不读取或回写密钥值。
-- 配置保存写入 Laravel 操作日志，不记录密钥和 Prompt，不新增审计 Package。
+- Filament `Settings` 页面增加 Provider、Base URL、API Key、Stage Model、Timeout、Token 单价和预算的编辑与保存。
+- API Key 使用 Laravel `Crypt` 加密保存；页面只接受替换或显式清除，空输入保留现值，页面不回显密钥。
+- 提供 `php artisan ai:import-environment-settings`，用于首次把当前环境中的 Provider、Model、Base URL、Timeout、Token 单价、预算和加密 API Key 写入 `system_settings.ai`；记录已存在时默认拒绝覆盖，只有显式 `--force` 才替换。
+- 配置保存写入 Laravel 操作日志，只记录是否已配置密钥，不记录明文、密文或 Prompt，不新增审计 Package。
 
 **涉及文件**
 
 - `app/Models/SystemSetting.php`
 - `app/AI/AiSettingsResolver.php`
 - `app/AI/Data/ResolvedAiSettings.php`
+- `app/Console/Commands/ImportAiEnvironmentSettings.php`
 - `app/Filament/Pages/Settings.php`
 - `config/ai.php`
 - `tests/Feature/AiSettingsResolverTest.php`
 - `tests/Feature/Filament/AiSettingsTest.php`
+- `tests/Feature/ImportAiEnvironmentSettingsTest.php`
 
 **测试**
 
@@ -1359,7 +1377,10 @@ flowchart TD
 - 小说级 Stage 覆盖只影响该小说和该 Stage。
 - 非法 Provider、未知 Stage、空 Model、非法 Timeout 保存失败且原配置不变。
 - 未启用或缺少 Key 的 Provider 不能成为生效配置。
-- 页面和 Laravel 操作日志都不出现 API Key 原值。
+- API Key 在 JSONB 中是可解密密文，空值保存不覆盖，显式清除后使用环境兼容回退。
+- 页面、Laravel 操作日志和校验错误都不出现 API Key 明文或密文。
+- Provider 请求使用数据库 Base URL 和解密后的 Key；费用和预算服务使用数据库单价与限制。
+- 环境导入命令能创建加密配置、默认拒绝覆盖已有后台配置，并支持显式 `--force`。
 - 两次相同保存不产生不必要的配置变化。
 
 **数据库 / Canonical State**
@@ -1369,7 +1390,7 @@ flowchart TD
 
 **回滚**
 
-- 删除 `system_settings.ai` 后自动回退到 `config/ai.php` 默认值。
+- 删除 `system_settings.ai` 后自动回退到 `config/ai.php` 默认值；这也会删除其中保存的加密密钥，执行前必须确认环境回退凭据或重新录入路径可用。
 - 回滚 UI 和 Resolver 不删除历史 Generation Run 或 Usage。
 
 ## OUT-013 — DeepSeek Provider 与运行时切换
@@ -1438,7 +1459,7 @@ flowchart TD
 11. 《六环余光》下一章能够明确按用户指定节点推进，而不是继续由 AI 自行选择方向。
 12. Targeted Tests、完整 Feature Suite、PostgreSQL Migration 和真实浏览器流程分别报告，不混为一次验证。
 13. `AI_LOG_PROMPTS` 默认关闭，关闭时日志中没有 System Prompt、Messages 或完整请求 Payload。
-14. API Key 只从环境配置读取，数据库、页面和应用日志均不出现原值。
+14. API Key 可在管理后台维护，仅以 Laravel `Crypt` 密文保存；页面和应用日志均不出现明文或密文。
 15. 管理后台可以维护默认 Provider 和各文本生成 Stage 的 Provider / Model。
 16. 后台配置变化只影响之后创建的 Generation Run，历史 Run 保留实际 Provider / Model。
 17. OpenAI 和 DeepSeek 的请求、Run、Artifact、Usage 使用同一个实际 Provider 标识。
@@ -1454,7 +1475,7 @@ flowchart TD
 - 不把 Draft Outline 写入 Canonical Story State。
 - 不自动修改《六环余光》已提交章节的正文。
 - 不在没有证据时伪造历史 Beat Completion Event。
-- 不把 OpenAI 或 DeepSeek API Key 保存到 `system_settings`。
+- 不把 OpenAI 或 DeepSeek API Key 以明文保存到 `system_settings`，也不在页面或日志中回显密钥或密文。
 - 不允许后台录入任意 Provider 类名或把任意 URL 当作受信任 Provider。
 - 不把 DeepSeek 文本生成配置自动用于 Embedding。
 - 不在本方案中引入动态 Provider 选择、按价格自动路由或失败后跨 Provider 自动切换。

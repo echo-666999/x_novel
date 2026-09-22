@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Actions\Generation\StartMvpSoakRunAction;
 use App\Actions\Generation\StartReliabilityRunAction;
 use App\Actions\Generation\StartSmokeRunAction;
+use App\AI\AiSettingsService;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Actions\EmergencyStopAction;
@@ -293,7 +294,7 @@ class Dashboard extends BaseDashboard
                 'novel' => $progress->novelTitle,
                 'status' => $progress->statusLabel(),
                 'progress' => "{$progress->canonicalChapters}/20 · {$progress->percent()}%",
-                'cost' => config('ai.cost.currency').' '.number_format($progress->cost, 4),
+                'cost' => $this->costCurrency().' '.number_format($progress->cost, 4),
                 'sequence_health' => $progress->sequenceHealthy() ? '正常' : '异常',
                 'state_health' => $progress->stateContinuous ? '正常' : '异常',
             ])
@@ -317,7 +318,7 @@ class Dashboard extends BaseDashboard
                     'recovery' => "重试 {$summary->retryRuns} · Worker {$summary->workerRecoveries}/{$summary->workerCrashes}",
                     'memory' => "{$summary->memories} 条 · 已向量化 {$summary->embeddedMemories}",
                     'story' => "伏笔 {$summary->foreshadowingEvents} · 审校 {$summary->reviews} · 重写 {$summary->rewrites}",
-                    'cost_context' => config('ai.cost.currency').' '.number_format($summary->cost, 4)." · 漂移 {$drift} · Context 平均 ".number_format($summary->averageContextTokens).' / 最大 '.number_format($summary->maximumContextTokens),
+                    'cost_context' => $this->costCurrency().' '.number_format($summary->cost, 4)." · 漂移 {$drift} · Context 平均 ".number_format($summary->averageContextTokens).' / 最大 '.number_format($summary->maximumContextTokens),
                 ];
             })
             ->all();
@@ -334,7 +335,7 @@ class Dashboard extends BaseDashboard
                 'integrity' => $summary->duplicateCanonicalCommits === 0 && $summary->missingCanonicalChapters === 0 && $summary->stateIntegrityIssues === 0 ? '正常' : '异常',
                 'guards' => '暂停禁止 Commit · Resume 连续性',
                 'story_guards' => 'Locked Fact · Critical Foreshadowing',
-                'usage' => config('ai.cost.currency').' '.number_format($summary->trackedCost, 4)." · 异常 {$summary->untraceableUsageRecords}",
+                'usage' => $this->costCurrency().' '.number_format($summary->trackedCost, 4)." · 异常 {$summary->untraceableUsageRecords}",
                 'status' => $summary->statusLabel()." · 重复 {$summary->duplicateCanonicalCommits} · 跳章 {$summary->missingCanonicalChapters} · State 异常 {$summary->stateIntegrityIssues}",
             ])
             ->all();
@@ -351,7 +352,12 @@ class Dashboard extends BaseDashboard
             ->whereDate('created_at', today())
             ->sum('estimated_cost');
 
-        return config('ai.cost.currency').' '.number_format($cost, 4);
+        return $this->costCurrency().' '.number_format($cost, 4);
+    }
+
+    private function costCurrency(): string
+    {
+        return (string) data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD');
     }
 
     private function todayTokens(): int

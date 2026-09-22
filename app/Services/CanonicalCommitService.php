@@ -9,6 +9,7 @@ use App\Data\StatePatch;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\CharacterStatus;
 use App\Enums\EventType;
 use App\Enums\FactHardness;
 use App\Enums\FactSourceType;
@@ -19,6 +20,7 @@ use App\Enums\WorldEntityStatus;
 use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
+use App\Models\Character;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
@@ -74,10 +76,12 @@ class CanonicalCommitService
             }
 
             $planning = $this->validatePlanningAcceptance($chapter, $review, $events);
+            $characters = $this->persistCharacterCandidates($novel, $chapter, $planning['character_candidates']);
             $worldEntities = $this->persistWorldEntityCandidates($novel, $chapter, $planning['world_entity_candidates']);
+            $events = $this->resolveCharacterEvents($events, $planning['character_candidates'], $characters);
             $events = $this->resolveWorldEntityEvents($events, $planning['world_entity_candidates'], $worldEntities);
-            $worldOperations = collect($events)
-                ->flatMap(fn (StoryEventCandidate $event, int $index): array => $event->eventType === EventType::WorldEntityIntroduced
+            $introductionOperations = collect($events)
+                ->flatMap(fn (StoryEventCandidate $event, int $index): array => in_array($event->eventType, [EventType::CharacterIntroduced, EventType::WorldEntityIntroduced], true)
                     ? array_map(
                         fn (array $operation): array => [...$operation, 'source_event_index' => $index],
                         $this->storyEventApplier->operations($event),
@@ -86,7 +90,7 @@ class CanonicalCommitService
                 ->values()->all();
             $nextState = $this->statePatchBuilder->applyPatch(
                 $nextState,
-                new StatePatch($currentState->version, $worldOperations),
+                new StatePatch($currentState->version, $introductionOperations),
             );
             $persistedEvents = $this->persistEvents($novel, $chapter, $events, $nextVersion);
             $this->applyFactChanges($novel, $patchArtifact, $persistedEvents);
@@ -105,6 +109,12 @@ class CanonicalCommitService
                 'canonical_metadata' => [
                     'arc_beat_audits' => $planning['arc_beat_audits'],
                     'arc_completion_audits' => $planning['arc_completion_audits'],
+                    'character_introductions' => collect($characters)->map(
+                        fn ($character, string $candidateKey): array => [
+                            'candidate_key' => $candidateKey,
+                            'character_id' => $character->getKey(),
+                        ],
+                    )->values()->all(),
                     'world_entity_introductions' => collect($worldEntities)->map(
                         fn ($entity, string $candidateKey): array => [
                             'candidate_key' => $candidateKey,
@@ -321,28 +331,36 @@ class CanonicalCommitService
 
     /**
      * @param  array<int, StoryEventCandidate>  $events
-     * @return array{arc_beat_audits: array<int, array<string, mixed>>, arc_completion_audits: array<int, array<string, mixed>>, world_entity_candidates: array<string, array<string, mixed>>}
+     * @return array{arc_beat_audits: array<int, array<string, mixed>>, arc_completion_audits: array<int, array<string, mixed>>, character_candidates: array<string, array<string, mixed>>, world_entity_candidates: array<string, array<string, mixed>>}
      */
     private function validatePlanningAcceptance(Chapter $chapter, Review $review, array $events): array
     {
         $plan = $chapter->latestPlan;
         $reviewData = $review->artifact->data;
         $allArcAudits = collect(data_get($reviewData, 'arc_beat_audits', []));
+        $allCharacterAudits = collect(data_get($reviewData, 'character_candidate_audits', []));
         $allWorldAudits = collect(data_get($reviewData, 'world_entity_candidate_audits', []));
         $arcAudits = $allArcAudits
             ->where('status', 'fulfilled')->values();
         $worldAudits = $allWorldAudits
             ->where('status', 'introduced')->keyBy('candidate_key');
+        $characterAudits = $allCharacterAudits
+            ->where('status', 'introduced')->keyBy('candidate_key');
         $arcContracts = collect($plan?->arc_contributions ?? [])->keyBy(
             fn (array $item): string => ((int) ($item['arc_id'] ?? 0)).':'.($item['beat_key'] ?? ''),
         );
         $worldContracts = collect($plan?->world_entity_candidates ?? [])->keyBy('candidate_key');
+        $characterContracts = collect($plan?->character_candidates ?? [])->keyBy('candidate_key');
 
         if ($allArcAudits->count() !== $arcContracts->count()
+            || $allCharacterAudits->count() !== $characterContracts->count()
             || $allWorldAudits->count() !== $worldContracts->count()) {
-            throw ValidationException::withMessages(['review' => 'PASS Review 缺少完整的 Arc Beat 或 World Entity Candidate 验收记录。']);
+            throw ValidationException::withMessages(['review' => 'PASS Review 缺少完整的 Arc Beat、Character Candidate 或 World Entity Candidate 验收记录。']);
         }
 
+        if (data_get($reviewData, 'unapproved_characters', []) !== []) {
+            throw ValidationException::withMessages(['review' => '正文仍包含未获 Plan 批准的持续性人物，不能 Canonical Commit。']);
+        }
         if (data_get($reviewData, 'unapproved_world_entities', []) !== []) {
             throw ValidationException::withMessages(['review' => '正文仍包含未获 Plan 批准的重大世界实体，不能 Canonical Commit。']);
         }
@@ -372,6 +390,23 @@ class CanonicalCommitService
             }
         }
 
+        foreach ($characterAudits as $candidateKey => $audit) {
+            $matchingEvent = collect($events)->first(fn (StoryEventCandidate $event): bool => $event->eventType === EventType::CharacterIntroduced
+                && $event->subjectType === 'character'
+                && $event->subjectId === $candidateKey
+                && ($event->payload['candidate_key'] ?? null) === $candidateKey
+                && collect($event->evidence)->contains(fn (array $evidence): bool => ($evidence['quote'] ?? null) === ($audit['evidence'] ?? null))
+            );
+            if (! $characterContracts->has($candidateKey) || $matchingEvent === null) {
+                throw ValidationException::withMessages(['character_candidates' => '已验收的人物候选缺少匹配的 Plan 契约或 Event Candidate。']);
+            }
+        }
+
+        $unapprovedCharacterIntroduction = collect($events)->first(fn (StoryEventCandidate $event): bool => $event->eventType === EventType::CharacterIntroduced && ! $characterAudits->has((string) $event->subjectId));
+        if ($unapprovedCharacterIntroduction !== null) {
+            throw ValidationException::withMessages(['character_candidates' => '未通过 Review 的人物候选不能进入 Canonical Commit。']);
+        }
+
         $unapprovedIntroduction = collect($events)->first(fn (StoryEventCandidate $event): bool => $event->eventType === EventType::WorldEntityIntroduced && ! $worldAudits->has((string) $event->subjectId));
         if ($unapprovedIntroduction !== null) {
             throw ValidationException::withMessages(['world_entity_candidates' => '未通过 Review 的世界实体候选不能进入 Canonical Commit。']);
@@ -382,16 +417,105 @@ class CanonicalCommitService
         if ($unapprovedArcEvent !== null) {
             throw ValidationException::withMessages(['arc_contributions' => '未通过 Review 的 Story Arc Beat 不能计入 Canonical Progress。']);
         }
+        foreach ($arcAudits as $audit) {
+            $duplicateExists = $chapter->novel->storyEvents()
+                ->where('status', 'active')
+                ->where('event_type', EventType::StoryArcBeatCompleted->value)
+                ->where('subject_type', 'story_arc')
+                ->where('subject_id', (string) $audit['arc_id'])
+                ->get()
+                ->contains(fn (StoryEvent $event): bool => data_get($event->payload, 'beat_key') === $audit['beat_key']);
+            if ($duplicateExists) {
+                throw ValidationException::withMessages(['arc_contributions' => '该 Story Arc Beat 已存在 Active Completion Event，不能重复完成。']);
+            }
+        }
 
         return [
             'arc_beat_audits' => $arcAudits->all(),
             'arc_completion_audits' => collect(data_get($reviewData, 'arc_completion_audits', []))->where('status', 'fulfilled')->values()->all(),
+            'character_candidates' => $characterAudits->map(fn (array $audit, string $key): array => [
+                ...$characterContracts->get($key),
+                'evidence' => $audit['evidence'],
+                'scene_id' => $audit['scene_id'],
+            ])->all(),
             'world_entity_candidates' => $worldAudits->map(fn (array $audit, string $key): array => [
                 ...$worldContracts->get($key),
                 'evidence' => $audit['evidence'],
                 'scene_id' => $audit['scene_id'],
             ])->all(),
         ];
+    }
+
+    /** @param array<string, array<string, mixed>> $candidates @return array<string, Character> */
+    private function persistCharacterCandidates(Novel $novel, Chapter $chapter, array $candidates): array
+    {
+        $characters = [];
+        foreach ($candidates as $candidateKey => $candidate) {
+            $duplicate = $novel->characters()->whereRaw('LOWER(name) = ?', [mb_strtolower(trim($candidate['name']))])->exists();
+            if ($duplicate) {
+                throw ValidationException::withMessages(['character_candidates' => "人物候选「{$candidate['name']}」与现有正式人物重名，不能自动提交。"]);
+            }
+
+            $characters[$candidateKey] = $novel->characters()->firstOrCreate(
+                ['source_chapter_id' => $chapter->getKey(), 'source_candidate_key' => $candidateKey],
+                [
+                    'name' => $candidate['name'],
+                    'aliases' => [],
+                    'role' => $candidate['role'],
+                    'profile' => $candidate['profile'],
+                    'motivation' => $candidate['motivation'],
+                    'personality' => $candidate['personality'],
+                    'abilities' => $candidate['abilities'],
+                    'knowledge' => $candidate['knowledge'],
+                    'current_state' => [],
+                    'locked_fields' => [],
+                    'status' => CharacterStatus::Active,
+                ],
+            );
+        }
+
+        return $characters;
+    }
+
+    /** @param array<int, StoryEventCandidate> $events @param array<string, array<string, mixed>> $candidates @param array<string, Character> $characters @return array<int, StoryEventCandidate> */
+    private function resolveCharacterEvents(array $events, array $candidates, array $characters): array
+    {
+        return array_map(function (StoryEventCandidate $event) use ($candidates, $characters): StoryEventCandidate {
+            if ($event->eventType !== EventType::CharacterIntroduced) {
+                return $event;
+            }
+
+            $candidateKey = (string) $event->subjectId;
+            $candidate = $candidates[$candidateKey] ?? null;
+            $character = $characters[$candidateKey] ?? null;
+            if ($candidate === null || $character === null) {
+                throw ValidationException::withMessages(['character_candidates' => '人物候选解析失败。']);
+            }
+
+            return new StoryEventCandidate(
+                eventType: $event->eventType,
+                subjectType: 'character',
+                subjectId: (string) $character->getKey(),
+                payload: [
+                    ...$event->payload,
+                    'candidate_key' => $candidateKey,
+                    'state' => [
+                        'character_id' => $character->getKey(),
+                        'name' => $candidate['name'],
+                        'role' => $candidate['role'],
+                        'profile' => $candidate['profile'],
+                        'motivation' => $candidate['motivation'],
+                        'personality' => $candidate['personality'],
+                        'abilities' => $candidate['abilities'],
+                        'knowledge' => $candidate['knowledge'],
+                        'status' => CharacterStatus::Active->value,
+                    ],
+                ],
+                evidence: $event->evidence,
+                storyTime: $event->storyTime,
+                confidence: $event->confidence,
+            );
+        }, $events);
     }
 
     /** @param array<string, array<string, mixed>> $candidates @return array<string, \App\Models\WorldEntity> */

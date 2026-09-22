@@ -204,7 +204,7 @@ class MemoryUpdater
     private function memoryType(StoryEvent $event): MemoryType
     {
         return match ($event->event_type) {
-            EventType::CharacterStatusChanged, EventType::CharacterInjured, EventType::CharacterRecovered,
+            EventType::CharacterIntroduced, EventType::CharacterStatusChanged, EventType::CharacterInjured, EventType::CharacterRecovered,
             EventType::CharacterGoalChanged, EventType::CharacterAbilityAcquired, EventType::CharacterAbilityChanged,
             EventType::CharacterLearned, EventType::CharacterForgot => MemoryType::CharacterMilestone,
             EventType::RelationshipChanged, EventType::PromiseMade, EventType::PromiseBroken,
@@ -229,7 +229,7 @@ class MemoryUpdater
     {
         return match ($event->event_type) {
             EventType::ForeshadowingPaidOff, EventType::ForeshadowingDue,
-            EventType::WorldRuleRevealed, EventType::WorldRuleChanged, EventType::WorldEntityIntroduced,
+            EventType::CharacterIntroduced, EventType::WorldRuleRevealed, EventType::WorldRuleChanged, EventType::WorldEntityIntroduced,
             EventType::StoryArcBeatCompleted => 0.900,
             EventType::CharacterStatusChanged, EventType::CharacterAbilityAcquired,
             EventType::CharacterLearned, EventType::RelationshipChanged,

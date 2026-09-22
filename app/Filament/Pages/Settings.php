@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\AI\AiSettingsResolver;
+use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
@@ -14,10 +15,17 @@ use App\Filament\Actions\EmergencyStopAction;
 use App\Services\SystemHealthService;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Schemas\Components\Actions;
+use Filament\Schemas\Components\EmbeddedSchema;
+use Filament\Schemas\Components\Form;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Text;
@@ -36,6 +44,14 @@ class Settings extends Page
     /** @var array{success: bool, model: string, latency_ms: int|null, message: string}|null */
     public ?array $aiConnectionResult = null;
 
+    /** @var array<string, mixed> */
+    public array $data = [];
+
+    public function mount(): void
+    {
+        $this->form->fill(app(AiSettingsService::class)->editableSettings());
+    }
+
     public static function getNavigationItemActiveRoutePattern(): string|array
     {
         return [static::getRouteName(), AiDebugTest::getRouteName()];
@@ -43,25 +59,42 @@ class Settings extends Page
 
     protected function getHeaderActions(): array
     {
+        $settings = app(AiSettingsService::class);
+
         return [
             EmergencyStopAction::make(),
             Action::make('testAiConnection')
                 ->label('Test Connection')
                 ->icon('heroicon-o-signal')
-                ->action(fn (AiProvider $provider) => $this->testAiConnection($provider)),
+                ->action(function (AiProvider $provider): void {
+                    $resolved = app(AiSettingsResolver::class)->resolve(AiStage::Planner);
+                    $this->testAiConnection($provider, $resolved->provider, $resolved->model);
+                }),
+            ...collect($settings->registeredProviders())->map(function (string $provider): Action {
+                return Action::make('test'.ucfirst($provider).'Connection')
+                    ->label('测试 '.$this->providerLabel($provider))
+                    ->icon('heroicon-o-signal')
+                    ->schema([
+                        TextInput::make('model')
+                            ->label($this->providerLabel($provider).' Model')
+                            ->default(fn (): ?string => $this->connectionTestModel($provider))
+                            ->required(),
+                    ])
+                    ->action(fn (array $data, AiProvider $router) => $this->testAiConnection($router, $provider, trim((string) $data['model'])));
+            })->all(),
         ];
     }
 
     public function content(Schema $schema): Schema
     {
         return $schema->components([
-            Text::make('此处仅展示配置来源。各设置项将由对应任务开放编辑。')
+            Text::make('AI 运行配置在此维护；API Key 使用 Laravel 应用密钥加密保存，页面不会回显原值。')
                 ->color('gray'),
             Grid::make([
                 'default' => 1,
                 'xl' => 2,
             ])->schema([
-                $this->aiSection(),
+                $this->aiSection()->columnSpanFull(),
                 $this->placeholderSection(
                     heading: '生成',
                     description: '生成默认值、重试行为与章节工作流策略。',
@@ -86,10 +119,89 @@ class Settings extends Page
         ]);
     }
 
+    public function form(Schema $schema): Schema
+    {
+        $settings = app(AiSettingsService::class);
+        $providerOptions = collect($settings->registeredProviders())
+            ->mapWithKeys(fn (string $provider): array => [$provider => $this->providerLabel($provider)])
+            ->all();
+
+        return $schema
+            ->statePath('data')
+            ->components([
+                Hidden::make('schema_version')
+                    ->default(AiSettingsService::SCHEMA_VERSION),
+                Select::make('default_provider')
+                    ->label('默认文本生成 Provider')
+                    ->options($providerOptions)
+                    ->required()
+                    ->native(false),
+                ...collect($settings->registeredProviders())
+                    ->flatMap(fn (string $provider): array => [
+                        Toggle::make("providers.{$provider}.enabled")
+                            ->label($this->providerLabel($provider).' 已启用')
+                            ->helperText('只有已注册、已启用且已经配置 API Key 的 Provider 才能保存为生效配置。'),
+                        TextInput::make("providers.{$provider}.base_url")
+                            ->label($this->providerLabel($provider).' Base URL')
+                            ->url()
+                            ->required()
+                            ->maxLength(AiSettingsService::URL_MAX_LENGTH),
+                        TextInput::make("providers.{$provider}.api_key")
+                            ->label($this->providerLabel($provider).' API Key')
+                            ->password()
+                            ->revealable()
+                            ->autocomplete(false)
+                            ->helperText(fn (): string => $settings->isCredentialConfigured($provider)
+                                ? '已配置。留空保留现有密钥；填写新值会替换并加密保存。'
+                                : '未配置。保存后使用 Laravel 应用密钥加密存入 system_settings.ai。'),
+                        Toggle::make("providers.{$provider}.clear_api_key")
+                            ->label('清除 '.$this->providerLabel($provider).' API Key')
+                            ->helperText('启用后保存会删除数据库密钥；环境变量仍可作为兼容回退。'),
+                        TextInput::make("providers.{$provider}.connect_timeout")
+                            ->label($this->providerLabel($provider).' 连接超时（秒）')
+                            ->numeric()
+                            ->integer()
+                            ->minValue(AiSettingsService::MIN_TIMEOUT_SECONDS)
+                            ->maxValue(AiSettingsService::MAX_CONNECT_TIMEOUT_SECONDS)
+                            ->required(),
+                        TextInput::make("providers.{$provider}.timeout")
+                            ->label($this->providerLabel($provider).' 请求超时（秒）')
+                            ->numeric()
+                            ->integer()
+                            ->minValue(AiSettingsService::MIN_TIMEOUT_SECONDS)
+                            ->maxValue(AiSettingsService::MAX_REQUEST_TIMEOUT_SECONDS)
+                            ->required(),
+                    ])
+                    ->all(),
+                ...collect($settings->stages())
+                    ->flatMap(fn (AiStage $stage): array => [
+                        Select::make("stages.{$stage->value}.provider")
+                            ->label($stage->getLabel().' Provider')
+                            ->options($providerOptions)
+                            ->required()
+                            ->native(false),
+                        TextInput::make("stages.{$stage->value}.model")
+                            ->label($stage->getLabel().' Model')
+                            ->required()
+                            ->maxLength(AiSettingsService::MODEL_MAX_LENGTH),
+                    ])
+                    ->all(),
+                TextInput::make('cost.currency')->label('成本货币代码')->required()->length(3),
+                TextInput::make('cost.input_per_million')->label('输入 Token 单价／百万')->numeric()->minValue(0)->required(),
+                TextInput::make('cost.cached_input_per_million')->label('缓存输入 Token 单价／百万')->numeric()->minValue(0)->required(),
+                TextInput::make('cost.output_per_million')->label('输出 Token 单价／百万')->numeric()->minValue(0)->required(),
+                TextInput::make('budget.daily_hard_limit')->label('每日成本硬限制')->numeric()->minValue(0)->nullable(),
+                TextInput::make('budget.novel_total_limit')->label('单小说总成本限制')->numeric()->minValue(0)->nullable(),
+                TextInput::make('budget.chapter_max_cost')->label('单章成本限制')->numeric()->minValue(0)->nullable(),
+            ]);
+    }
+
     private function aiSection(): Section
     {
+        $settings = app(AiSettingsService::class);
+
         return Section::make('AI')
-            ->description('当前 Provider 配置与连接检查。凭据仅从环境配置读取。')
+            ->description('Provider、Stage Model 与 Timeout。保存只影响之后创建的生成任务。')
             ->icon('heroicon-o-cpu-chip')
             ->afterHeader([
                 Action::make('openAiDebug')
@@ -98,44 +210,34 @@ class Settings extends Page
                     ->color('gray')
                     ->url(AiDebugTest::getUrl()),
             ])
-            ->columns(['default' => 1, 'md' => 3])
             ->schema([
-                Text::make('来源：.env 与 config/services.php；AI 运行配置：config/ai.php')
+                Text::make(fn (): string => '当前生效来源：'.match ($settings->current()['source']) {
+                    'database' => 'system_settings.ai',
+                    'environment_invalid_database' => 'config/ai.php（数据库记录无效）',
+                    default => 'config/ai.php',
+                })
                     ->icon('heroicon-o-information-circle')
-                    ->color('gray')
-                    ->columnSpanFull(),
-                TextEntry::make('ai_provider')
-                    ->label('Provider')
-                    ->state(fn (): string => (string) config('ai.provider'))
-                    ->badge(),
-                TextEntry::make('ai_model')
-                    ->label('Model')
-                    ->state(fn (): string => (string) config('ai.model')),
-                TextEntry::make('ai_connection_status')
-                    ->label('Connection Status')
-                    ->state(fn (): string => filled(config('ai.providers.openai.api_key')) ? '已配置' : '未配置')
-                    ->badge()
-                    ->color(fn (): string => filled(config('ai.providers.openai.api_key')) ? 'success' : 'gray'),
-                RepeatableEntry::make('ai_stage_models')
-                    ->label('Stage Models')
-                    ->state(fn (): array => collect(AiStage::cases())
-                        ->map(function (AiStage $stage): array {
-                            $resolved = app(AiSettingsResolver::class)->resolve($stage);
-
-                            return [
-                                'stage' => $stage->getLabel(),
-                                'model' => $resolved->model,
-                                'source' => 'Global Default',
-                            ];
-                        })
-                        ->all())
-                    ->columns(['default' => 1, 'md' => 3])
-                    ->schema([
-                        TextEntry::make('stage')->label('Stage')->badge(),
-                        TextEntry::make('model')->label('Resolved Model'),
-                        TextEntry::make('source')->label('Source')->color('gray'),
-                    ])
-                    ->columnSpanFull(),
+                    ->color('gray'),
+                Grid::make(['default' => 1, 'md' => 2])
+                    ->schema(collect($settings->registeredProviders())
+                        ->map(fn (string $provider): TextEntry => TextEntry::make("{$provider}_credential_status")
+                            ->label($this->providerLabel($provider).' API Key')
+                            ->state(fn (): string => $settings->isCredentialConfigured($provider) ? '已配置' : '未配置')
+                            ->badge()
+                            ->color(fn (): string => $settings->isCredentialConfigured($provider) ? 'success' : 'gray'))
+                        ->all()),
+                Form::make([EmbeddedSchema::make('form')])
+                    ->id('ai-settings-form')
+                    ->livewireSubmitHandler('saveAiSettings')
+                    ->columns(['default' => 1, 'md' => 2])
+                    ->footer([
+                        Actions::make([
+                            Action::make('saveAiSettings')
+                                ->label('保存 AI 配置')
+                                ->icon('heroicon-o-check')
+                                ->submit('saveAiSettings'),
+                        ]),
+                    ]),
                 RepeatableEntry::make('prompt_versions')
                     ->label('Prompt Versions')
                     ->state(fn (): array => collect(app(PromptVersionResolver::class)->all())
@@ -151,42 +253,53 @@ class Settings extends Page
                         TextEntry::make('stage')->label('Stage')->badge(),
                         TextEntry::make('version')->label('Current Version')->copyable(),
                         TextEntry::make('source')->label('Source')->color('gray'),
-                    ])
-                    ->columnSpanFull(),
-                TextEntry::make('ai_test_success')
-                    ->label('Test Result')
-                    ->state(fn (): ?string => $this->aiConnectionResult === null
-                        ? null
-                        : ($this->aiConnectionResult['success'] ? 'Success' : 'Failed'))
-                    ->badge()
-                    ->color(fn (): string => ($this->aiConnectionResult['success'] ?? false) ? 'success' : 'danger')
-                    ->visible(fn (): bool => $this->aiConnectionResult !== null),
-                TextEntry::make('ai_test_model')
-                    ->label('Response Model')
-                    ->state(fn (): ?string => $this->aiConnectionResult['model'] ?? null)
-                    ->visible(fn (): bool => $this->aiConnectionResult !== null),
-                TextEntry::make('ai_test_latency')
-                    ->label('Latency')
-                    ->state(fn (): ?string => isset($this->aiConnectionResult['latency_ms'])
-                        ? $this->aiConnectionResult['latency_ms'].' ms'
-                        : null)
-                    ->placeholder('—')
-                    ->visible(fn (): bool => $this->aiConnectionResult !== null),
-                TextEntry::make('ai_test_message')
-                    ->label('说明')
-                    ->state(fn (): ?string => $this->aiConnectionResult['message'] ?? null)
-                    ->columnSpanFull()
-                    ->visible(fn (): bool => $this->aiConnectionResult !== null),
+                    ]),
+                Grid::make(['default' => 1, 'md' => 3])
+                    ->schema([
+                        TextEntry::make('ai_test_success')
+                            ->label('Test Result')
+                            ->state(fn (): ?string => $this->aiConnectionResult === null
+                                ? null
+                                : ($this->aiConnectionResult['success'] ? 'Success' : 'Failed'))
+                            ->badge()
+                            ->color(fn (): string => ($this->aiConnectionResult['success'] ?? false) ? 'success' : 'danger')
+                            ->visible(fn (): bool => $this->aiConnectionResult !== null),
+                        TextEntry::make('ai_test_model')
+                            ->label('Response Model')
+                            ->state(fn (): ?string => $this->aiConnectionResult['model'] ?? null)
+                            ->visible(fn (): bool => $this->aiConnectionResult !== null),
+                        TextEntry::make('ai_test_latency')
+                            ->label('Latency')
+                            ->state(fn (): ?string => isset($this->aiConnectionResult['latency_ms'])
+                                ? $this->aiConnectionResult['latency_ms'].' ms'
+                                : null)
+                            ->placeholder('—')
+                            ->visible(fn (): bool => $this->aiConnectionResult !== null),
+                        TextEntry::make('ai_test_message')
+                            ->label('说明')
+                            ->state(fn (): ?string => $this->aiConnectionResult['message'] ?? null)
+                            ->visible(fn (): bool => $this->aiConnectionResult !== null),
+                    ]),
             ]);
     }
 
-    private function testAiConnection(AiProvider $provider): void
+    public function saveAiSettings(AiSettingsService $settings): void
     {
-        $model = app(AiSettingsResolver::class)->modelFor(AiStage::Planner);
+        $result = $settings->save($this->form->getState(), auth()->id());
+        $this->form->fill($result['settings']);
 
+        Notification::make()
+            ->title($result['changed'] ? 'AI 配置已保存' : 'AI 配置没有变化')
+            ->success()
+            ->send();
+    }
+
+    private function testAiConnection(AiProvider $provider, string $providerName, string $model): void
+    {
         try {
             $response = $provider->generate(new AiRequest(
                 model: $model,
+                provider: $providerName,
                 systemPrompt: 'You are a connection test. Reply briefly.',
                 prompt: 'Reply with OK.',
                 temperature: 0,
@@ -222,6 +335,17 @@ class Settings extends Page
         }
     }
 
+    private function connectionTestModel(string $provider): ?string
+    {
+        foreach ((array) data_get(app(AiSettingsService::class)->settings(), 'stages', []) as $stage) {
+            if (is_array($stage) && ($stage['provider'] ?? null) === $provider && filled($stage['model'] ?? null)) {
+                return (string) $stage['model'];
+            }
+        }
+
+        return null;
+    }
+
     private function budgetSection(): Section
     {
         return Section::make('预算')
@@ -241,11 +365,11 @@ class Settings extends Page
                     ->color(fn (): string => app(BudgetService::class)->dailyUsage()->reached() ? 'danger' : 'gray'),
                 TextEntry::make('novel_budget_default')
                     ->label('Novel Total Default')
-                    ->state(fn (): string => $this->formatLimit(config('ai.budget.novel_total_limit'))),
+                    ->state(fn (): string => $this->formatLimit(data_get(app(AiSettingsService::class)->budgetSettings(), 'novel_total_limit'))),
                 TextEntry::make('chapter_budget_default')
                     ->label('Chapter Max Default')
-                    ->state(fn (): string => $this->formatLimit(config('ai.budget.chapter_max_cost'))),
-                Text::make('来源：config/ai.php 与 Novel settings。空值表示无限制。')
+                    ->state(fn (): string => $this->formatLimit(data_get(app(AiSettingsService::class)->budgetSettings(), 'chapter_max_cost'))),
+                Text::make('来源：system_settings.ai 与 Novel settings；数据库未配置时回退 config。空值表示无限制。')
                     ->icon('heroicon-o-information-circle')
                     ->color('gray')
                     ->columnSpanFull(),
@@ -254,7 +378,7 @@ class Settings extends Page
 
     private function formatBudget(BudgetUsage $usage): string
     {
-        return config('ai.cost.currency').' '.number_format($usage->used, 4).' / '.$this->formatLimit($usage->limit, false);
+        return data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format($usage->used, 4).' / '.$this->formatLimit($usage->limit, false);
     }
 
     private function systemHealthSection(): Section
@@ -307,7 +431,12 @@ class Settings extends Page
 
         $value = number_format((float) $limit, 4);
 
-        return $withCurrency ? config('ai.cost.currency').' '.$value : $value;
+        return $withCurrency ? data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.$value : $value;
+    }
+
+    private function providerLabel(string $provider): string
+    {
+        return $provider === 'openai' ? 'OpenAI' : ucfirst($provider);
     }
 
     private function placeholderSection(

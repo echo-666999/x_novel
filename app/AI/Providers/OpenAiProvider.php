@@ -2,6 +2,7 @@
 
 namespace App\AI\Providers;
 
+use App\AI\AiSettingsService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Data\AiRequest;
@@ -19,19 +20,42 @@ use JsonException;
 
 class OpenAiProvider implements AiProvider, EmbeddingProvider
 {
+    private static bool $legacyEnvironmentWarningLogged = false;
+
+    private const PROVIDER = 'openai';
+
+    private const DIAGNOSTIC_METADATA_KEYS = [
+        'generation_run_id',
+        'novel_id',
+        'chapter_id',
+        'scene_id',
+        'stage',
+    ];
+
+    private const SENSITIVE_LOG_KEYS = [
+        'authorization',
+        'proxy_authorization',
+        'api_key',
+        'openai_api_key',
+        'deepseek_api_key',
+    ];
+
+    public function __construct(private readonly AiSettingsService $settingsService) {}
+
     public function generate(AiRequest $request): AiResponse
     {
         $startedAt = hrtime(true);
         $requestLogId = (string) ($request->metadata['ai_request_log_id'] ?? Str::uuid());
         $payload = $this->payload($request);
 
-        Log::debug('AI Provider 完整请求。', [
-            'ai_request_log_id' => $requestLogId,
-            'endpoint' => '/chat/completions',
-            'prompt_version' => $request->promptVersion,
-            'metadata' => $request->metadata,
-            'payload' => $payload,
-        ]);
+        $requestLogContext = $this->diagnosticLogContext($request, $requestLogId);
+
+        if ((bool) config('ai.logging.prompts', false)) {
+            $requestLogContext['metadata'] = $this->sanitizeForLogging($request->metadata);
+            $requestLogContext['payload'] = $this->sanitizeForLogging($payload);
+        }
+
+        Log::debug('AI Provider 请求。', $requestLogContext);
 
         try {
             $response = $this->client()->post('/chat/completions', $payload);
@@ -40,11 +64,8 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                 || str_contains(strtolower($exception->getMessage()), 'timeout');
 
             Log::warning('AI Provider 请求未收到响应。', [
-                'ai_request_log_id' => $requestLogId,
-                'endpoint' => '/chat/completions',
-                'prompt_version' => $request->promptVersion,
-                'metadata' => $request->metadata,
-                'exception' => $exception->getMessage(),
+                ...$this->diagnosticLogContext($request, $requestLogId),
+                'exception' => $this->sanitizeForLogging($exception->getMessage()),
             ]);
 
             throw new AiProviderException(
@@ -58,14 +79,15 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $latencyMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
 
         Log::debug('AI Provider 完整响应。', [
-            'ai_request_log_id' => $requestLogId,
-            'endpoint' => '/chat/completions',
-            'prompt_version' => $request->promptVersion,
-            'metadata' => $request->metadata,
+            ...$this->diagnosticLogContext($request, $requestLogId),
+            'model' => $response->json('model') ?? $request->model,
             'status' => $response->status(),
             'latency_ms' => $latencyMs,
-            'provider_request_id' => $response->header('x-request-id') ?? $response->json('id'),
-            'body' => $response->body(),
+            'provider_request_id' => $response->header('x-request-id') ?: $response->json('id'),
+            'input_tokens' => (int) $response->json('usage.prompt_tokens', 0),
+            'output_tokens' => (int) $response->json('usage.completion_tokens', 0),
+            'cached_tokens' => (int) $response->json('usage.prompt_tokens_details.cached_tokens', 0),
+            'body' => $this->sanitizedResponseBody($response),
         ]);
 
         if ($response->failed()) {
@@ -118,7 +140,9 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
 
     private function client(): PendingRequest
     {
-        $apiKey = (string) config('ai.providers.openai.api_key');
+        $this->logLegacyEnvironmentWarning();
+        $providerSettings = $this->settingsService->providerSettings(self::PROVIDER);
+        $apiKey = $this->settingsService->apiKey(self::PROVIDER);
 
         if ($apiKey === '') {
             throw new AiProviderException(
@@ -128,12 +152,30 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             );
         }
 
-        return Http::baseUrl(rtrim((string) config('ai.providers.openai.base_url'), '/'))
+        return Http::baseUrl(rtrim((string) ($providerSettings['base_url'] ?? config('ai.providers.openai.base_url')), '/'))
             ->withToken($apiKey)
             ->acceptJson()
             ->asJson()
-            ->connectTimeout((int) config('ai.providers.openai.connect_timeout', 10))
-            ->timeout((int) config('ai.providers.openai.timeout', 60));
+            ->connectTimeout((int) ($providerSettings['connect_timeout'] ?? config('ai.providers.openai.connect_timeout', 10)))
+            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.openai.timeout', 60)));
+    }
+
+    private function logLegacyEnvironmentWarning(): void
+    {
+        if (self::$legacyEnvironmentWarningLogged) {
+            return;
+        }
+
+        $legacy = array_values(array_filter([
+            config('ai.providers.openai.using_legacy_api_key') ? 'AI_API_KEY' : null,
+            config('ai.providers.openai.using_legacy_base_url') ? 'AI_BASE_URL' : null,
+        ]));
+
+        if ($legacy !== []) {
+            Log::warning('Deprecated OpenAI environment variables are in use.', ['variables' => $legacy]);
+        }
+
+        self::$legacyEnvironmentWarningLogged = true;
     }
 
     /** @return array<string, mixed> */
@@ -161,6 +203,67 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         }
 
         return $payload;
+    }
+
+    /** @return array<string, mixed> */
+    private function diagnosticLogContext(AiRequest $request, string $requestLogId): array
+    {
+        $context = [
+            'ai_request_log_id' => $requestLogId,
+            'provider' => self::PROVIDER,
+            'model' => $request->model,
+            'endpoint' => '/chat/completions',
+            'prompt_version' => $request->promptVersion,
+        ];
+
+        foreach (self::DIAGNOSTIC_METADATA_KEYS as $key) {
+            if (array_key_exists($key, $request->metadata)) {
+                $context[$key] = $request->metadata[$key];
+            }
+        }
+
+        return $context;
+    }
+
+    private function sanitizedResponseBody(Response $response): string
+    {
+        $decoded = $response->json();
+
+        if (is_array($decoded)) {
+            return json_encode(
+                $this->sanitizeForLogging($decoded),
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            );
+        }
+
+        return (string) $this->sanitizeForLogging($response->body());
+    }
+
+    private function sanitizeForLogging(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            $sanitized = [];
+
+            foreach ($value as $key => $item) {
+                $normalizedKey = is_string($key)
+                    ? strtolower(str_replace(['-', '.', ' '], '_', $key))
+                    : null;
+
+                $sanitized[$key] = $normalizedKey !== null && in_array($normalizedKey, self::SENSITIVE_LOG_KEYS, true)
+                    ? '[REDACTED]'
+                    : $this->sanitizeForLogging($item);
+            }
+
+            return $sanitized;
+        }
+
+        if (! is_string($value)) {
+            return $value;
+        }
+
+        $apiKey = $this->settingsService->apiKey(self::PROVIDER);
+
+        return $apiKey === '' ? $value : str_replace($apiKey, '[REDACTED]', $value);
     }
 
     private function mapResponse(Response $response, int $latencyMs): AiResponse

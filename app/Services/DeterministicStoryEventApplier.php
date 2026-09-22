@@ -23,6 +23,7 @@ class DeterministicStoryEventApplier implements StoryEventApplier
         }
 
         return match ($event->eventType) {
+            EventType::CharacterIntroduced => $this->set("characters.{$id}", $payload['state'] ?? $payload),
             EventType::CharacterMoved => $this->set("characters.{$id}.location", $payload['to'] ?? null),
             EventType::CharacterStatusChanged => $this->set("characters.{$id}.status", $payload['status'] ?? $payload['to'] ?? null),
             EventType::CharacterInjured => $this->set("characters.{$id}.health", [

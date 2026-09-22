@@ -23,6 +23,7 @@ final class AiDebugService
 
         $response = $this->provider->generate(new AiRequest(
             model: $settings->model,
+            provider: $settings->provider,
             prompt: $input,
             promptVersion: $promptVersion,
             metadata: [

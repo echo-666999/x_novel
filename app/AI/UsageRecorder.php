@@ -22,7 +22,7 @@ class UsageRecorder
             'generation_run_id' => is_numeric($generationRunId) ? (int) $generationRunId : null,
             'novel_id' => is_numeric($novelId) ? (int) $novelId : null,
             'chapter_id' => is_numeric($chapterId) ? (int) $chapterId : null,
-            'provider' => (string) config('ai.provider'),
+            'provider' => $request->provider ?? throw new \LogicException('AI request provider must be resolved before usage is recorded.'),
             'model' => $response->model,
             'input_tokens' => $response->inputTokens,
             'output_tokens' => $response->outputTokens,
@@ -38,16 +38,13 @@ class UsageRecorder
         $generationRunId = $request->metadata['generation_run_id'] ?? null;
         $novelId = $request->metadata['novel_id'] ?? null;
         $chapterId = $request->metadata['chapter_id'] ?? null;
-        $estimatedCost = round(
-            $response->inputTokens * (float) config('ai.cost.input_per_million', 0) / 1_000_000,
-            6,
-        );
+        $estimatedCost = $this->costCalculator->estimateInputOnly($response->inputTokens);
 
         return UsageRecord::query()->create([
             'generation_run_id' => is_numeric($generationRunId) ? (int) $generationRunId : null,
             'novel_id' => is_numeric($novelId) ? (int) $novelId : null,
             'chapter_id' => is_numeric($chapterId) ? (int) $chapterId : null,
-            'provider' => (string) config('ai.provider'),
+            'provider' => (string) config('ai.embedding.provider', 'openai'),
             'model' => $response->model,
             'input_tokens' => $response->inputTokens,
             'output_tokens' => 0,

@@ -23,6 +23,7 @@ use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
@@ -163,7 +164,8 @@ function addPlanningClosureToCanonicalFixture(array $fixture): StoryArc
             'target_scene_sequence' => 1,
         ]],
     ]);
-    $events = data_get($fixture['candidate']->data, 'events', []);
+    $candidateData = $fixture['candidate']->fresh()->data;
+    $events = data_get($candidateData, 'events', []);
     $evidence = [[
         'artifact_id' => $fixture['draft']->getKey(),
         'scene_id' => null,
@@ -190,10 +192,11 @@ function addPlanningClosureToCanonicalFixture(array $fixture): StoryArc
         'confidence' => 0.98,
     ];
     DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
-        'data' => json_encode([...$fixture['candidate']->data, 'events' => $events]),
+        'data' => json_encode([...$candidateData, 'events' => $events]),
     ]);
+    $currentReviewData = $fixture['review']->artifact()->firstOrFail()->data;
     $reviewData = [
-        ...$fixture['review']->artifact->data,
+        ...$currentReviewData,
         'arc_beat_audits' => [[
             'arc_id' => $arc->getKey(),
             'beat_key' => $beatKey,
@@ -221,6 +224,59 @@ function addPlanningClosureToCanonicalFixture(array $fixture): StoryArc
     return $arc;
 }
 
+/** @param array<string, mixed> $fixture */
+function addCharacterIntroductionToCanonicalFixture(array $fixture): void
+{
+    $fixture['chapter']->latestPlan->update(['character_candidates' => [[
+        'candidate_key' => 'character-shen-lan',
+        'name' => '沈澜',
+        'role' => '向导',
+        'motivation' => '查清灯塔失踪事件。',
+        'profile' => ['age' => 28],
+        'personality' => ['trait' => '谨慎'],
+        'abilities' => ['skill' => '辨认星图'],
+        'knowledge' => ['route' => '灯塔旧路'],
+        'deduplication_basis' => '现有正式人物中没有同名或同身份人物。',
+        'possible_duplicate_character_ids' => [],
+        'introduction_reason' => '带领主角进入灯塔。',
+        'target_scene_sequence' => 1,
+    ]]]);
+    $candidateData = $fixture['candidate']->fresh()->data;
+    $events = data_get($candidateData, 'events', []);
+    $events[] = [
+        'event_type' => EventType::CharacterIntroduced->value,
+        'subject_type' => 'character',
+        'subject_id' => 'character-shen-lan',
+        'payload' => ['candidate_key' => 'character-shen-lan'],
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => null,
+            'quote' => '沈澜走进灯塔',
+            'start_offset' => 0,
+            'end_offset' => 7,
+        ]],
+        'story_time' => '第一日夜晚',
+        'confidence' => 0.98,
+    ];
+    DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
+        'data' => json_encode([...$candidateData, 'events' => $events]),
+    ]);
+    $currentReviewData = $fixture['review']->artifact()->firstOrFail()->data;
+    $reviewData = [
+        ...$currentReviewData,
+        'character_candidate_audits' => [[
+            'candidate_key' => 'character-shen-lan',
+            'status' => 'introduced',
+            'evidence' => '沈澜走进灯塔',
+            'scene_id' => null,
+        ]],
+        'unapproved_characters' => [],
+    ];
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($reviewData),
+    ]);
+}
+
 test('canonical commit atomically persists events state and pointers', function () {
     $fixture = canonicalCommitFixture();
 
@@ -240,27 +296,98 @@ test('canonical commit atomically persists events state and pointers', function 
 test('canonical commit closes accepted arc beats and world entity candidates exactly once and rollback reverses them', function () {
     $fixture = canonicalCommitFixture();
     $arc = addPlanningClosureToCanonicalFixture($fixture);
+    addCharacterIntroductionToCanonicalFixture($fixture);
     $service = app(CanonicalCommitService::class);
 
     $version = $service->commit($fixture['data']);
     $service->commit($fixture['data']);
     $entity = WorldEntity::query()->where('novel_id', $fixture['novel']->getKey())->sole();
+    $character = Character::query()->where('novel_id', $fixture['novel']->getKey())->sole();
 
     expect($arc->fresh()->progress)->toBe(1.0)
         ->and($arc->fresh()->status)->toBe(StoryArcStatus::Completed)
         ->and($entity->source_chapter_id)->toBe($fixture['chapter']->getKey())
         ->and($entity->source_candidate_key)->toBe('wec-hidden-star-map')
+        ->and($character->source_chapter_id)->toBe($fixture['chapter']->getKey())
+        ->and($character->source_candidate_key)->toBe('character-shen-lan')
+        ->and($character->name)->toBe('沈澜')
+        ->and(data_get($version->state, 'characters.'.$character->getKey().'.name'))->toBe('沈澜')
         ->and(data_get($version->state, 'world.'.$entity->getKey().'.name'))->toBe('隐藏星图')
+        ->and(StoryEvent::query()->where('event_type', EventType::CharacterIntroduced)->value('subject_id'))->toBe((string) $character->getKey())
         ->and(StoryEvent::query()->where('event_type', EventType::StoryArcBeatCompleted)->count())->toBe(1)
         ->and(StoryEvent::query()->where('event_type', EventType::WorldEntityIntroduced)->value('subject_id'))->toBe((string) $entity->getKey())
+        ->and(Character::query()->count())->toBe(1)
         ->and(WorldEntity::query()->count())->toBe(1);
 
     app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '验证规划和世界资料回滚');
 
     expect($arc->fresh()->progress)->toBe(0.0)
         ->and($arc->fresh()->status)->toBe(StoryArcStatus::Active)
+        ->and(Character::query()->count())->toBe(0)
         ->and(WorldEntity::query()->count())->toBe(0);
 });
+
+test('canonical commit rejects an unconfirmed character candidate without creating it', function () {
+    $fixture = canonicalCommitFixture();
+    addCharacterIntroductionToCanonicalFixture($fixture);
+    $reviewData = $fixture['review']->artifact->fresh()->data;
+    $reviewData['character_candidate_audits'][0]['status'] = 'missing';
+    $reviewData['character_candidate_audits'][0]['evidence'] = null;
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($reviewData),
+    ]);
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
+        ->toThrow(ValidationException::class, '未通过 Review');
+
+    expect(Character::query()->count())->toBe(0)
+        ->and(StoryEvent::query()->count())->toBe(0)
+        ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull();
+});
+
+test('beat completion requires matching plan review event and evidence', function (string $missingLink) {
+    $fixture = canonicalCommitFixture();
+    addPlanningClosureToCanonicalFixture($fixture);
+
+    if ($missingLink === 'plan') {
+        $contributions = $fixture['chapter']->latestPlan->arc_contributions;
+        $contributions[0]['beat_key'] = 'another-beat';
+        $fixture['chapter']->latestPlan->update(['arc_contributions' => $contributions]);
+    }
+
+    if ($missingLink === 'review') {
+        $reviewData = $fixture['review']->artifact()->firstOrFail()->data;
+        $reviewData['arc_beat_audits'] = [];
+        DB::table('generation_artifacts')->where('id', $fixture['review']->artifact_id)->update([
+            'data' => json_encode($reviewData),
+        ]);
+    }
+
+    if ($missingLink === 'event') {
+        $candidateData = $fixture['candidate']->fresh()->data;
+        $candidateData['events'] = collect($candidateData['events'])
+            ->reject(fn (array $event): bool => $event['event_type'] === EventType::StoryArcBeatCompleted->value)
+            ->values()->all();
+        DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
+            'data' => json_encode($candidateData),
+        ]);
+    }
+
+    if ($missingLink === 'evidence') {
+        $reviewData = $fixture['review']->artifact()->firstOrFail()->data;
+        $reviewData['arc_beat_audits'][0]['evidence'] = '沈澜走进灯塔';
+        DB::table('generation_artifacts')->where('id', $fixture['review']->artifact_id)->update([
+            'data' => json_encode($reviewData),
+        ]);
+    }
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
+        ->toThrow(ValidationException::class);
+
+    expect(StoryEvent::query()->count())->toBe(0)
+        ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1);
+})->with(['plan', 'review', 'event', 'evidence']);
 
 test('projection refresh after commit derives every foreshadowing field from canonical inputs', function () {
     $fixture = canonicalCommitFixture();
@@ -674,6 +801,7 @@ test('a transaction exception after event writes leaves no partial canonical sta
 test('a transaction exception after creating a planned world entity rolls back the whole planning closure', function () {
     $fixture = canonicalCommitFixture();
     $arc = addPlanningClosureToCanonicalFixture($fixture);
+    addCharacterIntroductionToCanonicalFixture($fixture);
     $patchData = $fixture['patch']->data;
     $patchData['fact_changes'] = [[
         'action' => 'create',
@@ -690,7 +818,8 @@ test('a transaction exception after creating a planned world entity rolls back t
     expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
         ->toThrow(ValidationException::class, '不存在的 Story Event');
 
-    expect(WorldEntity::query()->count())->toBe(0)
+    expect(Character::query()->count())->toBe(0)
+        ->and(WorldEntity::query()->count())->toBe(0)
         ->and(StoryEvent::query()->count())->toBe(0)
         ->and(Fact::query()->count())->toBe(0)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1)
@@ -698,6 +827,29 @@ test('a transaction exception after creating a planned world entity rolls back t
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($arc->fresh()->progress)->toBe(0.0)
         ->and($arc->fresh()->status)->toBe(StoryArcStatus::Active);
+});
+
+test('rollback refuses to delete a chapter introduced character referenced by another canonical chapter', function () {
+    $fixture = canonicalCommitFixture();
+    addCharacterIntroductionToCanonicalFixture($fixture);
+    app(CanonicalCommitService::class)->commit($fixture['data']);
+    $character = Character::query()->sole();
+    $laterChapter = Chapter::factory()->for($fixture['novel'])->create([
+        'sequence' => 2,
+        'status' => ChapterStatus::Canonical,
+    ]);
+    StoryEvent::factory()->for($fixture['novel'])->for($laterChapter)->create([
+        'event_type' => EventType::CharacterMoved,
+        'subject_type' => 'character',
+        'subject_id' => (string) $character->getKey(),
+        'state_version' => 2,
+    ]);
+
+    expect(fn () => app(LatestCanonicalChapterRollback::class)->rollback($fixture['chapter'], '验证后续人物引用保护'))
+        ->toThrow(ValidationException::class, '已被其他正式章节引用');
+
+    expect(Character::query()->whereKey($character)->exists())->toBeTrue()
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
 });
 
 test('an already canonical chapter rejects a conflicting artifact', function () {

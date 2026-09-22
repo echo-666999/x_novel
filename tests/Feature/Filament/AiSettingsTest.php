@@ -1,12 +1,17 @@
 <?php
 
+use App\AI\AiSettingsResolver;
+use App\AI\AiSettingsService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\Enums\AiStage;
 use App\Filament\Pages\Settings;
+use App\Models\SystemSetting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -19,23 +24,25 @@ beforeEach(function () {
     config()->set('ai.models.writer', 'writer-model');
 });
 
-test('ai settings shows provider model status and connection action without exposing credentials', function () {
+test('ai settings shows editable provider stage model timeout and credential status without exposing credentials', function () {
     config()->set('ai.providers.openai.api_key', null);
 
     Livewire::test(Settings::class)
         ->assertOk()
-        ->assertSee('Provider')
-        ->assertSee('openai')
-        ->assertSee('Model')
-        ->assertSee('test-model')
-        ->assertSee('Connection Status')
+        ->assertSet('data.default_provider', 'openai')
+        ->assertSet('data.stages.planner.model', 'planner-model')
+        ->assertSet('data.stages.writer.model', 'writer-model')
+        ->assertSee('默认文本生成 Provider')
+        ->assertSee('OpenAI API Key')
         ->assertSee('未配置')
-        ->assertSee('Stage Models')
         ->assertSee('章节规划')
-        ->assertSee('planner-model')
         ->assertSee('场景写作')
-        ->assertSee('writer-model')
-        ->assertSee('Global Default')
+        ->assertSee('连接超时')
+        ->assertSee('请求超时')
+        ->assertSee('OpenAI Base URL')
+        ->assertSee('成本货币代码')
+        ->assertSee('每日成本硬限制')
+        ->assertSee('保存 AI 配置')
         ->assertSee('Prompt Versions')
         ->assertSee('chapter-planner-v9')
         ->assertSee('scene-writer-v13')
@@ -46,7 +53,62 @@ test('ai settings shows provider model status and connection action without expo
         ->assertSee('summary-v1')
         ->assertSee('config/prompts.php')
         ->assertSee('Test Connection')
-        ->assertDontSee('AI_API_KEY');
+        ->assertDontSee('AI_API_KEY')
+        ->assertDontSee('secret-page-key');
+});
+
+test('ai settings saves an api key without returning or logging its plaintext', function () {
+    config()->set('ai.providers.openai.api_key', null);
+    $records = [];
+    Log::shouldReceive('info')->once()->andReturnUsing(function (string $message, array $context) use (&$records): void {
+        $records[] = compact('message', 'context');
+    });
+
+    Livewire::test(Settings::class)
+        ->set('data.providers.openai.api_key', 'page-secret-key')
+        ->call('saveAiSettings')
+        ->assertHasNoErrors()
+        ->assertSet('data.providers.openai.api_key', null)
+        ->assertDontSee('page-secret-key')
+        ->assertNotified('AI 配置已保存');
+
+    $stored = SystemSetting::query()->findOrFail(SystemSetting::AI)->value;
+
+    expect(json_encode($stored, JSON_THROW_ON_ERROR))->not->toContain('page-secret-key')
+        ->and(json_encode($records, JSON_THROW_ON_ERROR))->not->toContain('page-secret-key')
+        ->and(app(AiSettingsService::class)->apiKey('openai'))->toBe('page-secret-key');
+});
+
+test('ai settings saves normalized values and reloads the database source without logging the key', function () {
+    config()->set('ai.providers.openai.api_key', 'secret-page-key');
+    $records = [];
+    Log::shouldReceive('info')
+        ->once()
+        ->andReturnUsing(function (string $message, array $context) use (&$records): void {
+            $records[] = compact('message', 'context');
+        });
+
+    Livewire::test(Settings::class)
+        ->set('data.providers.openai.connect_timeout', 15)
+        ->set('data.providers.openai.timeout', 75)
+        ->set('data.stages.writer.model', '  database-writer-model  ')
+        ->call('saveAiSettings')
+        ->assertHasNoErrors()
+        ->assertSet('data.stages.writer.model', 'database-writer-model')
+        ->assertSee('当前生效来源：system_settings.ai')
+        ->assertDontSee('secret-page-key')
+        ->assertNotified('AI 配置已保存');
+
+    $stored = SystemSetting::query()->findOrFail(SystemSetting::AI)->value;
+    $resolved = app(AiSettingsResolver::class)->resolve(AiStage::Writer);
+
+    expect(data_get($stored, 'providers.openai.connect_timeout'))->toBe(15)
+        ->and(data_get($stored, 'providers.openai.timeout'))->toBe(75)
+        ->and($resolved->model)->toBe('database-writer-model')
+        ->and($resolved->source)->toBe('database')
+        ->and(json_encode($stored, JSON_THROW_ON_ERROR))->not->toContain('secret-page-key')
+        ->and(json_encode($records, JSON_THROW_ON_ERROR))->not->toContain('secret-page-key')
+        ->and(json_encode($records, JSON_THROW_ON_ERROR))->not->toContain('api_key');
 });
 
 test('ai settings can run a successful connection test', function () {
@@ -72,6 +134,7 @@ test('ai settings can run a successful connection test', function () {
 
     expect($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->model)->toBe('planner-model')
+        ->and($fake->requests()[0]->provider)->toBe('openai')
         ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v9')
         ->and($fake->requests()[0]->metadata)->toBe(['purpose' => 'connection_test']);
 });

@@ -83,7 +83,7 @@ function reviewResponse(string $decision = 'PASS', int $score = 90, array $findi
             ]];
         })
         ->all();
-    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'dimension_audits' => $dimensionAudits, 'foreshadowing_audits' => $foreshadowingAudits, 'arc_beat_audits' => [], 'arc_completion_audits' => [], 'world_entity_candidate_audits' => [], 'unapproved_world_entities' => [], 'findings' => $findings];
+    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'dimension_audits' => $dimensionAudits, 'foreshadowing_audits' => $foreshadowingAudits, 'arc_beat_audits' => [], 'arc_completion_audits' => [], 'character_candidate_audits' => [], 'world_entity_candidate_audits' => [], 'unapproved_characters' => [], 'unapproved_world_entities' => [], 'findings' => $findings];
 
     return new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'review-request', model: 'review-test');
 }
@@ -106,6 +106,12 @@ test('planning review audits require verbatim evidence and surface missing or un
             'description' => '防守目标。', 'deduplication_basis' => '无同名地点。',
             'possible_duplicate_entity_ids' => [], 'introduction_reason' => '承载冲突。', 'target_scene_sequence' => 1,
         ]],
+        'character_candidates' => [[
+            'candidate_key' => 'character-guide', 'name' => '向导', 'role' => '向导', 'motivation' => '守住城门。',
+            'profile' => [], 'personality' => [], 'abilities' => [], 'knowledge' => [],
+            'deduplication_basis' => '无相同人物。', 'possible_duplicate_character_ids' => [],
+            'introduction_reason' => '协助守城。', 'target_scene_sequence' => 1,
+        ]],
     ]);
     $payload = [
         'arc_beat_audits' => [[
@@ -115,6 +121,10 @@ test('planning review audits require verbatim evidence and surface missing or un
         'arc_completion_audits' => [[
             'arc_id' => $arc->getKey(), 'status' => 'not_met', 'evidence' => null,
         ]],
+        'character_candidate_audits' => [[
+            'candidate_key' => 'character-guide', 'status' => 'missing', 'evidence' => null,
+            'scene_id' => $scene->getKey(),
+        ]],
         'world_entity_candidate_audits' => [[
             'candidate_key' => 'wec-city-gate', 'status' => 'missing', 'evidence' => null,
             'scene_id' => $scene->getKey(),
@@ -122,12 +132,20 @@ test('planning review audits require verbatim evidence and surface missing or un
         'unapproved_world_entities' => [[
             'name' => '黑塔', 'type' => 'location', 'evidence' => '城门', 'scene_id' => $scene->getKey(),
         ]],
+        'unapproved_characters' => [[
+            'name' => '陌生使者', 'evidence' => '林舟', 'scene_id' => $scene->getKey(),
+        ]],
     ];
 
     $validated = app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']);
     $codes = collect(app(PlanningReviewAudit::class)->findings($validated))->pluck('code');
 
-    expect($codes)->toContain('WORLD_ENTITY_CANDIDATE_NOT_INTRODUCED', 'UNAPPROVED_WORLD_ENTITY')
+    expect($codes)->toContain(
+        'CHARACTER_CANDIDATE_NOT_INTRODUCED',
+        'UNAPPROVED_CHARACTER',
+        'WORLD_ENTITY_CANDIDATE_NOT_INTRODUCED',
+        'UNAPPROVED_WORLD_ENTITY',
+    )
         ->and($codes)->not->toContain('ARC_BEAT_NOT_FULFILLED');
 
     $payload['arc_beat_audits'][0]['evidence'] = '正文中不存在的证据';

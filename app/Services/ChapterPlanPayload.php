@@ -18,7 +18,7 @@ final class ChapterPlanPayload
             'type' => 'object',
             'additionalProperties' => false,
             'required' => [
-                'novel_outline_id', 'chapter_function', 'arc_contribution', 'arc_contributions', 'reader_promise', 'target_words',
+                'novel_outline_id', 'chapter_function', 'arc_contribution', 'arc_contributions', 'character_candidates', 'reader_promise', 'target_words',
                 'pov_character_id', 'tone', 'time_anchor', 'hook_type', 'must_reveal',
                 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
                 'foreshadowing_actions', 'world_entity_candidates', 'scene_plans',
@@ -40,6 +40,32 @@ final class ChapterPlanPayload
                             'beat_index' => ['type' => 'integer', 'minimum' => 1],
                             'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
                             'acceptance_criteria' => ['type' => 'string'],
+                        ],
+                    ],
+                ],
+                'character_candidates' => [
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'object',
+                        'additionalProperties' => false,
+                        'required' => [
+                            'candidate_key', 'name', 'role', 'motivation', 'profile', 'personality',
+                            'abilities', 'knowledge', 'deduplication_basis',
+                            'possible_duplicate_character_ids', 'introduction_reason', 'target_scene_sequence',
+                        ],
+                        'properties' => [
+                            'candidate_key' => ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$'],
+                            'name' => ['type' => 'string'],
+                            'role' => ['type' => 'string'],
+                            'motivation' => ['type' => 'string'],
+                            'profile' => ['type' => 'object'],
+                            'personality' => ['type' => 'object'],
+                            'abilities' => ['type' => 'object'],
+                            'knowledge' => ['type' => 'object'],
+                            'deduplication_basis' => ['type' => 'string'],
+                            'possible_duplicate_character_ids' => ['type' => 'array', 'items' => ['type' => 'integer']],
+                            'introduction_reason' => ['type' => 'string'],
+                            'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
                         ],
                     ],
                 ],
@@ -173,7 +199,7 @@ final class ChapterPlanPayload
             }
         }
 
-        foreach (['arc_contributions', 'world_entity_candidates'] as $field) {
+        foreach (['arc_contributions', 'character_candidates', 'world_entity_candidates'] as $field) {
             $allowedFields = array_keys(self::schema()['properties'][$field]['items']['properties']);
 
             foreach ($payload[$field] ?? [] as $item) {
@@ -194,6 +220,20 @@ final class ChapterPlanPayload
             'arc_contributions.*.beat_index' => ['required', 'integer', 'min:1'],
             'arc_contributions.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
             'arc_contributions.*.acceptance_criteria' => ['required', 'string'],
+            'character_candidates' => ['present', 'array'],
+            'character_candidates.*.candidate_key' => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
+            'character_candidates.*.name' => ['required', 'string'],
+            'character_candidates.*.role' => ['required', 'string'],
+            'character_candidates.*.motivation' => ['required', 'string'],
+            'character_candidates.*.profile' => ['present', 'array'],
+            'character_candidates.*.personality' => ['present', 'array'],
+            'character_candidates.*.abilities' => ['present', 'array'],
+            'character_candidates.*.knowledge' => ['present', 'array'],
+            'character_candidates.*.deduplication_basis' => ['required', 'string'],
+            'character_candidates.*.possible_duplicate_character_ids' => ['present', 'array'],
+            'character_candidates.*.possible_duplicate_character_ids.*' => ['integer', 'min:1'],
+            'character_candidates.*.introduction_reason' => ['required', 'string'],
+            'character_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
             'reader_promise' => ['required', 'string'],
             'target_words' => ['required', 'integer', 'min:1'],
             'pov_character_id' => ['required', 'integer', 'min:1'],

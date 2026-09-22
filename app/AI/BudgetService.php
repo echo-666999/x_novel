@@ -12,6 +12,8 @@ use InvalidArgumentException;
 
 class BudgetService
 {
+    public function __construct(private readonly AiSettingsService $settings) {}
+
     public function assertWithinNovelLimits(Novel $novel): void
     {
         $this->assertAvailable($this->dailyUsage());
@@ -44,7 +46,7 @@ class BudgetService
         return new BudgetUsage(
             scope: 'daily',
             used: (float) UsageRecord::query()->whereDate('created_at', today())->sum('estimated_cost'),
-            limit: $this->limit(config('ai.budget.daily_hard_limit')),
+            limit: $this->limit(data_get($this->settings->budgetSettings(), 'daily_hard_limit')),
         );
     }
 
@@ -106,7 +108,7 @@ class BudgetService
     {
         $override = data_get($novel->settings, "budget.{$key}");
 
-        return $this->limit(filled($override) ? $override : config("ai.budget.{$key}"));
+        return $this->limit(filled($override) ? $override : data_get($this->settings->budgetSettings(), $key));
     }
 
     private function limit(mixed $value): ?float

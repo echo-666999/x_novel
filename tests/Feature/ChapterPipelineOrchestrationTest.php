@@ -455,6 +455,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'chapter_function' => '迫使主角离开安全区',
             'arc_contribution' => '推进灯塔主线',
             'arc_contributions' => [],
+            'character_candidates' => [],
             'reader_promise' => '主角抵达灯塔水域',
             'target_words' => $this->baseline['chapter_target_words'],
             'pov_character_id' => $this->characterId,
@@ -631,7 +632,9 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             ]],
             'arc_beat_audits' => [],
             'arc_completion_audits' => [],
+            'character_candidate_audits' => [],
             'world_entity_candidate_audits' => [],
+            'unapproved_characters' => [],
             'unapproved_world_entities' => [],
             'findings' => $findings,
         ];

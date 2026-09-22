@@ -29,12 +29,14 @@ return new class extends Migration
             $table->index(['novel_id', 'status']);
         });
 
+        $grammar = DB::connection()->getSchemaGrammar();
+        $outlines = $grammar->wrapTable('novel_outlines');
+        $currentIndex = $grammar->wrap('novel_outlines_current_unique');
         DB::statement(
-            "CREATE UNIQUE INDEX novel_outlines_current_unique ON novel_outlines (novel_id) WHERE status = 'current'"
+            "CREATE UNIQUE INDEX {$currentIndex} ON {$outlines} (novel_id) WHERE status = 'current'"
         );
 
         if (DB::getDriverName() === 'pgsql') {
-            $table = DB::connection()->getSchemaGrammar()->wrapTable('novel_outlines');
             $statuses = collect(NovelOutlineStatus::cases())
                 ->map(fn (NovelOutlineStatus $status): string => DB::connection()->getPdo()->quote($status->value))
                 ->implode(', ');
@@ -42,11 +44,11 @@ return new class extends Migration
                 ->map(fn (NovelOutlineSource $source): string => DB::connection()->getPdo()->quote($source->value))
                 ->implode(', ');
 
-            DB::statement("ALTER TABLE {$table} ADD CONSTRAINT novel_outlines_version_check CHECK (version > 0)");
-            DB::statement("ALTER TABLE {$table} ADD CONSTRAINT novel_outlines_schema_version_check CHECK (schema_version > 0)");
-            DB::statement("ALTER TABLE {$table} ADD CONSTRAINT novel_outlines_status_check CHECK (status IN ({$statuses}))");
-            DB::statement("ALTER TABLE {$table} ADD CONSTRAINT novel_outlines_source_check CHECK (source IN ({$sources}))");
-            DB::statement("ALTER TABLE {$table} ADD CONSTRAINT novel_outlines_content_check CHECK (jsonb_typeof(content) = 'object')");
+            DB::statement("ALTER TABLE {$outlines} ADD CONSTRAINT novel_outlines_version_check CHECK (version > 0)");
+            DB::statement("ALTER TABLE {$outlines} ADD CONSTRAINT novel_outlines_schema_version_check CHECK (schema_version > 0)");
+            DB::statement("ALTER TABLE {$outlines} ADD CONSTRAINT novel_outlines_status_check CHECK (status IN ({$statuses}))");
+            DB::statement("ALTER TABLE {$outlines} ADD CONSTRAINT novel_outlines_source_check CHECK (source IN ({$sources}))");
+            DB::statement("ALTER TABLE {$outlines} ADD CONSTRAINT novel_outlines_content_check CHECK (jsonb_typeof(content) = 'object')");
         }
     }
 

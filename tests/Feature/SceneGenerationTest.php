@@ -596,6 +596,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
     unset($inputContext['regeneration_batch_id']);
     $expectedInputHash = hash('sha256', json_encode([
         'context' => $inputContext,
+        'provider' => $run->provider,
         'model' => $run->model_policy,
         'prompt_version' => $run->prompt_version,
         'regeneration_batch_id' => null,
@@ -610,6 +611,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($scene->current_artifact_id)->toBe($artifact->getKey())
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->stage)->toBe(GenerationStage::SceneGeneration)
+        ->and($run->provider)->toBe('openai')
         ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'l4', 'style_contract_checksum', 'foreshadowing_contract_checksum', 'scene_task', 'temporary_state'])
         ->and($run->bible_version)->toBe(1)
         ->and($run->input_hash)->toBe($expectedInputHash)

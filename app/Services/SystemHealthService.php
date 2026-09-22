@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\AI\AiSettingsService;
 use App\Data\SystemHealthCheck;
 use App\Models\SystemSetting;
 use Illuminate\Support\Collection;
@@ -130,7 +131,7 @@ class SystemHealthService
 
     private function costLimit(): SystemHealthCheck
     {
-        $configured = collect(config('ai.budget', []))->contains(fn ($value): bool => is_numeric($value));
+        $configured = collect(app(AiSettingsService::class)->budgetSettings())->contains(fn ($value): bool => is_numeric($value));
 
         return new SystemHealthCheck('cost_limit', '成本硬限额', $configured ? 'healthy' : 'warning', $configured ? '至少配置了一项 Provider 请求硬限额。' : '未配置 Daily、Novel 或 Chapter 成本硬限额。');
     }

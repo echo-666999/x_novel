@@ -26,6 +26,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'state_version',
     'bible_version',
     'prompt_version',
+    'provider',
     'model_policy',
     'context_snapshot',
     'error_code',

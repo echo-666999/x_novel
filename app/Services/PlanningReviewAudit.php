@@ -45,12 +45,31 @@ class PlanningReviewAudit
                     'scene_id' => ['type' => ['integer', 'null']],
                 ],
             ]],
+            'character_candidate_audits' => ['type' => 'array', 'items' => [
+                'type' => 'object', 'additionalProperties' => false,
+                'required' => ['candidate_key', 'status', 'evidence', 'scene_id'],
+                'properties' => [
+                    'candidate_key' => ['type' => 'string'],
+                    'status' => ['type' => 'string', 'enum' => ['introduced', 'missing', 'contradicted']],
+                    'evidence' => $evidence,
+                    'scene_id' => ['type' => ['integer', 'null']],
+                ],
+            ]],
             'unapproved_world_entities' => ['type' => 'array', 'items' => [
                 'type' => 'object', 'additionalProperties' => false,
                 'required' => ['name', 'type', 'evidence', 'scene_id'],
                 'properties' => [
                     'name' => ['type' => 'string'],
                     'type' => ['type' => 'string', 'enum' => array_column(WorldEntityType::cases(), 'value')],
+                    'evidence' => ['type' => 'string'],
+                    'scene_id' => ['type' => ['integer', 'null']],
+                ],
+            ]],
+            'unapproved_characters' => ['type' => 'array', 'items' => [
+                'type' => 'object', 'additionalProperties' => false,
+                'required' => ['name', 'evidence', 'scene_id'],
+                'properties' => [
+                    'name' => ['type' => 'string'],
                     'evidence' => ['type' => 'string'],
                     'scene_id' => ['type' => ['integer', 'null']],
                 ],
@@ -75,6 +94,16 @@ class PlanningReviewAudit
             $sceneIds->all(),
             $draft,
             ['fulfilled', 'missing', 'contradicted'],
+            'status',
+        );
+        $this->validateContractAudits(
+            $payload['character_candidate_audits'] ?? null,
+            $plan->character_candidates ?? [],
+            null,
+            'candidate_key',
+            $sceneIds->all(),
+            $draft,
+            ['introduced', 'missing', 'contradicted'],
             'status',
         );
         $this->validateContractAudits(
@@ -115,6 +144,18 @@ class PlanningReviewAudit
                 throw ValidationException::withMessages(['unapproved_world_entities' => '未批准世界实体必须提供合法类型、Scene 和正文逐字证据。']);
             }
         }
+        if (! is_array($payload['unapproved_characters'] ?? null)) {
+            throw ValidationException::withMessages(['unapproved_characters' => '未批准人物检查必须返回数组。']);
+        }
+        foreach ($payload['unapproved_characters'] as $candidate) {
+            if (! is_array($candidate)
+                || ! $this->hasExactKeys($candidate, ['name', 'evidence', 'scene_id'])
+                || ! is_string($candidate['name'] ?? null) || blank($candidate['name'])
+                || ! is_string($candidate['evidence'] ?? null) || ! str_contains((string) $draft->content, $candidate['evidence'])
+                || ($candidate['scene_id'] !== null && ! in_array($candidate['scene_id'], $sceneIds->all(), true))) {
+                throw ValidationException::withMessages(['unapproved_characters' => '未批准人物必须提供合法名称、Scene 和正文逐字证据。']);
+            }
+        }
 
         return $payload;
     }
@@ -128,6 +169,11 @@ class PlanningReviewAudit
                 $findings[] = $this->finding('ARC_BEAT_NOT_FULFILLED', 'progress', $audit['scene_id'], '声明的 Story Arc Beat 未被正文验收，不会计入 Canonical Progress。', $audit['evidence']);
             }
         }
+        foreach ($payload['character_candidate_audits'] as $audit) {
+            if ($audit['status'] !== 'introduced') {
+                $findings[] = $this->finding('CHARACTER_CANDIDATE_NOT_INTRODUCED', 'plan', $audit['scene_id'], '计划中的人物候选未在正文中完成引入，不会创建正式人物。', $audit['evidence']);
+            }
+        }
         foreach ($payload['world_entity_candidate_audits'] as $audit) {
             if ($audit['status'] !== 'introduced') {
                 $findings[] = $this->finding('WORLD_ENTITY_CANDIDATE_NOT_INTRODUCED', 'plan', $audit['scene_id'], '计划中的世界实体候选未在正文中完成引入，不会创建正式实体。', $audit['evidence']);
@@ -135,6 +181,9 @@ class PlanningReviewAudit
         }
         foreach ($payload['unapproved_world_entities'] as $entity) {
             $findings[] = $this->finding('UNAPPROVED_WORLD_ENTITY', 'plan', $entity['scene_id'], "正文引入了未在 Chapter Plan 批准的重大世界实体「{$entity['name']}」。", $entity['evidence'], true);
+        }
+        foreach ($payload['unapproved_characters'] as $character) {
+            $findings[] = $this->finding('UNAPPROVED_CHARACTER', 'plan', $character['scene_id'], "正文引入了未在 Chapter Plan 批准的持续性人物「{$character['name']}」。", $character['evidence'], true);
         }
 
         return $findings;

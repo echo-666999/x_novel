@@ -221,6 +221,29 @@ test('story event candidate schema supports strict output and restores a JSON pa
         ->and($candidate->payload)->toBe(['from' => '长安', 'to' => '洛阳']);
 });
 
+test('extractor accepts a character introduced event only for a frozen plan candidate', function () {
+    $fixture = eventExtractionFixture();
+    $fixture['chapter']->latestPlan->update(['character_candidates' => [[
+        'candidate_key' => 'character-guide', 'name' => '林舟', 'role' => '向导', 'motivation' => '进入洛阳。',
+        'profile' => [], 'personality' => [], 'abilities' => [], 'knowledge' => [],
+        'deduplication_basis' => '测试候选。', 'possible_duplicate_character_ids' => [],
+        'introduction_reason' => '推动主线。', 'target_scene_sequence' => 1,
+    ]]]);
+    $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
+        'event_type' => EventType::CharacterIntroduced->value,
+        'subject_type' => 'character',
+        'subject_id' => 'character-guide',
+        'payload' => ['candidate_key' => 'character-guide'],
+    ]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact?->data, 'events.0.event_type'))->toBe(EventType::CharacterIntroduced->value)
+        ->and(data_get($artifact?->data, 'events.0.subject_id'))->toBe('character-guide')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('character_introduced');
+});
+
 test('a historical due event remains readable but cannot overwrite foreshadowing content state', function () {
     $candidate = StoryEventCandidate::fromArray([
         'event_type' => EventType::ForeshadowingDue->value,

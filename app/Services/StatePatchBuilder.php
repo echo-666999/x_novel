@@ -38,7 +38,7 @@ class StatePatchBuilder
         $operations = [];
 
         foreach ($events as $index => $event) {
-            if ($event->eventType === EventType::WorldEntityIntroduced) {
+            if (in_array($event->eventType, [EventType::CharacterIntroduced, EventType::WorldEntityIntroduced], true)) {
                 continue;
             }
 

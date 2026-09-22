@@ -759,6 +759,7 @@ Attempt
 Idempotency Key
 Input Hash
 Context Snapshot
+Provider
 Model
 Error
 Timing

@@ -79,7 +79,7 @@ test('the owner can access every workbench page', function (string $path, string
     ['/x/generation', '暂无生成记录'],
     ['/x/review', '审校收件箱为空'],
     ['/x/memory', '暂无已索引记忆'],
-    ['/x/settings', '此处仅展示配置来源。'],
+    ['/x/settings', 'AI 运行配置在此维护；API Key 使用 Laravel 应用密钥加密保存，页面不会回显原值。'],
 ]);
 
 test('the owner account is restricted to the x panel', function () {
@@ -109,7 +109,7 @@ test('the dashboard provides the initial operational shell', function () {
         ->assertSee('暂无待处理伏笔');
 });
 
-test('the settings page provides the five read only configuration sections', function () {
+test('the settings page provides editable ai settings and the remaining configuration sections', function () {
     $this->actingAs(User::factory()->create())
         ->get('/x/settings')
         ->assertOk()
@@ -120,7 +120,8 @@ test('the settings page provides the five read only configuration sections', fun
             '记忆',
             '预算',
         ])
-        ->assertSee('来源：.env 与 config/services.php')
+        ->assertSee('当前生效来源：config/ai.php')
+        ->assertSee('保存 AI 配置')
         ->assertSee('来源：config 与小说设置')
         ->assertSee('只读');
 });

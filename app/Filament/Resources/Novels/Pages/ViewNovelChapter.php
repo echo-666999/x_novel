@@ -6,6 +6,7 @@ use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
+use App\AI\AiSettingsService;
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -1229,6 +1230,9 @@ class ViewNovelChapter extends ViewRecord
                                                     ->label('模型')
                                                     ->state($versionRun?->model_policy)
                                                     ->placeholder('—'),
+                                                TextEntry::make('scene_artifact_provider_'.$versionArtifact->getKey())
+                                                    ->label('Provider')
+                                                    ->state($versionRun?->provider ?? '旧记录未保存 Provider'),
                                                 TextEntry::make('scene_artifact_prompt_'.$versionArtifact->getKey())
                                                     ->label('提示词版本')
                                                     ->state($versionRun?->prompt_version)
@@ -1266,6 +1270,7 @@ class ViewNovelChapter extends ViewRecord
                     ->modalCancelActionLabel('关闭')
                     ->infolist([
                         TextEntry::make('scene_run_status_'.$scene->getKey())->label('状态')->state($run?->status)->badge(),
+                        TextEntry::make('scene_run_provider_'.$scene->getKey())->label('Provider')->state($run?->provider ?? '旧记录未保存 Provider'),
                         TextEntry::make('scene_run_model_'.$scene->getKey())->label('模型')->state($run?->model_policy)->placeholder('—'),
                         TextEntry::make('scene_run_prompt_'.$scene->getKey())->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
                         TextEntry::make('scene_run_error_'.$scene->getKey())
@@ -1290,7 +1295,7 @@ class ViewNovelChapter extends ViewRecord
                     ->placeholder('—'),
                 TextEntry::make('scene_cost_'.$scene->getKey())
                     ->label('成本')
-                    ->state($run === null ? null : config('ai.cost.currency').' '.number_format((float) $run->usageRecords->sum('estimated_cost'), 4))
+                    ->state($run === null ? null : data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $run->usageRecords->sum('estimated_cost'), 4))
                     ->placeholder('—'),
                 TextEntry::make('scene_pov_'.$scene->getKey())->label('视角角色')->state($scene->povCharacter?->name)->placeholder('未指定'),
                 TextEntry::make('scene_location_'.$scene->getKey())->label('地点')->state($scene->location)->placeholder('未指定'),
@@ -1527,7 +1532,7 @@ class ViewNovelChapter extends ViewRecord
                         ->placeholder('—'),
                     TextEntry::make('canonical_cost')
                         ->label('章节累计成本')
-                        ->state(config('ai.cost.currency').' '.number_format($this->canonicalCost(), 4)),
+                        ->state(data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format($this->canonicalCost(), 4)),
                     TextEntry::make('canonical_memory_count')
                         ->hiddenLabel()
                         ->state('已创建记忆：'.$this->chapterMemoryCount())
@@ -1985,6 +1990,7 @@ class ViewNovelChapter extends ViewRecord
                             ->map(fn ($run): array => [
                                 'run' => '#'.$run->getKey().' · 第 '.$run->attempt.' 次尝试',
                                 'status' => $run->status,
+                                'provider' => $run->provider ?? '旧记录未保存 Provider',
                                 'model' => $run->model_policy,
                                 'prompt_version' => $run->prompt_version,
                                 'state_version' => $run->state_version === null ? '—' : 'v'.$run->state_version,
@@ -1995,6 +2001,7 @@ class ViewNovelChapter extends ViewRecord
                         ->schema([
                             TextEntry::make('run')->label('运行记录'),
                             TextEntry::make('status')->label('状态')->badge(),
+                            TextEntry::make('provider')->label('Provider'),
                             TextEntry::make('model')->label('模型')->placeholder('—'),
                             TextEntry::make('prompt_version')->label('提示词版本')->placeholder('—'),
                             TextEntry::make('state_version')->label('状态版本'),
@@ -2074,7 +2081,7 @@ class ViewNovelChapter extends ViewRecord
             TextEntry::make('timeline_detail_duration_'.$item['key'])->label('耗时')->state($run?->durationMilliseconds() === null ? null : $run->durationMilliseconds().' ms')->placeholder('—'),
             TextEntry::make('timeline_detail_model_'.$item['key'])->label('模型')->state($run?->model_policy)->placeholder('—'),
             TextEntry::make('timeline_detail_tokens_'.$item['key'])->label('令牌数')->state($usage === null ? null : number_format((int) $usage->sum(fn ($record): int => $record->input_tokens + $record->output_tokens)))->placeholder('—'),
-            TextEntry::make('timeline_detail_cost_'.$item['key'])->label('费用')->state($usage === null ? null : config('ai.cost.currency').' '.number_format((float) $usage->sum('estimated_cost'), 4))->placeholder('—'),
+            TextEntry::make('timeline_detail_cost_'.$item['key'])->label('费用')->state($usage === null ? null : data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $usage->sum('estimated_cost'), 4))->placeholder('—'),
             TextEntry::make('timeline_detail_prompt_'.$item['key'])->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
             TextEntry::make('timeline_detail_state_version_'.$item['key'])->label('状态版本')->state($run?->state_version === null ? null : 'v'.$run->state_version)->placeholder('—'),
             TextEntry::make('timeline_detail_artifact_'.$item['key'])->label('产物')->state($artifact === null ? null : $artifact->type->getLabel().' v'.$artifact->version.' · #'.$artifact->getKey())->placeholder('尚无产物'),

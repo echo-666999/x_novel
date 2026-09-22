@@ -1,5 +1,6 @@
 <?php
 
+use App\AI\AiSettingsService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
@@ -34,6 +35,7 @@ test('tracking provider records tokens latency cost request id and run context',
     $provider = new TrackingAiProvider($fake, app(UsageRecorder::class));
     $request = new AiRequest(
         model: 'requested-model',
+        provider: 'openai',
         prompt: 'Write',
         metadata: [
             'generation_run_id' => $run->getKey(),
@@ -58,6 +60,28 @@ test('tracking provider records tokens latency cost request id and run context',
         ->latency_ms->toBe(345)
         ->estimated_cost->toBe('0.005700')
         ->request_id->toBe('provider-request-1');
+});
+
+test('tracking provider calculates cost from database pricing', function () {
+    config()->set('ai.cost.input_per_million', 100);
+    config()->set('ai.cost.cached_input_per_million', 100);
+    config()->set('ai.cost.output_per_million', 100);
+    $settingsService = app(AiSettingsService::class);
+    $settings = $settingsService->editableSettings();
+    $settings['cost']['input_per_million'] = 2;
+    $settings['cost']['cached_input_per_million'] = 0.5;
+    $settings['cost']['output_per_million'] = 8;
+    $settingsService->save($settings, 7);
+    $fake = (new FakeAiProvider)->enqueue(usageResponse());
+    $provider = new TrackingAiProvider($fake, app(UsageRecorder::class));
+
+    $provider->generate(new AiRequest(
+        model: 'requested-model',
+        provider: 'openai',
+        prompt: 'Write',
+    ));
+
+    expect(UsageRecord::query()->sole()->estimated_cost)->toBe('0.005700');
 });
 
 test('failed and fake only provider calls do not create usage records', function () {
