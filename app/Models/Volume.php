@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
     'novel_id',
+    'outline_key',
     'sequence',
     'title',
     'goal',

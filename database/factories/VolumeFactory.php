@@ -17,6 +17,7 @@ class VolumeFactory extends Factory
     {
         return [
             'novel_id' => Novel::factory(),
+            'outline_key' => null,
             'sequence' => 1,
             'title' => fake()->words(3, true),
             'goal' => fake()->sentence(),

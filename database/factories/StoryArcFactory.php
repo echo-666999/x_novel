@@ -20,6 +20,8 @@ class StoryArcFactory extends Factory
         return [
             'novel_id' => Novel::factory(),
             'volume_id' => null,
+            'outline_key' => null,
+            'sequence' => 1,
             'type' => StoryArcType::Main,
             'title' => fake()->sentence(4),
             'goal' => fake()->sentence(),

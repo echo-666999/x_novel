@@ -451,6 +451,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         $chapterSequence = Chapter::query()->findOrFail($chapterId)->sequence;
 
         return [
+            'novel_outline_id' => null,
             'chapter_function' => '迫使主角离开安全区',
             'arc_contribution' => '推进灯塔主线',
             'arc_contributions' => [],

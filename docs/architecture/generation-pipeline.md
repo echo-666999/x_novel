@@ -12,19 +12,21 @@ Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、E
 
 ## 2. 权威流水线
 
-新建小说先完成一次初始化规划：
+新建小说先完成一次可人工确认的全书大纲与初始化规划：
 
 ```text
 Novel.status = draft
-→ NovelPlanner 生成结构化 Blueprint Artifact
-→ 用户预览并采用
-→ 写入包含完整叙事与文风设置的 Bible / Character / World / Volume / Arc / Foreshadowing
+→ 用户手工创建，或 NovelPlanner 生成结构化 Blueprint / Outline Artifact
+→ Outline Draft Version
+→ 用户逐项编辑、校验并采用
+→ Current Novel Outline
+→ 写入包含完整叙事与文风设置的 Bible / 初始 Character / World / Volume / Arc / Foreshadowing
 → 初始化 Story State
 → Planning Readiness Check
 → Novel.status = generating
 ```
 
-Blueprint 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。首次 Blueprint 生成发生在 Current Bible 创建前，是唯一不能读取 Current Bible 的生成入口；采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源。
+Blueprint / AI Outline Candidate 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。首次 Blueprint 生成发生在 Current Bible 创建前，是唯一不能读取 Current Bible 的生成入口；采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，Current Novel Outline 是后续 Chapter Planning 的顺序和主线权威。Laravel 选择当前节点；LLM 不拥有 Beat 排序、主线切换、跳过或删除节点的权限。
 
 进入 `generating` 后执行章节流水线：
 
@@ -176,8 +178,10 @@ Filament 发起生成任务时，必须在派发前写入带 TTL 的临时待执
 ```text
 Novel
 Current Bible
+Current Novel Outline
 Current Volume
 Active Arcs
+Current Outline Target
 Current Story State
 Due Foreshadowings
 Recent Summaries
@@ -191,8 +195,25 @@ Closure Debt（completing 时）
 幂等键：
 
 ```text
-plan:{chapter_id}:{state_version}:{bible_version}:{prompt_version}:{model_policy_hash}
+plan:{chapter_id}:{state_version}:{bible_version}:{outline_id}:{outline_checksum}:{prompt_version}:{model_policy_hash}
 ```
+
+调用模型前，`OutlineProgressResolver` 必须确定性执行：
+
+```text
+读取 novels.current_outline_id
+→ 选择 Active Volume
+→ 选择该 Volume 中 sequence 最小的 Active Main Arc
+→ 从 Active story_arc_beat_completed Events 取得已完成 Beat Keys
+→ 合并经人工确认的历史 baseline_completions（仅用于迁移起点）
+→ 选择 sequence 最小的未完成 Beat
+→ 统计该 Beat 已占用的 Canonical Chapter 数
+→ 生成 Current Outline Target
+```
+
+`baseline_completions` 不会创建 Story Event，也不会推进 Arc Progress；新 Outline 生效后的 Beat 只能由 Canonical Commit 完成。Current Outline Target 必须包含 Volume / Arc / Beat Key、标题、Sequence、预算、验收条件、必须/禁止内容以及已解析 Candidate。
+
+若当前 Beat 的 Canonical Chapter 使用数已经达到非空 `chapter_budget.max` 且仍无正式 Completion，系统必须在创建 Planning Run 和调用 Provider 前停止自动生成，进入 `NEEDS_ATTENTION`。用户只能通过延长预算、修订未来 Outline、人工调整新 Plan 或处理历史映射后再继续；LLM 不能自行跳到下一 Beat。
 
 Plan 至少包含：
 
@@ -200,6 +221,7 @@ Plan 至少包含：
 chapter_function
 arc_contribution
 arc_contributions
+character_candidates
 world_entity_candidates
 reader_promise
 target_words
@@ -213,7 +235,21 @@ foreshadowing_actions
 scene_plans
 ```
 
-`arc_contributions` 以 `arc_id + beat_key + beat_index` 引用当前小说中属于当前 Volume 或跨卷 Active Arc 的真实 Beat，并冻结目标 Scene 和验收条件；自然语言 `arc_contribution` 仅作说明。`world_entity_candidates` 以稳定临时键记录正文确实需要、Canonical World 中尚不存在的地点、物品、阵营、组织、规则或概念，并包含类型、名称、描述、去重依据、潜在重复实体、引入理由和目标 Scene。两组数据在 Review PASS 和 Canonical Commit 前都只是 Draft 契约。
+`chapter_plans.novel_outline_id` 冻结本次规划采用的精确 Outline Version。`arc_contributions` 以 `arc_id + beat_key + beat_index + role` 引用该版本的真实 Beat，并冻结目标 Scene 和验收条件；每个新 Plan 必须恰有一个 `role=primary`，且只能是 Current Outline Target。Secondary 允许推进获准支线，但不能替代 Primary 或提前完成后续 Main Beat。自然语言 `arc_contribution` 仅作说明。
+
+`character_candidates` 与 `world_entity_candidates` 以稳定临时键记录正文确实需要且 Canonical Domain 中尚不存在的对象，并包含去重依据、潜在重复对象、引入理由和目标 Scene。它们在 Review PASS 和 Canonical Commit 前都只是 Draft 契约。Planner 只能选择 Current Beat 授权的 Candidate；不得仅因模型认为剧情需要就新增核心人物或世界规则。
+
+PlanValidator 必须拒绝缺失 Primary、Outline Version 不一致、已完成 Beat、顺序跳跃、预算耗尽、必须内容缺失、规划禁止内容和非法 Character Candidate。若一章不能完成当前 Beat，Plan 必须给出可验证的中间结果，不能重复背景说明。
+
+Generation Run 的 Context Snapshot 固定记录：
+
+```text
+novel_outline_id / outline_version / outline_checksum
+primary_arc_id / primary_beat_key / primary_beat_sequence
+canonical_completed_beat_keys
+chapters_used_for_current_beat
+chapter_budget
+```
 
 新 Plan 的每个 Scene 使用 `continuity_requirements` 和稳定 `key` 区分 `establish / persist / change / callback`。相同持续状态只能首次建立一次；`persist` 只要求当前 Scene 的增量影响，`change` 要求真实状态变化，`callback` 只允许在章末回扣。Plan Validator 在 Writer 前拒绝跨 Scene 重复的 goal/conflict/turn/outcome 或错误的连续性阶段；历史 Plan 可缺少该字段并保持只读兼容。
 
@@ -456,7 +492,7 @@ rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
 
 该 Job 由用户在 PASS 后确认“提交正式章节”，或由 `auto_commit=true` 的 Review PASS 安全分支派发。两条路径都必须验证当前 Review/Draft 来源、Pause、Expected State Version 和幂等键，并调用同一 `CanonicalCommitService`；Resume 本身不得绕过这些条件直接提交。
 
-Canonical Commit 的数据库事务固定已验收 World Entity Candidate、Story Events、Facts、State Version、Chapter、Novel 指针和 Story Arc 进度。World Entity 使用 `(novel_id, source_chapter_id, source_candidate_key)` 幂等创建，临时键在写 Event、State 和后续 Memory 前解析为正式 Entity ID。Story Arc Progress 只根据 Active `story_arc_beat_completed` 事件中的唯一 Beat 重算；Draft 贡献不改变正式进度。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；其他领域投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
+Canonical Commit 的数据库事务固定已验收 Character / World Entity Candidate、Story Events、Facts、State Version、Chapter、Novel 指针和 Story Arc 进度。Candidate 使用 `(novel_id, source_chapter_id, source_candidate_key)` 幂等创建，临时键在写 Event、State 和后续 Memory 前解析为正式 ID。`story_arc_beat_completed` 必须对应冻结 Primary Beat，并由 Reviewer 对全部验收条件给出 `fulfilled` 和正文逐字证据；Draft、Review 或 Rewrite 不能直接完成 Beat。Story Arc Progress 只根据 Active Completion Events 中的唯一 Beat 重算。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；其他领域投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
 
 投影重建以最新的无章节 State Version 为基线，按 `state_version, id` 重放不晚于目标版本的 Active 伏笔事件，并复核结果与目标 Canonical State 的 `status` 和 `reinforce_count` 一致。`setup_chapter_id` 只取有效 `foreshadowing_planted` 事件，`payoff_chapter_id` 只取有效 `foreshadowing_paid_off` 事件；不存在相应有效事件时字段必须为 `null`。它计算目标值后整体覆盖漂移字段，不在表当前值上执行 `+1`。
 

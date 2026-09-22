@@ -145,30 +145,29 @@ Filament 的小说表单当前收集：
 
 ### 4.2 生成结构化蓝图
 
-`NovelPlanner` 根据小说基础信息生成结构化 Blueprint。当前蓝图 Prompt 版本由该服务记录为 `novel-planner-v4`。
+`NovelPlanner` 根据小说基础信息生成结构化 Blueprint。当前蓝图 Prompt 版本由该服务记录为 `novel-planner-v5`。
 
 Blueprint 至少覆盖：
 
 - Bible 的核心设定、硬约束、文风配置和 Ending Contract
 - 主要角色，且必须存在主角
 - 世界实体和世界规则
-- 分卷及每卷目标、高潮、目标字数
-- Story Arc、关键 Beats、完成条件
+- 嵌套的 Volume → Story Arc → 结构化 Beat，以及稳定 Key、Sequence、章节预算和验收条件
 - 伏笔及其兑现窗口
 
-这个结果保存为 `GenerationArtifact(type=context)`，并关联 Generation Run。它仍是可预览、可重新生成的提案，不会在 Provider 返回后直接写入正式规划表。
+这个结果保存为 `GenerationArtifact(type=context)`，并关联 Generation Run；其中 Outline 同时创建为 `novel_outlines.status=draft` 的不可变版本。Artifact 和 Draft Outline 都只是候选，不会在 Provider 返回后直接写入 Bible、Volume、Story Arc、Character、World Entity 或 Canonical State。手工入口直接创建 Draft Outline，不调用 Provider；人工编辑和局部重新生成均创建新版本，不覆盖 Artifact 或旧 Outline。
 
 ### 4.3 采用蓝图
 
-用户确认采用后，`ApplyNovelBlueprintAction` 在数据库事务中锁定 Novel，并执行以下操作：
+用户确认采用后，`ApplyNovelBlueprintAction` 只接受已经通过结构校验且 checksum 匹配的 Draft Outline，并在数据库事务中锁定 Novel。AI Outline 还必须提供属于同一 Novel 且与其来源版本匹配的不可变 Blueprint Artifact；手工 Outline 使用用户已经创建的 Current Bible 和初始资料。
 
-1. 确认蓝图属于当前小说。
-2. 确认小说尚未存在会冲突的规划、章节或事件。
-3. 创建不可变 Bible Version。
-4. 创建 Volumes；第一卷为 `active`，其余为 `planned`。
-5. 创建 Story Arcs；第一卷的故事弧为 `active`，其他为 `planned`。
-6. 创建 Characters、World Entities 和 Foreshadowings。
-7. 初始化或刷新 Canonical Story State。
+1. 确认 Draft Outline 属于当前小说、校验结果有效且 checksum 匹配。
+2. 确认小说尚未存在 Current Outline、Volume、Story Arc、Chapter 或 Story Event。
+3. AI 路径从匹配 Artifact 创建不可变 Bible Version、初始 Characters 和 World Entities；未来 Candidate 保留在 Outline Beat 中。
+4. 按 `outline_key + sequence` 创建 Volumes；第一卷为 `active`，其余为 `planned`。
+5. 创建 Story Arcs 并原样保存结构化 Beats；第一卷的 Arc 为 `active`，其他为 `planned`。
+6. AI 路径从匹配 Artifact 创建 Foreshadowings。
+7. 将选定 Outline 改为 `current`、更新 `novels.current_outline_id`，并初始化或刷新 Canonical Story State。
 8. 将 Novel 切换到 `planning`。
 
 采用蓝图是一次正式业务写入。重复采用不得产生第二套规划数据。
@@ -606,7 +605,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 补充边界：
 
-- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v4`，不通过 `PromptVersionResolver`。
+- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v5`，局部 Outline 修订记录 `novel-outline-node-v1`；两者都不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把 Prompt Version 写入 Generation Run，使历史输出在 Prompt 更新后仍可解释。
 

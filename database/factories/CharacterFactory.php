@@ -28,6 +28,8 @@ class CharacterFactory extends Factory
             'current_state' => [],
             'locked_fields' => [],
             'status' => CharacterStatus::Active,
+            'source_chapter_id' => null,
+            'source_candidate_key' => null,
         ];
     }
 }

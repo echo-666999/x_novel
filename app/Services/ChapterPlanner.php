@@ -17,6 +17,7 @@ use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
+use App\Exceptions\GenerationPreflightException;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationRun;
@@ -41,6 +42,7 @@ class ChapterPlanner
         private readonly ForeshadowingPlanningGate $foreshadowingPlanningGate,
         private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
         private readonly StoryArcBeatContract $storyArcBeatContract,
+        private readonly OutlineContextBuilder $outlineContextBuilder,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -62,7 +64,8 @@ class ChapterPlanner
             'model' => $settings->model,
             'prompt_version' => $promptVersion,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        $baseKey = "plan:{$chapter->getKey()}:{$context['state_version']}:{$context['bible_version']}:{$promptVersion}:".
+        $baseKey = "plan:{$chapter->getKey()}:{$context['state_version']}:{$context['bible_version']}:".
+            ($context['novel_outline_id'] ?? 'legacy').':'.($context['outline_checksum'] ?? 'legacy').":{$promptVersion}:".
             hash('sha256', $settings->provider.'|'.$settings->model.'|'.$settings->source);
 
         [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->model, $promptVersion, $regenerate);
@@ -80,7 +83,8 @@ class ChapterPlanner
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
-                    .'arc_contributions 只能逐字复制 active_arcs[].beats 中的 arc_id、beat_key 和 beat_index，并指定目标 Scene 与可验收条件；没有推进项时返回 []。'
+                    .'存在 current_outline_target 时，novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence，再指定目标 Scene 与 acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，不能替代 Main Primary Beat。历史上下文没有 current_outline_target 时 novel_outline_id 返回 null，arc_contributions 继续从 active_arcs[].beats 复制并标记 role=secondary，没有推进项时返回 []。'
+                    .'存在 current_outline_target 时，world_entity_candidates 只能从对应数组中选择并逐字段复制，当前节点没有 Candidate 时必须返回 []；Beat 的 must_include 必须合并到 must_reveal，must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
                     .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据和目标 Scene，不需要新实体时返回 []。'
                     .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
@@ -177,6 +181,19 @@ class ChapterPlanner
                 );
             }
 
+            $expectedOutlineId = data_get($run->context_snapshot, 'novel_outline_id');
+            $expectedOutlineChecksum = data_get($run->context_snapshot, 'outline_checksum');
+            $outlineChanged = ($expectedOutlineId === null) !== ($novel->current_outline_id === null)
+                || ($expectedOutlineId !== null && (int) $novel->current_outline_id !== (int) $expectedOutlineId)
+                || ($expectedOutlineId !== null && $novel->currentOutline()->value('checksum') !== $expectedOutlineChecksum);
+            if ($outlineChanged) {
+                throw new AiProviderException(
+                    'outline_version_conflict',
+                    '生成期间 Current Novel Outline 已变化，请基于最新大纲重新规划。',
+                    false,
+                );
+            }
+
             $version = ((int) $chapter->plans()->max('version')) + 1;
             $chapter->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
             $plan = $chapter->plans()->create(['version' => $version, 'status' => PlanStatus::Ready, ...$payload]);
@@ -216,6 +233,17 @@ class ChapterPlanner
         }
 
         $styleContract = $this->narrativeStyleProfile->contractForBible($bible);
+        $outlineContext = null;
+        if ($novel->current_outline_id !== null) {
+            $outlineContext = $this->outlineContextBuilder->build($novel);
+            $maximum = data_get($outlineContext, 'chapter_budget.max');
+            if (is_int($maximum) && $outlineContext['chapters_used_for_current_beat'] >= $maximum) {
+                throw new GenerationPreflightException(
+                    'outline_beat_budget_exhausted',
+                    "当前 Outline Beat「{$outlineContext['beat']['title']}」已使用 {$outlineContext['chapters_used_for_current_beat']} 章，达到预算上限 {$maximum}；自动 Planner 已在调用模型前停止。",
+                );
+            }
+        }
 
         $context = [
             'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
@@ -228,13 +256,15 @@ class ChapterPlanner
             'l4' => $styleContract,
             'bible' => $bible->only(['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract']),
             'state_version' => $novel->canonicalStateVersion->version,
+            ...($outlineContext ?? []),
+            'current_outline_target' => $outlineContext,
             'story_state' => $novel->canonicalStateVersion->state,
             'volume' => $chapter->volume->only(['id', 'sequence', 'title', 'goal', 'climax', 'target_words']),
             'active_arcs' => $novel->storyArcs()->where('status', 'active')
                 ->where(fn ($query) => $query->whereNull('volume_id')->orWhere('volume_id', $chapter->volume_id))
                 ->get()
                 ->map(fn ($arc): array => [
-                    ...$arc->only(['id', 'volume_id', 'title', 'goal', 'stakes', 'completion_conditions', 'progress']),
+                    ...$arc->only(['id', 'volume_id', 'type', 'title', 'goal', 'stakes', 'completion_conditions', 'progress']),
                     'beats' => $this->storyArcBeatContract->forArc($arc),
                 ])->all(),
             'existing_world_entities' => $novel->worldEntities()->where('status', 'active')->get()

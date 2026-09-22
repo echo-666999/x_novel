@@ -9,6 +9,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelBible;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ManageNovelCharacters;
 use App\Filament\Resources\Novels\Pages\ManageNovelForeshadowings;
+use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ManageNovelStoryArcs;
 use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ManageNovelWorld;
@@ -75,6 +76,7 @@ class NovelResource extends Resource
     {
         return $page->generateNavigationItems([
             ViewNovel::class,
+            ManageNovelOutline::class,
             ManageNovelBible::class,
             ManageNovelCharacters::class,
             ManageNovelWorld::class,
@@ -94,6 +96,7 @@ class NovelResource extends Resource
             'index' => ListNovels::route('/'),
             'create' => CreateNovel::route('/create'),
             'view' => ViewNovel::route('/{record}'),
+            'outline' => ManageNovelOutline::route('/{record}/outline'),
             'bible' => ManageNovelBible::route('/{record}/bible'),
             'characters' => ManageNovelCharacters::route('/{record}/characters'),
             'world' => ManageNovelWorld::route('/{record}/world'),

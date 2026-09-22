@@ -11,10 +11,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 #[Fillable([
     'chapter_id',
+    'novel_outline_id',
     'version',
     'chapter_function',
     'arc_contribution',
     'arc_contributions',
+    'character_candidates',
     'reader_promise',
     'target_words',
     'pov_character_id',
@@ -47,6 +49,12 @@ class ChapterPlan extends Model
     public function povCharacter(): BelongsTo
     {
         return $this->belongsTo(Character::class, 'pov_character_id');
+    }
+
+    /** @return BelongsTo<NovelOutline, $this> */
+    public function novelOutline(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutline::class);
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -94,6 +102,7 @@ class ChapterPlan extends Model
     {
         return [
             'version' => 'integer',
+            'novel_outline_id' => 'integer',
             'target_words' => 'integer',
             'pov_character_id' => 'integer',
             'must_reveal' => 'array',
@@ -104,6 +113,7 @@ class ChapterPlan extends Model
             'due_foreshadowings' => 'array',
             'foreshadowing_actions' => 'array',
             'arc_contributions' => 'array',
+            'character_candidates' => 'array',
             'world_entity_candidates' => 'array',
             'scene_plans' => 'array',
             'status' => PlanStatus::class,

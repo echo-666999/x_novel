@@ -14,10 +14,12 @@ class ChapterPlanFactory extends Factory
     {
         return [
             'chapter_id' => Chapter::factory(),
+            'novel_outline_id' => null,
             'version' => 1,
             'chapter_function' => fake()->sentence(),
             'arc_contribution' => fake()->sentence(),
             'arc_contributions' => [],
+            'character_candidates' => [],
             'reader_promise' => fake()->sentence(),
             'target_words' => 3_000,
             'pov_character_id' => null,

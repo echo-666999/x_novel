@@ -24,6 +24,11 @@ class ViewNovelPlanningPreview extends ViewRecord
 
     protected ?ChapterPlan $cachedPlan = null;
 
+    /** @var array<string, mixed>|null */
+    protected ?array $cachedOutlineTarget = null;
+
+    protected bool $outlineTargetResolved = false;
+
     public function mount(int|string $record, int|string|null $chapter = null): void
     {
         parent::mount($record);
@@ -114,6 +119,47 @@ class ViewNovelPlanningPreview extends ViewRecord
                         ->state(fn (): ?string => $this->chapterPlan() === null
                             ? null
                             : $this->chapterPlan()->tone.' · '.$this->chapterPlan()->hook_type),
+                ]),
+            Section::make('Current Outline Target')
+                ->description('本章计划冻结的 Outline Version、Primary Beat 与章节预算。')
+                ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
+                ->visible(fn (): bool => $this->outlineTarget() !== null)
+                ->schema([
+                    TextEntry::make('outline_version')
+                        ->label('Outline Version')
+                        ->state(fn (): ?string => $this->chapterPlan()?->novelOutline === null ? null : 'v'.$this->chapterPlan()->novelOutline->version),
+                    TextEntry::make('outline_checksum')
+                        ->label('Checksum')
+                        ->state(fn (): ?string => $this->chapterPlan()?->novelOutline?->checksum)
+                        ->fontFamily('mono')
+                        ->copyable(),
+                    TextEntry::make('primary_beat')
+                        ->label('Primary Beat')
+                        ->state(fn (): ?string => data_get($this->outlineTarget(), 'beat.title')),
+                    TextEntry::make('primary_beat_key')
+                        ->label('Beat Key')
+                        ->state(fn (): ?string => data_get($this->outlineTarget(), 'beat.key'))
+                        ->fontFamily('mono'),
+                    TextEntry::make('chapter_budget')
+                        ->label('章节预算')
+                        ->state(function (): ?string {
+                            $budget = data_get($this->outlineTarget(), 'beat.chapter_budget');
+
+                            return is_array($budget) ? ($budget['min'].'–'.($budget['max'] ?? '∞').' 章') : null;
+                        }),
+                    TextEntry::make('acceptance_criteria')
+                        ->label('验收条件')
+                        ->state(fn (): array => data_get($this->outlineTarget(), 'beat.acceptance_criteria', []))
+                        ->bulleted()
+                        ->columnSpanFull(),
+                    TextEntry::make('outline_must_include')
+                        ->label('必须包含')
+                        ->state(fn (): array => data_get($this->outlineTarget(), 'beat.must_include', []))
+                        ->bulleted(),
+                    TextEntry::make('outline_must_not_include')
+                        ->label('禁止包含')
+                        ->state(fn (): array => data_get($this->outlineTarget(), 'beat.must_not_include', []))
+                        ->bulleted(),
                 ]),
             Section::make('场景流程')
                 ->description('按计划顺序检查每个场景的目标、冲突、转折和结果。')
@@ -209,9 +255,43 @@ class ViewNovelPlanningPreview extends ViewRecord
             ->whereHas('chapter', fn ($query) => $query
                 ->whereKey($this->chapterId)
                 ->where('novel_id', $this->getRecord()->getKey()))
-            ->with(['chapter', 'povCharacter'])
+            ->with(['chapter', 'povCharacter', 'novelOutline'])
             ->orderByDesc('version')
             ->first();
+    }
+
+    /** @return array<string, mixed>|null */
+    private function outlineTarget(): ?array
+    {
+        if ($this->outlineTargetResolved) {
+            return $this->cachedOutlineTarget;
+        }
+        $this->outlineTargetResolved = true;
+        $plan = $this->chapterPlan();
+        $outline = $plan?->novelOutline;
+        $primary = collect($plan?->arc_contributions ?? [])
+            ->first(fn (mixed $item): bool => is_array($item) && ($item['role'] ?? null) === 'primary');
+
+        if ($outline === null || ! is_array($primary)) {
+            return null;
+        }
+
+        $outlineKey = $this->getRecord()->storyArcs()->whereKey($primary['arc_id'] ?? null)->value('outline_key');
+
+        foreach ($outline->content['volumes'] ?? [] as $volume) {
+            foreach ($volume['arcs'] ?? [] as $arc) {
+                if (($arc['key'] ?? null) !== $outlineKey) {
+                    continue;
+                }
+                foreach ($arc['beats'] ?? [] as $beat) {
+                    if (($beat['key'] ?? null) === ($primary['beat_key'] ?? null)) {
+                        return $this->cachedOutlineTarget = ['volume' => $volume, 'arc' => $arc, 'beat' => $beat];
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     private function validationResult(): ?PlanValidationResult

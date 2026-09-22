@@ -449,6 +449,15 @@ Ending Constraints
 bible_version
 state_version
 chapter_plan_id
+novel_outline_id
+outline_version
+outline_checksum
+primary_arc_id
+primary_beat_key
+primary_beat_sequence
+canonical_completed_beat_keys
+chapters_used_for_current_beat
+chapter_budget
 character_ids
 world_entity_ids
 foreshadowing_ids
@@ -1179,11 +1188,12 @@ Complex JOIN
 
 ## 40. Current Data Model
 
-当前 MVP 约 18 张核心表：
+Outline 调整后的 MVP 为 19 张核心表；`novel_outlines` 是唯一新增核心表：
 
 ```text
 novels
 novel_bibles
+novel_outlines
 
 volumes
 story_arcs
@@ -1238,6 +1248,80 @@ style_parameters
 
 首次 AI 小说蓝图生成发生在 Current Bible 创建前，可以生成完整 Bible 候选；用户采用并创建 Current Bible 后，Planner、Writer、Assembler、Reviewer、Rewriter 和长度修复必须读取同一个冻结 Bible Version。
 
+### 40.2 Novel Outline、结构化 Beat 与 Candidate
+
+人工确认的 Current Novel Outline 是 Chapter Planning 的上游权威，Canonical Story State 与 Active Story Events 仍是已经发生之故事事实的权威。AI 只能生成 Outline Candidate 或拆分 Laravel 指定的当前 Beat，不能排序 Main Beat、切换主线、跳过节点或宣告节点完成。
+
+新增 `novel_outlines`：
+
+```text
+id bigint PK
+novel_id bigint FK novels.id
+version unsigned integer
+status draft | current | superseded
+source ai | manual | revision
+schema_version unsigned integer
+content jsonb
+checksum char(64)
+based_on_outline_id nullable FK novel_outlines.id
+created_by nullable FK users.id
+applied_at nullable timestamp
+created_at
+updated_at
+```
+
+数据库约束为 `unique(novel_id, version)`、`version > 0`、`schema_version > 0`、枚举值 CHECK，以及 PostgreSQL 部分唯一索引保证同一 Novel 最多一个 `current`。`novels.current_outline_id` 可空并引用 `novel_outlines.id`。采用或修订 Current Outline 时必须锁定 Novel，在同一事务内 supersede 旧版本并切换指针。
+
+`content` 固定为：
+
+```text
+title
+summary
+must_include[]
+must_not_include[]
+baseline_completions[]（仅旧小说迁移）
+volumes[]
+  key / sequence / title / goal / climax / target_words
+  arcs[]
+    key / sequence / type / title / goal / stakes / completion_conditions[]
+    beats[]
+```
+
+Volume、Arc、Beat Key 在同一 Outline 内全局唯一且版本创建后不可原地修改；各层 `sequence` 从 1 连续排列。至少存在一个 Main Arc，每个 Main Arc 至少存在一个 Beat。结构化 Beat 至少包含：
+
+```text
+key
+sequence
+title
+summary
+chapter_budget { min, max nullable }
+acceptance_criteria[]
+must_include[]
+must_not_include[]
+character_candidates[]
+world_entity_candidates[]
+```
+
+Beat 必须满足 `min >= 1`、非空 `max >= min`、至少一个验收条件，且同一文本不能同时为必须和禁止内容。旧字符串 Beat 由 Normalizer 只读兼容：原文本继续通过现有 `StoryArcBeatContract` 计算完全相同的 Key，数组位置成为 Sequence，默认预算为 `{min: 1, max: null}`，原文本成为临时验收条件。不得改写已有 Canonical Event 的 Beat Key。
+
+相关投影字段冻结为：
+
+```text
+volumes.outline_key nullable
+story_arcs.outline_key nullable
+story_arcs.sequence unsigned integer default 1
+chapter_plans.novel_outline_id nullable FK novel_outlines.id
+chapter_plans.character_candidates jsonb default []
+characters.source_chapter_id nullable FK chapters.id
+characters.source_candidate_key nullable
+```
+
+唯一约束包括 `unique(novel_id, outline_key) WHERE outline_key IS NOT NULL`、`unique(volume_id, sequence)` 和 `unique(novel_id, source_chapter_id, source_candidate_key)`。`story_arcs.beats` 升级为结构化对象数组；`chapter_plans.arc_contributions[*].role` 只允许 `primary | secondary`，每个新 Plan 恰有一个 Primary。
+
+Character Candidate 至少保存 `candidate_key`、`name`、`role`、`motivation`、`profile`、`personality`、`abilities`、`knowledge`、`deduplication_basis`、`possible_duplicate_character_ids`、`introduction_reason`、`target_scene_sequence`。World Entity Candidate 继续使用现有同类冻结结构。Candidate Key 在 Outline 内唯一；保存 Draft 或采用 Outline 都不会创建正式 Character / World Entity。只有对应 Chapter Plan、Review 逐字证据、匹配的 Introduced Event 与 State Version 校验全部通过后，Canonical Commit 才能幂等转正。
+
+`baseline_completions` 每项保存 `beat_key`、Canonical `chapter_ids`、逐字 `evidence`、`reason`、`confirmed_by`、`confirmed_at`。它只供旧小说选择迁移后的起始节点，不创建 Story Event，不修改历史 Canonical State 或 Arc Progress，也不能与 Canonical `story_arc_beat_completed` 混同。
+
 ---
 
 ## 41. Data Model Batches
@@ -1247,6 +1331,7 @@ style_parameters
 ```text
 novels
 novel_bibles
+novel_outlines
 volumes
 story_arcs
 chapters

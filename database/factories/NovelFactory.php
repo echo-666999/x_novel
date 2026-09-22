@@ -24,6 +24,7 @@ class NovelFactory extends Factory
             'premise' => fake()->paragraph(),
             'target_words' => fake()->numberBetween(300_000, 2_000_000),
             'status' => NovelStatus::Draft,
+            'current_outline_id' => null,
             'current_chapter_sequence' => null,
             'settings' => [],
         ];

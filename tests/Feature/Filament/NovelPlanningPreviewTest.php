@@ -3,6 +3,7 @@
 use App\Enums\FactHardness;
 use App\Enums\ForeshadowingImportance;
 use App\Enums\ForeshadowingStatus;
+use App\Enums\NovelOutlineStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ManageNovelChapters;
 use App\Filament\Resources\Novels\Pages\ViewNovelPlanningPreview;
@@ -12,7 +13,11 @@ use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
+use App\Models\NovelOutline;
+use App\Models\StoryArc;
 use App\Models\User;
+use App\Models\Volume;
+use App\Services\NovelOutlineChecksum;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -122,6 +127,62 @@ test('a chapter with no plan shows the preview empty state', function () {
         ->assertOk()
         ->assertSee('尚未建立章节计划')
         ->assertSee('返回章节列表建立完整计划后');
+});
+
+test('planning preview shows the frozen current outline target and constraints', function () {
+    $novel = Novel::factory()->create();
+    $volume = Volume::factory()->for($novel)->create(['outline_key' => 'volume-one', 'status' => 'active']);
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create();
+    $arc = StoryArc::factory()->for($novel)->forVolume($volume)->create([
+        'outline_key' => 'main-arc',
+        'status' => 'active',
+    ]);
+    $content = [
+        'title' => '预览大纲', 'summary' => '预览当前节点。', 'must_include' => [], 'must_not_include' => [],
+        'baseline_completions' => [],
+        'volumes' => [[
+            'key' => 'volume-one', 'sequence' => 1, 'title' => '第一卷', 'goal' => '启程', 'climax' => '离城', 'target_words' => 100000,
+            'arcs' => [[
+                'key' => 'main-arc', 'sequence' => 1, 'type' => 'main', 'title' => '启程主线', 'goal' => '离开旧城',
+                'stakes' => '被困旧城', 'completion_conditions' => ['离开旧城'],
+                'beats' => [[
+                    'key' => 'beat-map', 'sequence' => 1, 'title' => '取得地图', 'summary' => '取得可靠地图。',
+                    'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['主角取得真实地图'],
+                    'must_include' => ['地图来源可验证'], 'must_not_include' => ['直接穿过城门'],
+                    'character_candidates' => [], 'world_entity_candidates' => [],
+                ]],
+            ]],
+        ]],
+    ];
+    $outline = NovelOutline::factory()->for($novel)->create([
+        'status' => NovelOutlineStatus::Current,
+        'content' => $content,
+        'checksum' => app(NovelOutlineChecksum::class)->for($content),
+        'applied_at' => now(),
+    ]);
+    $novel->update(['current_outline_id' => $outline->getKey()]);
+    $pov = Character::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create([
+        'novel_outline_id' => $outline->getKey(),
+        'pov_character_id' => $pov->getKey(),
+        'arc_contributions' => [[
+            'role' => 'primary', 'arc_id' => $arc->getKey(), 'beat_key' => 'beat-map', 'beat_index' => 1,
+            'target_scene_sequence' => 1, 'acceptance_criteria' => '主角取得真实地图',
+        ]],
+        'must_reveal' => ['地图来源可验证'],
+        'must_not_reveal' => ['直接穿过城门'],
+    ]);
+
+    Livewire::test(ViewNovelPlanningPreview::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSeeTextInOrder([
+            'Current Outline Target', 'Outline Version', 'v1', 'Primary Beat', '取得地图',
+            'Beat Key', 'beat-map', '章节预算', '1–2 章', '验收条件', '主角取得真实地图',
+            '必须包含', '地图来源可验证', '禁止包含', '直接穿过城门',
+        ]);
 });
 
 test('planning preview rejects a chapter from another novel', function () {

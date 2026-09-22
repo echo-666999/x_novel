@@ -178,6 +178,7 @@ final readonly class StoryEventCandidate
 ## Character
 
 ```text
+character_introduced
 character_status_changed
 character_moved
 character_injured
@@ -251,7 +252,11 @@ world_state_changed
 story_arc_beat_completed
 ```
 
-`world_entity_introduced` 的候选 `subject_id` 可以是 Chapter Plan 冻结的 Entity Candidate 临时键；只有 Canonical Commit 验证 Review 逐字证据并创建正式实体后，才把它解析为正式 `world_entities.id`。`story_arc_beat_completed` 必须引用当前小说有效 Arc 和该 Arc 的稳定 Beat Key，Arc Progress 只从正式 Active Event 投影。
+`character_introduced` 与 `world_entity_introduced` 的候选 `subject_id` 可以是 Chapter Plan 冻结的 Candidate 临时键。只有 Canonical Commit 验证 Candidate 来自冻结 Plan、Review 状态为 `introduced`、逐字证据命中当前正文、Introduced Event 匹配、无重复对象且 Expected State Version 一致后，才幂等创建正式 Character / World Entity 并把临时键解析为正式 ID。保存或采用 Outline、Plan、Draft、Review 与 Rewrite 都不得提前创建正式对象。
+
+`story_arc_beat_completed` 必须引用 Chapter Plan 冻结 Outline Version 中的 Primary `arc_id + beat_key`。Reviewer 必须对该 Beat 的每条 `acceptance_criteria` 返回 `fulfilled | not_met | contradicted`；只有全部 `fulfilled` 且证据逐字命中 Canonical 候选正文时，Extractor 才能生成 Completion Candidate。Canonical Commit 再校验 Plan、Review 与 Event 的 Arc / Beat 一致性及 Active Event 幂等性。Arc Progress 只从正式 Active Completion Event 投影，Draft、Review、Rewrite 和 Baseline Completion 都不能推进进度。
+
+旧小说可以在 Outline Version 保存人工确认的 `baseline_completions`，用于选择迁移后顺序最早的未完成 Beat。Baseline 必须引用 Canonical Chapter IDs 和逐字证据，并保留确认人、确认时间与原因；它不是正文发生的新事件，因此不得创建 `story_arc_beat_completed`、不得改写历史 Story State 或伪装成 Canonical Event。
 
 ## Correction
 
@@ -1255,14 +1260,16 @@ Foreshadowing projection rebuild
 ↓
 Story Arc progress rebuild
 ↓
-Delete entities first introduced by Chapter 51 when no later Active Canonical Event references them
+Delete characters and world entities first introduced by Chapter 51 when no later Active Canonical Event references them
 ```
 
 旧数据不物理删除。
 
 Commit、Latest Chapter Rollback 和 Manual Canonical Correction 在各自 Canonical 事务成功后，统一派发当前 State Version 对应的投影刷新任务。Rollback 先在事务内恢复 Canonical 指针并失效最新章事件，投影任务随后只重放仍为 Active 且不晚于恢复版本的事件，因此 `status`、`reinforce_count`、`setup_chapter_id` 和 `payoff_chapter_id` 会一起回到上一正式版本。重复刷新从相同基线与事件集合重新计算，不会重复累计强化次数。
 
-Arc Progress 同样从剩余 Active `story_arc_beat_completed` 事件中的唯一 Beat 重算，并且只有全部 Beat 与 Completion Conditions 都有正式验收记录时才进入 completed。若后续 Canonical Chapter 已引用本章首次引入的 World Entity，Latest Chapter Rollback 必须阻止简单删除并要求先处理后续引用。历史 Plan 缺少结构化 Beat 时不得根据章节数或自然语言猜测进度；`story:rebuild-arc-progress` 默认仅 dry-run，显式 `--execute` 才更新投影。
+Arc Progress 同样从剩余 Active `story_arc_beat_completed` 事件中的唯一 Beat 重算，并且只有全部 Beat 与 Completion Conditions 都有正式验收记录时才进入 completed。回滚使某个 Beat 失去最后一个 Active Completion Event 时，该 Beat 恢复为未完成；Baseline Completion 仍只保留其迁移语义，不会在重建时变成 Event 或 Arc Progress。
+
+若后续 Canonical Chapter 已引用本章首次引入的 Character 或 World Entity，Latest Chapter Rollback 必须阻止简单删除并要求先处理后续正式引用。没有后续引用时，只删除带当前 `source_chapter_id + source_candidate_key` 的本章 Candidate 转正对象；人工初始规划中已存在的人物和实体不属于该删除范围。历史 Plan 缺少结构化 Beat 时不得根据章节数或自然语言猜测进度；`story:rebuild-arc-progress` 默认仅 dry-run，显式 `--execute` 才更新投影。
 
 投影刷新失败只留下可重试的 Queue 失败记录，不删除 Story Events、State Version 或 Canonical Chapter。Canonical State 与 Active Story Events 仍是权威来源；管理表在任务完成前可能短暂陈旧，不能反向覆盖 Canonical 数据。这一投影只覆盖已有领域表，不等于引入通用 Event Projection 框架。
 

@@ -13,6 +13,7 @@ use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanFindingSeverity;
 use App\Enums\StoryArcStatus;
+use App\Enums\StoryArcType;
 use App\Enums\WorldEntityStatus;
 use App\Enums\WorldEntityType;
 use App\Models\ChapterPlan;
@@ -27,6 +28,8 @@ class PlanValidator
     public function __construct(
         private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
         private readonly StoryArcBeatContract $storyArcBeatContract,
+        private readonly OutlineProgressResolver $outlineProgressResolver,
+        private readonly NovelOutlineChecksum $outlineChecksum,
     ) {}
 
     public function validate(ChapterPlan $plan): PlanValidationResult
@@ -57,6 +60,7 @@ class PlanValidator
         $requiredFacts = $this->validateFactReferences($plan, $activeFacts, $findings);
         $this->validateLockedFactsAndKnowledge($requiredFacts, $lockedFacts, $characters, $findings);
         $this->validateForeshadowings($plan, $foreshadowings, $findings);
+        $this->validateOutlineContract($plan, $findings);
         $this->validateArcContributions($plan, $findings);
         $this->validateWorldEntityCandidates($plan, $findings);
 
@@ -65,6 +69,110 @@ class PlanValidator
         }
 
         return new PlanValidationResult($findings);
+    }
+
+    /** @param array<int, PlanFinding> $findings */
+    private function validateOutlineContract(ChapterPlan $plan, array &$findings): void
+    {
+        $novel = $plan->chapter->novel;
+        $currentOutline = $novel->currentOutline()->first();
+
+        if ($currentOutline === null) {
+            if ($plan->novel_outline_id !== null) {
+                $findings[] = $this->blocked('OUTLINE_VERSION_MISMATCH', 'Chapter Plan 引用了不存在的 Current Novel Outline。');
+            }
+
+            return;
+        }
+
+        if ($plan->novel_outline_id !== $currentOutline->getKey()) {
+            $findings[] = $this->blocked('OUTLINE_VERSION_MISMATCH', 'Chapter Plan 必须冻结当前采用的 Novel Outline Version。');
+
+            return;
+        }
+
+        $target = $this->outlineProgressResolver->resolve($novel);
+        if ($target === null) {
+            $findings[] = $this->blocked('MISSING_PRIMARY_OUTLINE_BEAT', 'Current Novel Outline 没有可规划的 Main Beat。');
+
+            return;
+        }
+
+        $contributions = collect($plan->arc_contributions ?? [])->filter(fn (mixed $item): bool => is_array($item));
+        $primary = $contributions->where('role', 'primary')->values();
+        if ($primary->count() !== 1) {
+            $findings[] = $this->blocked('MISSING_PRIMARY_OUTLINE_BEAT', '新 Chapter Plan 必须恰有一个 Main Outline Beat 作为 Primary Contribution。');
+
+            return;
+        }
+
+        $primaryContribution = $primary->first();
+        $primaryBeatKey = (string) ($primaryContribution['beat_key'] ?? '');
+        $completed = [...$target->canonicalCompletedBeatKeys, ...$target->baselineCompletedBeatKeys];
+        if (in_array($primaryBeatKey, $completed, true)) {
+            $findings[] = $this->blocked('OUTLINE_BEAT_ALREADY_COMPLETED', '已完成的 Outline Beat 不能再次作为 Primary。');
+        } elseif ((int) ($primaryContribution['arc_id'] ?? 0) !== $target->arcId
+            || $primaryBeatKey !== ($target->beat['key'] ?? null)
+            || (int) ($primaryContribution['beat_index'] ?? 0) !== (int) ($target->beat['sequence'] ?? 0)) {
+            $findings[] = $this->blocked('OUTLINE_BEAT_OUT_OF_ORDER', 'Primary Contribution 必须引用顺序最早的未完成 Main Beat。');
+        }
+
+        $criteria = (string) ($primaryContribution['acceptance_criteria'] ?? '');
+        if (! in_array($criteria, $target->beat['acceptance_criteria'] ?? [], true)) {
+            $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', 'Primary Contribution 必须选择当前 Beat 的明确验收条件。');
+        }
+
+        $maximum = data_get($target->beat, 'chapter_budget.max');
+        if (is_int($maximum) && $target->chaptersUsedForCurrentBeat >= $maximum) {
+            $findings[] = $this->blocked('OUTLINE_BEAT_BUDGET_EXHAUSTED', '当前 Outline Beat 已达到章节预算上限，不能继续自动规划。');
+        }
+
+        $arcs = $novel->storyArcs()->get()->keyBy('id');
+        foreach ($contributions->where('role', 'secondary') as $secondary) {
+            $arc = $arcs->get((int) ($secondary['arc_id'] ?? 0));
+            if ($arc?->type !== StoryArcType::Subplot) {
+                $findings[] = $this->blocked('OUTLINE_BEAT_OUT_OF_ORDER', 'Secondary Contribution 只能推进 Active Subplot，不能替代或并行跳转 Main Beat。');
+            }
+        }
+
+        foreach ($target->beat['must_include'] ?? [] as $required) {
+            if (! in_array($required, $plan->must_reveal ?? [], true)) {
+                $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', "当前 Beat 的必须内容「{$required}」未合并到 must_reveal。");
+            }
+        }
+        $forbiddenConstraints = [...($plan->must_not_reveal ?? []), ...($plan->forbidden_conflicts ?? [])];
+        foreach ($target->beat['must_not_include'] ?? [] as $forbidden) {
+            if (! in_array($forbidden, $forbiddenConstraints, true)) {
+                $findings[] = $this->blocked('OUTLINE_FORBIDDEN_CONTENT_PLANNED', "当前 Beat 的禁止内容「{$forbidden}」未冻结到禁止约束。");
+            }
+        }
+
+        $this->validateOutlineCandidates(
+            $plan->world_entity_candidates ?? [],
+            $target->beat['world_entity_candidates'] ?? [],
+            'INVALID_WORLD_ENTITY_CANDIDATE',
+            '世界实体',
+            $findings,
+        );
+    }
+
+    /** @param array<int, mixed> $selected @param array<int, mixed> $allowed @param array<int, PlanFinding> $findings */
+    private function validateOutlineCandidates(array $selected, array $allowed, string $code, string $label, array &$findings): void
+    {
+        $contracts = collect($allowed)->filter(fn (mixed $item): bool => is_array($item))->keyBy('candidate_key');
+        foreach ($selected as $candidate) {
+            if (! is_array($candidate)) {
+                $findings[] = $this->blocked($code, "{$label} Candidate 结构无效。");
+
+                continue;
+            }
+
+            $key = (string) ($candidate['candidate_key'] ?? '');
+            $contract = $contracts->get($key);
+            if ($contract === null || $this->outlineChecksum->for($candidate) !== $this->outlineChecksum->for($contract)) {
+                $findings[] = $this->blocked($code, "{$label} Candidate {$key} 不属于当前 Outline Beat 或内容与冻结契约不一致。");
+            }
+        }
     }
 
     /** @param array<int, PlanFinding> $findings */

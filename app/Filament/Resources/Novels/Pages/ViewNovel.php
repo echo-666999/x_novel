@@ -13,12 +13,14 @@ use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
+use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
+use App\Models\NovelOutline;
 use App\Services\NovelPlanner;
 use App\Services\ResumeResolver;
 use Filament\Actions\Action;
@@ -124,8 +126,8 @@ class ViewNovel extends ViewRecord
                     ]),
                     Section::make('规划结构')->columns(3)->schema([
                         TextEntry::make('blueprint_characters')->label('人物')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'characters', []))->pluck('name')->all())->bulleted(),
-                        TextEntry::make('blueprint_volumes')->label('分卷')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'volumes', []))->pluck('title')->all())->bulleted(),
-                        TextEntry::make('blueprint_arcs')->label('故事线')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'story_arcs', []))->pluck('title')->all())->bulleted(),
+                        TextEntry::make('blueprint_volumes')->label('分卷')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'outline.volumes', []))->pluck('title')->all())->bulleted(),
+                        TextEntry::make('blueprint_arcs')->label('故事线')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'outline.volumes', []))->flatMap(fn (array $volume): array => $volume['arcs'] ?? [])->pluck('title')->all())->bulleted(),
                         TextEntry::make('blueprint_world')->label('世界设定')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'world_entities', []))->pluck('name')->all())->bulleted(),
                         TextEntry::make('blueprint_foreshadowings')->label('伏笔')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'foreshadowings', []))->pluck('title')->all())->bulleted(),
                     ]),
@@ -133,13 +135,13 @@ class ViewNovel extends ViewRecord
             Action::make('applyNovelBlueprint')
                 ->label('采用 AI 规划')
                 ->icon('heroicon-o-check-circle')
-                ->visible(fn (): bool => $this->latestBlueprintArtifact() !== null && ! $this->hasPlanningData())
+                ->visible(fn (): bool => $this->latestBlueprintArtifact() !== null && $this->latestDraftOutline() !== null && ! $this->hasPlanningData())
                 ->requiresConfirmation()
                 ->modalHeading('采用 AI 小说规划')
                 ->modalDescription('将一次性创建小说圣经、人物、世界设定、分卷、故事线、伏笔和初始故事状态。')
                 ->action(function (ApplyNovelBlueprintAction $apply): void {
                     try {
-                        $apply->handle($this->getRecord(), $this->latestBlueprintArtifact());
+                        $apply->handle($this->getRecord(), $this->latestDraftOutline(), $this->latestBlueprintArtifact());
                     } catch (ValidationException $exception) {
                         Notification::make()->title('无法采用规划')->body(collect($exception->errors())->flatten()->first())->danger()->send();
 
@@ -351,6 +353,14 @@ class ViewNovel extends ViewRecord
                 ->where('stage', GenerationStage::ChapterPlanning)
                 ->where('status', RunStatus::Succeeded))
             ->latest('id')
+            ->first();
+    }
+
+    private function latestDraftOutline(): ?NovelOutline
+    {
+        return $this->getRecord()->outlines()
+            ->where('status', NovelOutlineStatus::Draft->value)
+            ->latest('version')
             ->first();
     }
 

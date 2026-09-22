@@ -37,6 +37,7 @@ test('the planning overview shows active arcs beneath their volumes', function (
         'status' => StoryArcStatus::Active,
     ]);
     StoryArc::factory()->forVolume($volume)->create([
+        'sequence' => 2,
         'title' => '已经结束的支线',
         'status' => StoryArcStatus::Completed,
     ]);

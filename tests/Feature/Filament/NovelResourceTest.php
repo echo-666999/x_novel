@@ -10,6 +10,7 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
+use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
@@ -54,7 +55,7 @@ test('the owner can list search and filter novels', function () {
 });
 
 test('the owner can create a novel and enters its workbench', function () {
-    Livewire::test(CreateNovel::class)
+    $component = Livewire::test(CreateNovel::class)
         ->assertDontSee('创作风格')
         ->assertDontSee('文风高级设置')
         ->fillForm([
@@ -65,10 +66,10 @@ test('the owner can create a novel and enters its workbench', function () {
             'generation_chapter_target_words' => 3_500,
         ])
         ->call('create')
-        ->assertHasNoFormErrors()
-        ->assertRedirect();
+        ->assertHasNoFormErrors();
 
     $novel = Novel::query()->sole();
+    $component->assertRedirect(NovelResource::getUrl('outline', ['record' => $novel]));
 
     expect($novel->title)->toBe('长夜将明')
         ->and($novel->status)->toBe(NovelStatus::Draft)
@@ -78,6 +79,11 @@ test('the owner can create a novel and enters its workbench', function () {
     $this->get(NovelResource::getUrl('view', ['record' => $novel]))
         ->assertOk()
         ->assertSee('小说概览');
+    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->assertOk()
+        ->assertSee('尚未建立全书大纲')
+        ->assertActionVisible('generateOutlineCandidate')
+        ->assertActionVisible('saveManualOutline');
 });
 
 test('the owner can edit a novels basic information', function () {

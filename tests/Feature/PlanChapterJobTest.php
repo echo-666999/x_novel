@@ -9,8 +9,10 @@ use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
+use App\Enums\EventType;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
@@ -18,16 +20,21 @@ use App\Enums\VolumeStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\NovelOutline;
+use App\Models\StoryArc;
+use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\Volume;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterPlanPayload;
+use App\Services\NovelOutlineChecksum;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 
@@ -48,6 +55,7 @@ function plannerChapter(): array
 function plannerPayload(int $characterId, array $overrides = []): array
 {
     return [
+        'novel_outline_id' => null,
         'chapter_function' => '迫使主角离开安全区',
         'arc_contribution' => '推进失踪船队主线',
         'arc_contributions' => [],
@@ -95,9 +103,88 @@ function plannerResponse(array $payload): AiResponse
     );
 }
 
+function plannerOutlineContent(int $maximum = 2): array
+{
+    return [
+        'title' => '章节规划测试大纲',
+        'summary' => '按顺序取得地图并穿过城门。',
+        'must_include' => [],
+        'must_not_include' => [],
+        'baseline_completions' => [],
+        'volumes' => [[
+            'key' => 'volume-one', 'sequence' => 1, 'title' => '启程篇', 'goal' => '离开旧城', 'climax' => '穿过城门', 'target_words' => 100000,
+            'arcs' => [[
+                'key' => 'arc-departure', 'sequence' => 1, 'type' => 'main', 'title' => '启程主线', 'goal' => '主角离开旧城', 'stakes' => '被困在旧城',
+                'completion_conditions' => ['主角穿过城门'],
+                'beats' => [[
+                    'key' => 'beat-map', 'sequence' => 1, 'title' => '取得地图', 'summary' => '主角取得可靠地图。',
+                    'chapter_budget' => ['min' => 1, 'max' => $maximum], 'acceptance_criteria' => ['主角取得真实地图'],
+                    'must_include' => ['地图来源可验证'], 'must_not_include' => ['直接穿过城门'],
+                    'character_candidates' => [], 'world_entity_candidates' => [],
+                ], [
+                    'key' => 'beat-gate', 'sequence' => 2, 'title' => '穿过城门', 'summary' => '主角付出代价穿过城门。',
+                    'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['主角穿过城门'],
+                    'must_include' => ['通行代价'], 'must_not_include' => ['无代价通行'],
+                    'character_candidates' => [], 'world_entity_candidates' => [],
+                ]],
+            ]],
+        ]],
+    ];
+}
+
+function outlinePlannerChapter(int $maximum = 2): array
+{
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    NovelBible::factory()->for($novel)->create(['version' => 1]);
+    $content = plannerOutlineContent($maximum);
+    $outline = NovelOutline::factory()->for($novel)->create([
+        'status' => NovelOutlineStatus::Current,
+        'content' => $content,
+        'checksum' => app(NovelOutlineChecksum::class)->for($content),
+        'applied_at' => now(),
+    ]);
+    $novel->update(['current_outline_id' => $outline->getKey()]);
+    $volume = Volume::factory()->for($novel)->create([
+        'outline_key' => 'volume-one',
+        'status' => VolumeStatus::Active,
+    ]);
+    $arc = StoryArc::factory()->forVolume($volume)->create([
+        'outline_key' => 'arc-departure',
+        'status' => 'active',
+        'beats' => data_get($content, 'volumes.0.arcs.0.beats'),
+    ]);
+    $character = Character::factory()->for($novel)->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 1]);
+
+    return [$chapter, $character, $outline, $volume, $arc];
+}
+
+function outlinePlannerPayload(Character $character, NovelOutline $outline, StoryArc $arc, string $beatKey = 'beat-map', int $beatSequence = 1): array
+{
+    $required = $beatKey === 'beat-map' ? '地图来源可验证' : '通行代价';
+    $forbidden = $beatKey === 'beat-map' ? '直接穿过城门' : '无代价通行';
+    $criteria = $beatKey === 'beat-map' ? '主角取得真实地图' : '主角穿过城门';
+
+    return plannerPayload($character->getKey(), [
+        'novel_outline_id' => $outline->getKey(),
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $arc->getKey(),
+            'beat_key' => $beatKey,
+            'beat_index' => $beatSequence,
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $criteria,
+        ]],
+        'must_reveal' => [$required],
+        'must_not_reveal' => [$forbidden],
+    ]);
+}
+
 test('the chapter plan response schema requires every declared scene field', function () {
     $sceneSchema = ChapterPlanPayload::schema()['properties']['scene_plans']['items'];
     $foreshadowingSchema = ChapterPlanPayload::schema()['properties']['foreshadowing_actions']['items'];
+    $arcSchema = ChapterPlanPayload::schema()['properties']['arc_contributions']['items'];
 
     expect($sceneSchema['required'])
         ->toEqualCanonicalizing(array_keys($sceneSchema['properties']))
@@ -105,7 +192,102 @@ test('the chapter plan response schema requires every declared scene field', fun
         ->and($sceneSchema['properties']['location']['type'])->toContain('null')
         ->and($sceneSchema['properties']['time_anchor']['type'])->toContain('null')
         ->and($foreshadowingSchema['required'])->toEqualCanonicalizing(array_keys($foreshadowingSchema['properties']))
+        ->and($arcSchema['required'])->toEqualCanonicalizing(array_keys($arcSchema['properties']))
+        ->and($arcSchema['properties']['role']['enum'])->toBe(['primary', 'secondary'])
         ->and($foreshadowingSchema['properties']['action']['enum'])->toBe(['plant', 'reinforce', 'pay_off']);
+});
+
+test('the planner freezes the earliest unfinished outline beat and source version', function () {
+    [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
+    $payload = outlinePlannerPayload($character, $outline, $arc);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+
+    $plan = app(ChapterPlanner::class)->generate($chapter->getKey());
+    $snapshot = $chapter->generationRuns()->sole()->context_snapshot;
+
+    expect($plan?->novel_outline_id)->toBe($outline->getKey())
+        ->and(data_get($plan?->arc_contributions, '0.role'))->toBe('primary')
+        ->and(data_get($snapshot, 'novel_outline_id'))->toBe($outline->getKey())
+        ->and(data_get($snapshot, 'outline_version'))->toBe(1)
+        ->and(data_get($snapshot, 'outline_checksum'))->toBe($outline->checksum)
+        ->and(data_get($snapshot, 'primary_arc_id'))->toBe($arc->getKey())
+        ->and(data_get($snapshot, 'primary_beat_key'))->toBe('beat-map')
+        ->and(data_get($snapshot, 'chapter_budget'))->toBe(['min' => 1, 'max' => 2])
+        ->and(data_get($snapshot, 'current_outline_target.beat.key'))->toBe('beat-map')
+        ->and($arc->fresh()->progress)->toBe(0.0)
+        ->and($chapter->novel->storyEvents()->count())->toBe(0)
+        ->and($chapter->novel->canonicalStateVersion()->value('version'))->toBe(0)
+        ->and($chapter->novel->fresh()->current_outline_id)->toBe($outline->getKey())
+        ->and($fake->requests())->toHaveCount(1);
+});
+
+test('the planner advances to the next beat only after an active completion event', function () {
+    [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
+    StoryEvent::factory()->create([
+        'novel_id' => $chapter->novel_id,
+        'chapter_id' => $chapter->getKey(),
+        'event_type' => EventType::StoryArcBeatCompleted,
+        'subject_type' => 'story_arc',
+        'subject_id' => (string) $arc->getKey(),
+        'payload' => ['beat_key' => 'beat-map'],
+    ]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(outlinePlannerPayload($character, $outline, $arc, 'beat-gate', 2)));
+    app()->instance(AiProvider::class, $fake);
+
+    $plan = app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    expect(data_get($plan?->arc_contributions, '0.beat_key'))->toBe('beat-gate')
+        ->and(data_get($chapter->generationRuns()->sole()->context_snapshot, 'primary_beat_key'))->toBe('beat-gate')
+        ->and(data_get($chapter->generationRuns()->sole()->context_snapshot, 'canonical_completed_beat_keys'))->toBe(['beat-map']);
+});
+
+test('an exhausted outline beat budget stops planning before a run or provider call', function () {
+    [$chapter, $character, $outline, $volume, $arc] = outlinePlannerChapter(1);
+    $canonical = Chapter::factory()->for($chapter->novel)->for($volume)->create([
+        'sequence' => 0,
+        'status' => ChapterStatus::Canonical,
+    ]);
+    ChapterPlan::factory()->for($canonical)->create([
+        'novel_outline_id' => $outline->getKey(),
+        'arc_contributions' => [[
+            'role' => 'primary', 'arc_id' => $arc->getKey(), 'beat_key' => 'beat-map', 'beat_index' => 1,
+            'target_scene_sequence' => 1, 'acceptance_criteria' => '主角取得真实地图',
+        ]],
+    ]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(outlinePlannerPayload($character, $outline, $arc)));
+    app()->instance(AiProvider::class, $fake);
+
+    try {
+        app(ChapterPlanner::class)->generate($chapter->getKey());
+        test()->fail('Expected outline budget gate to stop planning.');
+    } catch (GenerationPreflightException $exception) {
+        expect($exception->reason)->toBe('outline_beat_budget_exhausted')
+            ->and($fake->requests())->toHaveCount(0)
+            ->and($chapter->generationRuns()->count())->toBe(0)
+            ->and($chapter->plans()->count())->toBe(0);
+    }
+});
+
+test('outline retries and duplicate delivery keep the same frozen outline context', function () {
+    [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
+    $payload = outlinePlannerPayload($character, $outline, $arc);
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiProviderException('provider_timeout', 'timeout', true))
+        ->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    expect(fn () => $planner->generate($chapter->getKey()))->toThrow(AiProviderException::class, 'timeout');
+    $plan = $planner->generate($chapter->getKey());
+    $duplicate = $planner->generate($chapter->getKey());
+    $runs = $chapter->generationRuns()->oldest('id')->get();
+
+    expect($duplicate?->is($plan))->toBeTrue()
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($runs)->toHaveCount(2)
+        ->and($runs->pluck('context_snapshot')->pluck('outline_checksum')->unique()->all())->toBe([$outline->checksum])
+        ->and($chapter->plans()->count())->toBe(1);
 });
 
 test('the model payload cannot authorize defer or abandon actions', function (string $action) {
@@ -141,6 +323,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
     $run = $chapter->generationRuns()->sole();
 
     expect($plan->status)->toBe(PlanStatus::Ready)
+        ->and($plan->novel_outline_id)->toBeNull()
         ->and($plan->scene_plans)->toHaveCount(1)
         ->and(data_get($plan->scene_plans, '0.outcome_allowed'))->toBe(['寻找无人看守的小船'])
         ->and(data_get($plan->scene_plans, '0.outcome_forbidden'))->toBe(['取得港务官正式许可'])
@@ -476,11 +659,16 @@ test('a stale running planner run is failed and recovered as a new attempt', fun
 });
 
 test('a paused novel cannot start a planner run', function () {
-    [$chapter] = plannerChapter();
+    [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
     $chapter->novel->update(['status' => NovelStatus::Paused]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(outlinePlannerPayload($character, $outline, $arc)));
+    app()->instance(AiProvider::class, $fake);
 
     expect(fn () => app(ChapterPlanner::class)->generate($chapter->getKey()))
         ->toThrow(AiProviderException::class, '小说已暂停');
 
-    expect($chapter->generationRuns()->count())->toBe(0);
+    expect($chapter->generationRuns()->count())->toBe(0)
+        ->and($chapter->plans()->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(0)
+        ->and($chapter->novel->fresh()->current_outline_id)->toBe($outline->getKey());
 });

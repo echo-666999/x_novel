@@ -18,12 +18,13 @@ final class ChapterPlanPayload
             'type' => 'object',
             'additionalProperties' => false,
             'required' => [
-                'chapter_function', 'arc_contribution', 'arc_contributions', 'reader_promise', 'target_words',
+                'novel_outline_id', 'chapter_function', 'arc_contribution', 'arc_contributions', 'reader_promise', 'target_words',
                 'pov_character_id', 'tone', 'time_anchor', 'hook_type', 'must_reveal',
                 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
                 'foreshadowing_actions', 'world_entity_candidates', 'scene_plans',
             ],
             'properties' => [
+                'novel_outline_id' => ['type' => ['integer', 'null'], 'minimum' => 1],
                 'chapter_function' => ['type' => 'string'],
                 'arc_contribution' => ['type' => 'string'],
                 'arc_contributions' => [
@@ -31,8 +32,9 @@ final class ChapterPlanPayload
                     'items' => [
                         'type' => 'object',
                         'additionalProperties' => false,
-                        'required' => ['arc_id', 'beat_key', 'beat_index', 'target_scene_sequence', 'acceptance_criteria'],
+                        'required' => ['role', 'arc_id', 'beat_key', 'beat_index', 'target_scene_sequence', 'acceptance_criteria'],
                         'properties' => [
+                            'role' => ['type' => 'string', 'enum' => ['primary', 'secondary']],
                             'arc_id' => ['type' => 'integer', 'minimum' => 1],
                             'beat_key' => ['type' => 'string'],
                             'beat_index' => ['type' => 'integer', 'minimum' => 1],
@@ -182,9 +184,11 @@ final class ChapterPlanPayload
         }
 
         return Validator::make($payload, [
+            'novel_outline_id' => ['present', 'nullable', 'integer', 'min:1'],
             'chapter_function' => ['required', 'string'],
             'arc_contribution' => ['required', 'string'],
             'arc_contributions' => ['present', 'array'],
+            'arc_contributions.*.role' => ['required', 'string', 'in:primary,secondary'],
             'arc_contributions.*.arc_id' => ['required', 'integer', 'min:1'],
             'arc_contributions.*.beat_key' => ['required', 'string'],
             'arc_contributions.*.beat_index' => ['required', 'integer', 'min:1'],

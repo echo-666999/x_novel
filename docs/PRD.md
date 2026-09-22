@@ -150,6 +150,8 @@ pgvector 负责：
 ```text
 Novel Bible
   ↓
+Current Novel Outline（用户确认的 Volume → Arc → Beat 顺序）
+  ↓
 Volume
   ↓
 Story Arc
@@ -166,6 +168,8 @@ Chapter
 - ≥100 万中文字；
 - 数百到数千章；
 - 支持单章一次启动自动运行到 Review PASS；小说级 `auto_commit` 默认关闭。关闭时由用户确认 Canonical Commit，开启时由 Laravel 在 PASS 后安全派发同一提交服务。
+
+人工确认的 Current Novel Outline 是 Chapter Planning 的上游约束。AI 可以生成候选大纲、拆分当前 Beat、决定场景表达和建议一个 Beat 需要几章，但不能拥有节点排序、主线切换、跳过节点或删除节点的决定权。Laravel 必须选择顺序最早的未完成 Main Beat，并把该精确 Outline Version 和 Primary Beat 冻结到 Chapter Plan。
 
 ---
 
@@ -303,6 +307,10 @@ Owner / Admin
 ```text
 Novel Bible
     ↓
+Current Novel Outline
+    ↓
+Laravel 选择当前最早未完成的 Main Beat
+    ↓
 Volume
     ↓
 Story Arc
@@ -408,6 +416,7 @@ premise
 target_words
 status
 current_volume_id
+current_outline_id
 current_chapter_sequence
 canonical_state_version_id
 ending_mode
@@ -461,11 +470,62 @@ Current Bible Version 是叙事与文风的唯一权威来源。它统一承载 
 
 # 9.2 Story Structure
 
+### novel_outlines
+
+`novel_outlines` 保存用户确认前后的完整全书大纲版本。它是章节规划的权威来源，但不是已经发生的故事事实；Canonical Story State 与 Active Story Events 仍是正式故事事实来源。
+
+```text
+id
+novel_id
+version
+status draft | current | superseded
+source ai | manual | revision
+schema_version
+content JSONB
+checksum char(64)
+based_on_outline_id nullable
+created_by nullable
+applied_at nullable
+created_at
+updated_at
+```
+
+约束：
+
+```text
+unique(novel_id, version)
+version > 0
+schema_version > 0
+每个 novel 最多一个 status=current
+```
+
+`novels.current_outline_id` 指向当前采用版本。更换 Current Outline 必须在锁定 Novel 的事务中完成，并保留旧版本为 `superseded`。AI 生成结果只能先成为 Artifact 或 Draft Outline；用户确认采用前不得写入正式 Volume、Story Arc、Character、World Entity 或 Canonical Story State。
+
+`content` 固定为 `Volume → Story Arc → Beat`。Volume、Arc、Beat 的 `key` 在同一 Outline 内唯一，版本创建后不可原地改键；每层 `sequence` 从 1 开始、连续且不重复。每个 Main Arc 至少有一个 Beat，每个 Beat 至少包含：
+
+```text
+key
+sequence
+title
+summary
+chapter_budget { min, max }
+acceptance_criteria[]
+must_include[]
+must_not_include[]
+character_candidates[]
+world_entity_candidates[]
+```
+
+`chapter_budget.min >= 1`，非空 `max >= min`；`acceptance_criteria` 不得为空；同一文本不得同时出现在 `must_include` 与 `must_not_include`。Candidate 使用 Outline 内唯一的稳定 `candidate_key`，只表达未来正文可能引入的对象，不会在保存或采用大纲时自动成为正式人物或世界实体。
+
+旧小说迁移可以在 Outline Version 中保存经人工确认的 `baseline_completions`，每项记录 `beat_key`、Canonical `chapter_ids`、逐字 `evidence`、`reason`、`confirmed_by` 和 `confirmed_at`。历史基线只决定新 Outline 从哪个 Beat 继续，不创建 `story_arc_beat_completed`，不修改历史 Story Event、State Version 或 Arc Progress，UI 必须明确标识为“历史基线”。新 Outline 生效后的 Beat 只能由 Review PASS 后的 Canonical Commit 正式完成。
+
 ### volumes
 
 ```text
 id
 novel_id
+outline_key nullable
 sequence
 title
 goal
@@ -481,6 +541,7 @@ updated_at
 
 ```text
 unique(novel_id, sequence)
+unique(novel_id, outline_key) WHERE outline_key IS NOT NULL
 ```
 
 ---
@@ -491,6 +552,8 @@ unique(novel_id, sequence)
 id
 novel_id
 volume_id nullable
+outline_key nullable
+sequence
 type
 title
 goal
@@ -505,7 +568,11 @@ updated_at
 
 `story_arcs.progress` 只由 Canonical Chapter 中经过验证的结构化 Beat 完成记录投影计算。Chapter Plan、Scene Draft、Review 或 Rewrite 只能保存候选贡献，不得直接推进 Arc；最新 Canonical Chapter 回滚时必须用剩余 Canonical 记录重算进度。
 
-新出现的 World Entity 在 Review PASS 前只能作为 Candidate 保存。只有 Canonical Commit 可以在同一事务中把经过验证的候选转为正式 `world_entities`；系统可以显示类型覆盖缺口，但不得要求每本小说机械包含所有实体类型。
+Story Arc 的 Outline 投影约束为 `unique(novel_id, outline_key) WHERE outline_key IS NOT NULL` 与 `unique(volume_id, sequence)`。
+
+新 Outline 的 `beats` 使用结构化 Beat 对象。旧字符串 Beat 只做兼容读取：保留原文本，继续用现有 `StoryArcBeatContract` 生成相同 Key，`sequence` 使用原数组位置，预算默认为 `{min: 1, max: null}`，验收条件暂用原 Beat 文本。兼容迁移不得改变已有 Canonical Event 的 `beat_key`。
+
+新出现的 Character / World Entity 在 Review PASS 前只能作为 Candidate 保存。只有 Canonical Commit 可以在同一事务中把经过验证的候选转为正式 `characters` / `world_entities`；系统可以显示类型覆盖缺口，但不得要求每本小说机械包含所有实体类型。
 
 ---
 
@@ -542,10 +609,12 @@ Scene Plans 保存为 JSONB。
 ```text
 id
 chapter_id
+novel_outline_id nullable
 version
 chapter_function
 arc_contribution
 arc_contributions JSONB
+character_candidates JSONB
 reader_promise
 target_words
 pov_character_id
@@ -570,7 +639,9 @@ updated_at
 
 `due_foreshadowings` 只保留历史整数 ID；新版本 Plan 使用 `foreshadowing_actions`。人工编辑保存为新的 Plan Version，旧版本不得原地覆盖。
 
-`arc_contributions` 使用 `arc_id + beat_key + beat_index` 引用当前小说、当前 Volume 或跨卷 Active Arc 的真实 Beat，并记录目标 Scene 与验收条件。`world_entity_candidates` 保存稳定临时键、类型、名称、描述、去重依据、潜在重复实体、引入理由与目标 Scene。二者在 Review PASS 前都只是 Draft 契约。
+`arc_contributions` 使用 `arc_id + beat_key + beat_index + role` 引用冻结 Outline 中的真实 Beat，并记录目标 Scene 与验收条件；每个新 Plan 必须恰有一个 `role=primary`，Secondary 只能推进获准支线，不能替代或提前完成后续 Main Beat。`character_candidates` 与 `world_entity_candidates` 保存稳定临时键、名称或类型、描述、去重依据、潜在重复对象、引入理由与目标 Scene。三者在 Review PASS 前都只是 Draft 契约。
+
+Chapter Plan 的 `novel_outline_id` 必须冻结当时采用的 Outline Version。Generation Run 的 Context Snapshot 同时记录 Outline ID、Version、Checksum、Primary Arc/Beat、已完成 Beat Keys、当前 Beat 已使用的 Canonical Chapter 数和章节预算，后续大纲修订不得把旧 Plan 静默改挂到新版本。
 
 ---
 
@@ -1192,7 +1263,7 @@ Context Builder 是系统最核心组件之一。
 1 System / Output Schema
 2 Bible Hard Constraints
 3 Ending Contract
-4 Volume / Arc / Chapter Plan
+4 Current Outline Target / Volume / Arc / Chapter Plan
 5 Current Story State
 6 Characters / World
 7 Due Foreshadowing

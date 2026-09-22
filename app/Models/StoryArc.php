@@ -14,6 +14,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 #[Fillable([
     'novel_id',
     'volume_id',
+    'outline_key',
+    'sequence',
     'type',
     'title',
     'goal',
@@ -51,6 +53,7 @@ class StoryArc extends Model
     {
         return [
             'type' => StoryArcType::class,
+            'sequence' => 'integer',
             'beats' => 'array',
             'completion_conditions' => 'array',
             'progress' => 'float',

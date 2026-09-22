@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'premise',
     'target_words',
     'status',
+    'current_outline_id',
     'current_chapter_sequence',
     'canonical_state_version_id',
     'settings',
@@ -36,6 +37,18 @@ class Novel extends Model
     public function currentBible(): HasOne
     {
         return $this->hasOne(NovelBible::class)->ofMany('version', 'max');
+    }
+
+    /** @return HasMany<NovelOutline, $this> */
+    public function outlines(): HasMany
+    {
+        return $this->hasMany(NovelOutline::class)->orderByDesc('version');
+    }
+
+    /** @return BelongsTo<NovelOutline, $this> */
+    public function currentOutline(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutline::class, 'current_outline_id');
     }
 
     /** @return HasMany<Volume, $this> */
@@ -118,6 +131,7 @@ class Novel extends Model
         return [
             'target_words' => 'integer',
             'status' => NovelStatus::class,
+            'current_outline_id' => 'integer',
             'current_chapter_sequence' => 'integer',
             'canonical_state_version_id' => 'integer',
             'settings' => 'array',

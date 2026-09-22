@@ -10,11 +10,22 @@ class StoryArcBeatContract
     public function forArc(StoryArc $arc): array
     {
         return collect($arc->beats ?? [])->values()->map(
-            fn (mixed $beat, int $index): array => [
-                'beat_key' => $this->key((string) $beat),
-                'beat_index' => $index + 1,
-                'text' => (string) $beat,
-            ],
+            function (mixed $beat, int $index): array {
+                $text = is_array($beat)
+                    ? (string) ($beat['title'] ?? $beat['summary'] ?? $beat['text'] ?? '')
+                    : (string) $beat;
+                $explicitKey = is_array($beat)
+                    ? trim((string) ($beat['key'] ?? $beat['beat_key'] ?? ''))
+                    : '';
+
+                return [
+                    'beat_key' => $explicitKey !== '' ? $explicitKey : $this->key($text),
+                    'beat_index' => is_array($beat)
+                        ? (int) ($beat['sequence'] ?? $beat['beat_index'] ?? $index + 1)
+                        : $index + 1,
+                    'text' => $text,
+                ];
+            },
         )->all();
     }
 
