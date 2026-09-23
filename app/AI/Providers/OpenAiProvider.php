@@ -51,6 +51,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $requestLogContext = $this->diagnosticLogContext($request, $requestLogId);
 
         if ((bool) config('ai.logging.prompts', false)) {
+            $requestLogContext['ai_models'] = $this->sanitizeForLogging((array) config('ai.models', []));
             $requestLogContext['metadata'] = $this->sanitizeForLogging($request->metadata);
             $requestLogContext['payload'] = $this->sanitizeForLogging($payload);
         }

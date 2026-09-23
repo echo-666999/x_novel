@@ -175,12 +175,46 @@ test('deepseek prompt logging follows the shared environment switch', function (
     ));
 
     $serialized = json_encode($records, JSON_THROW_ON_ERROR);
-    expect($records['AI Provider 请求。'])->not->toHaveKeys(['payload', 'metadata'])
+    expect($records['AI Provider 请求。'])->not->toHaveKeys(['ai_models', 'payload', 'metadata'])
         ->and($records['AI Provider 请求。']['provider'])->toBe('deepseek')
         ->and($serialized)->not->toContain('private-system-prompt')
         ->and($serialized)->not->toContain('private-user-prompt')
         ->and($serialized)->not->toContain('private-metadata')
         ->and($serialized)->not->toContain('deepseek-test-key');
+});
+
+test('deepseek logs ai model configuration when prompt logging is enabled', function () {
+    config()->set('ai.logging.prompts', true);
+    config()->set('ai.models', [
+        'planner' => 'planner-log-model',
+        'writer' => 'writer-log-model',
+    ]);
+    Http::fake(['deepseek.example/*' => Http::response([
+        'id' => 'deepseek-model-log-test',
+        'model' => 'deepseek-chat',
+        'choices' => [['message' => ['content' => 'OK']]],
+        'usage' => [],
+    ])]);
+    $records = [];
+    Log::shouldReceive('debug')->twice()->andReturnUsing(function (string $message, array $context) use (&$records): void {
+        $records[$message] = $context;
+    });
+
+    app(DeepSeekProvider::class)->generate(new AiRequest(
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        systemPrompt: 'logged-system-prompt',
+        prompt: 'logged-user-prompt',
+    ));
+
+    expect($records['AI Provider 请求。']['ai_models'])->toBe([
+        'planner' => 'planner-log-model',
+        'writer' => 'writer-log-model',
+    ])
+        ->and($records['AI Provider 请求。']['payload']['messages'])->toBe([
+            ['role' => 'system', 'content' => 'logged-system-prompt'],
+            ['role' => 'user', 'content' => 'logged-user-prompt'],
+        ]);
 });
 
 test('router rejects disabled missing and unknown providers before http', function (string $provider, ?string $key, string $code) {

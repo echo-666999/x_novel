@@ -89,6 +89,10 @@ test('openai provider logs the complete prompt and response with request metadat
     config()->set('ai.providers.openai.api_key', 'secret-test-key');
     config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
     config()->set('ai.logging.prompts', true);
+    config()->set('ai.models', [
+        'planner' => 'planner-log-model',
+        'writer' => 'writer-log-model',
+    ]);
 
     Http::fake([
         'llm.example/*' => Http::response([
@@ -139,6 +143,10 @@ test('openai provider logs the complete prompt and response with request metadat
         ->and($requestLog['provider'])->toBe('openai')
         ->and($responseLog['provider'])->toBe('openai')
         ->and($requestLog['model'])->toBe('current-model')
+        ->and($requestLog['ai_models'])->toBe([
+            'planner' => 'planner-log-model',
+            'writer' => 'writer-log-model',
+        ])
         ->and($responseLog['model'])->toBe('current-model-2026-09-01')
         ->and($requestLog['prompt_version'])->toBe('scene-writer-test')
         ->and($requestLog['metadata'])->toBe([
@@ -213,7 +221,7 @@ test('openai provider does not log prompts when the prompt logging environment s
     $responseLog = $records['AI Provider 完整响应。'];
     $serializedLogs = json_encode($records, JSON_THROW_ON_ERROR);
 
-    expect($requestLog)->not->toHaveKeys(['payload', 'metadata', 'messages', 'system_prompt', 'prompt'])
+    expect($requestLog)->not->toHaveKeys(['ai_models', 'payload', 'metadata', 'messages', 'system_prompt', 'prompt'])
         ->and($requestLog)->toMatchArray([
             'provider' => 'openai',
             'model' => 'current-model',
