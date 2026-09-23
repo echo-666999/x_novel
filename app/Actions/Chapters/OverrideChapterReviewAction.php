@@ -18,6 +18,12 @@ use Illuminate\Validation\ValidationException;
 
 class OverrideChapterReviewAction
 {
+    public const NON_OVERRIDABLE_PLANNING_FINDING_CODES = [
+        'ARC_BEAT_NOT_FULFILLED',
+        'CHARACTER_CANDIDATE_NOT_INTRODUCED',
+        'WORLD_ENTITY_CANDIDATE_NOT_INTRODUCED',
+    ];
+
     public function execute(Chapter $chapter, string $reason, ?int $actorId = null): Review
     {
         $validated = Validator::make(compact('reason'), [
@@ -39,6 +45,11 @@ class OverrideChapterReviewAction
             }
             if (collect($source->findings)->contains(fn (array $finding): bool => in_array(data_get($finding, 'code'), ['CHAPTER_LENGTH_TOO_SHORT', 'CHAPTER_LENGTH_TOO_LONG'], true))) {
                 throw ValidationException::withMessages(['review' => '字数问题不能通过普通 Override 清除；超出上限时请使用“接受超限版本”，低于下限时请先修改正文。']);
+            }
+            if (collect($source->findings)->contains(
+                fn (array $finding): bool => in_array(data_get($finding, 'code'), self::NON_OVERRIDABLE_PLANNING_FINDING_CODES, true),
+            )) {
+                throw ValidationException::withMessages(['review' => '规划验收问题不能通过普通 Override 清除；请先修订正文或重新审校。']);
             }
 
             $draftId = (int) data_get($source->artifact->data, 'source_artifact_id');
@@ -102,7 +113,9 @@ class OverrideChapterReviewAction
                 'overridden_findings' => $source->findings,
                 'arc_beat_audits' => data_get($source->artifact->data, 'arc_beat_audits', []),
                 'arc_completion_audits' => data_get($source->artifact->data, 'arc_completion_audits', []),
+                'character_candidate_audits' => data_get($source->artifact->data, 'character_candidate_audits', []),
                 'world_entity_candidate_audits' => data_get($source->artifact->data, 'world_entity_candidate_audits', []),
+                'unapproved_characters' => data_get($source->artifact->data, 'unapproved_characters', []),
                 'unapproved_world_entities' => data_get($source->artifact->data, 'unapproved_world_entities', []),
                 'actor_id' => $actorId,
             ];

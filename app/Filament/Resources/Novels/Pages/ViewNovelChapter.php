@@ -155,8 +155,15 @@ class ViewNovelChapter extends ViewRecord
                 ->visible(fn (): bool => $this->chapter()->status === ChapterStatus::Review
                     && $this->latestReview()?->decision === ReviewDecision::Pass
                     && $this->chapter()->canonical_artifact_id === null)
-                ->disabled(fn (): bool => $this->generationWorkPending() || $this->canonicalCommitContext() === null)
-                ->tooltip(fn (): ?string => $this->generationWorkPending() ? '当前生成任务尚未完成，请等待。' : ($this->canonicalCommitContext() === null ? '请先完成事件提取、状态补丁与状态校验。' : null))
+                ->disabled(fn (): bool => $this->generationWorkPending()
+                    || $this->canonicalCommitContext() === null
+                    || $this->canonicalPlanningConflictMessage() !== null)
+                ->tooltip(fn (): ?string => match (true) {
+                    $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
+                    $this->canonicalCommitContext() === null => '请先完成事件提取、状态补丁与状态校验。',
+                    $this->canonicalPlanningConflictMessage() !== null => $this->canonicalPlanningConflictMessage(),
+                    default => null,
+                })
                 ->modalHeading('提交正式章节')
                 ->modalDescription('该操作会原子写入正式事件、事实变化和新的故事状态版本。')
                 ->modalSubmitActionLabel('确认提交')
@@ -355,8 +362,12 @@ class ViewNovelChapter extends ViewRecord
                         ->color('danger')
                         ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::NeedsAttention
                             && ! $this->hasLengthReviewFinding())
-                        ->disabled(fn (): bool => $this->hasHardReviewFinding())
-                        ->tooltip(fn (): ?string => $this->hasHardReviewFinding() ? '当前 Review 存在硬冲突，不能人工通过。' : '保留原 Review 和 Findings，并创建一条带原因的人工 PASS Review。')
+                        ->disabled(fn (): bool => $this->hasHardReviewFinding() || $this->hasNonOverridablePlanningReviewFinding())
+                        ->tooltip(fn (): ?string => match (true) {
+                            $this->hasHardReviewFinding() => '当前 Review 存在硬冲突，不能人工通过。',
+                            $this->hasNonOverridablePlanningReviewFinding() => '规划验收问题不能人工清除；请先修订正文或重新审校。',
+                            default => '保留原 Review 和 Findings，并创建一条带原因的人工 PASS Review。',
+                        })
                         ->requiresConfirmation()
                         ->modalHeading('人工 Override 为通过')
                         ->modalDescription('该操作不会删除原审校问题。系统会创建新的 PASS Review 并记录操作原因，之后才可提交正式章节。')
@@ -746,6 +757,17 @@ class ViewNovelChapter extends ViewRecord
         );
     }
 
+    private function hasNonOverridablePlanningReviewFinding(): bool
+    {
+        return collect($this->latestReview()?->findings)->contains(
+            fn (array $finding): bool => in_array(
+                data_get($finding, 'code'),
+                OverrideChapterReviewAction::NON_OVERRIDABLE_PLANNING_FINDING_CODES,
+                true,
+            ),
+        );
+    }
+
     private function hasOverlengthReviewFinding(): bool
     {
         return collect($this->latestReview()?->findings)->contains(
@@ -825,6 +847,49 @@ class ViewNovelChapter extends ViewRecord
             expectedStateVersion: $stateVersion->version,
             artifactChecksum: $draft->checksum,
         );
+    }
+
+    private function canonicalPlanningConflictMessage(): ?string
+    {
+        $review = $this->currentDraftReview();
+        $draftId = (int) data_get($review?->artifact?->data, 'source_artifact_id', 0);
+        $candidate = $draftId < 1 ? null : GenerationArtifact::query()
+            ->where('type', ArtifactType::EventCandidate)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
+            ->latest('version')->latest('id')->get()
+            ->first(fn (GenerationArtifact $artifact): bool => (int) data_get($artifact->data, 'source_artifact_id') === $draftId);
+
+        if ($review === null || $candidate === null) {
+            return null;
+        }
+
+        $reviewData = $review->artifact->data;
+        $acceptedArcKeys = collect(data_get($reviewData, 'arc_beat_audits', []))
+            ->where('status', 'fulfilled')
+            ->map(fn (array $audit): string => ((int) ($audit['arc_id'] ?? 0)).':'.($audit['beat_key'] ?? ''));
+        $introducedCharacters = collect(data_get($reviewData, 'character_candidate_audits', []))
+            ->where('status', 'introduced')->pluck('candidate_key');
+        $introducedWorldEntities = collect(data_get($reviewData, 'world_entity_candidate_audits', []))
+            ->where('status', 'introduced')->pluck('candidate_key');
+
+        foreach (data_get($candidate->data, 'events', []) as $event) {
+            $eventType = $event['event_type'] ?? null;
+            $subjectId = (string) ($event['subject_id'] ?? '');
+            $candidateKey = (string) data_get($event, 'payload.candidate_key', $subjectId);
+
+            if ($eventType === 'story_arc_beat_completed'
+                && ! $acceptedArcKeys->contains(((int) $subjectId).':'.data_get($event, 'payload.beat_key', ''))) {
+                return '事件候选声明完成了未通过 Review 验收的 Story Arc Beat；请先强制重新审校。';
+            }
+            if ($eventType === 'character_introduced' && ! $introducedCharacters->contains($candidateKey)) {
+                return '事件候选引入了未通过 Review 验收的人物候选；请先强制重新审校。';
+            }
+            if ($eventType === 'world_entity_introduced' && ! $introducedWorldEntities->contains($candidateKey)) {
+                return '事件候选引入了未通过 Review 验收的世界实体候选；请先强制重新审校。';
+            }
+        }
+
+        return null;
     }
 
     /** @return array{draft: string, state: string, events: int, facts: int, changes: int} */

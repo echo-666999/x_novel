@@ -131,7 +131,8 @@ final class ArcCompletionAuditRepairer
             ->latest('id')
             ->get()
             ->first(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'role') === 'arc_completion_repair'
-                && data_get($artifact->data, 'input_hash') === $inputHash);
+                && data_get($artifact->data, 'input_hash') === $inputHash
+                && data_get($artifact->data, 'result.status') === 'succeeded');
     }
 
     /** @param array<string, mixed> $result */

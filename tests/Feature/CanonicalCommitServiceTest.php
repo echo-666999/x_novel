@@ -885,6 +885,25 @@ test('a pass review exposes a canonical commit preview and action', function () 
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
 });
 
+test('a legacy pass review with an unaccepted arc completion cannot expose an enabled commit action', function () {
+    $this->actingAs(User::factory()->create());
+    $fixture = canonicalCommitFixture();
+    addPlanningClosureToCanonicalFixture($fixture);
+    $reviewData = $fixture['review']->artifact->fresh()->data;
+    $reviewData['arc_beat_audits'][0]['status'] = 'missing';
+    $reviewData['arc_beat_audits'][0]['evidence'] = null;
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($reviewData),
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertActionVisible('commitCanonical')
+        ->assertActionDisabled('commitCanonical');
+});
+
 test('commit chapter job uses the canonical service and duplicate delivery has exactly once effects', function () {
     $fixture = canonicalCommitFixture();
     $job = new CommitChapterJob($fixture['chapter']->getKey(), $fixture['review']->getKey());

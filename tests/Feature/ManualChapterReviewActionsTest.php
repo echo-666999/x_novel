@@ -24,7 +24,7 @@ use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
-function manualReviewFixture(array $findings = []): array
+function manualReviewFixture(array $findings = [], array $reviewData = []): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
@@ -54,7 +54,7 @@ function manualReviewFixture(array $findings = []): array
     $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
         'type' => ArtifactType::ReviewResult,
         'version' => 3,
-        'data' => ['source_artifact_id' => $draft->getKey()],
+        'data' => ['source_artifact_id' => $draft->getKey(), ...$reviewData],
     ]);
     $review = Review::factory()->for($reviewRun)->create([
         'artifact_id' => $reviewArtifact->getKey(),
@@ -103,11 +103,17 @@ test('manual chapter revision rejects unchanged content', function () {
 });
 
 test('manual review override creates an audited pass review without changing history', function () {
-    $fixture = manualReviewFixture([[
-        'dimension' => 'pacing',
-        'severity' => 'warning',
-        'message' => '节奏偏慢。',
-    ]]);
+    $fixture = manualReviewFixture(
+        [[
+            'dimension' => 'pacing',
+            'severity' => 'warning',
+            'message' => '节奏偏慢。',
+        ]],
+        ['character_candidate_audits' => [[
+            'candidate_key' => 'character-lin-mo',
+            'status' => 'introduced',
+        ]], 'unapproved_characters' => []],
+    );
 
     $review = app(OverrideChapterReviewAction::class)->execute(
         $fixture['chapter'],
@@ -121,6 +127,8 @@ test('manual review override creates an audited pass review without changing his
         ->and(data_get($review->artifact->data, 'manual_override_reason'))->toBe('当前篇幅可以接受，保留该版本。')
         ->and(data_get($review->artifact->data, 'source_review_id'))->toBe($fixture['review']->getKey())
         ->and(data_get($review->artifact->data, 'overridden_findings.0.message'))->toBe('节奏偏慢。')
+        ->and(data_get($review->artifact->data, 'character_candidate_audits.0.candidate_key'))->toBe('character-lin-mo')
+        ->and(data_get($review->artifact->data, 'unapproved_characters'))->toBe([])
         ->and($review->generationRun->model_policy)->toBe('manual')
         ->and($review->generationRun->prompt_version)->toBe('manual-override-v1')
         ->and($fixture['review']->fresh()->decision)->toBe(ReviewDecision::NeedsAttention)
@@ -156,6 +164,25 @@ test('ordinary manual override cannot clear a chapter length finding', function 
 
     expect(Review::query()->count())->toBe(1);
 });
+
+test('ordinary manual override cannot turn an unmet planning contract into a pass review', function (string $code) {
+    $fixture = manualReviewFixture([[
+        'code' => $code,
+        'severity' => 'warning',
+        'message' => '规划验收尚未满足。',
+    ]]);
+
+    expect(fn () => app(OverrideChapterReviewAction::class)->execute(
+        $fixture['chapter'],
+        '尝试跳过规划验收。',
+    ))->toThrow(ValidationException::class, '规划验收问题不能通过普通 Override 清除');
+
+    expect(Review::query()->count())->toBe(1);
+})->with([
+    '未完成的 Story Arc Beat' => 'ARC_BEAT_NOT_FULFILLED',
+    '未引入的人物候选' => 'CHARACTER_CANDIDATE_NOT_INTRODUCED',
+    '未引入的世界实体候选' => 'WORLD_ENTITY_CANDIDATE_NOT_INTRODUCED',
+]);
 
 test('accepting an overlength chapter records a distinct exception and preserves the finding', function () {
     $finding = [

@@ -153,6 +153,97 @@ test('planning review audits require verbatim evidence and surface missing or un
         ->toThrow(ValidationException::class, '正文逐字证据');
 });
 
+test('planning review audits normalize quoted evidence with an omission marker to a verbatim excerpt', function () {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $arc = StoryArc::factory()->for($fixture['novel'])->create([
+        'status' => StoryArcStatus::Active,
+        'beats' => ['守住城门'],
+    ]);
+    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $fixture['chapter']->latestPlan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $beatKey,
+        'beat_index' => 1,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确守住城门。',
+    ]]]);
+    $payload = [
+        'arc_beat_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'beat_key' => $beatKey,
+            'status' => 'fulfilled',
+            'evidence' => '“林舟守住城门……向同伴作出的承诺。”',
+            'scene_id' => $scene->getKey(),
+        ]],
+        'arc_completion_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'status' => 'not_met',
+            'evidence' => null,
+        ]],
+        'character_candidate_audits' => [],
+        'world_entity_candidate_audits' => [],
+        'unapproved_world_entities' => [],
+        'unapproved_characters' => [],
+    ];
+
+    $validated = app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']);
+
+    expect(data_get($validated, 'arc_beat_audits.0.evidence'))
+        ->toBe('向同伴作出的承诺。');
+});
+
+test('arc completion repair retries a previously failed provider request instead of reusing it', function () {
+    $fixture = reviewFixture();
+    $firstRun = $fixture['draft']->generationRun;
+    $secondRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $fixture['chapter']->getKey(),
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Running,
+    ]);
+    $contract = [[
+        'arc_id' => 1,
+        'title' => '守城',
+        'completion_conditions' => ['守住城门。'],
+    ]];
+    $invalidAudits = [[
+        'arc_id' => 1,
+        'status' => 'fulfilled',
+        'evidence' => '守住城门；兑现承诺',
+    ]];
+    $repairResponse = new AiResponse(
+        content: json_encode(['arc_completion_audits' => [[
+            'arc_id' => 1,
+            'status' => 'not_met',
+            'evidence' => null,
+        ]]], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: ['arc_completion_audits' => [[
+            'arc_id' => 1,
+            'status' => 'not_met',
+            'evidence' => null,
+        ]]],
+        inputTokens: 20,
+        outputTokens: 10,
+        cachedTokens: 0,
+        latencyMs: 10,
+        providerRequestId: 'arc-completion-retry-request',
+        model: 'review-test',
+    );
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiProviderException('provider_request_failed', 'temporary provider failure', true, 500))
+        ->enqueue($repairResponse);
+    app()->instance(AiProvider::class, $fake);
+    $repairer = app(ArcCompletionAuditRepairer::class);
+
+    $failed = $repairer->repair($firstRun, $contract, $invalidAudits, $fixture['draft']->content, 'review-test');
+    $succeeded = $repairer->repair($secondRun, $contract, $invalidAudits, $fixture['draft']->content, 'review-test');
+
+    expect($failed['status'])->toBe('failed')
+        ->and($succeeded['status'])->toBe('succeeded')
+        ->and($fake->requests())->toHaveCount(2);
+});
+
 function reviewFinding(
     string $code = 'STYLE_MISMATCH',
     string $dimension = 'style',

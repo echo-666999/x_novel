@@ -86,7 +86,7 @@ class PlanningReviewAudit
         }
 
         $sceneIds = $chapter->scenes->keyBy('sequence')->map->getKey();
-        $this->validateContractAudits(
+        $payload['arc_beat_audits'] = $this->validateContractAudits(
             $payload['arc_beat_audits'] ?? null,
             $plan->arc_contributions ?? [],
             'arc_id',
@@ -96,7 +96,7 @@ class PlanningReviewAudit
             ['fulfilled', 'missing', 'contradicted'],
             'status',
         );
-        $this->validateContractAudits(
+        $payload['character_candidate_audits'] = $this->validateContractAudits(
             $payload['character_candidate_audits'] ?? null,
             $plan->character_candidates ?? [],
             null,
@@ -106,7 +106,7 @@ class PlanningReviewAudit
             ['introduced', 'missing', 'contradicted'],
             'status',
         );
-        $this->validateContractAudits(
+        $payload['world_entity_candidate_audits'] = $this->validateContractAudits(
             $payload['world_entity_candidate_audits'] ?? null,
             $plan->world_entity_candidates ?? [],
             null,
@@ -189,8 +189,13 @@ class PlanningReviewAudit
         return $findings;
     }
 
-    /** @param mixed $audits @param array<int, mixed> $contracts @param array<int, int> $sceneIds @param array<int, string> $statuses */
-    private function validateContractAudits(mixed $audits, array $contracts, ?string $parentKey, string $key, array $sceneIds, GenerationArtifact $draft, array $statuses, string $statusKey): void
+    /**
+     * @param  array<int, mixed>  $contracts
+     * @param  array<int, int>  $sceneIds
+     * @param  array<int, string>  $statuses
+     * @return array<int, array<string, mixed>>
+     */
+    private function validateContractAudits(mixed $audits, array $contracts, ?string $parentKey, string $key, array $sceneIds, GenerationArtifact $draft, array $statuses, string $statusKey): array
     {
         if (! is_array($audits) || count($audits) !== count($contracts)) {
             throw ValidationException::withMessages([$key => '规划契约验收必须逐项完整返回。']);
@@ -208,8 +213,34 @@ class PlanningReviewAudit
                 throw ValidationException::withMessages([$key => '规划契约验收的标识、顺序或目标 Scene 不一致。']);
             }
             $fulfilled = in_array($audit[$statusKey], ['fulfilled', 'introduced'], true);
+            if ($fulfilled || $audit[$statusKey] === 'contradicted') {
+                $audit['evidence'] = $this->normalizeQuotedEvidence($audit['evidence'] ?? null, (string) $draft->content);
+                $audits[$index] = $audit;
+            }
             $this->validateEvidence($fulfilled || $audit[$statusKey] === 'contradicted', $audit['evidence'] ?? null, $draft, $key);
         }
+
+        return $audits;
+    }
+
+    private function normalizeQuotedEvidence(mixed $evidence, string $draft): mixed
+    {
+        if (! is_string($evidence) || str_contains($draft, $evidence)) {
+            return $evidence;
+        }
+
+        $trimmed = trim($evidence, " \t\n\r\0\x0B\"'“”‘’");
+        if ($trimmed !== '' && str_contains($draft, $trimmed)) {
+            return $trimmed;
+        }
+
+        $candidates = preg_split('/(?:……|…{1,}|\.{3,}|[；;])/u', $trimmed) ?: [];
+
+        return collect($candidates)
+            ->map(fn (string $candidate): string => trim($candidate, " \t\n\r\0\x0B\"'“”‘’"))
+            ->filter(fn (string $candidate): bool => $candidate !== '' && str_contains($draft, $candidate))
+            ->sortByDesc(fn (string $candidate): int => mb_strlen($candidate))
+            ->first() ?? $evidence;
     }
 
     private function validateEvidence(bool $required, mixed $evidence, GenerationArtifact $draft, string $field): void
