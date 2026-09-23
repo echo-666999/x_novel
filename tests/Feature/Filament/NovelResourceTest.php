@@ -188,12 +188,12 @@ test('the novel overview shows closure debt totals and expandable details', func
         ->assertSee('未完成故事弧');
 });
 
-test('draft novels show planning entry and generating novels show chapter controls', function () {
+test('draft novels leave planning in the outline workspace and generating novels show chapter controls', function () {
     Queue::fake();
     $draft = Novel::factory()->create();
 
     Livewire::test(ViewNovel::class, ['record' => $draft->getRouteKey()])
-        ->assertActionVisible('generateNovelBlueprint')
+        ->assertActionDoesNotExist('generateNovelBlueprint')
         ->assertActionHidden('generateNextChapter')
         ->assertActionHidden('startAutoGenerate');
 

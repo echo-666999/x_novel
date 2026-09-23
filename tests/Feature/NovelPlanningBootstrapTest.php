@@ -197,34 +197,6 @@ test('ai planning rejects a blueprint without a complete style profile', functio
         ->and($novel->bibles()->count())->toBe(0);
 });
 
-test('the blueprint preview shows complete narrative and style settings before adoption', function () {
-    $this->actingAs(User::factory()->create());
-    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
-    $fake = (new FakeAiProvider)->enqueue(novelBlueprintResponse());
-    app()->instance(AiProvider::class, $fake);
-    app(NovelPlanner::class)->generate($novel, 1);
-
-    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertActionVisible('previewNovelBlueprint')
-        ->mountAction('previewNovelBlueprint')
-        ->assertActionMounted('previewNovelBlueprint')
-        ->assertMountedActionModalSee([
-            '叙事与文风基线',
-            '克制而紧张',
-            '第三人称限知',
-            '过去时',
-            '东方玄幻',
-            '起点中文网',
-            '热血激昂',
-            '通俗爽快',
-            '现代口语',
-            '快节奏',
-            '文风高级设置',
-            '对白占比',
-            '4 / 5',
-        ]);
-});
-
 test('a ready plan can enter generation and an incomplete plan cannot', function () {
     $incomplete = Novel::factory()->create(['status' => NovelStatus::Draft]);
 
@@ -242,26 +214,26 @@ test('a ready plan can enter generation and an incomplete plan cannot', function
     expect($novel->fresh()->status)->toBe(NovelStatus::Generating);
 });
 
-test('the novel workspace guides a draft through ai planning and generation readiness', function () {
+test('the outline workspace guides a draft through ai planning and generation readiness', function () {
     $this->actingAs(User::factory()->create());
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $fake = (new FakeAiProvider)->enqueue(novelBlueprintResponse());
     app()->instance(AiProvider::class, $fake);
 
+    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->assertActionVisible('generateOutlineCandidate')
+        ->callAction('generateOutlineCandidate', ['volume_count' => 1])
+        ->assertNotified('AI 大纲候选已保存为 Draft Version')
+        ->assertActionVisible('applyOutline')
+        ->callAction('applyOutline')
+        ->assertNotified('Current Novel Outline 已采用');
+
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertActionVisible('generateNovelBlueprint')
-        ->assertActionHidden('generateNextChapter')
-        ->callAction('generateNovelBlueprint', ['volume_count' => 1])
-        ->assertNotified('小说规划候选方案已生成')
-        ->assertActionVisible('previewNovelBlueprint')
-        ->assertActionVisible('applyNovelBlueprint')
-        ->callAction('applyNovelBlueprint')
-        ->assertNotified('AI 小说规划已采用')
+        ->assertActionDoesNotExist('generateNovelBlueprint')
         ->assertActionVisible('startNovelGeneration')
         ->callAction('startNovelGeneration')
         ->assertNotified('小说已进入生成阶段')
-        ->assertActionVisible('generateNextChapter')
-        ->assertActionHidden('generateNovelBlueprint');
+        ->assertActionVisible('generateNextChapter');
 });
 
 test('manual outline creation calls no provider and editing creates a new immutable version', function () {

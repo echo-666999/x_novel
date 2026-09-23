@@ -49,7 +49,7 @@ class NovelForm
                             ->required(),
                         Textarea::make('premise')
                             ->label('故事前提')
-                            ->rows(5)
+                            ->rows(19)
                             ->maxLength(10_000)
                             ->columnSpanFull(),
                     ]),

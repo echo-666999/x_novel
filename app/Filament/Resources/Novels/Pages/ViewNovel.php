@@ -6,30 +6,19 @@ use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Generation\GenerateNextChapterAction;
 use App\Actions\Generation\PauseGenerationAction;
 use App\Actions\Generation\SetAutoGenerationAction;
-use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\EnterCompletingModeAction;
 use App\Actions\Novels\StartNovelGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\BudgetExceededException;
-use App\Enums\ArtifactType;
-use App\Enums\GenerationStage;
-use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
-use App\Enums\RunStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Resources\Novels\NovelResource;
-use App\Models\GenerationArtifact;
 use App\Models\Novel;
-use App\Models\NovelOutline;
-use App\Services\NovelPlanner;
 use App\Services\ResumeResolver;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
-use Filament\Forms\Components\TextInput;
-use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
-use Filament\Schemas\Components\Section;
 use Illuminate\Validation\ValidationException;
 
 class ViewNovel extends ViewRecord
@@ -58,100 +47,6 @@ class ViewNovel extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
-            Action::make('generateNovelBlueprint')
-                ->label(fn (): string => $this->latestBlueprintArtifact() === null ? 'AI 生成小说规划' : '重新生成规划建议')
-                ->icon('heroicon-o-sparkles')
-                ->color('primary')
-                ->visible(fn (): bool => in_array($this->getRecord()->status, [NovelStatus::Draft, NovelStatus::Planning], true)
-                    && ! $this->hasPlanningData())
-                ->modalHeading('AI 生成小说规划')
-                ->modalDescription('根据小说基础信息生成小说圣经、人物、世界设定、分卷、故事线和伏笔。生成结果会先保存为候选方案。')
-                ->schema([
-                    TextInput::make('volume_count')
-                        ->label('预计分卷数')
-                        ->integer()
-                        ->minValue(1)
-                        ->maxValue(12)
-                        ->default(5)
-                        ->required(),
-                ])
-                ->modalSubmitActionLabel('开始生成')
-                ->action(function (array $data, NovelPlanner $planner): void {
-                    try {
-                        $planner->generate($this->getRecord(), (int) $data['volume_count']);
-                    } catch (\Throwable $exception) {
-                        Notification::make()->title('小说规划生成失败')->body($exception->getMessage())->danger()->send();
-
-                        return;
-                    }
-
-                    $this->getRecord()->refresh();
-                    $this->refreshFormData(['status']);
-                    Notification::make()->title('小说规划候选方案已生成')->body('请预览并确认采用。')->success()->send();
-                }),
-            Action::make('previewNovelBlueprint')
-                ->label('预览 AI 规划')
-                ->icon('heroicon-o-eye')
-                ->color('gray')
-                ->visible(fn (): bool => $this->latestBlueprintArtifact() !== null && ! $this->hasPlanningData())
-                ->modalHeading('AI 小说规划预览')
-                ->modalDescription('采用后将写入现有小说规划页面；采用前不会修改小说圣经、人物、世界或故事结构。')
-                ->modalWidth('5xl')
-                ->modalSubmitAction(false)
-                ->schema([
-                    Section::make('核心方案')->schema([
-                        TextEntry::make('blueprint_logline')->label('一句话梗概')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.logline')),
-                        TextEntry::make('blueprint_themes')->label('主题')->state(fn (): array => data_get($this->latestBlueprintArtifact()?->data, 'bible.themes', []))->bulleted(),
-                    ]),
-                    Section::make('叙事与文风基线')->columns(3)->schema([
-                        TextEntry::make('blueprint_tone')->label('基调')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.tone')),
-                        TextEntry::make('blueprint_pov')->label('视角')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.pov')),
-                        TextEntry::make('blueprint_tense')->label('时态')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.tense')),
-                        TextEntry::make('blueprint_subgenre')->label('子题材')->state(fn (): ?string => data_get($this->latestBlueprintArtifact()?->data, 'bible.style_profile.subgenre'))->placeholder('未设置'),
-                        TextEntry::make('blueprint_target_platform')->label('目标平台')->state(fn (): string => $this->blueprintNarrativeLabel('platforms', 'target_platform')),
-                        TextEntry::make('blueprint_primary_style')->label('主文风')->state(fn (): string => $this->blueprintNarrativeLabel('styles', 'primary_style')),
-                        TextEntry::make('blueprint_secondary_styles')->label('辅助文风')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'bible.style_profile.secondary_styles', []))
-                            ->map(fn (mixed $state): string => $this->narrativeLabel('styles', $state))
-                            ->all())->badge()->placeholder('无'),
-                        TextEntry::make('blueprint_language_era')->label('语言时代感')->state(fn (): string => $this->blueprintNarrativeLabel('language_eras', 'language_era')),
-                        TextEntry::make('blueprint_pacing')->label('故事节奏')->state(fn (): string => $this->blueprintNarrativeLabel('paces', 'pacing')),
-                    ]),
-                    Section::make('文风高级设置')->columns(3)->schema([
-                        ...collect($this->styleParameterLabels())
-                            ->map(fn (string $label, string $key): TextEntry => TextEntry::make("blueprint_style_parameter_{$key}")
-                                ->label($label)
-                                ->state(fn (): string => $this->blueprintStyleParameter($key)))
-                            ->values()
-                            ->all(),
-                    ]),
-                    Section::make('规划结构')->columns(3)->schema([
-                        TextEntry::make('blueprint_characters')->label('人物')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'characters', []))->pluck('name')->all())->bulleted(),
-                        TextEntry::make('blueprint_volumes')->label('分卷')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'outline.volumes', []))->pluck('title')->all())->bulleted(),
-                        TextEntry::make('blueprint_arcs')->label('故事线')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'outline.volumes', []))->flatMap(fn (array $volume): array => $volume['arcs'] ?? [])->pluck('title')->all())->bulleted(),
-                        TextEntry::make('blueprint_world')->label('世界设定')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'world_entities', []))->pluck('name')->all())->bulleted(),
-                        TextEntry::make('blueprint_foreshadowings')->label('伏笔')->state(fn (): array => collect(data_get($this->latestBlueprintArtifact()?->data, 'foreshadowings', []))->pluck('title')->all())->bulleted(),
-                    ]),
-                ]),
-            Action::make('applyNovelBlueprint')
-                ->label('采用 AI 规划')
-                ->icon('heroicon-o-check-circle')
-                ->visible(fn (): bool => $this->latestBlueprintArtifact() !== null && $this->latestDraftOutline() !== null && ! $this->hasPlanningData())
-                ->requiresConfirmation()
-                ->modalHeading('采用 AI 小说规划')
-                ->modalDescription('将一次性创建小说圣经、人物、世界设定、分卷、故事线、伏笔和初始故事状态。')
-                ->action(function (ApplyNovelBlueprintAction $apply): void {
-                    try {
-                        $apply->handle($this->getRecord(), $this->latestDraftOutline(), $this->latestBlueprintArtifact());
-                    } catch (ValidationException $exception) {
-                        Notification::make()->title('无法采用规划')->body(collect($exception->errors())->flatten()->first())->danger()->send();
-
-                        return;
-                    }
-
-                    $this->getRecord()->refresh();
-                    $this->refreshFormData(['status', 'canonical_state_version_id']);
-                    Notification::make()->title('AI 小说规划已采用')->body('请检查规划内容，确认后开始正文生成。')->success()->send();
-                }),
             Action::make('startNovelGeneration')
                 ->label('开始正文生成')
                 ->icon('heroicon-o-rocket-launch')
@@ -340,70 +235,5 @@ class ViewNovel extends ViewRecord
             || $this->getRecord()->characters()->exists()
             || $this->getRecord()->worldEntities()->exists()
             || $this->getRecord()->foreshadowings()->exists();
-    }
-
-    private function latestBlueprintArtifact(): ?GenerationArtifact
-    {
-        return GenerationArtifact::query()
-            ->where('type', ArtifactType::Context)
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('novel_id', $this->getRecord()->getKey())
-                ->whereNull('chapter_id')
-                ->where('scope_type', 'novel')
-                ->where('stage', GenerationStage::ChapterPlanning)
-                ->where('status', RunStatus::Succeeded))
-            ->latest('id')
-            ->first();
-    }
-
-    private function latestDraftOutline(): ?NovelOutline
-    {
-        return $this->getRecord()->outlines()
-            ->where('status', NovelOutlineStatus::Draft->value)
-            ->latest('version')
-            ->first();
-    }
-
-    private function blueprintNarrativeLabel(string $group, string $key): string
-    {
-        return $this->narrativeLabel(
-            $group,
-            data_get($this->latestBlueprintArtifact()?->data, "bible.style_profile.{$key}"),
-        );
-    }
-
-    private function narrativeLabel(string $group, mixed $state): string
-    {
-        if (! is_string($state)) {
-            return '尚未记录';
-        }
-
-        $option = data_get(config('narrative'), "{$group}.{$state}");
-
-        if ($group === 'styles' && is_array($option)) {
-            return (string) ($option['name'] ?? $state);
-        }
-
-        return is_string($option) ? $option : $state;
-    }
-
-    private function blueprintStyleParameter(string $key): string
-    {
-        $state = data_get($this->latestBlueprintArtifact()?->data, "bible.style_profile.parameters.{$key}");
-
-        return is_int($state) ? "{$state} / 5" : '尚未记录';
-    }
-
-    /** @return array<string, string> */
-    private function styleParameterLabels(): array
-    {
-        return [
-            'ornateness' => '语言华丽度',
-            'dialogue_ratio' => '对白占比',
-            'description_density' => '环境描写密度',
-            'psychology_density' => '心理描写密度',
-            'humor_level' => '幽默程度',
-            'literary_level' => '文学性',
-        ];
     }
 }
