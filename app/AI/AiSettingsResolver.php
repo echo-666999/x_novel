@@ -25,6 +25,8 @@ class AiSettingsResolver
 
         // 管理后台维护的“模型路由”是全局首选配置；config/ai.php 只承担兼容回退。
         $route = $this->modelRoutes->find($stage);
+        $routeProvider = $route === null ? null : strtolower(trim($route->provider));
+        $routeModel = $route === null ? null : trim($route->model);
 
         // Embedding 不读取小说级生成策略。未维护数据库路由时，直接使用环境配置，
         // 避免把文本生成模型的默认供应商错误应用到向量模型。
@@ -33,12 +35,13 @@ class AiSettingsResolver
                 return $this->environmentSettings($stage);
             }
 
-            $this->assertProviderIsUsable($route->provider);
+            $this->assertProviderIsUsable($routeProvider);
+            $this->assertModelIsConfigured($stage, $routeModel);
 
             return new ResolvedAiSettings(
                 stage: $stage,
-                provider: $route->provider,
-                model: $route->model,
+                provider: $routeProvider,
+                model: $routeModel,
                 source: 'database',
             );
         }
@@ -46,10 +49,10 @@ class AiSettingsResolver
         // 先建立全局基础配置：模型路由优先，其次是当前数据库 AI 设置及其环境回退。
         $current = $this->settingsService->current();
         $databaseStage = data_get($current['settings'], "stages.{$stage->value}");
-        $baseProvider = $route?->provider ?? (is_array($databaseStage)
+        $baseProvider = $routeProvider ?? (is_array($databaseStage)
             ? trim((string) ($databaseStage['provider'] ?? ''))
             : trim((string) data_get($current['settings'], 'default_provider')));
-        $baseModel = $route?->model ?? (is_array($databaseStage) ? trim((string) ($databaseStage['model'] ?? '')) : '');
+        $baseModel = $routeModel ?? (is_array($databaseStage) ? trim((string) ($databaseStage['model'] ?? '')) : '');
         $baseSource = $route !== null || str_starts_with($current['source'], 'database') ? 'database' : 'environment';
 
         // 小说级配置只覆盖当前小说，是最终优先级；旧 ai.models.* 结构保留兼容读取。
@@ -70,6 +73,7 @@ class AiSettingsResolver
                 $provider,
                 requireCredential: $baseSource === 'database' || $hasProviderOverride,
             );
+            $this->assertModelIsConfigured($stage, $model);
 
             return new ResolvedAiSettings(
                 stage: $stage,
@@ -80,6 +84,7 @@ class AiSettingsResolver
         }
 
         $this->assertProviderIsUsable($baseProvider, requireCredential: $baseSource === 'database');
+        $this->assertModelIsConfigured($stage, $baseModel);
 
         return new ResolvedAiSettings(
             stage: $stage,
@@ -129,6 +134,13 @@ class AiSettingsResolver
 
         if ($requireCredential && ! $this->settingsService->isCredentialConfigured($provider)) {
             throw new InvalidArgumentException("AI provider [{$provider}] has no configured API key.");
+        }
+    }
+
+    private function assertModelIsConfigured(AiStage $stage, string $model): void
+    {
+        if ($model === '') {
+            throw new InvalidArgumentException("AI model is not configured for stage [{$stage->value}].");
         }
     }
 }

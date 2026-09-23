@@ -96,7 +96,11 @@ class AiModelRouteService
                 continue;
             }
 
-            $resolved[$stage->value] = ['provider' => $price->provider, 'model' => $price->model];
+            // 路由值最终会原样发送给 Provider，保存前必须去除后台录入产生的首尾空白。
+            $resolved[$stage->value] = [
+                'provider' => strtolower(trim($price->provider)),
+                'model' => trim($price->model),
+            ];
         }
 
         if ($errors !== []) {

@@ -24,7 +24,8 @@ class AIModelPriceForm
                     TextInput::make('model')
                         ->label('模型标识')
                         ->required()
-                        ->maxLength(255),
+                        ->maxLength(255)
+                        ->dehydrateStateUsing(fn (string $state): string => trim($state)),
                     TextInput::make('currency')
                         ->label('币种')
                         ->default('USD')

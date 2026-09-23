@@ -5,6 +5,7 @@ use App\AI\AiSettingsService;
 use App\AI\Data\AiRequest;
 use App\AI\Providers\OpenAiProvider;
 use App\Enums\AiStage;
+use App\Models\AIModelRoute;
 use App\Models\Novel;
 use App\Models\SystemSetting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -58,6 +59,19 @@ test('database stage settings override environment defaults', function () {
             'connect_timeout' => 12,
             'timeout' => 70,
         ]);
+});
+
+test('database model routes are normalized before provider requests', function () {
+    AIModelRoute::query()->create([
+        'role' => AiStage::Planner,
+        'provider' => ' openai ',
+        'model' => ' gpt-5.6-terra ',
+    ]);
+
+    expect(app(AiSettingsResolver::class)->resolve(AiStage::Planner))
+        ->provider->toBe('openai')
+        ->model->toBe('gpt-5.6-terra')
+        ->source->toBe('database');
 });
 
 test('novel stage overrides affect only that novel and stage', function () {

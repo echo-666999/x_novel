@@ -1,11 +1,12 @@
 <?php
 
 use App\AI\AiCostCalculator;
-use App\AI\AiSettingsResolver;
 use App\AI\AiProviderConnectionTester;
+use App\AI\AiSettingsResolver;
 use App\AI\AiSettingsService;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\AiStage;
 use App\Filament\Resources\AIModelPrices\Pages\CreateAIModelPrice;
 use App\Filament\Resources\AIModelPrices\Pages\ListAIModelPrices;
 use App\Filament\Resources\AIProviderConnections\Pages\CreateAIProviderConnection;
@@ -14,7 +15,6 @@ use App\Filament\Resources\AIProviderConnections\Pages\ListAIProviderConnections
 use App\Models\AIModelPrice;
 use App\Models\AIModelRoute;
 use App\Models\AIProviderConnection;
-use App\Enums\AiStage;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -118,7 +118,7 @@ test('model price can be maintained and drives cost calculation', function () {
     Livewire::test(CreateAIModelPrice::class)
         ->fillForm([
             'provider' => 'openai',
-            'model' => 'gpt-priced',
+            'model' => ' gpt-priced ',
             'currency' => 'USD',
             'billing_unit' => 1_000_000,
             'input_price' => '2',
@@ -145,6 +145,7 @@ test('model price can be maintained and drives cost calculation', function () {
     ), 'openai');
 
     expect($price->input_price)->toBe('2.000000000000')
+        ->and($price->model)->toBe('gpt-priced')
         ->and($price->cached_input_price)->toBe('0.500000000000')
         ->and($price->output_price)->toBe('8.000000000000')
         ->and($cost)->toBe(0.0057);
