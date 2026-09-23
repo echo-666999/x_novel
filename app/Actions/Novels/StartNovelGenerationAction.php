@@ -13,13 +13,16 @@ class StartNovelGenerationAction
 {
     public function handle(Novel $novel): Novel
     {
+        // 启动正文生成只切换生命周期状态，不在此处创建章节或调用模型。
         return DB::transaction(function () use ($novel): Novel {
+            // 锁定 Novel，避免两个请求同时通过准备度检查并重复启动。
             $locked = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
 
             if (! in_array($locked->status, [NovelStatus::Draft, NovelStatus::Planning], true)) {
                 throw ValidationException::withMessages(['novel' => '只有草稿或规划中的小说可以开始正文生成。']);
             }
 
+            // Current Outline 采用后应形成以下最小规划闭环，缺一项都不能进入 Generating。
             $missing = collect([
                 '小说圣经' => ! $locked->currentBible()->exists(),
                 '主要人物' => ! $locked->characters()->where('role', '主角')->exists(),

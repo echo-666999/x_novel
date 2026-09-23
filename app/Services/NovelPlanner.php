@@ -25,6 +25,7 @@ use Throwable;
 
 class NovelPlanner
 {
+    // Prompt 版本参与 input_hash；修改提示词时必须升级版本，避免复用旧语义产物。
     public const PROMPT_VERSION = 'novel-planner-v5';
 
     public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v1';
@@ -41,10 +42,12 @@ class NovelPlanner
     {
         $novel->refresh();
 
+        // 初始蓝图只能在正文生成前创建，防止覆盖已经进入正式生命周期的规划。
         if (! in_array($novel->status, [NovelStatus::Draft, NovelStatus::Planning], true)) {
             throw new AiProviderException('novel_planning_unavailable', '只有草稿或规划中的小说可以生成初始规划。', false);
         }
 
+        // 此处解析并冻结实际供应商与模型，后续后台配置变化不会污染历史 Run 的可追溯性。
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $context = [
             'novel' => $novel->only(['id', 'title', 'genre', 'premise', 'target_words']),
@@ -53,6 +56,7 @@ class NovelPlanner
             ],
             'requested_volume_count' => $volumeCount,
         ];
+        // 相同输入、模型和 Prompt 版本产生相同哈希，用于复用已经成功的昂贵调用。
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'provider' => $settings->provider,
@@ -60,6 +64,7 @@ class NovelPlanner
             'prompt_version' => self::PROMPT_VERSION,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
+        // 全书规划沿用 ChapterPlanning 阶段枚举，通过 novel scope 与空 chapter_id 区分单章规划。
         $reusable = GenerationRun::query()
             ->where('novel_id', $novel->getKey())
             ->whereNull('chapter_id')
@@ -73,6 +78,7 @@ class NovelPlanner
         $artifact = $reusable?->artifacts()->where('type', ArtifactType::Context)->first();
 
         if ($artifact instanceof GenerationArtifact) {
+            // Artifact 是可重放的完整蓝图；即使 Draft 被清理，也可据此恢复而不重复付费。
             $this->ensureDraftOutline($novel, $artifact);
 
             return $artifact;
@@ -85,6 +91,7 @@ class NovelPlanner
             ->where('stage', GenerationStage::ChapterPlanning)
             ->max('attempt')) + 1;
 
+        // 先持久化 Running 状态，再调用外部 Provider，确保超时和异常都有业务追踪记录。
         $run = GenerationRun::query()->create([
             'novel_id' => $novel->getKey(),
             'scope_type' => 'novel',
@@ -102,6 +109,7 @@ class NovelPlanner
         ]);
 
         try {
+            // Provider 只负责完成认知任务；结构、流程和是否采用仍由 Laravel 决定。
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -118,10 +126,12 @@ class NovelPlanner
                 ],
             ));
 
+            // Provider 输出属于不可信输入：先解析严格 JSON，再执行 Laravel 业务校验。
             $blueprint = $this->validate(
                 StructuredOutput::require($response, 'novel_plan', '小说规划'),
                 $volumeCount,
             );
+            // 先冻结完整 Blueprint Artifact，再从其中派生可供用户确认的 Draft Outline。
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::Context,
                 'version' => 1,
@@ -135,6 +145,7 @@ class NovelPlanner
 
             return $artifact;
         } catch (Throwable $exception) {
+            // 失败 Run 也必须落库；它不会被成功结果复用查询命中。
             $run->update([
                 'status' => RunStatus::Failed,
                 'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'novel_planning_failed',
@@ -158,12 +169,14 @@ class NovelPlanner
         $nodeKey = trim($nodeKey);
         $instruction = trim($instruction);
 
+        // Current Outline 已经约束后续 Chapter Plan，局部 AI 修订只能作用于尚未采用的 Draft。
         if ($outline->novel_id !== $novel->getKey() || $outline->status !== NovelOutlineStatus::Draft) {
             throw new AiProviderException('outline_regeneration_unavailable', '局部重新生成只接受当前小说的 Draft Outline。', false);
         }
         if ($instruction === '' || ! in_array($nodeKey, $this->nodeKeys($outline->content), true)) {
             throw new AiProviderException('outline_regeneration_target_invalid', '必须选择有效节点并填写局部修改要求。', false);
         }
+        // 修订必须继承同一小说的完整 Blueprint，避免丢失 Bible、人物、世界资料和伏笔来源。
         if ($sourceArtifact->generationRun()->where('novel_id', $novel->getKey())->where('scope_type', 'novel')->doesntExist()
             || ! is_array(data_get($sourceArtifact->data, 'bible'))) {
             throw new AiProviderException('outline_regeneration_source_invalid', '局部重新生成缺少可追踪的初始 Blueprint Artifact。', false);
@@ -204,6 +217,7 @@ class NovelPlanner
         ]);
 
         try {
+            // 为便于结构校验和差异检查，局部修订仍要求模型返回完整 Outline。
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -222,8 +236,10 @@ class NovelPlanner
             ));
             $revised = StructuredOutput::require($response, 'outline_node_regeneration', '大纲局部修订');
             $this->outlineValidator->assertValid($revised);
+            // Prompt 约束不能作为安全边界，服务端再次确认模型没有修改目标节点之外的内容。
             $this->assertOnlyTargetChanged($outline->content, $revised, $nodeKey);
 
+            // 新 Artifact 保留原始蓝图的其他部分，仅替换通过校验的 Outline 并记录修订来源。
             $artifactData = $sourceArtifact->data;
             $artifactData['outline'] = $revised;
             $artifactData['regeneration'] = [
@@ -324,12 +340,14 @@ class NovelPlanner
             throw new AiProviderException('novel_outline_missing', 'AI 小说规划缺少结构化 Outline。', false);
         }
 
+        // checksum 相同的 Draft/Current 已经代表相同内容，无需创建重复版本。
         $checksum = $this->outlineChecksum->for($content);
         $existing = $novel->outlines()->where('checksum', $checksum)->latest('version')->first();
         if ($existing?->status === NovelOutlineStatus::Draft || $existing?->status === NovelOutlineStatus::Current) {
             return;
         }
 
+        // Artifact 只保存 AI 产物；用户可查看和采用的业务对象仍是不可变 Outline Version。
         $this->createOutlineVersion->handle(
             novel: $novel,
             content: $content,
@@ -341,6 +359,7 @@ class NovelPlanner
     /** @param array<string, mixed> $data @return array<string, mixed> */
     private function validate(array $data, int $volumeCount): array
     {
+        // 第一层校验完整 Blueprint 的字段、类型、枚举和用户指定的精确分卷数。
         $rules = [
             'bible' => ['required', 'array'],
             'bible.logline' => ['required', 'string'],
@@ -427,16 +446,19 @@ class NovelPlanner
         $valid = $validator->validate();
         $valid['outline'] = $data['outline'];
 
+        // 第二层校验 Volume → Arc → Beat 的顺序、稳定键、预算和候选对象等领域约束。
         $this->outlineValidator->assertValid($valid['outline']);
 
         $arcKeys = collect($valid['outline']['volumes'])
             ->flatMap(fn (array $volume): array => $volume['arcs'] ?? [])
             ->pluck('key');
 
+        // 初始规划必须能支撑正文启动，因此至少需要一名主角。
         if (! collect($valid['characters'])->contains(fn (array $character): bool => $character['role'] === '主角')) {
             throw new AiProviderException('novel_plan_protagonist_missing', '小说规划必须包含至少一名主角。', false);
         }
 
+        // 伏笔通过稳定 Arc key 建立引用，采用蓝图时再映射为正式数据库 ID。
         if (collect($valid['foreshadowings'])->contains(fn (array $item): bool => filled($item['owner_arc_key'] ?? null) && ! $arcKeys->contains($item['owner_arc_key']))) {
             throw new AiProviderException('novel_plan_reference_invalid', '小说规划包含无效的故事线引用。', false);
         }

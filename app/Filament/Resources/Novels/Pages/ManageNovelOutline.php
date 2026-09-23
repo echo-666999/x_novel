@@ -69,6 +69,7 @@ class ManageNovelOutline extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            // 只生成可审阅的 Draft 候选；正式规划表要等用户点击“确认采用”后才写入。
             Action::make('generateOutlineCandidate')
                 ->label('AI 生成候选')
                 ->icon('heroicon-o-sparkles')
@@ -123,6 +124,7 @@ class ManageNovelOutline extends ViewRecord
                 ])
                 ->action(function (array $data, NovelPlanner $planner): void {
                     try {
+                        // 服务端会再次限制变更范围，不能只依赖 Prompt 要求模型保持其他节点不变。
                         $planner->regenerateNode(
                             $this->getRecord(),
                             $this->latestDraft(),
@@ -149,6 +151,7 @@ class ManageNovelOutline extends ViewRecord
                 ->action(function (ApplyNovelBlueprintAction $apply): void {
                     $outline = $this->latestDraft();
                     try {
+                        // 只有 AI 根版本需要附带 Blueprint Artifact；手工大纲使用已维护的正式资料。
                         $apply->handle(
                             $this->getRecord(),
                             $outline,
@@ -185,6 +188,7 @@ class ManageNovelOutline extends ViewRecord
                     ...self::outlineForm(),
                 ])
                 ->action(function (array $data, ApplyNovelOutlineRevisionAction $apply): void {
+                    // expected ID 与 checksum 构成乐观并发检查，防止基于过期 Current 版本修订。
                     $expectedId = (int) $data['expected_current_outline_id'];
                     $expectedChecksum = (string) $data['expected_current_outline_checksum'];
                     unset($data['expected_current_outline_id'], $data['expected_current_outline_checksum']);

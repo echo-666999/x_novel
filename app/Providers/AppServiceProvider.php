@@ -29,11 +29,13 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(StoryEventApplier::class, DeterministicStoryEventApplier::class);
         $this->app->bind(AiProvider::class, function (): AiProvider {
+            // 先按请求中的 provider 路由，再由 Tracking 装饰器统一记录实际用量与费用。
             $provider = new RoutingAiProvider([
                 'openai' => new TrackingAiProvider(app(OpenAiProvider::class), app(UsageRecorder::class)),
                 'deepseek' => new TrackingAiProvider(app(DeepSeekProvider::class), app(UsageRecorder::class)),
             ], app(AiSettingsService::class));
 
+            // 预算与紧急停止位于最外层，确保任何业务阶段都不能绕过全局保护。
             $budgetedProvider = new BudgetGuardAiProvider($provider, app(BudgetService::class));
 
             return new EmergencyStopAiProvider($budgetedProvider, app(EmergencyStopService::class));

@@ -32,6 +32,7 @@ class NovelOutline extends Model
     protected static function booted(): void
     {
         static::updating(function (NovelOutline $outline): void {
+            // Chapter Plan 会冻结精确 Outline Version，内容原地修改会破坏历史可解释性。
             $allowed = ['status', 'applied_at', 'updated_at'];
             if (array_diff(array_keys($outline->getDirty()), $allowed) !== []) {
                 throw new LogicException('Novel Outline versions are immutable; create a new version instead.');
@@ -39,6 +40,7 @@ class NovelOutline extends Model
         });
 
         static::deleting(function (NovelOutline $outline): void {
+            // 已被章节规划引用的版本属于生成证据链，必须永久保留。
             if ($outline->chapterPlans()->exists()) {
                 throw new LogicException('Novel Outline versions referenced by Chapter Plans cannot be deleted.');
             }

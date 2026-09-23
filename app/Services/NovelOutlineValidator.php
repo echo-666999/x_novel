@@ -11,6 +11,7 @@ class NovelOutlineValidator
     /** @param array<string, mixed> $content */
     public function validate(array $content): NovelOutlineValidationResult
     {
+        // 一次收集全部错误，便于后台展示完整修正清单，而不是逐项试错。
         $errors = [];
         $keys = [];
         $candidateKeys = [];
@@ -22,6 +23,7 @@ class NovelOutlineValidator
         $this->stringList($content['must_include'] ?? [], 'Outline must_include', $errors);
         $this->stringList($content['must_not_include'] ?? [], 'Outline must_not_include', $errors);
 
+        // Outline 的权威结构固定为 Volume → Arc → Beat。
         $volumes = $content['volumes'] ?? null;
         if (! is_array($volumes) || $volumes === []) {
             $errors[] = 'Outline 至少需要一个 Volume。';
@@ -102,6 +104,7 @@ class NovelOutlineValidator
                     if (array_intersect($must, $mustNot) !== []) {
                         $errors[] = "{$beatPath} 同一文本不能同时出现在 must_include 和 must_not_include。";
                     }
+                    // Candidate 只是未来正文可能引入的对象，采用 Outline 时不会提前转成正式实体。
                     $this->candidates($beat['character_candidates'] ?? [], 'Character', $beatPath, $candidateKeys, $errors);
                     $this->candidates($beat['world_entity_candidates'] ?? [], 'World Entity', $beatPath, $candidateKeys, $errors);
                 }
@@ -111,6 +114,7 @@ class NovelOutlineValidator
         if ($mainArcCount === 0) {
             $errors[] = 'Outline 至少需要一个 Main Arc。';
         }
+        // 历史基线仅用于旧小说迁移，必须引用当前 Outline 中真实存在的 Beat。
         $this->baseline($content['baseline_completions'] ?? [], $beatKeys, $errors);
 
         return new NovelOutlineValidationResult(array_values(array_unique($errors)));
@@ -125,6 +129,7 @@ class NovelOutlineValidator
     /** @param array<string, mixed> $node @param array<string, true> $keys @param array<int, string> $errors */
     private function nodeKey(array $node, string $path, array &$keys, array &$errors): string
     {
+        // 稳定 key 会被 Chapter Plan 和正式事件引用，因此同一版本内必须全局唯一且可持久比较。
         $key = trim((string) ($node['key'] ?? ''));
         if (! preg_match('/^[a-z0-9][a-z0-9-]*$/', $key)) {
             $errors[] = "{$path} key 必须是稳定的小写字母、数字或连字符标识。";
@@ -146,6 +151,7 @@ class NovelOutlineValidator
             return;
         }
 
+        // 连续顺序让 Laravel 可以确定性选择最早未完成节点，不把流程控制交给模型。
         $actual = array_map(fn (mixed $node): mixed => is_array($node) ? ($node['sequence'] ?? null) : null, array_values($nodes));
         if ($actual !== range(1, count($nodes))) {
             $errors[] = "{$path} sequence 必须从 1 连续排列。";

@@ -8,7 +8,7 @@ return [
         'prompts' => env('AI_LOG_PROMPTS', false),
     ],
 
-    // Compatibility fallback. Database model routes maintained in Filament take precedence.
+    // 兼容回退配置：管理后台维护的数据库模型路由优先于这里的环境变量。
     'models' => [
         'planner' => env('AI_MODEL_PLANNER', env('AI_MODEL', 'gpt-5.6-luna')),
         'writer' => env('AI_MODEL_WRITER', env('AI_MODEL', 'gpt-5.6-luna')),
