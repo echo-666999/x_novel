@@ -11,7 +11,9 @@ use App\Exceptions\GenerationPreflightException;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\Volume;
+use App\Services\GenerationRunLease;
 use App\Services\NarrativeStyleProfile;
+use App\Services\StalledRunRecoveryService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -20,10 +22,15 @@ class GenerateNextChapterAction
     public function __construct(
         private readonly BudgetService $budgetService,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
+        private readonly GenerationRunLease $runLease,
     ) {}
 
     public function handle(Novel $novel): Chapter
     {
+        // 独立提交停滞清理。即使后续发现另一个真正活跃的工作流并拒绝生成，
+        // 已确认过期的 Run 也不能随外层事务回滚后继续占用小说。
+        $this->markStalledRuns($novel);
+
         return DB::transaction(function () use ($novel): Chapter {
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
 
@@ -57,6 +64,22 @@ class GenerateNextChapterAction
                 'word_count' => 0,
             ]);
         });
+    }
+
+    private function markStalledRuns(Novel $novel): void
+    {
+        // Scheduler 可能暂时不可用；前置检查必须自行回收当前小说的过期 Run，
+        // 否则已经丢失的 Worker 会永久阻止后续章节。只处理 Running，不能误伤仍在排队的任务。
+        $novel->generationRuns()
+            ->where('status', RunStatus::Running)
+            ->whereIn('stage', StalledRunRecoveryService::RECOVERABLE_STAGES)
+            ->where('updated_at', '<=', $this->runLease->cutoff())
+            ->update([
+                'status' => RunStatus::Failed,
+                'error_code' => StalledRunRecoveryService::ERROR_CODE,
+                'error_message' => 'Worker 心跳超时，Run 已标记为可恢复。',
+                'finished_at' => now(),
+            ]);
     }
 
     private function validateNovel(Novel $novel): void

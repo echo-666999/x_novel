@@ -34,7 +34,7 @@ final class ForeshadowingCoverageEvidenceRepairer
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 reasoningEffort: $reasoningEffort,
-                systemPrompt: '你是 XNovel 伏笔 Coverage 证据校对器。不得修改正文，也不得改变数组顺序、foreshadowing_id、action 或 status。status=fulfilled 或 contradicted 时，evidence 必须从 content 中选择一段连续文本并逐字复制；不得概括、改写、拼接不连续句子或用主题相近措辞替代动作证据。status=missing 时 evidence 必须为 null。只返回符合 Schema 的数组。',
+                systemPrompt: '你是 XNovel 伏笔 Coverage 证据校对器。不得修改正文，也不得改变数组顺序、foreshadowing_id、action 或 status。status=fulfilled 或 contradicted 时，evidence 必须从 content 中选择一段连续文本并逐字复制；不得概括、改写、拼接不连续句子或用主题相近措辞替代动作证据。status=missing 时 evidence 必须为 null。只返回符合 Schema 的对象。',
                 prompt: '请只修正以下伏笔 Coverage 的 evidence：'.json_encode([
                     'expectations' => $expectations,
                     'content' => $content,
@@ -42,20 +42,24 @@ final class ForeshadowingCoverageEvidenceRepairer
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: $maxTokens,
-                responseSchema: ForeshadowingCoverage::schema(),
+                // OpenAI strict Structured Outputs 要求根节点必须是 object，
+                // 因此用 coverage 包装领域层原本的数组结构。
+                responseSchema: self::responseSchema(),
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
             ));
 
-            if (! is_array($response->structuredData)) {
+            $repairedCoverage = data_get($response->structuredData, 'coverage');
+
+            if (! is_array($repairedCoverage)) {
                 continue;
             }
 
-            $this->assertClaimsUnchanged($coverage, $response->structuredData, $path);
+            $this->assertClaimsUnchanged($coverage, $repairedCoverage, $path);
 
             try {
                 return ForeshadowingCoverage::validate(
-                    $response->structuredData,
+                    $repairedCoverage,
                     $content,
                     $expectations,
                     $path,
@@ -71,6 +75,17 @@ final class ForeshadowingCoverageEvidenceRepairer
             $expectations,
             $path,
         );
+    }
+
+    /** @return array<string, mixed> */
+    public static function responseSchema(): array
+    {
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['coverage'],
+            'properties' => ['coverage' => ForeshadowingCoverage::schema()],
+        ];
     }
 
     /** @param array<int, array<string, mixed>> $before

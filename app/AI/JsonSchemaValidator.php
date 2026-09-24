@@ -26,8 +26,16 @@ class JsonSchemaValidator
             }
         }
 
-        if (is_string($value) && isset($schema['pattern']) && preg_match('/'.$schema['pattern'].'/u', $value) !== 1) {
-            return false;
+        if (is_string($value)) {
+            if (isset($schema['minLength']) && mb_strlen($value) < $schema['minLength']) {
+                return false;
+            }
+            if (isset($schema['maxLength']) && mb_strlen($value) > $schema['maxLength']) {
+                return false;
+            }
+            if (isset($schema['pattern']) && preg_match('/'.$schema['pattern'].'/u', $value) !== 1) {
+                return false;
+            }
         }
 
         if (is_array($value) && array_is_list($value)) {

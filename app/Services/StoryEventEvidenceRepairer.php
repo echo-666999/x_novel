@@ -46,19 +46,7 @@ final class StoryEventEvidenceRepairer
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: $maxTokens,
-                responseSchema: [
-                    'type' => 'object',
-                    'additionalProperties' => false,
-                    'required' => ['quotes'],
-                    'properties' => [
-                        'quotes' => [
-                            'type' => 'array',
-                            'minItems' => count($evidence),
-                            'maxItems' => count($evidence),
-                            'items' => ['type' => 'string'],
-                        ],
-                    ],
-                ],
+                responseSchema: self::responseSchema(count($evidence)),
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'event_evidence_repair_attempt' => $attempt, 'event_index' => $eventIndex],
             ));
@@ -114,5 +102,23 @@ final class StoryEventEvidenceRepairer
         throw $lastException ?? ValidationException::withMessages([
             'evidence' => 'Story Event evidence 修复失败。',
         ]);
+    }
+
+    /** @return array<string, mixed> */
+    public static function responseSchema(int $evidenceCount): array
+    {
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['quotes'],
+            'properties' => [
+                'quotes' => [
+                    'type' => 'array',
+                    'minItems' => $evidenceCount,
+                    'maxItems' => $evidenceCount,
+                    'items' => ['type' => 'string'],
+                ],
+            ],
+        ];
     }
 }

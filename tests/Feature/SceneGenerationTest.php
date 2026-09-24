@@ -112,6 +112,22 @@ function sceneCoverageResponse(array $coverage): AiResponse
     );
 }
 
+function sceneForeshadowingCoverageResponse(array $coverage): AiResponse
+{
+    $payload = ['coverage' => $coverage];
+
+    return new AiResponse(
+        content: json_encode($payload, JSON_UNESCAPED_UNICODE),
+        structuredData: $payload,
+        inputTokens: 50,
+        outputTokens: 50,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'foreshadowing-coverage-repair-request',
+        model: 'writer-test',
+    );
+}
+
 function sceneForeshadowingAction(array $fixture, int $sceneSequence = 1): Foreshadowing
 {
     $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
@@ -279,7 +295,7 @@ test('scene generator repairs only invalid foreshadowing evidence', function () 
     $valid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '染血地图指向潮汐门');
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse($content, foreshadowingCoverage: $invalid))
-        ->enqueue(sceneCoverageResponse($valid));
+        ->enqueue(sceneForeshadowingCoverageResponse($valid));
     app()->instance(AiProvider::class, $fake);
 
     $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
@@ -303,7 +319,7 @@ test('foreshadowing evidence repair cannot change the declared action result', f
     $changed = sceneForeshadowingCoverage($foreshadowing, 'missing', null);
     app()->instance(AiProvider::class, (new FakeAiProvider)
         ->enqueue(sceneResponse($content, foreshadowingCoverage: $invalid))
-        ->enqueue(sceneCoverageResponse($changed)));
+        ->enqueue(sceneForeshadowingCoverageResponse($changed)));
 
     expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey()))
         ->toThrow(ValidationException::class, '不得改变数组顺序、伏笔 ID、动作或原 status');

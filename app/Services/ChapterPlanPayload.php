@@ -58,10 +58,12 @@ final class ChapterPlanPayload
                             'name' => ['type' => 'string'],
                             'role' => ['type' => 'string'],
                             'motivation' => ['type' => 'string'],
-                            'profile' => ['type' => 'object'],
-                            'personality' => ['type' => 'object'],
-                            'abilities' => ['type' => 'object'],
-                            'knowledge' => ['type' => 'object'],
+                            // Candidate 数据来自冻结的 Outline Beat；用字符串列表保留可扩展内容，
+                            // 同时避免严格 Structured Outputs 无法表达任意键 object 的限制。
+                            'profile' => $strings,
+                            'personality' => $strings,
+                            'abilities' => $strings,
+                            'knowledge' => $strings,
                             'deduplication_basis' => ['type' => 'string'],
                             'possible_duplicate_character_ids' => ['type' => 'array', 'items' => ['type' => 'integer']],
                             'introduction_reason' => ['type' => 'string'],

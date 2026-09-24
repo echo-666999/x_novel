@@ -183,6 +183,7 @@ function outlinePlannerPayload(Character $character, NovelOutline $outline, Stor
 }
 
 test('the chapter plan response schema requires every declared scene field', function () {
+    $schema = ChapterPlanPayload::schema();
     $sceneSchema = ChapterPlanPayload::schema()['properties']['scene_plans']['items'];
     $foreshadowingSchema = ChapterPlanPayload::schema()['properties']['foreshadowing_actions']['items'];
     $arcSchema = ChapterPlanPayload::schema()['properties']['arc_contributions']['items'];
@@ -195,7 +196,11 @@ test('the chapter plan response schema requires every declared scene field', fun
         ->and($foreshadowingSchema['required'])->toEqualCanonicalizing(array_keys($foreshadowingSchema['properties']))
         ->and($arcSchema['required'])->toEqualCanonicalizing(array_keys($arcSchema['properties']))
         ->and($arcSchema['properties']['role']['enum'])->toBe(['primary', 'secondary'])
-        ->and($foreshadowingSchema['properties']['action']['enum'])->toBe(['plant', 'reinforce', 'pay_off']);
+        ->and($foreshadowingSchema['properties']['action']['enum'])->toBe(['plant', 'reinforce', 'pay_off'])
+        ->and(data_get($schema, 'properties.character_candidates.items.properties.profile.type'))->toBe('array')
+        ->and(data_get($schema, 'properties.character_candidates.items.properties.personality.type'))->toBe('array')
+        ->and(data_get($schema, 'properties.character_candidates.items.properties.abilities.type'))->toBe('array')
+        ->and(data_get($schema, 'properties.character_candidates.items.properties.knowledge.type'))->toBe('array');
 });
 
 test('the planner freezes the earliest unfinished outline beat and source version', function () {

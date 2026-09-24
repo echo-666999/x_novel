@@ -125,6 +125,11 @@ class DeepSeekProvider implements AiProvider
     {
         $content = $response->json('choices.0.message.content');
         $model = $response->json('model');
+        $refusal = $response->json('choices.0.message.refusal');
+
+        if (is_string($refusal) && trim($refusal) !== '') {
+            throw new AiProviderException('provider_refused', 'DeepSeek 拒绝生成当前内容：'.$this->safeProviderDetail($refusal), false, $response->status());
+        }
 
         if (! is_string($content) || ! is_string($model)) {
             throw new AiProviderException('provider_invalid_response', 'DeepSeek 返回了无效响应。', false, $response->status());
@@ -132,6 +137,10 @@ class DeepSeekProvider implements AiProvider
 
         $structuredData = null;
         if ($schema !== null) {
+            if ($response->json('choices.0.finish_reason') === 'length') {
+                throw new AiProviderException('provider_output_truncated', 'DeepSeek JSON Output 因 Token 用尽而被截断。', true, $response->status());
+            }
+
             if (trim($content) === '') {
                 throw new AiProviderException('provider_empty_json_response', 'DeepSeek JSON Output 返回了空内容。', false, $response->status());
             }
@@ -163,21 +172,39 @@ class DeepSeekProvider implements AiProvider
             outputTokens: (int) $response->json('usage.completion_tokens', 0),
             cachedTokens: (int) $response->json('usage.prompt_cache_hit_tokens', $response->json('usage.prompt_tokens_details.cached_tokens', 0)),
             latencyMs: $latencyMs,
-            providerRequestId: $response->json('id'),
+            providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
             model: $model,
-            metadata: ['finish_reason' => $response->json('choices.0.finish_reason'), 'refusal' => null],
+            metadata: ['finish_reason' => $response->json('choices.0.finish_reason'), 'refusal' => $refusal],
         );
     }
 
     private function mapFailedResponse(Response $response): AiProviderException
     {
         $status = $response->status();
+        $detail = $this->providerErrorDetail($response);
 
         return match ($status) {
             401, 403 => new AiProviderException('provider_authentication_failed', 'AI Provider 认证失败，请检查 API Key 和访问权限。', false, $status),
             408, 429 => new AiProviderException($status === 429 ? 'provider_rate_limited' : 'provider_timeout', $status === 429 ? 'AI Provider 请求频率受限，请稍后重试。' : 'AI Provider 请求超时，请稍后重试。', true, $status),
-            default => new AiProviderException('provider_request_failed', $status >= 500 ? "AI Provider 服务暂时不可用（HTTP {$status}），请稍后重试。" : "AI Provider 拒绝了请求（HTTP {$status}）。", $status >= 500, $status),
+            default => new AiProviderException('provider_request_failed', $status >= 500 ? "AI Provider 服务暂时不可用（HTTP {$status}），请稍后重试。" : "AI Provider 拒绝了请求（HTTP {$status}）：{$detail}", $status >= 500, $status),
         };
+    }
+
+    private function providerErrorDetail(Response $response): string
+    {
+        $message = $response->json('error.message');
+
+        return is_string($message) && trim($message) !== ''
+            ? $this->safeProviderDetail($message)
+            : 'Provider 未返回具体错误原因。';
+    }
+
+    private function safeProviderDetail(string $detail): string
+    {
+        $sanitized = (string) $this->sanitizeForLogging($detail);
+        $sanitized = preg_replace('/\s+/u', ' ', trim($sanitized)) ?? trim($sanitized);
+
+        return mb_substr($sanitized, 0, 600);
     }
 
     /** @return array<string, mixed> */

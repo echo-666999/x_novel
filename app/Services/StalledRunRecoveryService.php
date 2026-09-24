@@ -15,7 +15,7 @@ class StalledRunRecoveryService
 {
     public const ERROR_CODE = 'worker_lost';
 
-    private const RECOVERABLE_STAGES = [
+    public const RECOVERABLE_STAGES = [
         GenerationStage::ChapterPlanning,
         GenerationStage::SceneGeneration,
         GenerationStage::ChapterAssembly,

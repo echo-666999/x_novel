@@ -89,6 +89,20 @@ test('deepseek structured output failures are non retryable', function (string $
     'schema mismatch' => ['{"answer":12}', 'provider_schema_validation_failed'],
 ]);
 
+test('deepseek exposes sanitized provider details for rejected requests', function () {
+    Http::fake(['deepseek.example/*' => Http::response([
+        'error' => ['message' => 'Unsupported parameter: reasoning_effort'],
+    ], 400)]);
+
+    try {
+        app(DeepSeekProvider::class)->generate(new AiRequest(model: 'deepseek-chat', provider: 'deepseek'));
+        $this->fail('Expected rejected request exception was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_request_failed')
+            ->and($exception->getMessage())->toContain('Unsupported parameter: reasoning_effort');
+    }
+});
+
 test('router records the frozen provider on usage and does not change an existing run', function () {
     $settings = app(AiSettingsService::class)->defaults();
     $settings['providers']['deepseek']['enabled'] = true;

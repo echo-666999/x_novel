@@ -776,7 +776,7 @@ stage:{stage}
 | Review PASS | `auto_commit=false` 时等待提交；开启时仅在未暂停且来源链有效时派发 Canonical Commit | 关闭时在章节工作台点击“提交正式章节”；开启时查看 Commit 结果；小说暂停时不会自动提交 |
 | NEEDS_ATTENTION / BLOCK | 自动推进停止；Hard Finding 不允许普通 Override | 按 Findings 修订正文或修复状态前置条件，再重新审校；历史 Review 和 Artifact 保留 |
 
-`php artisan generation:mark-stalled` 只把超时的 queued/running Run 标记为失败，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
+“生成下一章”的前置检查会先对当前小说执行一次原子化停滞清理：只把超过 `stalled_run_after_seconds` 的 `running` Run 标记为 `failed / worker_lost`，再判断是否仍有 `queued / running` Run 或其他活跃章节；近期 Run 与仍在排队的任务不得误清理。该清理独立提交，即使后续因另一个真实活跃工作流而拒绝生成，过期 Run 也不会回滚成 `running`。`php artisan generation:mark-stalled` 继续承担全局定时清理，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
 
 Bible 变更恢复命令默认只读：
 

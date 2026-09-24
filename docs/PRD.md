@@ -1945,6 +1945,8 @@ DeepSeek
 
 Laravel 按 Stage 已解析并冻结到 Generation Run 的 Provider 进行固定路由。不得实现动态选型、按价格自动路由或失败后跨 Provider 自动切换。Embedding 继续固定使用 OpenAI，不随文本生成 Provider 切换。
 
+OpenAI 严格结构化输出在发出请求前必须递归校验 Schema：根节点为 object、每个 object 设置 `additionalProperties=false`，且 `required` 完整覆盖 `properties`。Provider 成功响应仍按同一 Schema 本地复验；非法 JSON、Schema 不匹配、拒绝和 Token 截断必须使用不同错误码。HTTP 4xx 应保留经过脱敏和长度限制的 Provider 原始错误原因，便于从 Generation Run 直接定位参数或 Schema 问题。Embedding 响应必须验证向量为数值列表且维度与请求一致。
+
 ---
 
 # 30. Prompt 系统

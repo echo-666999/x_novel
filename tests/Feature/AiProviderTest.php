@@ -188,7 +188,7 @@ test('openai provider does not log prompts when the prompt logging environment s
     Http::fake(['llm.example/*' => Http::response([
         'id' => 'request-default-disabled',
         'model' => 'current-model-resolved',
-        'choices' => [['message' => ['content' => 'OK']]],
+        'choices' => [['message' => ['content' => '{"answer":"OK"}']]],
         'usage' => [
             'prompt_tokens' => 21,
             'completion_tokens' => 5,
@@ -207,7 +207,14 @@ test('openai provider does not log prompts when the prompt logging environment s
         model: 'current-model',
         systemPrompt: 'default-disabled-system-prompt',
         prompt: 'default-disabled-user-prompt',
-        responseSchema: ['type' => 'object', 'example' => 'default-disabled-json-example'],
+        responseSchema: [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['answer'],
+            'properties' => [
+                'answer' => ['type' => 'string', 'description' => 'default-disabled-json-example'],
+            ],
+        ],
         promptVersion: 'default-disabled-v1',
         metadata: [
             'generation_run_id' => 91,
@@ -337,6 +344,25 @@ test('openai provider maps a fixed dimension embedding response', function () {
         && $request['dimensions'] === 3);
 });
 
+test('openai provider rejects malformed embedding vectors', function (array $embedding) {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake(['*' => Http::response([
+        'id' => 'bad-embedding',
+        'model' => 'text-embedding-test',
+        'data' => [['embedding' => $embedding]],
+        'usage' => [],
+    ])]);
+
+    app(OpenAiProvider::class)->embed(new EmbeddingRequest(
+        model: 'text-embedding-test',
+        input: '需要向量化的记忆',
+        dimensions: 3,
+    ));
+})->with([
+    'wrong dimensions' => [[0.1, 0.2]],
+    'non numeric value' => [[0.1, 'invalid', 0.3]],
+])->throws(AiProviderException::class, 'Embedding Provider 返回了无效响应。');
+
 test('openai provider maps retryable and non retryable errors', function (int $status, string $code, bool $retryable) {
     config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response(['error' => ['message' => 'Provider error']], $status)]);
@@ -390,6 +416,7 @@ test('openai provider logs the complete rejected response body', function () {
         $body = json_decode($responseLog['body'], true, flags: JSON_THROW_ON_ERROR);
 
         expect($exception->errorCode)->toBe('provider_request_failed')
+            ->and($exception->getMessage())->toContain('Unsupported parameter: max_tokens')
             ->and($responseLog['status'])->toBe(400)
             ->and($responseLog['provider_request_id'])->toBe('failed-request-400')
             ->and($responseLog['generation_run_id'])->toBe(51)
@@ -403,6 +430,99 @@ test('openai provider logs the complete rejected response body', function () {
             ]);
     }
 });
+
+test('openai provider rejects an invalid strict response schema before sending a request', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake();
+
+    try {
+        app(OpenAiProvider::class)->generate(new AiRequest(
+            model: 'current-model',
+            prompt: 'Ping',
+            responseSchema: [
+                'type' => 'object',
+                'properties' => [
+                    'profile' => ['type' => 'object'],
+                ],
+                'required' => ['profile'],
+                'additionalProperties' => false,
+            ],
+        ));
+        $this->fail('Expected invalid schema exception was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_invalid_response_schema')
+            ->and($exception->retryable)->toBeFalse()
+            ->and($exception->getMessage())->toContain('$.properties.profile');
+    }
+
+    Http::assertNothingSent();
+});
+
+test('openai provider classifies a remote invalid schema response with its exact detail', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake(['*' => Http::response([
+        'error' => ['message' => "Invalid schema for response_format 'xnovel_response': additionalProperties is required."],
+    ], 400)]);
+
+    try {
+        app(OpenAiProvider::class)->generate(new AiRequest(model: 'test-model', prompt: 'Ping'));
+        $this->fail('Expected invalid schema exception was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_invalid_response_schema')
+            ->and($exception->getMessage())->toContain('additionalProperties is required');
+    }
+});
+
+test('openai provider validates structured response data before returning it', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake(['*' => Http::response([
+        'id' => 'invalid-structured-response',
+        'model' => 'test-model',
+        'choices' => [['finish_reason' => 'stop', 'message' => ['content' => '{"answer":""}', 'refusal' => null]]],
+        'usage' => [],
+    ])]);
+
+    app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'test-model',
+        prompt: 'Ping',
+        responseSchema: [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['answer'],
+            'properties' => ['answer' => ['type' => 'string', 'minLength' => 1]],
+        ],
+    ));
+})->throws(AiProviderException::class, 'AI Provider 结构化输出不符合响应 Schema。');
+
+test('openai provider distinguishes refusals from truncated structured output', function (array $message, string $finishReason, string $code, bool $retryable) {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake(['*' => Http::response([
+        'id' => 'structured-failure',
+        'model' => 'test-model',
+        'choices' => [['finish_reason' => $finishReason, 'message' => $message]],
+        'usage' => [],
+    ])]);
+
+    try {
+        app(OpenAiProvider::class)->generate(new AiRequest(
+            model: 'test-model',
+            prompt: 'Ping',
+            responseSchema: [
+                'type' => 'object',
+                'additionalProperties' => false,
+                'required' => ['answer'],
+                'properties' => ['answer' => ['type' => 'string']],
+            ],
+        ));
+        $this->fail('Expected structured response failure was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe($code)
+            ->and($exception->retryable)->toBe($retryable);
+    }
+})->with([
+    'refusal' => [['content' => null, 'refusal' => 'cannot comply'], 'stop', 'provider_refused', false],
+    'truncated' => [['content' => '{"answer":', 'refusal' => null], 'length', 'provider_output_truncated', true],
+]);
 
 test('openai provider rejects missing credentials before sending a request', function () {
     config()->set('ai.providers.openai.api_key', null);

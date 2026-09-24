@@ -10,6 +10,8 @@ use App\AI\Data\AiResponse;
 use App\AI\Data\EmbeddingRequest;
 use App\AI\Data\EmbeddingResponse;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\JsonSchemaValidator;
+use App\AI\OpenAiStructuredOutputSchema;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -40,10 +42,18 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         'deepseek_api_key',
     ];
 
-    public function __construct(private readonly AiSettingsService $settingsService) {}
+    public function __construct(
+        private readonly AiSettingsService $settingsService,
+        private readonly OpenAiStructuredOutputSchema $structuredOutputSchema,
+        private readonly JsonSchemaValidator $schemaValidator,
+    ) {}
 
     public function generate(AiRequest $request): AiResponse
     {
+        if ($request->responseSchema !== null) {
+            $this->structuredOutputSchema->assertValid($request->responseSchema);
+        }
+
         $startedAt = hrtime(true);
         $requestLogId = (string) ($request->metadata['ai_request_log_id'] ?? Str::uuid());
         $payload = $this->payload($request);
@@ -95,11 +105,19 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             throw $this->mapFailedResponse($response);
         }
 
-        return $this->mapResponse($response, $latencyMs);
+        return $this->mapResponse($response, $latencyMs, $request->responseSchema);
     }
 
     public function embed(EmbeddingRequest $request): EmbeddingResponse
     {
+        if (trim($request->model) === '' || trim($request->input) === '' || $request->dimensions < 1) {
+            throw new AiProviderException(
+                errorCode: 'provider_invalid_embedding_request',
+                message: 'Embedding 请求必须包含模型、非空输入和正整数维度。',
+                retryable: false,
+            );
+        }
+
         $startedAt = hrtime(true);
 
         try {
@@ -126,7 +144,11 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $embedding = $response->json('data.0.embedding');
         $model = $response->json('model');
 
-        if (! is_array($embedding) || ! is_string($model)) {
+        if (! is_array($embedding)
+            || ! array_is_list($embedding)
+            || count($embedding) !== $request->dimensions
+            || collect($embedding)->contains(fn (mixed $value): bool => ! is_int($value) && ! is_float($value))
+            || ! is_string($model)) {
             throw new AiProviderException('provider_invalid_response', 'Embedding Provider 返回了无效响应。', false);
         }
 
@@ -134,7 +156,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             embedding: array_map(static fn (mixed $value): float => (float) $value, $embedding),
             inputTokens: (int) $response->json('usage.prompt_tokens', 0),
             latencyMs: $latencyMs,
-            providerRequestId: $response->json('id'),
+            providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
             model: $model,
         );
     }
@@ -271,10 +293,21 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         return $apiKey === '' ? $value : str_replace($apiKey, '[REDACTED]', $value);
     }
 
-    private function mapResponse(Response $response, int $latencyMs): AiResponse
+    /** @param array<string, mixed>|null $schema */
+    private function mapResponse(Response $response, int $latencyMs, ?array $schema): AiResponse
     {
         $content = $response->json('choices.0.message.content');
         $model = $response->json('model');
+        $refusal = $response->json('choices.0.message.refusal');
+
+        if (is_string($refusal) && trim($refusal) !== '') {
+            throw new AiProviderException(
+                errorCode: 'provider_refused',
+                message: 'AI Provider 拒绝生成当前内容：'.$this->safeProviderDetail($refusal),
+                retryable: false,
+                statusCode: $response->status(),
+            );
+        }
 
         if (! is_string($content) || ! is_string($model)) {
             throw new AiProviderException(
@@ -287,7 +320,28 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
 
         $structuredData = null;
 
-        if ($content !== '' && str_starts_with(ltrim($content), '{')) {
+        if ($schema !== null) {
+            if ($response->json('choices.0.finish_reason') === 'length') {
+                throw new AiProviderException('provider_output_truncated', 'AI Provider 结构化输出因 Token 用尽而被截断。', true, $response->status());
+            }
+
+            if (trim($content) === '') {
+                throw new AiProviderException('provider_empty_json_response', 'AI Provider 结构化输出为空。', false, $response->status());
+            }
+
+            try {
+                $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
+                $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
+            } catch (JsonException $exception) {
+                throw new AiProviderException('provider_invalid_json_response', 'AI Provider 结构化输出不是合法 JSON。', false, $response->status(), $exception);
+            }
+
+            if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
+                throw new AiProviderException('provider_schema_validation_failed', 'AI Provider 结构化输出不符合响应 Schema。', false, $response->status());
+            }
+
+            $structuredData = $decoded;
+        } elseif ($content !== '' && str_starts_with(ltrim($content), '{')) {
             try {
                 $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
                 $structuredData = is_array($decoded) ? $decoded : null;
@@ -303,11 +357,11 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             outputTokens: (int) $response->json('usage.completion_tokens', 0),
             cachedTokens: (int) $response->json('usage.prompt_tokens_details.cached_tokens', 0),
             latencyMs: $latencyMs,
-            providerRequestId: $response->json('id'),
+            providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
             model: $model,
             metadata: [
                 'finish_reason' => $response->json('choices.0.finish_reason'),
-                'refusal' => $response->json('choices.0.message.refusal'),
+                'refusal' => $refusal,
             ],
         );
     }
@@ -315,6 +369,16 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
     private function mapFailedResponse(Response $response): AiProviderException
     {
         $status = $response->status();
+        $detail = $this->providerErrorDetail($response);
+
+        if ($status === 400 && str_contains(strtolower($detail), 'invalid schema')) {
+            return new AiProviderException(
+                'provider_invalid_response_schema',
+                'AI Provider 拒绝了响应 Schema（HTTP 400）：'.$detail,
+                false,
+                $status,
+            );
+        }
 
         return match ($status) {
             401, 403 => new AiProviderException(
@@ -333,10 +397,27 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                 'provider_request_failed',
                 $status >= 500
                     ? "AI Provider 服务暂时不可用（HTTP {$status}），请稍后重试。"
-                    : "AI Provider 拒绝了请求（HTTP {$status}），请检查输入数据和结构化输出格式。",
+                    : "AI Provider 拒绝了请求（HTTP {$status}）：{$detail}",
                 $status >= 500,
                 $status,
             ),
         };
+    }
+
+    private function providerErrorDetail(Response $response): string
+    {
+        $message = $response->json('error.message');
+
+        return is_string($message) && trim($message) !== ''
+            ? $this->safeProviderDetail($message)
+            : 'Provider 未返回具体错误原因。';
+    }
+
+    private function safeProviderDetail(string $detail): string
+    {
+        $sanitized = (string) $this->sanitizeForLogging($detail);
+        $sanitized = preg_replace('/\s+/u', ' ', trim($sanitized)) ?? trim($sanitized);
+
+        return mb_substr($sanitized, 0, 600);
     }
 }

@@ -15,6 +15,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\UsageRecord;
 use App\Models\Volume;
+use App\Services\StalledRunRecoveryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -157,6 +158,73 @@ test('preflight rejects another active generation run', function () {
 
     app(GenerateNextChapterAction::class)->handle($novel);
 })->throws(GenerationPreflightException::class, '已有另一个活跃章节工作流');
+
+test('preflight marks only the current novels stalled run before checking active workflows', function () {
+    config()->set('generation.stalled_run_after_seconds', 60);
+    $novel = generationReadyNovel();
+    $otherNovel = Novel::factory()->create();
+    $stalled = GenerationRun::factory()->for($novel)->create([
+        'chapter_id' => null,
+        'scope_type' => 'novel',
+        'scope_id' => $novel->getKey(),
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Running,
+        'updated_at' => now()->subMinutes(2),
+    ]);
+    $otherStalled = GenerationRun::factory()->for($otherNovel)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Running,
+        'updated_at' => now()->subMinutes(2),
+    ]);
+
+    $chapter = app(GenerateNextChapterAction::class)->handle($novel);
+
+    expect($chapter->status)->toBe(ChapterStatus::Planned)
+        ->and($stalled->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($stalled->fresh()->error_code)->toBe(StalledRunRecoveryService::ERROR_CODE)
+        ->and($stalled->fresh()->finished_at)->not->toBeNull()
+        ->and($otherStalled->fresh()->status)->toBe(RunStatus::Running);
+});
+
+test('preflight still rejects a fresh running generation run', function () {
+    config()->set('generation.stalled_run_after_seconds', 60);
+    $novel = generationReadyNovel();
+    GenerationRun::factory()->for($novel)->create([
+        'chapter_id' => null,
+        'scope_type' => 'novel',
+        'scope_id' => $novel->getKey(),
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Running,
+        'updated_at' => now(),
+    ]);
+
+    app(GenerateNextChapterAction::class)->handle($novel);
+})->throws(GenerationPreflightException::class, '已有另一个活跃章节工作流');
+
+test('stalled cleanup persists when another fresh workflow still blocks generation', function () {
+    config()->set('generation.stalled_run_after_seconds', 60);
+    $novel = generationReadyNovel();
+    $stalled = GenerationRun::factory()->for($novel)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Running,
+        'updated_at' => now()->subMinutes(2),
+    ]);
+    GenerationRun::factory()->for($novel)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Running,
+        'updated_at' => now(),
+    ]);
+
+    try {
+        app(GenerateNextChapterAction::class)->handle($novel);
+        $this->fail('Expected the fresh workflow to block generation.');
+    } catch (GenerationPreflightException $exception) {
+        expect($exception->reason)->toBe('active_workflow_exists')
+            ->and($stalled->fresh()->status)->toBe(RunStatus::Failed)
+            ->and($stalled->fresh()->error_code)->toBe(StalledRunRecoveryService::ERROR_CODE)
+            ->and($novel->chapters()->count())->toBe(0);
+    }
+});
 
 test('preflight rejects a reached hard budget before creating a chapter', function () {
     config()->set('ai.budget.daily_hard_limit', 1);
