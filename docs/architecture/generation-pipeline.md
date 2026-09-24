@@ -270,7 +270,7 @@ chapter_budget
 
 小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
 
-字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，且在计算当前上限时，必须按章节下限和 Scene 总数为每个尚未生成的后续 Scene 保留最低字数空间，不能让前置 Scene 用完章节硬上限后再把最后一个完整剧情任务压缩成极短文本。最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。整章 Rewrite 的长度修复不得再次返回整章替换稿，而应返回逐字唯一命中的 `search` / `replacement` 局部补丁；Laravel 负责应用补丁和重新计数，并拒绝让过长稿跨越下限成为过短稿、或让过短稿跨越上限成为过长稿，以避免扩写和压缩在硬范围两侧振荡。修复提示使用目标字数 95%～105% 的窄目标区间提供安全余量，最终硬范围仍为 85%～115%。修复后仍不合规则不得提升为当前 Artifact。最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，且在计算当前上限时，必须按章节下限和 Scene 总数为每个尚未生成的后续 Scene 保留最低字数空间，不能让前置 Scene 用完章节硬上限后再把最后一个完整剧情任务压缩成极短文本。最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。Scene 长度修复必须把原草稿的 `foreshadowing_coverage` 身份列表视为冻结模板；模型只能重新判断状态和逐字证据。Laravel 丢弃其他 Scene 的额外动作，并将漏项、重复或错写身份的模板项保守降级为 `missing`，使叙事问题进入 Rewrite/Review，而不是以 Coverage 结构错误终止 Run。整章 Rewrite 的长度修复不得再次返回整章替换稿，而应返回逐字唯一命中的 `search` / `replacement` 局部补丁；Laravel 负责应用补丁和重新计数，并拒绝让过长稿跨越下限成为过短稿、或让过短稿跨越上限成为过长稿，以避免扩写和压缩在硬范围两侧振荡。修复提示使用目标字数 95%～105% 的窄目标区间提供安全余量，最终硬范围仍为 85%～115%。修复后仍不合规则不得提升为当前 Artifact。最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
 
 Scene Draft 的正文、临时状态、声明事件和 Coverage 先经过本地校验。`temporary_state_delta` 或 `declared_events` 仅发生 JSON 语法或对象结构错误时，流水线最多执行两次 `scene-support-fields-repair-v1` 定向修复；该修复不得改写正文和 Coverage，也不得引入输入之外的新事实。无法可靠结构化的临时状态返回空对象，无法可靠结构化的声明事件丢弃。Coverage 引用先执行空白、引号和高置信连续重合片段的确定性归位，再执行独立的证据修复。证据修复耗尽后，不得把未经验证的引用当成事实，也不得仅因引用格式阻塞整章；系统将对应 Coverage 保守降为 `missing`，生成可自动 Rewrite 的计划覆盖 Finding。
 
@@ -719,7 +719,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 
 ```text
 chapter-planner-v10
-scene-writer-v14
+scene-writer-v15
 assembler-v12
 event-extractor-v6
 reviewer-v14

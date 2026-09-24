@@ -7,7 +7,7 @@ use App\Enums\AiStage;
 test('prompt versions follow the documented convention', function () {
     expect(app(PromptVersionResolver::class)->all())->toBe([
         'planner' => 'chapter-planner-v10',
-        'writer' => 'scene-writer-v14',
+        'writer' => 'scene-writer-v15',
         'assembler' => 'assembler-v12',
         'extractor' => 'event-extractor-v6',
         'reviewer' => 'reviewer-v14',
@@ -20,7 +20,7 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
     expect(app(PromptVersionResolver::class)->resolve($stage))->toBe($version);
 })->with([
     'planner' => [AiStage::Planner, 'chapter-planner-v10'],
-    'writer' => [AiStage::Writer, 'scene-writer-v14'],
+    'writer' => [AiStage::Writer, 'scene-writer-v15'],
     'assembler' => [AiStage::Assembler, 'assembler-v12'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v6'],
     'reviewer' => [AiStage::Reviewer, 'reviewer-v14'],

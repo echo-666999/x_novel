@@ -265,6 +265,38 @@ test('scene foreshadowing coverage rejects another scene or action target', func
         ->toThrow(ValidationException::class, '不能引用其他 Scene、其他伏笔或其他动作');
 });
 
+test('length repair reconciles foreshadowing coverage to its frozen identity template', function () {
+    $template = [[
+        'foreshadowing_id' => 31,
+        'action' => 'pay_off',
+        'status' => 'fulfilled',
+        'evidence' => '潮汐门已经开启',
+    ]];
+
+    expect(ForeshadowingCoverage::reconcileWithIdentityTemplate([[
+        'foreshadowing_id' => 32,
+        'action' => 'reinforce',
+        'status' => 'fulfilled',
+        'evidence' => '错误动作',
+    ]], $template))->toBe([[
+        'foreshadowing_id' => 31,
+        'action' => 'pay_off',
+        'status' => 'missing',
+        'evidence' => null,
+    ]])->and(ForeshadowingCoverage::reconcileWithIdentityTemplate([[
+        'foreshadowing_id' => 31,
+        'action' => 'pay_off',
+        'status' => 'fulfilled',
+        'evidence' => '潮汐门已经开启',
+    ]], $template))->toBe($template)
+        ->and(ForeshadowingCoverage::reconcileWithIdentityTemplate([[
+            'foreshadowing_id' => 31,
+            'action' => 'pay_off',
+            'status' => 'fulfilled',
+            'evidence' => '潮汐门已经开启',
+        ]], []))->toBe([]);
+});
+
 test('missing scene foreshadowing action creates an automatic rewrite finding', function () {
     $fixture = sceneGenerationFixture(1);
     $foreshadowing = sceneForeshadowingAction($fixture);
@@ -731,6 +763,29 @@ test('an overlength scene is compressed once before it becomes the current draft
         ->and($fixture['scenes']->first()->fresh()->current_artifact_id)->toBe($artifact->getKey())
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->systemPrompt)->toContain('场景压缩器');
+});
+
+test('length repair discards a foreshadowing action assigned to another scene', function () {
+    $fixture = sceneGenerationFixture(1);
+    $foreshadowing = sceneForeshadowingAction($fixture, 2);
+    $fixture['plan']->update(['target_words' => 100]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('超', 120)))
+        ->enqueue(sceneResponse(
+            str_repeat('改', 100),
+            foreshadowingCoverage: sceneForeshadowingCoverage($foreshadowing, 'missing', null),
+        ));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact->content)->toBe(str_repeat('改', 100))
+        ->and($artifact->data['foreshadowing_coverage'])->toBe([])
+        ->and($artifact->data['plan_findings'])->toBe([])
+        ->and($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->systemPrompt)->toContain('模板为空时必须返回 []')
+        ->and($fake->requests()[1]->prompt)->toContain('"current_scene_foreshadowing_actions":[]');
 });
 
 test('an overlength scene is rejected when compression still exceeds the hard maximum', function () {

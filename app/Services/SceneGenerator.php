@@ -419,17 +419,25 @@ class SceneGenerator
                 break;
             }
 
+            $foreshadowingCoverageTemplate = is_array($payload['foreshadowing_coverage'] ?? null)
+                ? $payload['foreshadowing_coverage']
+                : [];
+            $currentSceneForeshadowingActions = ForeshadowingCoverage::expectationsForScene(
+                data_get($context, 'l0.foreshadowing_contract', []),
+                (int) data_get($context, 'scene_task.sequence'),
+            );
+
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 reasoningEffort: $reasoningEffort,
                 systemPrompt: ($tooLong
-                    ? '你是 XNovel 场景压缩器。输入包含一份字数超限的场景草稿。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。请在不改变场景目标、冲突、转折、结果和既定事实的前提下，删除重复解释、重复感受和不推动情节的细节，返回完整替换稿。必须重新按 Schema 检查 goal、conflict、turn、outcome，并按 foreshadowing_contract 重新返回 foreshadowing_coverage；不得改变伏笔目标或动作，只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。最终正文不得超过 maximum_scene_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。返回符合 Schema 的 JSON，所有自然语言使用简体中文。'
-                    : '你是 XNovel 场景扩写器。输入包含一份字数不足的场景草稿。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。请在不改变场景目标、冲突、转折、结果和既定事实的前提下，将它扩写为完整替换稿。必须保留原有有效内容，通过动作过程、对话反应、环境感官、人物心理和自然过渡补足细节。必须重新按 Schema 检查 goal、conflict、turn、outcome，并按 foreshadowing_contract 重新返回 foreshadowing_coverage；不得改变伏笔目标或动作，只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。完整正文至少达到 required_scene_words，并尽量接近 scene_target_words，且不得超过 maximum_scene_words；字数统计排除空白和换行。不得输出提纲、摘要、解释或无意义重复，不得新增重大事实、能力、世界规则或角色知识。返回符合 Schema 的 JSON，所有自然语言使用简体中文。').NarrativeProsePolicy::writing(),
+                    ? '你是 XNovel 场景压缩器。输入包含一份字数超限的场景草稿。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。请在不改变场景目标、冲突、转折、结果和既定事实的前提下，删除重复解释、重复感受和不推动情节的细节，返回完整替换稿。必须重新按 Schema 检查 goal、conflict、turn、outcome。draft.foreshadowing_coverage 是伏笔 Coverage 的身份模板；返回数组必须保持完全相同的长度、顺序、foreshadowing_id 和 action，模板为空时必须返回 []。current_scene_foreshadowing_actions 只用于重新判断 status 和逐字 evidence，不得加入其他 Scene 的动作。只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。最终正文不得超过 maximum_scene_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。返回符合 Schema 的 JSON，所有自然语言使用简体中文。'
+                    : '你是 XNovel 场景扩写器。输入包含一份字数不足的场景草稿。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。请在不改变场景目标、冲突、转折、结果和既定事实的前提下，将它扩写为完整替换稿。必须保留原有有效内容，通过动作过程、对话反应、环境感官、人物心理和自然过渡补足细节。必须重新按 Schema 检查 goal、conflict、turn、outcome。draft.foreshadowing_coverage 是伏笔 Coverage 的身份模板；返回数组必须保持完全相同的长度、顺序、foreshadowing_id 和 action，模板为空时必须返回 []。current_scene_foreshadowing_actions 只用于重新判断 status 和逐字 evidence，不得加入其他 Scene 的动作。只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。完整正文至少达到 required_scene_words，并尽量接近 scene_target_words，且不得超过 maximum_scene_words；字数统计排除空白和换行。不得输出提纲、摘要、解释或无意义重复，不得新增重大事实、能力、世界规则或角色知识。返回符合 Schema 的 JSON，所有自然语言使用简体中文。').NarrativeProsePolicy::writing(),
                 prompt: ($tooLong ? '请压缩以下超限场景：' : '请扩写以下短稿：').json_encode([
                     'scene_task' => $context['scene_task'],
                     'writing_constraints' => $constraints,
                     'l4' => $context['l4'],
-                    'foreshadowing_contract' => data_get($context, 'l0.foreshadowing_contract', []),
+                    'current_scene_foreshadowing_actions' => $currentSceneForeshadowingActions,
                     'must_not_reveal' => data_get($context, 'l0.plan_constraints.must_not_reveal', []),
                     'repair_attempt' => $attempt,
                     'current_words' => $actual,
@@ -443,8 +451,13 @@ class SceneGenerator
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
 
+            $repairedPayload = StructuredOutput::require($response, 'scene', 'Scene Draft');
+            $repairedPayload['foreshadowing_coverage'] = ForeshadowingCoverage::reconcileWithIdentityTemplate(
+                is_array($repairedPayload['foreshadowing_coverage'] ?? null) ? $repairedPayload['foreshadowing_coverage'] : [],
+                $foreshadowingCoverageTemplate,
+            );
             $payload = $this->validatePayloadWithCoverageRepair(
-                payload: StructuredOutput::require($response, 'scene', 'Scene Draft'),
+                payload: $repairedPayload,
                 context: $context,
                 model: $model,
                 reasoningEffort: $reasoningEffort,

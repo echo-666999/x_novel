@@ -54,7 +54,7 @@ test('changing task type refreshes model and prompt version', function () {
     Livewire::test(AiDebugTest::class)
         ->set('data.task_type', 'writer')
         ->assertSet('data.model', 'writer-test-model')
-        ->assertSet('data.prompt_version', 'scene-writer-v14');
+        ->assertSet('data.prompt_version', 'scene-writer-v15');
 });
 
 test('ai debug test calls the tracked provider and displays metrics', function () {

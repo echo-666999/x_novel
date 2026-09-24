@@ -50,6 +50,47 @@ final class ForeshadowingCoverage
     }
 
     /**
+     * 长度修复只能重写正文及重新判断 Coverage，不能改变原草稿冻结的伏笔动作身份。
+     * 模型漏项、重复或引用其他 Scene 时，将对应模板项保守降级为 missing；额外项直接丢弃。
+     *
+     * @param  array<int, array<string, mixed>>  $coverage
+     * @param  array<int, array<string, mixed>>  $template
+     * @return array<int, array<string, mixed>>
+     */
+    public static function reconcileWithIdentityTemplate(array $coverage, array $template): array
+    {
+        return collect($template)
+            ->map(function (array $expected) use ($coverage): array {
+                $foreshadowingId = (int) ($expected['foreshadowing_id'] ?? 0);
+                $action = (string) ($expected['action'] ?? '');
+                $matches = collect($coverage)
+                    ->filter(fn (mixed $item): bool => is_array($item)
+                        && (int) ($item['foreshadowing_id'] ?? 0) === $foreshadowingId
+                        && (string) ($item['action'] ?? '') === $action)
+                    ->values();
+
+                if ($matches->count() !== 1
+                    || ! self::hasExactKeys($matches->first(), ['foreshadowing_id', 'action', 'status', 'evidence'])) {
+                    return [
+                        'foreshadowing_id' => $foreshadowingId,
+                        'action' => $action,
+                        'status' => 'missing',
+                        'evidence' => null,
+                    ];
+                }
+
+                return [
+                    'foreshadowing_id' => $foreshadowingId,
+                    'action' => $action,
+                    'status' => $matches->first()['status'],
+                    'evidence' => $matches->first()['evidence'],
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $expectations
      * @return array<int, array{foreshadowing_id: int, action: string, status: string, evidence: string|null}>
      */
