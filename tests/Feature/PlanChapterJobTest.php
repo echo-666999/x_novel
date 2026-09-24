@@ -228,6 +228,34 @@ test('the planner freezes the earliest unfinished outline beat and source versio
         ->and($fake->requests())->toHaveCount(1);
 });
 
+test('the planner restores authoritative outline constraints before validating the model plan', function () {
+    [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
+    $payload = outlinePlannerPayload($character, $outline, $arc);
+    $payload['novel_outline_id'] = $outline->getKey() + 100;
+    $payload['arc_contributions'][0]['arc_id'] = $arc->getKey() + 100;
+    $payload['arc_contributions'][0]['beat_key'] = 'model-rewritten-beat';
+    $payload['arc_contributions'][0]['beat_index'] = 99;
+    $payload['must_reveal'] = [
+        '地图来源可验证：需要在正文中交代证据链。',
+        '模型补充的本章揭示项',
+    ];
+    $payload['must_not_reveal'] = [
+        '直接穿过城门。',
+        '模型补充的禁止项',
+    ];
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+
+    $plan = app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    expect($plan->novel_outline_id)->toBe($outline->getKey())
+        ->and(data_get($plan->arc_contributions, '0.arc_id'))->toBe($arc->getKey())
+        ->and(data_get($plan->arc_contributions, '0.beat_key'))->toBe('beat-map')
+        ->and(data_get($plan->arc_contributions, '0.beat_index'))->toBe(1)
+        ->and($plan->must_reveal)->toBe(['地图来源可验证', '模型补充的本章揭示项'])
+        ->and($plan->must_not_reveal)->toBe(['直接穿过城门', '模型补充的禁止项']);
+});
+
 test('the planner advances to the next beat only after an active completion event', function () {
     [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
     StoryEvent::factory()->create([
@@ -276,6 +304,8 @@ test('an exhausted outline beat budget stops planning before a run or provider c
 });
 
 test('outline retries and duplicate delivery keep the same frozen outline context', function () {
+    config()->set('generation.planner_max_output_tokens', 12_000);
+    config()->set('generation.planner_retry_max_output_tokens', 16_000);
     [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
     $payload = outlinePlannerPayload($character, $outline, $arc);
     $fake = (new FakeAiProvider)
@@ -291,8 +321,12 @@ test('outline retries and duplicate delivery keep the same frozen outline contex
 
     expect($duplicate?->is($plan))->toBeTrue()
         ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
         ->and($runs)->toHaveCount(2)
         ->and($runs->pluck('context_snapshot')->pluck('outline_checksum')->unique()->all())->toBe([$outline->checksum])
+        ->and(data_get($runs[0]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
+        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
         ->and($chapter->plans()->count())->toBe(1);
 });
 

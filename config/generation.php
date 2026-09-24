@@ -3,6 +3,8 @@
 return [
     'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 300),
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),
+    'planner_max_output_tokens' => (int) env('PLANNER_MAX_OUTPUT_TOKENS', 12_000),
+    'planner_retry_max_output_tokens' => (int) env('PLANNER_RETRY_MAX_OUTPUT_TOKENS', 16_000),
     'scene_context_token_budget' => (int) env('SCENE_CONTEXT_TOKEN_BUDGET', 12_000),
     'scene_max_output_tokens' => (int) env('SCENE_MAX_OUTPUT_TOKENS', 4_000),
     'max_length_repair_attempts' => 1,

@@ -59,6 +59,10 @@ class ChapterPlanner
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Planner);
         $context = $this->context($chapter, $regenerate);
+        $context['generation_preferences']['planner_token_budget'] = [
+            'initial_max_completion_tokens' => (int) config('generation.planner_max_output_tokens', 12_000),
+            'retry_max_completion_tokens' => (int) config('generation.planner_retry_max_output_tokens', 16_000),
+        ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'provider' => $settings->provider,
@@ -78,6 +82,13 @@ class ChapterPlanner
             return is_numeric($planId) ? ChapterPlan::query()->find((int) $planId) : null;
         }
 
+        $maxTokens = $run->attempt > 1
+            ? (int) config('generation.planner_retry_max_output_tokens', 16_000)
+            : (int) config('generation.planner_max_output_tokens', 12_000);
+        $runContext = $context;
+        $runContext['generation_preferences']['max_completion_tokens'] = $maxTokens;
+        $run->update(['context_snapshot' => $runContext]);
+
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
@@ -96,7 +107,7 @@ class ChapterPlanner
                     .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。上下文：'
                     .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
-                maxTokens: 4_000,
+                maxTokens: $maxTokens,
                 responseSchema: ChapterPlanPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [
@@ -110,6 +121,7 @@ class ChapterPlanner
             $payload = ChapterPlanPayload::validate(
                 StructuredOutput::require($response, 'plan', 'Chapter Plan'),
             );
+            $payload = $this->applyOutlineContract($payload, $context['current_outline_target']);
             $payload['target_words'] = (int) data_get($novel->settings, 'generation.chapter_target_words', $payload['target_words']);
             $candidate = new ChapterPlan($payload);
             $candidate->setRelation('chapter', $chapter);
@@ -120,6 +132,83 @@ class ChapterPlanner
             $this->fail($run, $exception);
             throw $exception;
         }
+    }
+
+    /**
+     * Outline 中的引用和硬约束已经由 Laravel 冻结，不应依赖模型逐字复写。
+     * 模型负责选择场景与补充计划；这里恢复权威原文后再交给 PlanValidator 审核。
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>|null  $outlineTarget
+     * @return array<string, mixed>
+     */
+    private function applyOutlineContract(array $payload, ?array $outlineTarget): array
+    {
+        if ($outlineTarget === null) {
+            return $payload;
+        }
+
+        $payload['novel_outline_id'] = (int) $outlineTarget['novel_outline_id'];
+        $payload['must_reveal'] = $this->mergeAuthoritativeConstraints(
+            (array) ($outlineTarget['must_include'] ?? []),
+            (array) ($payload['must_reveal'] ?? []),
+        );
+        $payload['must_not_reveal'] = $this->mergeAuthoritativeConstraints(
+            (array) ($outlineTarget['must_not_include'] ?? []),
+            (array) ($payload['must_not_reveal'] ?? []),
+        );
+
+        foreach ($payload['arc_contributions'] as &$contribution) {
+            if (($contribution['role'] ?? null) !== 'primary') {
+                continue;
+            }
+
+            $contribution['arc_id'] = (int) $outlineTarget['primary_arc_id'];
+            $contribution['beat_key'] = (string) $outlineTarget['primary_beat_key'];
+            $contribution['beat_index'] = (int) $outlineTarget['primary_beat_sequence'];
+        }
+        unset($contribution);
+
+        foreach (['character_candidates', 'world_entity_candidates'] as $field) {
+            $contracts = collect($outlineTarget[$field] ?? [])->keyBy('candidate_key');
+            $payload[$field] = collect($payload[$field] ?? [])->map(
+                fn (mixed $candidate): mixed => is_array($candidate) && $contracts->has($candidate['candidate_key'] ?? null)
+                    ? $contracts->get($candidate['candidate_key'])
+                    : $candidate,
+            )->values()->all();
+        }
+
+        return $payload;
+    }
+
+    /** @param array<int, mixed> $authoritative @param array<int, mixed> $generated @return array<int, string> */
+    private function mergeAuthoritativeConstraints(array $authoritative, array $generated): array
+    {
+        $authoritative = collect($authoritative)
+            ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
+            ->map(fn (string $value): string => trim($value))
+            ->unique()
+            ->values();
+
+        $supplemental = collect($generated)
+            ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
+            ->map(fn (string $value): string => trim($value))
+            ->reject(function (string $value) use ($authoritative): bool {
+                return $authoritative->contains(function (string $contract) use ($value): bool {
+                    if ($value === $contract) {
+                        return true;
+                    }
+
+                    $suffix = mb_substr($value, mb_strlen($contract), 1);
+
+                    return str_starts_with($value, $contract)
+                        && in_array($suffix, ['：', ':', '。', '；', ';', '，', ','], true);
+                });
+            })
+            ->unique()
+            ->values();
+
+        return $authoritative->concat($supplemental)->values()->all();
     }
 
     /** @return array{0: GenerationRun, 1: bool} */

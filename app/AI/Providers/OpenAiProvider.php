@@ -299,6 +299,8 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $content = $response->json('choices.0.message.content');
         $model = $response->json('model');
         $refusal = $response->json('choices.0.message.refusal');
+        $finishReason = $response->json('choices.0.finish_reason');
+        $structuredOutputTruncated = $schema !== null && $finishReason === 'length';
 
         if (is_string($refusal) && trim($refusal) !== '') {
             throw new AiProviderException(
@@ -309,7 +311,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             );
         }
 
-        if (! is_string($content) || ! is_string($model)) {
+        if ((! is_string($content) && ! $structuredOutputTruncated) || ! is_string($model)) {
             throw new AiProviderException(
                 errorCode: 'provider_invalid_response',
                 message: 'AI Provider 返回了无效响应。',
@@ -318,29 +320,29 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             );
         }
 
+        $content = is_string($content) ? $content : '';
+
         $structuredData = null;
 
         if ($schema !== null) {
-            if ($response->json('choices.0.finish_reason') === 'length') {
-                throw new AiProviderException('provider_output_truncated', 'AI Provider 结构化输出因 Token 用尽而被截断。', true, $response->status());
-            }
+            if (! $structuredOutputTruncated) {
+                if (trim($content) === '') {
+                    throw new AiProviderException('provider_empty_json_response', 'AI Provider 结构化输出为空。', false, $response->status());
+                }
 
-            if (trim($content) === '') {
-                throw new AiProviderException('provider_empty_json_response', 'AI Provider 结构化输出为空。', false, $response->status());
-            }
+                try {
+                    $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
+                    $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
+                } catch (JsonException $exception) {
+                    throw new AiProviderException('provider_invalid_json_response', 'AI Provider 结构化输出不是合法 JSON。', false, $response->status(), $exception);
+                }
 
-            try {
-                $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
-                $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
-            } catch (JsonException $exception) {
-                throw new AiProviderException('provider_invalid_json_response', 'AI Provider 结构化输出不是合法 JSON。', false, $response->status(), $exception);
-            }
+                if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
+                    throw new AiProviderException('provider_schema_validation_failed', 'AI Provider 结构化输出不符合响应 Schema。', false, $response->status());
+                }
 
-            if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
-                throw new AiProviderException('provider_schema_validation_failed', 'AI Provider 结构化输出不符合响应 Schema。', false, $response->status());
+                $structuredData = $decoded;
             }
-
-            $structuredData = $decoded;
         } elseif ($content !== '' && str_starts_with(ltrim($content), '{')) {
             try {
                 $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
@@ -360,7 +362,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
             model: $model,
             metadata: [
-                'finish_reason' => $response->json('choices.0.finish_reason'),
+                'finish_reason' => $finishReason,
                 'refusal' => $refusal,
             ],
         );

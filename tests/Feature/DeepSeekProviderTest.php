@@ -89,6 +89,32 @@ test('deepseek structured output failures are non retryable', function (string $
     'schema mismatch' => ['{"answer":12}', 'provider_schema_validation_failed'],
 ]);
 
+test('deepseek returns usage metadata for truncated structured output', function () {
+    Http::fake(['deepseek.example/*' => Http::response([
+        'id' => 'deepseek-truncated',
+        'model' => 'deepseek-chat',
+        'choices' => [['finish_reason' => 'length', 'message' => ['content' => '{"answer":"partial"}']]],
+        'usage' => ['prompt_tokens' => 2_000, 'completion_tokens' => 4_000],
+    ])]);
+
+    $response = app(DeepSeekProvider::class)->generate(new AiRequest(
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        responseSchema: [
+            'type' => 'object',
+            'required' => ['answer'],
+            'properties' => ['answer' => ['type' => 'string']],
+            'additionalProperties' => false,
+        ],
+    ));
+
+    expect($response->content)->toBe('{"answer":"partial"}')
+        ->and($response->structuredData)->toBeNull()
+        ->and($response->inputTokens)->toBe(2_000)
+        ->and($response->outputTokens)->toBe(4_000)
+        ->and($response->metadata['finish_reason'])->toBe('length');
+});
+
 test('deepseek exposes sanitized provider details for rejected requests', function () {
     Http::fake(['deepseek.example/*' => Http::response([
         'error' => ['message' => 'Unsupported parameter: reasoning_effort'],

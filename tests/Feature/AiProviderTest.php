@@ -494,12 +494,12 @@ test('openai provider validates structured response data before returning it', f
     ));
 })->throws(AiProviderException::class, 'AI Provider 结构化输出不符合响应 Schema。');
 
-test('openai provider distinguishes refusals from truncated structured output', function (array $message, string $finishReason, string $code, bool $retryable) {
+test('openai provider reports a structured output refusal', function () {
     config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'id' => 'structured-failure',
         'model' => 'test-model',
-        'choices' => [['finish_reason' => $finishReason, 'message' => $message]],
+        'choices' => [['finish_reason' => 'stop', 'message' => ['content' => null, 'refusal' => 'cannot comply']]],
         'usage' => [],
     ])]);
 
@@ -516,13 +516,37 @@ test('openai provider distinguishes refusals from truncated structured output', 
         ));
         $this->fail('Expected structured response failure was not thrown.');
     } catch (AiProviderException $exception) {
-        expect($exception->errorCode)->toBe($code)
-            ->and($exception->retryable)->toBe($retryable);
+        expect($exception->errorCode)->toBe('provider_refused')
+            ->and($exception->retryable)->toBeFalse();
     }
-})->with([
-    'refusal' => [['content' => null, 'refusal' => 'cannot comply'], 'stop', 'provider_refused', false],
-    'truncated' => [['content' => '{"answer":', 'refusal' => null], 'length', 'provider_output_truncated', true],
-]);
+});
+
+test('openai provider returns usage metadata for truncated structured output', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake(['*' => Http::response([
+        'id' => 'structured-truncated',
+        'model' => 'test-model',
+        'choices' => [['finish_reason' => 'length', 'message' => ['content' => '{"answer":"partial"}', 'refusal' => null]]],
+        'usage' => ['prompt_tokens' => 8_898, 'completion_tokens' => 4_000],
+    ])]);
+
+    $response = app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'test-model',
+        prompt: 'Ping',
+        responseSchema: [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['answer'],
+            'properties' => ['answer' => ['type' => 'string']],
+        ],
+    ));
+
+    expect($response->content)->toBe('{"answer":"partial"}')
+        ->and($response->structuredData)->toBeNull()
+        ->and($response->inputTokens)->toBe(8_898)
+        ->and($response->outputTokens)->toBe(4_000)
+        ->and($response->metadata['finish_reason'])->toBe('length');
+});
 
 test('openai provider rejects missing credentials before sending a request', function () {
     config()->set('ai.providers.openai.api_key', null);

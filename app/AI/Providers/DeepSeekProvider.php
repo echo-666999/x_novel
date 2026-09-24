@@ -126,36 +126,38 @@ class DeepSeekProvider implements AiProvider
         $content = $response->json('choices.0.message.content');
         $model = $response->json('model');
         $refusal = $response->json('choices.0.message.refusal');
+        $finishReason = $response->json('choices.0.finish_reason');
+        $structuredOutputTruncated = $schema !== null && $finishReason === 'length';
 
         if (is_string($refusal) && trim($refusal) !== '') {
             throw new AiProviderException('provider_refused', 'DeepSeek 拒绝生成当前内容：'.$this->safeProviderDetail($refusal), false, $response->status());
         }
 
-        if (! is_string($content) || ! is_string($model)) {
+        if ((! is_string($content) && ! $structuredOutputTruncated) || ! is_string($model)) {
             throw new AiProviderException('provider_invalid_response', 'DeepSeek 返回了无效响应。', false, $response->status());
         }
 
+        $content = is_string($content) ? $content : '';
+
         $structuredData = null;
         if ($schema !== null) {
-            if ($response->json('choices.0.finish_reason') === 'length') {
-                throw new AiProviderException('provider_output_truncated', 'DeepSeek JSON Output 因 Token 用尽而被截断。', true, $response->status());
-            }
+            if (! $structuredOutputTruncated) {
+                if (trim($content) === '') {
+                    throw new AiProviderException('provider_empty_json_response', 'DeepSeek JSON Output 返回了空内容。', false, $response->status());
+                }
 
-            if (trim($content) === '') {
-                throw new AiProviderException('provider_empty_json_response', 'DeepSeek JSON Output 返回了空内容。', false, $response->status());
-            }
+                try {
+                    $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
+                    $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
+                } catch (JsonException $exception) {
+                    throw new AiProviderException('provider_invalid_json_response', 'DeepSeek JSON Output 不是合法 JSON。', false, $response->status(), $exception);
+                }
 
-            try {
-                $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
-                $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
-            } catch (JsonException $exception) {
-                throw new AiProviderException('provider_invalid_json_response', 'DeepSeek JSON Output 不是合法 JSON。', false, $response->status(), $exception);
+                if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
+                    throw new AiProviderException('provider_schema_validation_failed', 'DeepSeek JSON Output 不符合响应 Schema。', false, $response->status());
+                }
+                $structuredData = $decoded;
             }
-
-            if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
-                throw new AiProviderException('provider_schema_validation_failed', 'DeepSeek JSON Output 不符合响应 Schema。', false, $response->status());
-            }
-            $structuredData = $decoded;
         } elseif ($content !== '' && str_starts_with(ltrim($content), '{')) {
             try {
                 $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
@@ -174,7 +176,7 @@ class DeepSeekProvider implements AiProvider
             latencyMs: $latencyMs,
             providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
             model: $model,
-            metadata: ['finish_reason' => $response->json('choices.0.finish_reason'), 'refusal' => $refusal],
+            metadata: ['finish_reason' => $finishReason, 'refusal' => $refusal],
         );
     }
 

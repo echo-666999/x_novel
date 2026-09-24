@@ -35,6 +35,8 @@ AI 全书大纲必须异步执行。Filament Action 只向 `generation` 队列�
 
 进入 `generating` 后执行章节流水线：
 
+Chapter Planner 的 completion token 上限独立于 Scene Writer：首次请求默认 12,000，失败后的新 Run 默认 16,000，并把实际采用值冻结到 `context_snapshot.generation_preferences.max_completion_tokens`。OpenAI 的推理 Token 与结构化正文共用 completion 额度；若 `finish_reason=length`，Provider 必须返回实际 Token 用量供费用追踪，再由结构化输出层标记为可重试的 `plan_output_truncated`，不能让同一低上限重复消耗全部重试次数。
+
 ```text
 GenerateNextChapterAction
 → PlanChapterJob
