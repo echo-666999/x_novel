@@ -15,6 +15,7 @@ use App\Enums\RunStatus;
 use App\Enums\StoryArcType;
 use App\Enums\WorldEntityType;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Jobs\GenerateNovelOutlineJob;
 use App\Models\GenerationArtifact;
 use App\Models\NovelOutline;
 use App\Services\NovelOutlineValidator;
@@ -77,16 +78,17 @@ class ManageNovelOutline extends ViewRecord
                 ->schema([
                     TextInput::make('volume_count')->label('预计分卷数')->integer()->minValue(1)->maxValue(12)->default(5)->required(),
                 ])
-                ->action(function (array $data, NovelPlanner $planner): void {
-                    try {
-                        $planner->generate($this->getRecord(), (int) $data['volume_count']);
-                    } catch (\Throwable $exception) {
-                        Notification::make()->title('大纲候选生成失败')->body($exception->getMessage())->danger()->send();
+                ->action(function (array $data): void {
+                    GenerateNovelOutlineJob::dispatch(
+                        $this->getRecord()->getKey(),
+                        (int) $data['volume_count'],
+                    );
 
-                        return;
-                    }
-                    $this->getRecord()->refresh();
-                    Notification::make()->title('AI 大纲候选已保存为 Draft Version')->success()->send();
+                    Notification::make()
+                        ->title('AI 大纲候选已加入生成队列')
+                        ->body('生成完成后刷新本页面即可查看 Draft Version。')
+                        ->success()
+                        ->send();
                 }),
             Action::make('saveManualOutline')
                 ->label(fn (): string => $this->latestDraft() === null ? '手工创建' : '编辑为新版本')

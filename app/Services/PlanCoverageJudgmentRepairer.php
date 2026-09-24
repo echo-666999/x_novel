@@ -22,11 +22,12 @@ final class PlanCoverageJudgmentRepairer
      * @param  array<string, mixed>  $task
      * @return array<string, mixed>
      */
-    public function repair(GenerationRun $run, int $sceneId, array $coverage, string $content, array $task, string $model): array
+    public function repair(GenerationRun $run, int $sceneId, array $coverage, string $content, array $task, string $model, ?string $reasoningEffort = null): array
     {
         $input = [
             ...compact('sceneId', 'coverage', 'content', 'task'),
             'model' => $model,
+            'reasoning_effort' => $reasoningEffort,
             'prompt_version' => self::PROMPT_VERSION,
         ];
         $inputHash = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -40,6 +41,7 @@ final class PlanCoverageJudgmentRepairer
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: '你是 XNovel Coverage 判定复核器。只重新判断 goal、conflict、turn、outcome 的 status 和 evidence；不得修改正文、计划或任何 Canonical 数据。必须根据 task 的语义和完整 content 判断，不能用关键词命中代替语义完成。fulfilled/contradicted 的 evidence 必须逐字引用 content 中的连续文本；missing 的 evidence 必须为 null。若原判定正确应保持原判定。',
                 prompt: '请复核以下 Coverage：'.json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2,

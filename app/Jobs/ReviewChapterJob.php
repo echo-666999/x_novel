@@ -23,7 +23,7 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 90;
+    public int $timeout = 330;
 
     public array $backoff = [10, 30];
 

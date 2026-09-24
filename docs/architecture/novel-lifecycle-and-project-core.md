@@ -46,7 +46,7 @@ Completed Novel
 
 ```mermaid
 flowchart TD
-    A["新建 Novel<br/>状态 draft"] --> B["生成 Novel Blueprint<br/>NovelPlanner"]
+    A["新建 Novel<br/>状态 draft"] --> B["generation 队列<br/>GenerateNovelOutlineJob → NovelPlanner"]
     B --> C{"人工预览并采用蓝图?"}
     C -- "否" --> B
     C -- "是" --> D["落地 Bible / 角色 / 世界资料<br/>Volume / Story Arc / Foreshadowing"]
@@ -145,7 +145,7 @@ Filament 的小说表单当前收集：
 
 ### 4.2 生成结构化蓝图
 
-`NovelPlanner` 根据小说基础信息生成结构化 Blueprint。当前蓝图 Prompt 版本由该服务记录为 `novel-planner-v5`。
+Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Job 在 `generation` 队列调用 `NovelPlanner`，根据小说基础信息生成结构化 Blueprint，避免全书规划受 PHP-FPM 请求时限影响。同一 Novel 同时只允许一个该 Job，网络、超时和临时 Provider 错误最多重试三次；输出截断不会用相同参数自动重复计费。规划请求使用 24,000 completion token，推理程度读取 `planner` 模型路由；该配置为空时采用 Provider 默认行为。Provider Schema 分别约束 `vol-*`、`arc-*`、`beat-*` 键，防止模型把分卷错放到故事线层或用备注/占位节点凑分卷数。当前蓝图 Prompt 版本由 `NovelPlanner` 记录为 `novel-planner-v6`。
 
 Blueprint 至少覆盖：
 
@@ -605,7 +605,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 补充边界：
 
-- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v5`，局部 Outline 修订记录 `novel-outline-node-v1`；两者都不通过 `PromptVersionResolver`。
+- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v6`，局部 Outline 修订记录 `novel-outline-node-v1`；两者都不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把 Prompt Version 写入 Generation Run，使历史输出在 Prompt 更新后仍可解释。
 

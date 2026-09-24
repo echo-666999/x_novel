@@ -56,6 +56,7 @@ class StoryEventExtractor
             'context' => $context,
             'provider' => $settings->provider,
             'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
             'prompt_version' => $promptVersion,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $baseKey = "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}";
@@ -75,6 +76,7 @@ class StoryEventExtractor
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
+                reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
@@ -91,6 +93,7 @@ class StoryEventExtractor
                 $settings->model,
                 $metadata,
                 $context['foreshadowing_contract'],
+                $settings->reasoningEffort,
             );
 
             return $this->complete(
@@ -240,13 +243,13 @@ class StoryEventExtractor
     }
 
     /** @return array<int, StoryEventCandidate> */
-    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract): array
+    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract, ?string $reasoningEffort): array
     {
         if (array_keys($payload) !== ['events'] || ! is_array($payload['events'])) {
             throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须只返回 events 数组。']);
         }
 
-        $candidates = collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata): StoryEventCandidate {
+        $candidates = collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata, $reasoningEffort): StoryEventCandidate {
             if (! is_array($event)) {
                 throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
             }
@@ -268,6 +271,7 @@ class StoryEventExtractor
                         model: $model,
                         metadata: $metadata,
                         eventIndex: $index,
+                        reasoningEffort: $reasoningEffort,
                     );
                     $event = $this->normalizeEvidence($event, $draft);
                     $candidate = StoryEventCandidate::fromArray($event);

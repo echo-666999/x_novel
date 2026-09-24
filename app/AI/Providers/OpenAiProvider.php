@@ -192,6 +192,10 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             $payload['temperature'] = $request->temperature;
         }
 
+        if ($request->reasoningEffort !== null) {
+            $payload['reasoning_effort'] = $request->reasoningEffort;
+        }
+
         if ($request->responseSchema !== null) {
             $payload['response_format'] = [
                 'type' => 'json_schema',

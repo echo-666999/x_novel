@@ -112,7 +112,7 @@ class ChapterRewriter
             ],
             'content' => $source->content,
         ];
-        $inputHash = hash('sha256', json_encode([$brief, $settings->provider, $settings->model, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $inputHash = hash('sha256', json_encode([$brief, $settings->provider, $settings->model, $settings->reasoningEffort, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         [$run, $reused] = $this->startRun($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $settings->provider, $settings->model, $promptVersion);
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::RewriteDraft)->first();
@@ -123,6 +123,7 @@ class ChapterRewriter
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
+                reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: $this->systemPrompt($sceneId !== null),
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
@@ -140,6 +141,7 @@ class ChapterRewriter
                 task: $brief['plan_acceptance'],
                 chapter: $chapter,
                 foreshadowingContract: $foreshadowingContract,
+                reasoningEffort: $settings->reasoningEffort,
             );
 
             $payload = $this->repairLengthIfNeeded(
@@ -149,6 +151,7 @@ class ChapterRewriter
                 promptVersion: $promptVersion,
                 metadata: $metadata,
                 sceneRewrite: $sceneId !== null,
+                reasoningEffort: $settings->reasoningEffort,
             );
             if ($sceneId === null) {
                 $payload = $this->validateChapterPayloadWithCoverageRepair(
@@ -157,6 +160,7 @@ class ChapterRewriter
                     $foreshadowingContract,
                     $settings->model,
                     $metadata,
+                    $settings->reasoningEffort,
                 );
             }
             $this->validateLength($payload['content'], $brief['length_requirement']);
@@ -234,7 +238,7 @@ class ChapterRewriter
      * @param  array<string, mixed>|null  $structuredData
      * @return array<string, mixed>
      */
-    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite, ?string $model = null, array $metadata = [], mixed $task = null, ?Chapter $chapter = null, array $foreshadowingContract = []): array
+    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite, ?string $model = null, array $metadata = [], mixed $task = null, ?Chapter $chapter = null, array $foreshadowingContract = [], ?string $reasoningEffort = null): array
     {
         if ($sceneRewrite) {
             if ($structuredData === null) {
@@ -256,6 +260,7 @@ class ChapterRewriter
                 metadata: $metadata,
                 task: $task,
                 path: 'self_check',
+                reasoningEffort: $reasoningEffort,
             );
 
             try {
@@ -275,6 +280,7 @@ class ChapterRewriter
             $foreshadowingContract,
             $model,
             $metadata,
+            $reasoningEffort,
         );
     }
 
@@ -288,7 +294,7 @@ class ChapterRewriter
     }
 
     /** @param array<string, mixed> $payload @param array<string, mixed> $contract @param array<string, mixed> $metadata */
-    private function validateChapterPayloadWithCoverageRepair(array $payload, Chapter $chapter, array $contract, string $model, array $metadata): array
+    private function validateChapterPayloadWithCoverageRepair(array $payload, Chapter $chapter, array $contract, string $model, array $metadata, ?string $reasoningEffort = null): array
     {
         $sourceArtifacts = $chapter->scenes->sortBy('sequence')->pluck('currentArtifact')->filter()->values();
         $repaired = [];
@@ -324,6 +330,7 @@ class ChapterRewriter
                     model: $model,
                     metadata: $metadata,
                     path: "scene_coverage.{$index}.foreshadowing_coverage",
+                    reasoningEffort: $reasoningEffort,
                 );
             } else {
                 $coverage = $this->coverageEvidenceRepairer->repair(
@@ -333,6 +340,7 @@ class ChapterRewriter
                     metadata: $metadata,
                     task: data_get($chapter->latestPlan?->scene_plans, $index),
                     path: "scene_coverage.{$index}",
+                    reasoningEffort: $reasoningEffort,
                 );
                 $payload['scene_coverage'][$index] = [
                     'scene_id' => $row['scene_id'] ?? null,
@@ -382,10 +390,10 @@ class ChapterRewriter
     /** @param array<string, mixed> $brief
      * @param  array<string, mixed>  $metadata
      */
-    private function repairLengthIfNeeded(array $payload, array $brief, string $model, string $promptVersion, array $metadata, bool $sceneRewrite): array
+    private function repairLengthIfNeeded(array $payload, array $brief, string $model, string $promptVersion, array $metadata, bool $sceneRewrite, ?string $reasoningEffort = null): array
     {
         if (! $sceneRewrite) {
-            return $this->chapterLengthRepairer->repair($payload, $brief, $model, $metadata);
+            return $this->chapterLengthRepairer->repair($payload, $brief, $model, $metadata, $reasoningEffort);
         }
 
         $requirement = $brief['length_requirement'];
@@ -403,6 +411,7 @@ class ChapterRewriter
 
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: $tooLong
                     ? '你是 XNovel 场景重写稿压缩器。当前稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、plan_acceptance、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。'
                     : '你是 XNovel 场景重写稿扩写器。当前稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、plan_acceptance 和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。',
@@ -436,6 +445,7 @@ class ChapterRewriter
                 model: $model,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt],
                 task: $brief['plan_acceptance'],
+                reasoningEffort: $reasoningEffort,
             );
         }
 

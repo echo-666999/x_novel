@@ -22,13 +22,14 @@ final class ArcCompletionAuditRepairer
      * @param  array<int, mixed>  $audits
      * @return array<string, mixed>
      */
-    public function repair(GenerationRun $run, array $contract, array $audits, string $draft, string $model): array
+    public function repair(GenerationRun $run, array $contract, array $audits, string $draft, string $model, ?string $reasoningEffort = null): array
     {
         $input = [
             'arc_completion_contract' => $contract,
             'invalid_arc_completion_audits' => $audits,
             'draft' => $draft,
             'model' => $model,
+            'reasoning_effort' => $reasoningEffort,
             'prompt_version' => self::PROMPT_VERSION,
         ];
         $inputHash = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -42,6 +43,7 @@ final class ArcCompletionAuditRepairer
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: '你是 XNovel Arc Completion 审计修复器。只修复 arc_completion_audits，不得修改正文、Chapter Plan、评分、Findings 或 Canonical 数据。必须严格按 arc_completion_contract 的数量和顺序为每个 arc_id 返回一个对象。只有正文同时满足该 Arc 的全部 completion_conditions 时才返回 fulfilled，并提供一段来自正文的连续逐字片段；不得拼接、删节或合并相隔的句段。否则返回 not_met 且 evidence=null。不得把每个 completion condition 拆成独立审计。',
                 prompt: '请修复以下 Arc Completion 审计：'.json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .1,

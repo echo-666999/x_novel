@@ -26,9 +26,11 @@ use Throwable;
 class NovelPlanner
 {
     // Prompt 版本参与 input_hash；修改提示词时必须升级版本，避免复用旧语义产物。
-    public const PROMPT_VERSION = 'novel-planner-v5';
+    public const PROMPT_VERSION = 'novel-planner-v6';
 
     public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v1';
+
+    public const MAX_COMPLETION_TOKENS = 24_000;
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -53,14 +55,22 @@ class NovelPlanner
             'novel' => $novel->only(['id', 'title', 'genre', 'premise', 'target_words']),
             'generation_preferences' => [
                 'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
+                'max_completion_tokens' => self::MAX_COMPLETION_TOKENS,
+                'reasoning_effort' => $settings->reasoningEffort,
             ],
             'requested_volume_count' => $volumeCount,
+            'outline_contract' => [
+                'volume_keys' => collect(range(1, $volumeCount))->map(fn (int $sequence): string => sprintf('vol-%02d', $sequence))->all(),
+                'all_volumes_are_narrative' => true,
+                'forbid_meta_or_placeholder_volumes' => true,
+            ],
         ];
         // 相同输入、模型和 Prompt 版本产生相同哈希，用于复用已经成功的昂贵调用。
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'provider' => $settings->provider,
             'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
             'prompt_version' => self::PROMPT_VERSION,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
@@ -113,11 +123,12 @@ class NovelPlanner
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
-                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat 嵌套，所有节点使用全局唯一稳定 key 和从 1 连续的 sequence。每个 Main Arc 至少一个结构化 Beat；Beat 必须给出章节预算、验收条件和必须/禁止内容。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。',
+                reasoningEffort: $settings->reasoningEffort,
+                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat 嵌套：Volume key 只能是 vol-01、vol-02 这类两位顺序键，Arc key 只能是 arc-01 这类键，Beat key 只能是 beat-01 这类键。所有节点 key 全局唯一，sequence 在同级数组内从 1 连续。每一个 Volume 都必须是实际叙事分卷，禁止用“说明”“备注”“占位”“校准”“修正”等元数据节点凑数；结构要求应融入真实叙事节点。每个 Main Arc 至少一个结构化 Beat；Beat 必须给出章节预算、验收条件和必须/禁止内容。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。',
                 prompt: '请根据以下小说信息生成初始小说圣经、初始角色、初始世界实体、全书 Outline 和伏笔候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.5,
-                maxTokens: 8_000,
-                responseSchema: $this->schema(),
+                maxTokens: self::MAX_COMPLETION_TOKENS,
+                responseSchema: $this->schema($volumeCount),
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [
                     'generation_run_id' => $run->getKey(),
@@ -196,6 +207,7 @@ class NovelPlanner
             'context' => $context,
             'provider' => $settings->provider,
             'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
             'prompt_version' => self::REGENERATION_PROMPT_VERSION,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $attempt = ((int) $novel->generationRuns()
@@ -221,10 +233,11 @@ class NovelPlanner
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
+                reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的完整 Outline JSON。仅允许修改 target_node_key 对应节点及其后代；节点外的字段、顺序、key 和语义必须保持不变。不得把 Candidate 写入正式人物或世界资料。',
                 prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
-                maxTokens: 8_000,
+                maxTokens: self::MAX_COMPLETION_TOKENS,
                 responseSchema: $this->outlineSchema(),
                 promptVersion: self::REGENERATION_PROMPT_VERSION,
                 metadata: [
@@ -359,6 +372,9 @@ class NovelPlanner
     /** @param array<string, mixed> $data @return array<string, mixed> */
     private function validate(array $data, int $volumeCount): array
     {
+        // sequence 只是同级数组的确定性位置，Laravel 可从数组顺序安全重建，避免模型误用全局编号。
+        $data['outline'] = $this->normalizeOutlineSequences($data['outline'] ?? null);
+
         // 第一层校验完整 Blueprint 的字段、类型、枚举和用户指定的精确分卷数。
         $rules = [
             'bible' => ['required', 'array'],
@@ -432,6 +448,7 @@ class NovelPlanner
             'bible.style_profile.parameters.*.required' => 'AI 小说规划必须包含全部六项文风高级设置。',
             'bible.style_profile.parameters.*.integer' => 'AI 小说规划的文风高级设置必须是整数。',
             'bible.style_profile.parameters.*.between' => 'AI 小说规划的文风高级设置必须是 1 至 5 的整数。',
+            'outline.volumes.size' => "AI 小说规划必须包含用户指定的 {$volumeCount} 个分卷。",
         ]);
 
         $validator->after(function ($validator) use ($data): void {
@@ -470,8 +487,46 @@ class NovelPlanner
         return $valid;
     }
 
+    private function normalizeOutlineSequences(mixed $outline): mixed
+    {
+        if (! is_array($outline) || ! is_array($outline['volumes'] ?? null)) {
+            return $outline;
+        }
+
+        foreach ($outline['volumes'] as $volumeIndex => &$volume) {
+            if (! is_array($volume)) {
+                continue;
+            }
+            $volume['sequence'] = $volumeIndex + 1;
+
+            if (! is_array($volume['arcs'] ?? null)) {
+                continue;
+            }
+            foreach ($volume['arcs'] as $arcIndex => &$arc) {
+                if (! is_array($arc)) {
+                    continue;
+                }
+                $arc['sequence'] = $arcIndex + 1;
+
+                if (! is_array($arc['beats'] ?? null)) {
+                    continue;
+                }
+                foreach ($arc['beats'] as $beatIndex => &$beat) {
+                    if (is_array($beat)) {
+                        $beat['sequence'] = $beatIndex + 1;
+                    }
+                }
+                unset($beat);
+            }
+            unset($arc);
+        }
+        unset($volume);
+
+        return $outline;
+    }
+
     /** @return array<string, mixed> */
-    private function schema(): array
+    private function schema(int $volumeCount): array
     {
         $stringArray = ['type' => 'array', 'items' => ['type' => 'string']];
         $currentState = ['type' => 'object', 'additionalProperties' => false, 'required' => ['location', 'summary'], 'properties' => [
@@ -497,7 +552,7 @@ class NovelPlanner
                 'world_entities' => ['type' => 'array', 'items' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['type', 'name', 'description', 'attributes', 'rules', 'current_state'], 'properties' => [
                     'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'attributes' => $stringArray, 'rules' => $stringArray, 'current_state' => $stringArray,
                 ]]],
-                'outline' => $this->outlineSchema(),
+                'outline' => $this->outlineSchema($volumeCount),
                 'foreshadowings' => ['type' => 'array', 'items' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['title', 'description', 'promised_payoff', 'due_from_chapter', 'due_to_chapter', 'importance', 'owner_arc_key'], 'properties' => [
                     'title' => ['type' => 'string'], 'description' => ['type' => 'string'], 'promised_payoff' => ['type' => 'string'], 'due_from_chapter' => ['type' => 'integer'], 'due_to_chapter' => ['type' => 'integer'], 'importance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical']], 'owner_arc_key' => ['type' => ['string', 'null']],
                 ]]],
@@ -506,28 +561,42 @@ class NovelPlanner
     }
 
     /** @return array<string, mixed> */
-    public function outlineSchema(): array
+    public function outlineSchema(?int $volumeCount = null): array
     {
         $stringArray = ['type' => 'array', 'items' => ['type' => 'string']];
         $integerArray = ['type' => 'array', 'items' => ['type' => 'integer']];
+        $stableKey = ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$'];
+        $volumeKey = ['type' => 'string', 'pattern' => '^vol-[0-9]{2}$'];
+        $arcKey = ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$'];
+        $beatKey = ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$'];
         $characterCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'name', 'role', 'motivation', 'profile', 'personality', 'abilities', 'knowledge', 'deduplication_basis', 'possible_duplicate_character_ids', 'introduction_reason', 'target_scene_sequence'], 'properties' => [
-            'candidate_key' => ['type' => 'string'], 'name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'motivation' => ['type' => 'string'], 'profile' => ['type' => 'object'], 'personality' => ['type' => 'object'], 'abilities' => ['type' => 'object'], 'knowledge' => ['type' => 'object'], 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_character_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
+            'candidate_key' => $stableKey, 'name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'motivation' => ['type' => 'string'], 'profile' => $stringArray, 'personality' => $stringArray, 'abilities' => $stringArray, 'knowledge' => $stringArray, 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_character_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
+        ]];
+        $baselineCompletion = ['type' => 'object', 'additionalProperties' => false, 'required' => ['beat_key', 'chapter_ids', 'evidence', 'reason', 'confirmed_by', 'confirmed_at'], 'properties' => [
+            'beat_key' => ['type' => 'string'], 'chapter_ids' => $integerArray, 'evidence' => ['type' => 'string'], 'reason' => ['type' => 'string'], 'confirmed_by' => ['type' => 'string'], 'confirmed_at' => ['type' => 'string'],
         ]];
         $worldCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'type', 'name', 'description', 'deduplication_basis', 'possible_duplicate_entity_ids', 'introduction_reason', 'target_scene_sequence'], 'properties' => [
-            'candidate_key' => ['type' => 'string'], 'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_entity_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
+            'candidate_key' => $stableKey, 'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_entity_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
         ]];
         $beat = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'title', 'summary', 'chapter_budget', 'acceptance_criteria', 'must_include', 'must_not_include', 'character_candidates', 'world_entity_candidates'], 'properties' => [
-            'key' => ['type' => 'string'], 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'summary' => ['type' => 'string'],
+            'key' => $beatKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'summary' => ['type' => 'string'],
             'chapter_budget' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['min', 'max'], 'properties' => ['min' => ['type' => 'integer', 'minimum' => 1], 'max' => ['type' => ['integer', 'null'], 'minimum' => 1]]],
-            'acceptance_criteria' => $stringArray, 'must_include' => $stringArray, 'must_not_include' => $stringArray,
+            'acceptance_criteria' => ['type' => 'array', 'minItems' => 1, 'items' => ['type' => 'string']], 'must_include' => $stringArray, 'must_not_include' => $stringArray,
             'character_candidates' => ['type' => 'array', 'items' => $characterCandidate], 'world_entity_candidates' => ['type' => 'array', 'items' => $worldCandidate],
         ]];
         $arc = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'type', 'title', 'goal', 'stakes', 'completion_conditions', 'beats'], 'properties' => [
-            'key' => ['type' => 'string'], 'sequence' => ['type' => 'integer', 'minimum' => 1], 'type' => ['type' => 'string', 'enum' => ['main', 'subplot']], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'stakes' => ['type' => 'string'], 'completion_conditions' => $stringArray, 'beats' => ['type' => 'array', 'items' => $beat],
+            'key' => $arcKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'type' => ['type' => 'string', 'enum' => ['main', 'subplot']], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'stakes' => ['type' => 'string'], 'completion_conditions' => $stringArray, 'beats' => ['type' => 'array', 'minItems' => 1, 'items' => $beat],
         ]];
         $volume = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'title', 'goal', 'climax', 'target_words', 'arcs'], 'properties' => [
-            'key' => ['type' => 'string'], 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'climax' => ['type' => 'string'], 'target_words' => ['type' => 'integer', 'minimum' => 1], 'arcs' => ['type' => 'array', 'items' => $arc],
+            'key' => $volumeKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'climax' => ['type' => 'string'], 'target_words' => ['type' => 'integer', 'minimum' => 1], 'arcs' => ['type' => 'array', 'minItems' => 1, 'items' => $arc],
         ]];
+
+        $volumes = ['type' => 'array', 'items' => $volume];
+        if ($volumeCount !== null) {
+            // 用户指定的分卷数属于确定性约束，应直接写入 Provider Schema，避免生成后才拒绝并浪费费用。
+            $volumes['minItems'] = $volumeCount;
+            $volumes['maxItems'] = $volumeCount;
+        }
 
         return [
             'type' => 'object',
@@ -535,8 +604,9 @@ class NovelPlanner
             'required' => ['title', 'summary', 'must_include', 'must_not_include', 'baseline_completions', 'volumes'],
             'properties' => [
                 'title' => ['type' => 'string'], 'summary' => ['type' => 'string'], 'must_include' => $stringArray, 'must_not_include' => $stringArray,
-                'baseline_completions' => ['type' => 'array', 'maxItems' => 0, 'items' => ['type' => 'object']],
-                'volumes' => ['type' => 'array', 'items' => $volume],
+                // AI 新规划不得伪造历史完成记录；完整 item Schema 仅用于满足严格结构化输出校验。
+                'baseline_completions' => ['type' => 'array', 'maxItems' => 0, 'items' => $baselineCompletion],
+                'volumes' => $volumes,
             ],
         ];
     }
@@ -563,7 +633,6 @@ class NovelPlanner
                 'secondary_styles' => [
                     'type' => 'array',
                     'maxItems' => 2,
-                    'uniqueItems' => true,
                     'items' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))],
                 ],
                 'language_era' => ['type' => 'string', 'enum' => array_keys(config('narrative.language_eras', []))],

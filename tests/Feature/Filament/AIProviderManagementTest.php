@@ -1,6 +1,7 @@
 <?php
 
 use App\AI\AiCostCalculator;
+use App\AI\AiModelRouteService;
 use App\AI\AiProviderConnectionTester;
 use App\AI\AiSettingsResolver;
 use App\AI\AiSettingsService;
@@ -18,6 +19,7 @@ use App\Models\AIProviderConnection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -172,7 +174,14 @@ test('model routes are maintained from the model price page and override environ
         'is_enabled' => true,
     ]);
     $routes = collect(AiStage::cases())->mapWithKeys(
-        fn (AiStage $stage): array => [$stage->value => $price->getKey()],
+        fn (AiStage $stage): array => [$stage->value => [
+            'model_price_id' => $price->getKey(),
+            'reasoning_effort' => match ($stage) {
+                AiStage::Planner, AiStage::Reviewer => 'high',
+                AiStage::Writer => 'low',
+                default => null,
+            },
+        ]],
     )->all();
 
     Livewire::test(ListAIModelPrices::class)
@@ -181,10 +190,50 @@ test('model routes are maintained from the model price page and override environ
         ->assertHasNoActionErrors();
 
     expect(AIModelRoute::query()->count())->toBe(count(AiStage::cases()))
+        ->and(AIModelRoute::query()->where('role', AiStage::Planner)->firstOrFail()->reasoning_effort?->value)
+        ->toBe('high')
         ->and(app(AiSettingsResolver::class)->resolve(AiStage::Writer))
         ->provider->toBe('openai')
         ->model->toBe('database-routed-model')
+        ->reasoningEffort->toBe('low')
         ->source->toBe('database')
+        ->and(app(AiSettingsResolver::class)->resolve(AiStage::Reviewer)->reasoningEffort)
+        ->toBe('high')
         ->and(app(AiSettingsResolver::class)->resolve(AiStage::Embedding)->model)
         ->toBe('database-routed-model');
+});
+
+test('model route rejects an unsupported reasoning effort', function () {
+    AIProviderConnection::query()->create([
+        'provider' => 'openai',
+        'name' => 'OpenAI',
+        'base_url' => 'https://api.openai.com/v1',
+        'api_key' => 'database-key',
+        'connect_timeout' => 10,
+        'timeout' => 60,
+        'is_enabled' => true,
+    ]);
+    $price = AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'reasoning-model',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'input_price' => 1,
+        'output_price' => 2,
+        'is_enabled' => true,
+    ]);
+    $routes = collect(AiStage::cases())->mapWithKeys(
+        fn (AiStage $stage): array => [$stage->value => [
+            'model_price_id' => $price->getKey(),
+            'reasoning_effort' => $stage === AiStage::Writer ? 'extreme' : null,
+        ]],
+    )->all();
+
+    try {
+        app(AiModelRouteService::class)->save($routes, auth()->id());
+        $this->fail('Expected invalid reasoning effort to be rejected.');
+    } catch (ValidationException $exception) {
+        expect($exception->errors())->toHaveKey('routes.writer.reasoning_effort')
+            ->and(AIModelRoute::query()->count())->toBe(0);
+    }
 });

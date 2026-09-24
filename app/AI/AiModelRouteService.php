@@ -2,6 +2,7 @@
 
 namespace App\AI;
 
+use App\Enums\AiReasoningEffort;
 use App\Enums\AiStage;
 use App\Models\AIModelPrice;
 use App\Models\AIModelRoute;
@@ -23,7 +24,7 @@ class AiModelRouteService
         return AIModelRoute::query()->where('role', $stage->value)->first();
     }
 
-    /** @return array<string, int|null> */
+    /** @return array<string, array{model_price_id: int|null, reasoning_effort: string|null}> */
     public function formState(): array
     {
         $routes = Schema::hasTable('ai_model_routes')
@@ -33,7 +34,7 @@ class AiModelRouteService
         return collect(AiStage::cases())->mapWithKeys(function (AiStage $stage) use ($routes): array {
             $route = $routes->get($stage->value);
             if ($route === null) {
-                return [$stage->value => null];
+                return [$stage->value => ['model_price_id' => null, 'reasoning_effort' => null]];
             }
 
             $priceId = AIModelPrice::query()
@@ -43,7 +44,10 @@ class AiModelRouteService
                 ->orderByRaw('currency = ? desc', [strtoupper((string) config('ai.cost.currency', 'USD'))])
                 ->value('id');
 
-            return [$stage->value => is_numeric($priceId) ? (int) $priceId : null];
+            return [$stage->value => [
+                'model_price_id' => is_numeric($priceId) ? (int) $priceId : null,
+                'reasoning_effort' => $route->reasoning_effort?->value,
+            ]];
         })->all();
     }
 
@@ -71,13 +75,25 @@ class AiModelRouteService
         $errors = [];
 
         foreach (AiStage::cases() as $stage) {
-            $priceId = $routes[$stage->value] ?? null;
+            $routeInput = $routes[$stage->value] ?? null;
+            // 兼容旧调用方直接传入 price id，新后台表单传入模型与推理程度的组合。
+            $priceId = is_array($routeInput) ? ($routeInput['model_price_id'] ?? null) : $routeInput;
+            $reasoningEffort = is_array($routeInput) ? ($routeInput['reasoning_effort'] ?? null) : null;
+            $reasoningEffort = is_string($reasoningEffort) && trim($reasoningEffort) !== ''
+                ? trim($reasoningEffort)
+                : null;
             $price = is_numeric($priceId)
                 ? AIModelPrice::query()->where('is_enabled', true)->find((int) $priceId)
                 : null;
 
             if ($price === null) {
-                $errors["routes.{$stage->value}"][] = '请选择一个已启用且已配置价格的模型。';
+                $errors["routes.{$stage->value}.model_price_id"][] = '请选择一个已启用且已配置价格的模型。';
+
+                continue;
+            }
+
+            if ($reasoningEffort !== null && AiReasoningEffort::tryFrom($reasoningEffort) === null) {
+                $errors["routes.{$stage->value}.reasoning_effort"][] = '推理程度必须是低、中、高或使用 Provider 默认值。';
 
                 continue;
             }
@@ -100,6 +116,7 @@ class AiModelRouteService
             $resolved[$stage->value] = [
                 'provider' => strtolower(trim($price->provider)),
                 'model' => trim($price->model),
+                'reasoning_effort' => $reasoningEffort,
             ];
         }
 
@@ -109,7 +126,11 @@ class AiModelRouteService
 
         DB::transaction(function () use ($resolved, $actorId): void {
             $before = AIModelRoute::query()->get()->mapWithKeys(fn (AIModelRoute $route): array => [
-                $route->role->value => ['provider' => $route->provider, 'model' => $route->model],
+                $route->role->value => [
+                    'provider' => $route->provider,
+                    'model' => $route->model,
+                    'reasoning_effort' => $route->reasoning_effort?->value,
+                ],
             ])->all();
 
             foreach ($resolved as $role => $route) {

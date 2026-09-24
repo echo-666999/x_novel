@@ -21,7 +21,7 @@ final class StoryEventEvidenceRepairer
      * @param  array<string, mixed>  $metadata
      * @return array<int, array<string, mixed>>
      */
-    public function repair(array $event, string $content, string $model, array $metadata, int $eventIndex): array
+    public function repair(array $event, string $content, string $model, array $metadata, int $eventIndex, ?string $reasoningEffort = null): array
     {
         $evidence = $event['evidence'] ?? null;
 
@@ -37,6 +37,7 @@ final class StoryEventEvidenceRepairer
                 : (int) config('generation.event_evidence_repair_retry_max_output_tokens', 4_000);
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: '你是 XNovel Story Event 证据校对器。不得修改事件类型、主体、payload、story_time、confidence 或章节正文。按原 evidence 顺序为每项返回一个 quote；每个 quote 必须是 content 中一段连续文本的逐字复制，保留原标点和段落换行，不得概括、改写、拼接不连续句子或补字。',
                 prompt: '请修正以下 Story Event evidence quote：'.json_encode([
                     'event' => collect($event)->except('evidence')->all(),

@@ -61,6 +61,7 @@ test('openai provider maps a successful response to the provider dto', function 
         prompt: 'Ping',
         temperature: 0,
         maxTokens: 8,
+        reasoningEffort: 'low',
         responseSchema: [
             'type' => 'object',
             'properties' => ['answer' => ['type' => 'string']],
@@ -81,6 +82,7 @@ test('openai provider maps a successful response to the provider dto', function 
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://llm.example/v1/chat/completions'
         && $request->hasHeader('Authorization', 'Bearer test-key')
         && $request['max_completion_tokens'] === 8
+        && $request['reasoning_effort'] === 'low'
         && ! isset($request['max_tokens'])
         && $request['response_format']['type'] === 'json_schema');
 });

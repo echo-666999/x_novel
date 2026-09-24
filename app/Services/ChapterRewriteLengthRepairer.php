@@ -22,7 +22,7 @@ final class ChapterRewriteLengthRepairer
      * @param  array<string, mixed>  $metadata
      * @return array<string, mixed>
      */
-    public function repair(array $payload, array $brief, string $model, array $metadata): array
+    public function repair(array $payload, array $brief, string $model, array $metadata, ?string $reasoningEffort = null): array
     {
         $requirement = $brief['length_requirement'];
         $lastRejection = null;
@@ -41,6 +41,7 @@ final class ChapterRewriteLengthRepairer
             [$preferredMinimum, $preferredMaximum] = $this->preferredRange($requirement);
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: $this->systemPrompt($tooLong),
                 prompt: '请为以下重写稿生成局部字符补丁：'.json_encode([
                     'mode' => $tooLong ? 'compress' : 'expand',

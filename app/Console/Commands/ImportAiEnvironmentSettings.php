@@ -50,19 +50,33 @@ class ImportAiEnvironmentSettings extends Command
                 }
 
                 $currency = strtoupper(trim((string) config('ai.cost.currency', 'USD')));
-                foreach ($this->stageRoutes() as $role => $route) {
-                    ['provider' => $provider, 'model' => $model] = $route;
-                    AIModelPrice::query()->updateOrCreate(
-                        compact('provider', 'model', 'currency'),
-                        [
-                            'billing_unit' => 1_000_000,
-                            'input_price' => (float) config('ai.cost.input_per_million', 0),
-                            'cached_input_price' => (float) config('ai.cost.cached_input_per_million', 0),
-                            'output_price' => (float) config('ai.cost.output_per_million', 0),
-                            'is_enabled' => true,
-                        ],
-                    );
+                $routes = $this->stageRoutes();
+                $defaultRoute = [
+                    'provider' => strtolower(trim((string) config('ai.provider', 'openai'))),
+                    'model' => trim((string) config('ai.model')),
+                ];
 
+                // AI_MODEL 也是旧环境配置的独立价格对象；即使每个角色都有覆盖值，导入时也不应丢失它。
+                collect([...array_values($routes), $defaultRoute])
+                    ->filter(fn (array $route): bool => $route['provider'] !== '' && $route['model'] !== '')
+                    ->unique(fn (array $route): string => $route['provider'].'|'.$route['model'])
+                    ->each(function (array $route) use ($currency): void {
+                        ['provider' => $provider, 'model' => $model] = $route;
+
+                        AIModelPrice::query()->updateOrCreate(
+                            compact('provider', 'model', 'currency'),
+                            [
+                                'billing_unit' => 1_000_000,
+                                'input_price' => (float) config('ai.cost.input_per_million', 0),
+                                'cached_input_price' => (float) config('ai.cost.cached_input_per_million', 0),
+                                'output_price' => (float) config('ai.cost.output_per_million', 0),
+                                'is_enabled' => true,
+                            ],
+                        );
+                    });
+
+                foreach ($routes as $role => $route) {
+                    ['provider' => $provider, 'model' => $model] = $route;
                     AIModelRoute::query()->updateOrCreate(
                         ['role' => $role],
                         compact('provider', 'model'),

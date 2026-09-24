@@ -25,7 +25,7 @@ class AiSettingsService
 
     public const MAX_CONNECT_TIMEOUT_SECONDS = 60;
 
-    public const MAX_REQUEST_TIMEOUT_SECONDS = 80;
+    public const MAX_REQUEST_TIMEOUT_SECONDS = 300;
 
     /** @return array<int, AiStage> */
     public function stages(): array
@@ -274,7 +274,7 @@ class AiSettingsService
                 $errors["providers.{$provider}.connect_timeout"][] = '连接超时必须在 1 到 60 秒之间。';
             }
             if ($timeout === false || $timeout < self::MIN_TIMEOUT_SECONDS || $timeout > self::MAX_REQUEST_TIMEOUT_SECONDS) {
-                $errors["providers.{$provider}.timeout"][] = '请求超时必须在 1 到 80 秒之间。';
+                $errors["providers.{$provider}.timeout"][] = '请求超时必须在 1 到 300 秒之间。';
             }
             if ($connectTimeout !== false && $timeout !== false && $connectTimeout > $timeout) {
                 $errors["providers.{$provider}.connect_timeout"][] = '连接超时不能大于请求超时。';

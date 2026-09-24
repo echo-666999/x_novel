@@ -22,7 +22,7 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
-    public int $timeout = 90;
+    public int $timeout = 330;
 
     /** @var array<int> */
     public array $backoff = [10, 30];

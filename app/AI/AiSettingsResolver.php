@@ -27,6 +27,7 @@ class AiSettingsResolver
         $route = $this->modelRoutes->find($stage);
         $routeProvider = $route === null ? null : strtolower(trim($route->provider));
         $routeModel = $route === null ? null : trim($route->model);
+        $routeReasoningEffort = $route?->reasoning_effort?->value;
 
         // Embedding 不读取小说级生成策略。未维护数据库路由时，直接使用环境配置，
         // 避免把文本生成模型的默认供应商错误应用到向量模型。
@@ -42,6 +43,7 @@ class AiSettingsResolver
                 stage: $stage,
                 provider: $routeProvider,
                 model: $routeModel,
+                reasoningEffort: $routeReasoningEffort,
                 source: 'database',
             );
         }
@@ -79,6 +81,7 @@ class AiSettingsResolver
                 stage: $stage,
                 provider: $provider,
                 model: $model,
+                reasoningEffort: $routeReasoningEffort,
                 source: 'novel',
             );
         }
@@ -90,6 +93,7 @@ class AiSettingsResolver
             stage: $stage,
             provider: $baseProvider,
             model: $baseModel,
+            reasoningEffort: $routeReasoningEffort,
             source: $baseSource,
         );
     }
@@ -117,6 +121,7 @@ class AiSettingsResolver
             stage: $stage,
             provider: (string) ($stage === AiStage::Embedding ? config('ai.embedding.provider', 'openai') : config('ai.provider')),
             model: $model,
+            reasoningEffort: null,
             source: 'environment',
         );
     }

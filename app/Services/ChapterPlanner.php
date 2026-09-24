@@ -63,11 +63,12 @@ class ChapterPlanner
             'context' => $context,
             'provider' => $settings->provider,
             'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
             'prompt_version' => $promptVersion,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $baseKey = "plan:{$chapter->getKey()}:{$context['state_version']}:{$context['bible_version']}:".
             ($context['novel_outline_id'] ?? 'legacy').':'.($context['outline_checksum'] ?? 'legacy').":{$promptVersion}:".
-            hash('sha256', $settings->provider.'|'.$settings->model.'|'.$settings->source);
+            hash('sha256', $settings->provider.'|'.$settings->model.'|'.($settings->reasoningEffort ?? 'default').'|'.$settings->source);
 
         [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate);
 
@@ -81,6 +82,7 @@ class ChapterPlanner
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
+                reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: $this->systemPrompt($novel),
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'

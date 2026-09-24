@@ -25,6 +25,7 @@ final class ForeshadowingCoverageEvidenceRepairer
         string $model,
         array $metadata,
         string $path,
+        ?string $reasoningEffort = null,
     ): array {
         for ($attempt = 1; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
             $maxTokens = $attempt === 1
@@ -32,6 +33,7 @@ final class ForeshadowingCoverageEvidenceRepairer
                 : (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000);
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: '你是 XNovel 伏笔 Coverage 证据校对器。不得修改正文，也不得改变数组顺序、foreshadowing_id、action 或 status。status=fulfilled 或 contradicted 时，evidence 必须从 content 中选择一段连续文本并逐字复制；不得概括、改写、拼接不连续句子或用主题相近措辞替代动作证据。status=missing 时 evidence 必须为 null。只返回符合 Schema 的数组。',
                 prompt: '请只修正以下伏笔 Coverage 的 evidence：'.json_encode([
                     'expectations' => $expectations,

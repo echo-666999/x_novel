@@ -598,6 +598,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
         'context' => $inputContext,
         'provider' => $run->provider,
         'model' => $run->model_policy,
+        'reasoning_effort' => null,
         'prompt_version' => $run->prompt_version,
         'regeneration_batch_id' => null,
     ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));

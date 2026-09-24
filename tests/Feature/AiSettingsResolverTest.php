@@ -66,11 +66,13 @@ test('database model routes are normalized before provider requests', function (
         'role' => AiStage::Planner,
         'provider' => ' openai ',
         'model' => ' gpt-5.6-terra ',
+        'reasoning_effort' => 'high',
     ]);
 
     expect(app(AiSettingsResolver::class)->resolve(AiStage::Planner))
         ->provider->toBe('openai')
         ->model->toBe('gpt-5.6-terra')
+        ->reasoningEffort->toBe('high')
         ->source->toBe('database');
 });
 

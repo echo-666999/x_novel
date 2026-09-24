@@ -2,11 +2,12 @@
 
 namespace App\Models;
 
+use App\Enums\AiReasoningEffort;
 use App\Enums\AiStage;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 
-#[Fillable(['role', 'provider', 'model'])]
+#[Fillable(['role', 'provider', 'model', 'reasoning_effort'])]
 class AIModelRoute extends Model
 {
     protected $table = 'ai_model_routes';
@@ -14,6 +15,9 @@ class AIModelRoute extends Model
     /** @return array<string, string> */
     protected function casts(): array
     {
-        return ['role' => AiStage::class];
+        return [
+            'role' => AiStage::class,
+            'reasoning_effort' => AiReasoningEffort::class,
+        ];
     }
 }

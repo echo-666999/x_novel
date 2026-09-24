@@ -101,6 +101,7 @@ class CanonicalChapterSummaryService
             'prompt_version' => $promptVersion,
             'provider' => $settings->provider,
             'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
         [$run, $reusable] = $this->startRun($chapter, $source, $inputHash, $promptVersion, $settings->provider, $settings->model);
@@ -123,6 +124,7 @@ class CanonicalChapterSummaryService
             $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
+                reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: '你是 XNovel 正式章节摘要器。只总结提供的 Canonical Chapter，不得补写正文中未发生的事实。只返回符合 Schema 的 JSON；摘要必须简短、明确，并保留影响后续章节的事件、人物变化和未决线索。',
                 prompt: json_encode([
                     'chapter' => [

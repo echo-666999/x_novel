@@ -10,6 +10,7 @@ final readonly class ResolvedAiSettings
         public AiStage $stage,
         public string $provider,
         public string $model,
+        public ?string $reasoningEffort,
         public string $source,
     ) {}
 }

@@ -13,6 +13,7 @@ use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Jobs\GenerateNovelOutlineJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\NovelOutline;
@@ -22,6 +23,7 @@ use App\Models\User;
 use App\Services\NovelOutlineChecksum;
 use App\Services\NovelPlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
@@ -136,11 +138,86 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($novel->volumes()->count())->toBe(0)
         ->and($novel->generationRuns()->sole()->status)->toBe(RunStatus::Succeeded)
         ->and($fake->requests())->toHaveCount(1)
-        ->and($fake->requests()[0]->promptVersion)->toBe('novel-planner-v5')
+        ->and($fake->requests()[0]->promptVersion)->toBe('novel-planner-v6')
+        ->and($fake->requests()[0]->maxTokens)->toBe(24_000)
+        ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
+        ->and(data_get($novel->generationRuns()->sole()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(24_000)
+        ->and(data_get($novel->generationRuns()->sole()->context_snapshot, 'generation_preferences.reasoning_effort'))->toBeNull()
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.required'))->toContain('style_profile')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.properties.style_profile.properties.primary_style.enum'))->toContain('passionate')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.properties.style_profile.properties.secondary_styles'))->not->toHaveKey('uniqueItems')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.properties.style_profile.properties.parameters.required'))->toBe(config('narrative.parameter_keys'))
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.outline.properties.volumes.minItems'))->toBe(1)
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.outline.properties.volumes.maxItems'))->toBe(1)
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.beats.items.required'))->toContain('chapter_budget');
+});
+
+test('ai planning response schema contains only strict objects accepted by the provider', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = (new FakeAiProvider)->enqueue(novelBlueprintResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    app(NovelPlanner::class)->generate($novel, 1);
+
+    $schema = $fake->requests()[0]->responseSchema;
+    $invalidObjects = [];
+    $inspect = function (mixed $node, string $path = '$') use (&$inspect, &$invalidObjects): void {
+        if (! is_array($node)) {
+            return;
+        }
+
+        if (($node['type'] ?? null) === 'object') {
+            $properties = array_keys($node['properties'] ?? []);
+            $required = $node['required'] ?? [];
+
+            if (($node['additionalProperties'] ?? null) !== false || $properties !== $required) {
+                $invalidObjects[] = $path;
+            }
+        }
+
+        foreach ($node as $key => $value) {
+            if (is_array($value)) {
+                $inspect($value, $path.'.'.$key);
+            }
+        }
+    };
+    $inspect($schema);
+
+    expect($invalidObjects)->toBe([])
+        ->and(data_get($schema, 'properties.outline.properties.baseline_completions.maxItems'))->toBe(0)
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.key.pattern'))->toBe('^vol-[0-9]{2}$')
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.key.pattern'))->toBe('^arc-[0-9]{2,}$')
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.beats.items.properties.key.pattern'))->toBe('^beat-[0-9]{2,}$')
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.minItems'))->toBe(1)
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.beats.minItems'))->toBe(1)
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.beats.items.properties.character_candidates.items.properties.profile.type'))->toBe('array');
+});
+
+test('ai planning derives sibling sequences from array order', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $data = novelBlueprint();
+    $data['outline']['volumes'][0]['sequence'] = 10;
+    $data['outline']['volumes'][0]['arcs'][0]['sequence'] = 20;
+    $data['outline']['volumes'][0]['arcs'][0]['beats'][0]['sequence'] = 30;
+    $data['outline']['volumes'][0]['arcs'][0]['beats'][1]['sequence'] = 40;
+    $fake = (new FakeAiProvider)->enqueue(new AiResponse(
+        content: json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $data,
+        inputTokens: 100,
+        outputTokens: 500,
+        cachedTokens: 0,
+        latencyMs: 50,
+        providerRequestId: 'novel-plan-sequence-test',
+        model: 'planner-test',
+    ));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(NovelPlanner::class)->generate($novel, 1);
+
+    expect(data_get($artifact->data, 'outline.volumes.0.sequence'))->toBe(1)
+        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.sequence'))->toBe(1)
+        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.0.sequence'))->toBe(1)
+        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.1.sequence'))->toBe(2);
 });
 
 test('adopting a blueprint creates coherent planning data and refreshes an early initial state', function () {
@@ -215,6 +292,7 @@ test('a ready plan can enter generation and an incomplete plan cannot', function
 });
 
 test('the outline workspace guides a draft through ai planning and generation readiness', function () {
+    Queue::fake();
     $this->actingAs(User::factory()->create());
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $fake = (new FakeAiProvider)->enqueue(novelBlueprintResponse());
@@ -223,7 +301,16 @@ test('the outline workspace guides a draft through ai planning and generation re
     Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
         ->assertActionVisible('generateOutlineCandidate')
         ->callAction('generateOutlineCandidate', ['volume_count' => 1])
-        ->assertNotified('AI 大纲候选已保存为 Draft Version')
+        ->assertNotified('AI 大纲候选已加入生成队列');
+
+    Queue::assertPushed(GenerateNovelOutlineJob::class, fn (GenerateNovelOutlineJob $job): bool => $job->novelId === $novel->getKey()
+        && $job->volumeCount === 1
+        && $job->queue === 'generation');
+    expect($fake->requests())->toHaveCount(0);
+
+    (new GenerateNovelOutlineJob($novel->getKey(), 1))->handle(app(NovelPlanner::class));
+
+    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
         ->assertActionVisible('applyOutline')
         ->callAction('applyOutline')
         ->assertNotified('Current Novel Outline 已采用');

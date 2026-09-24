@@ -16,7 +16,8 @@ Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、E
 
 ```text
 Novel.status = draft
-→ 用户手工创建，或 NovelPlanner 生成结构化 Blueprint / Outline Artifact
+→ 用户手工创建，或 GenerateNovelOutlineJob 在 generation 队列调用 NovelPlanner
+→ 生成结构化 Blueprint / Outline Artifact
 → Outline Draft Version
 → 用户逐项编辑、校验并采用
 → Current Novel Outline
@@ -27,6 +28,10 @@ Novel.status = draft
 ```
 
 Blueprint / AI Outline Candidate 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。首次 Blueprint 生成发生在 Current Bible 创建前，是唯一不能读取 Current Bible 的生成入口；采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，Current Novel Outline 是后续 Chapter Planning 的顺序和主线权威。Laravel 选择当前节点；LLM 不拥有 Beat 排序、主线切换、跳过或删除节点的权限。
+
+AI 全书大纲必须异步执行。Filament Action 只向 `generation` 队列投递 `GenerateNovelOutlineJob` 并立即返回；Job 调用 `NovelPlanner` 创建 Generation Run、Artifact 和 Draft Outline。这样长耗时模型调用不会受 PHP-FPM Web 请求时限影响，同一 Novel 的重复投递由唯一 Job 合并，可恢复的 Provider 错误按 Job 策略重试。规划请求使用 24,000 completion token；推理程度读取 `planner` 模型路由。新增该字段的迁移会把已有 `planner` 路由回填为 `low`，延续原有全书大纲行为，并避免推理 token 耗尽预算后没有结构化正文。
+
+长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。
 
 进入 `generating` 后执行章节流水线：
 
@@ -167,7 +172,7 @@ context
 → hash 不同：new attempt
 ```
 
-技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 且没有可解析结构化结果时，必须记录为对应阶段的 `*_output_truncated` 技术故障并交由 Queue 重试，不能把它误记为普通 Schema 内容错误后立即阻塞。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
+技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 且没有可解析结构化结果时，必须记录为对应阶段的 `*_output_truncated` 技术故障，不能把它误记为普通 Schema 内容错误。使用固定预算的全书大纲请求遇到截断时终止当前 Job，避免相同参数自动重试并重复计费；其他阶段只有在提高后续请求预算时才允许重试。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
 
 Filament 发起生成任务时，必须在派发前写入带 TTL 的临时待执行标记，并在标记存在或数据库已有 `queued / running` Run 时禁用本章的生成操作。Queue Job 同时使用按阶段与业务对象定义的唯一键，防止页面刷新、多标签页或并发请求重复入队。Job 成功或最终失败后清除临时标记；Worker 异常退出时由 TTL 自动释放。该标记只用于弥补 Job 入队到 `GenerationRun` 创建之间的可见性窗口，业务恢复与执行进度仍以 PostgreSQL 中的 Run 和 Artifact 为准。
 
@@ -667,12 +672,11 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 默认超时链：
 
 ```text
-Provider request timeout = 60s
-单次 Provider 调用 Job = 90s
-可能执行一次字数修复的 Scene / Assembly / Rewrite Job = 180s
-Horizon worker timeout = 210s
-Redis retry_after = 240s
-Generation Run stalled threshold = 300s
+Provider request timeout <= 300s
+AI Job timeout = 330s
+Horizon worker timeout = 360s
+Redis retry_after = 420s
+Generation Run stalled threshold = 480s
 ```
 
 必须始终满足：
@@ -723,7 +727,7 @@ rewrite-length-patch-v1
 summary-v1
 ```
 
-文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider。每个新 Run 在创建时冻结 `provider` 与 `model_policy`；Provider 或 Model 参与 `input_hash`，因此跨 Provider 不复用旧 Artifact。后台设置变更只影响之后创建的 Run，历史 Run 不改写。
+文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。`ai_model_routes` 同时保存各 Stage 的可选 `reasoning_effort`，允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。小说级 Provider/Model 覆盖仍继承同一 Stage 路由的推理程度。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。每个新 Run 在创建时冻结 `provider`、`model_policy` 与推理程度；Provider、Model 或推理程度都参与 `input_hash`，避免错误复用采用不同推理策略生成的旧 Artifact。后台设置变更只影响之后创建的请求和 Run，历史 Run 不改写。
 
 文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。Base URL、API Key 和 Timeout 优先读取 `ai_provider_connections` 中对应的启用连接，API Key 使用 Eloquent `encrypted` cast，后台不回显；连接不存在时才兼容回退环境配置。成本按实际 Provider 和响应 Model 从 `ai_model_prices` 读取启用价格，按 `billing_unit` 计算并保存到 Usage；没有匹配价格时才回退旧全局环境单价。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema。Embedding 固定使用 OpenAI 配置，不随文本 Stage 切换。
 

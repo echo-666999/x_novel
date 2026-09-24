@@ -17,7 +17,7 @@ final class PlanCoverageEvidenceRepairer
      * @param  array<string, mixed>  $metadata
      * @return array<string, array{status: string, evidence: string|null}>
      */
-    public function repair(array $coverage, string $content, string $model, array $metadata, mixed $task, string $path): array
+    public function repair(array $coverage, string $content, string $model, array $metadata, mixed $task, string $path, ?string $reasoningEffort = null): array
     {
         for ($attempt = 1; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
             $maxTokens = $attempt === 1
@@ -25,6 +25,7 @@ final class PlanCoverageEvidenceRepairer
                 : (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000);
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                reasoningEffort: $reasoningEffort,
                 systemPrompt: '你是 XNovel Coverage 证据校对器。不得修改正文，也不得改变 goal、conflict、turn、outcome 的 status。status=fulfilled 或 contradicted 时，evidence 必须从 content 中选择一段连续文本并逐字复制，保留原标点和段落换行；不得概括、改写、拼接不连续句子或补字。status=missing 时 evidence 必须为 null。只返回符合 Schema 的 Coverage 对象。',
                 prompt: '请修正以下 Coverage 的 evidence：'.json_encode([
                     'task' => $task,
