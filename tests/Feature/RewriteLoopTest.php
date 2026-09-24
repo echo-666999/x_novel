@@ -242,6 +242,7 @@ test('chapter rewrite creates a new immutable artifact with finding hash', funct
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得只处理第一项')
         ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度进行一次全量自检')
         ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不要把潜台词全部说透')
         ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
 });
 
@@ -504,7 +505,7 @@ test('an overlength rewrite is compressed once before it becomes a rewrite draft
         ->and($fake->requests()[1]->systemPrompt)->toContain('局部字符补丁器')
         ->and($fake->requests()[1]->systemPrompt)->toContain('不得返回完整重写稿')
         ->and($fake->requests()[1]->responseSchema)->not->toBeNull()
-        ->and($fake->requests()[1]->promptVersion)->toBe('rewrite-length-patch-v1')
+        ->and($fake->requests()[1]->promptVersion)->toBe('rewrite-length-patch-v2')
         ->and($fake->requests()[1]->prompt)->toContain('"l4"')
         ->and($fake->requests()[1]->prompt)->toContain('"preferred_minimum_words":95')
         ->and($fake->requests()[1]->prompt)->toContain('"preferred_maximum_words":105')

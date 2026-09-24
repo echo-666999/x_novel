@@ -642,7 +642,9 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and(data_get($run->context_snapshot, 'l4.primary_style.instruction'))->toContain('语言直接易读')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('正文必须像人物正在经历事件')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得在每段末尾总结意义');
 });
 
 test('scene snapshots keep the bible version frozen for the current chapter plan', function () {

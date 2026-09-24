@@ -7,6 +7,7 @@ use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\NarrativeProsePolicy;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -26,9 +27,9 @@ use Throwable;
 class NovelPlanner
 {
     // Prompt 版本参与 input_hash；修改提示词时必须升级版本，避免复用旧语义产物。
-    public const PROMPT_VERSION = 'novel-planner-v6';
+    public const PROMPT_VERSION = 'novel-planner-v7';
 
-    public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v1';
+    public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v2';
 
     public const MAX_COMPLETION_TOKENS = 24_000;
 
@@ -124,7 +125,7 @@ class NovelPlanner
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat 嵌套：Volume key 只能是 vol-01、vol-02 这类两位顺序键，Arc key 只能是 arc-01 这类键，Beat key 只能是 beat-01 这类键。所有节点 key 全局唯一，sequence 在同级数组内从 1 连续。每一个 Volume 都必须是实际叙事分卷，禁止用“说明”“备注”“占位”“校准”“修正”等元数据节点凑数；结构要求应融入真实叙事节点。每个 Main Arc 至少一个结构化 Beat；Beat 必须给出章节预算、验收条件和必须/禁止内容。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。',
+                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat 嵌套：Volume key 只能是 vol-01、vol-02 这类两位顺序键，Arc key 只能是 arc-01 这类键，Beat key 只能是 beat-01 这类键。所有节点 key 全局唯一，sequence 在同级数组内从 1 连续。每一个 Volume 都必须是实际叙事分卷，禁止用“说明”“备注”“占位”“校准”“修正”等元数据节点凑数；结构要求应融入真实叙事节点。每个 Main Arc 至少一个结构化 Beat；Beat 必须给出章节预算、验收条件和必须/禁止内容。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。'.NarrativeProsePolicy::planning(),
                 prompt: '请根据以下小说信息生成初始小说圣经、初始角色、初始世界实体、全书 Outline 和伏笔候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.5,
                 maxTokens: self::MAX_COMPLETION_TOKENS,
@@ -234,7 +235,7 @@ class NovelPlanner
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的完整 Outline JSON。仅允许修改 target_node_key 对应节点及其后代；节点外的字段、顺序、key 和语义必须保持不变。不得把 Candidate 写入正式人物或世界资料。',
+                systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的完整 Outline JSON。仅允许修改 target_node_key 对应节点及其后代；节点外的字段、顺序、key 和语义必须保持不变。不得把 Candidate 写入正式人物或世界资料。'.NarrativeProsePolicy::planning(),
                 prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
                 maxTokens: self::MAX_COMPLETION_TOKENS,

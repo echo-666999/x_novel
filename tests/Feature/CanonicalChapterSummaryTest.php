@@ -49,7 +49,8 @@ test('a successful canonical summary persists its run artifact usage and input h
         ->and($run->stage)->toBe(GenerationStage::MemorySummary)
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->input_hash)->toHaveLength(64)
-        ->and($run->prompt_version)->toBe('summary-v1')
+        ->and($run->prompt_version)->toBe('summary-v2')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得评价文笔、解释主题')
         ->and($result['artifact']->type)->toBe(ArtifactType::Summary)
         ->and(data_get($result['artifact']->data, 'source_canonical_artifact_id'))->toBe($chapter->canonical_artifact_id)
         ->and(UsageRecord::query()->where('generation_run_id', $run->getKey())->count())->toBe(1);

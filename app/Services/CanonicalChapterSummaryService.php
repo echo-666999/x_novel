@@ -6,6 +6,7 @@ use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\NarrativeProsePolicy;
 use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
@@ -125,7 +126,7 @@ class CanonicalChapterSummaryService
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 正式章节摘要器。只总结提供的 Canonical Chapter，不得补写正文中未发生的事实。只返回符合 Schema 的 JSON；摘要必须简短、明确，并保留影响后续章节的事件、人物变化和未决线索。',
+                systemPrompt: '你是 XNovel 正式章节摘要器。只总结提供的 Canonical Chapter，不得补写正文中未发生的事实。只返回符合 Schema 的 JSON；摘要必须简短、明确，并保留影响后续章节的事件、人物变化和未决线索。'.NarrativeProsePolicy::summary(),
                 prompt: json_encode([
                     'chapter' => [
                         'id' => $chapter->getKey(),

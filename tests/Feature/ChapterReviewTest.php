@@ -393,6 +393,8 @@ test('narrative review persists seven weighted scores and an immutable result ar
         ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度逐项完成全量检查')
         ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and($fake->requests()[0]->systemPrompt)->toContain('普通窗口、走廊、查阅区、训练位、报告、凭据、记录、清单和练习道具不是重大世界实体')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('明显的机器生成痕迹')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('STYLE_MISMATCH finding')
         ->and(data_get($review->generationRun->context_snapshot, 'existing_world_entities'))->toBe([])
         ->and(data_get($review->artifact->data, 'dimension_audits.continuity.status'))->toBe('pass');
 });
@@ -575,6 +577,8 @@ test('an issues found status without a finding is repaired once and normalized w
         ->and(data_get($review->artifact->data, 'dimension_audits.style.status'))->toBe($recorded['expected_style_status'])
         ->and(data_get($review->artifact->data, 'schema_repairs.style.status'))->toBe('succeeded')
         ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->systemPrompt)->toContain('明显的机器生成痕迹')
+        ->and($fake->requests()[1]->promptVersion)->toBe('review-schema-repair-v3')
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
 });
 

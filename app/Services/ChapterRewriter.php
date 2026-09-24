@@ -6,6 +6,7 @@ use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\NarrativeProsePolicy;
 use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
@@ -229,9 +230,11 @@ class ChapterRewriter
     {
         $base = '你是 XNovel 批量定向重写器。findings 是本轮必须一次性解决的完整问题批次；必须逐项修复 batch_repair.required_finding_indexes 指定的全部问题，不得只处理第一项、最严重项或最容易处理的项，也不得把剩余问题留给下一轮。严格保留 plan_acceptance 要求的剧情结果和既定事实。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须保留并修复 actions 中的既定动作，不得主动处理未列入 actions 的未来伏笔，不得把 promised_payoff 当作允许直接揭晓的正文信息，并继续遵守 must_not_change.must_not_reveal。完成全部指定修复后，必须重新通读最终正文，对 continuity、plan、character、progress、repetition、pacing、style 七个维度进行一次全量自检，并立即修复重写过程中产生或原稿中仍然明显存在的同类问题；尤其检查时间地点、人物身体状态、物品位置、动作因果、重复表达和文风参数，避免修好旧问题又保留或引入低级矛盾。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words 且不得超过 length_requirement.maximum_words，并优先进入 preferred_minimum_words～preferred_maximum_words 的窄目标区间；字数统计排除空白和换行。原稿已处于硬范围时，应保持原有段落结构和整体篇幅；修复重复或节奏问题必须净缩减。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
 
-        return $sceneRewrite
-            ? $base.'当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'
-            : $base.'当前 scope=chapter，按 Schema 返回完整的简体中文章节替换稿、全部 Scene 的 scene_coverage 和 introduced_major_facts=[]。Coverage 必须基于最终重写正文重新判断，允许把已修复的问题从 missing/contradicted 更新为 fulfilled；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。';
+        $scope = $sceneRewrite
+            ? '当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'
+            : '当前 scope=chapter，按 Schema 返回完整的简体中文章节替换稿、全部 Scene 的 scene_coverage 和 introduced_major_facts=[]。Coverage 必须基于最终重写正文重新判断，允许把已修复的问题从 missing/contradicted 更新为 fulfilled；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。';
+
+        return $base.$scope.NarrativeProsePolicy::writing();
     }
 
     /**
@@ -412,9 +415,9 @@ class ChapterRewriter
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 reasoningEffort: $reasoningEffort,
-                systemPrompt: $tooLong
+                systemPrompt: ($tooLong
                     ? '你是 XNovel 场景重写稿压缩器。当前稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、plan_acceptance、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。'
-                    : '你是 XNovel 场景重写稿扩写器。当前稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、plan_acceptance 和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。',
+                    : '你是 XNovel 场景重写稿扩写器。当前稿仍然过短。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。保留已经完成的修复、plan_acceptance 和既定事实，通过原有场景内的动作、对话、环境、感官、心理和自然过渡补足。最终正文至少达到 minimum_words，并尽量接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。').NarrativeProsePolicy::writing(),
                 prompt: ($tooLong ? '请压缩以下重写稿：' : '请扩写以下重写稿：').json_encode([
                     'scope' => $brief['scope'],
                     'findings' => $brief['findings'],

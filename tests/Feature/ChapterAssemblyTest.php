@@ -201,6 +201,7 @@ test('assembler combines multiple scene drafts in sequence into a chapter draft'
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得把正文压缩成摘要')
         ->and($fake->requests()[0]->systemPrompt)->toContain('previous_chapter_ending')
         ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('正文必须像人物正在经历事件')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.scene_coverage.items.required'))->toBe(['scene_id', 'goal', 'conflict', 'turn', 'outcome', 'foreshadowing_coverage'])
         ->and(mb_strpos($prompt, 'Scene 1 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 2 正文'))
         ->and(mb_strpos($prompt, 'Scene 2 正文'))->toBeLessThan(mb_strpos($prompt, 'Scene 3 正文'));

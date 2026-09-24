@@ -262,7 +262,7 @@ chapter_budget
 
 新 Plan 的每个 Scene 使用 `continuity_requirements` 和稳定 `key` 区分 `establish / persist / change / callback`。相同持续状态只能首次建立一次；`persist` 只要求当前 Scene 的增量影响，`change` 要求真实状态变化，`callback` 只允许在章末回扣。Plan Validator 在 Writer 前拒绝跨 Scene 重复的 goal/conflict/turn/outcome 或错误的连续性阶段；历史 Plan 可缺少该字段并保持只读兼容。
 
-`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v9` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
+`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v10` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
 
 `due_from_chapter`～`due_to_chapter` 是兑现窗口。Planning 以目标章序号选择本章机会，但正式 `upcoming / due / overdue` 只按最新 Canonical 章节计算。Planner 同时接收完整伏笔定义、Canonical 生命周期来源、领域投影状态、允许动作和已发生的重要 Active Events。Critical 在窗口内必须有动作；目标章为 `due_to` 时不能只做 `reinforce`；窗口结束后，`ForeshadowingPlanningGate` 在创建 Planning Run 和调用模型前阻止自动 Planner。此时只有人工建立包含 `pay_off`，或具有有效人工授权的 `defer / abandon` 动作契约，才构成可继续执行的修复计划。非 Critical 逾期只产生 Warning。
 
@@ -451,7 +451,7 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
 
-Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。`findings` 是问题集合的权威来源；Laravel 根据最终 Findings 确定性派生 `dimension_audits.status = pass|issues_found`，并同时保存模型原始状态和归一化状态。原状态声称有问题但没有 Finding 时，执行一次 `review-schema-repair-v2` 单维结构修复；修复绑定相同 Draft、State Version、Bible Version 与 Reviewer Prompt 来源链，不重新运行完整 Review，也不消耗正文 Rewrite 配额。修复失败生成带 `ai_request_log_id` 的 NEEDS_ATTENTION，不把 Chapter 标为 blocked。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。
+Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。`findings` 是问题集合的权威来源；Laravel 根据最终 Findings 确定性派生 `dimension_audits.status = pass|issues_found`，并同时保存模型原始状态和归一化状态。原状态声称有问题但没有 Finding 时，执行一次 `review-schema-repair-v3` 单维结构修复；修复绑定相同 Draft、State Version、Bible Version 与 Reviewer Prompt 来源链，不重新运行完整 Review，也不消耗正文 Rewrite 配额。修复失败生成带 `ai_request_log_id` 的 NEEDS_ATTENTION，不把 Chapter 标为 blocked。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。
 
 Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Findings 作为回归清单，为每项保存 `resolved / still_present / replaced` 结果，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
 
@@ -718,18 +718,22 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v9
-scene-writer-v13
-assembler-v11
+chapter-planner-v10
+scene-writer-v14
+assembler-v12
 event-extractor-v6
-reviewer-v13
-rewrite-v12
-review-schema-repair-v2
+reviewer-v14
+rewrite-v13
+review-schema-repair-v3
 arc-completion-repair-v2
 coverage-judgment-repair-v1
-rewrite-length-patch-v1
-summary-v1
+rewrite-length-patch-v2
+summary-v2
 ```
+
+`NarrativeProsePolicy::VERSION = natural-prose-v1` 是规划、正文和审校共用的自然表达契约。Novel Planner 与 Chapter Planner 要把抽象主题落成可验证的人物行动、阻力和后果；Scene Writer、Assembler、Rewrite 及其长度修复要通过动作、对白、POV 感知和具体后果呈现信息，抑制解释性套句、机械同构、空泛升华、设定复述和人人同声；Reviewer 及单维审计修复只在这些特征反复出现或实质损害叙事时生成 `STYLE_MISMATCH`；Canonical Summary 只记录事件、状态变化和未决后果。
+
+当前 21 个 `AiRequest` 调用点均已核查。Story Event 提取、Coverage/Event 逐字证据校对、Scene 辅助 JSON 修复、Arc 完成审计、Coverage 判定复核只承担结构化判断或原文引用，因此保持精确任务 Prompt，不附加正文写作规则。`AiDebugService` 原样执行用户输入，便于诊断 Provider，不注入小说文风。该边界避免“去 AI 味”规则改变证据文本、事件事实或修复结构。
 
 文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。`ai_model_routes` 同时保存各 Stage 的可选 `reasoning_effort`，允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。小说级 Provider/Model 覆盖仍继承同一 Stage 路由的推理程度。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。每个新 Run 在创建时冻结 `provider`、`model_policy` 与推理程度；Provider、Model 或推理程度都参与 `input_hash`，避免错误复用采用不同推理策略生成的旧 Artifact。后台设置变更只影响之后创建的请求和 Run，历史 Run 不改写。
 

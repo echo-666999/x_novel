@@ -372,7 +372,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v9')
+        ->and($run->prompt_version)->toBe('chapter-planner-v10')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -533,7 +533,8 @@ test('the planner receives the previous canonical ending and requires a scene tr
     $snapshot = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->sole()->context_snapshot;
     expect(data_get($snapshot, 'previous_chapter_ending.text'))->toBe('林舟与苏离沿石阶向魔法学院走去。')
         ->and($fake->requests()[0]->prompt)->toContain('transition_from_previous')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得静默跳过');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得静默跳过')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化');
 });
 
 test('the planner reads recent canonical chapter summaries in sequence order', function () {

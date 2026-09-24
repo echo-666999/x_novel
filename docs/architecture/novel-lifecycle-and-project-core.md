@@ -145,7 +145,7 @@ Filament 的小说表单当前收集：
 
 ### 4.2 生成结构化蓝图
 
-Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Job 在 `generation` 队列调用 `NovelPlanner`，根据小说基础信息生成结构化 Blueprint，避免全书规划受 PHP-FPM 请求时限影响。同一 Novel 同时只允许一个该 Job，网络、超时和临时 Provider 错误最多重试三次；输出截断不会用相同参数自动重复计费。规划请求使用 24,000 completion token，推理程度读取 `planner` 模型路由；该配置为空时采用 Provider 默认行为。Provider Schema 分别约束 `vol-*`、`arc-*`、`beat-*` 键，防止模型把分卷错放到故事线层或用备注/占位节点凑分卷数。当前蓝图 Prompt 版本由 `NovelPlanner` 记录为 `novel-planner-v6`。
+Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Job 在 `generation` 队列调用 `NovelPlanner`，根据小说基础信息生成结构化 Blueprint，避免全书规划受 PHP-FPM 请求时限影响。同一 Novel 同时只允许一个该 Job，网络、超时和临时 Provider 错误最多重试三次；输出截断不会用相同参数自动重复计费。规划请求使用 24,000 completion token，推理程度读取 `planner` 模型路由；该配置为空时采用 Provider 默认行为。Provider Schema 分别约束 `vol-*`、`arc-*`、`beat-*` 键，防止模型把分卷错放到故事线层或用备注/占位节点凑分卷数。当前蓝图 Prompt 版本由 `NovelPlanner` 记录为 `novel-planner-v7`。
 
 Blueprint 至少覆盖：
 
@@ -595,17 +595,17 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 | AI Stage | Prompt Version |
 |---|---|
-| planner | `chapter-planner-v9` |
-| writer | `scene-writer-v13` |
-| assembler | `assembler-v11` |
+| planner | `chapter-planner-v10` |
+| writer | `scene-writer-v14` |
+| assembler | `assembler-v12` |
 | extractor | `event-extractor-v6` |
-| reviewer | `reviewer-v13` |
-| rewrite | `rewrite-v12` |
-| summary | `summary-v1` |
+| reviewer | `reviewer-v14` |
+| rewrite | `rewrite-v13` |
+| summary | `summary-v2` |
 
 补充边界：
 
-- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v6`，局部 Outline 修订记录 `novel-outline-node-v1`；两者都不通过 `PromptVersionResolver`。
+- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v7`，局部 Outline 修订记录 `novel-outline-node-v2`；两者都不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把 Prompt Version 写入 Generation Run，使历史输出在 Prompt 更新后仍可解释。
 
@@ -675,7 +675,7 @@ Ending Contract、Closure Debt 和 Ending Audit 确保系统不仅会继续生�
 以下结论来自当前代码核查：
 
 1. `docs/architecture/generation-pipeline.md` 描述了 `RollupSummaryJob` 更新 `chapters.summary`，但当前 `app/Jobs` 中没有该 Job。现有提交后流程实际是 `UpdateMemoryJob → MemoryUpdater → GenerateEmbeddingJob`，并由 `RefreshNovelProjectionJob` 刷新投影。
-2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；它的 Generation Stage 是 `memory_summary`，但当前并没有使用 `summary-v1` 调用 LLM 生成章节摘要。
+2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；Canonical 章节摘要由独立的 `CanonicalChapterSummaryService` 使用 `summary-v2` 生成，不属于 Memory 建立步骤。
 3. 当前分卷完成由人工触发 `VolumeCompletionGate`；未发现自动激活下一卷的工作流。
 4. 进入收束期由用户显式执行 `EnterCompletingModeAction`；未发现按目标字数自动进入 `completing` 的流程。
 5. `auto_commit` 默认关闭；Review PASS 本身不会自动改变 Canonical Story State。

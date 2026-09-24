@@ -5,11 +5,12 @@ namespace App\Services;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\NarrativeProsePolicy;
 use App\AI\StructuredOutput;
 
 final class ChapterRewriteLengthRepairer
 {
-    public const PROMPT_VERSION = 'rewrite-length-patch-v1';
+    public const PROMPT_VERSION = 'rewrite-length-patch-v2';
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -116,7 +117,7 @@ final class ChapterRewriteLengthRepairer
             ? '当前稿过长。每项 replacement 必须短于 search，可以删除重复说明，但不得删除剧情结果、事实、必要过渡或章节结尾。'
             : '当前稿过短。每项 replacement 必须长于 search，只能在原有场景内补足动作、对话、感官、心理或过渡，不得新增重大事实。';
 
-        return '你是 XNovel 整章重写稿的局部字符补丁器。'.$direction.'不得返回完整重写稿。只返回 edits；每项 search 必须逐字复制 draft 中一段连续且只出现一次的文本，replacement 是其完整替换文本。不得使用省略号代替原文，不得拼接不连续片段。保留 l4 的 POV、时态和文风，优先让最终字数进入 preferred_minimum_words 到 preferred_maximum_words；hard minimum 和 maximum 绝不能跨越。';
+        return '你是 XNovel 整章重写稿的局部字符补丁器。'.$direction.'不得返回完整重写稿。只返回 edits；每项 search 必须逐字复制 draft 中一段连续且只出现一次的文本，replacement 是其完整替换文本。不得使用省略号代替原文，不得拼接不连续片段。保留 l4 的 POV、时态和文风，优先让最终字数进入 preferred_minimum_words 到 preferred_maximum_words；hard minimum 和 maximum 绝不能跨越。'.NarrativeProsePolicy::writing();
     }
 
     /** @param array<string, mixed> $requirement

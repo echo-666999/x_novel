@@ -5,6 +5,7 @@ namespace App\Services;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\NarrativeProsePolicy;
 use App\Enums\ArtifactType;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -13,7 +14,7 @@ use Throwable;
 
 final class ReviewDimensionAuditRepairer
 {
-    public const PROMPT_VERSION = 'review-schema-repair-v2';
+    public const PROMPT_VERSION = 'review-schema-repair-v3';
 
     public function __construct(private readonly AiProvider $provider) {}
 
@@ -47,7 +48,7 @@ final class ReviewDimensionAuditRepairer
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 reasoningEffort: $reasoningEffort,
-                systemPrompt: '你是 XNovel Review Schema 修复器。只复核指定的一个质量维度，不得修改正文、Chapter Plan、评分、其他维度或 Canonical 数据。原审计声称该维度存在问题，但 findings 没有对应项。请根据正文和计划判断：确有实质问题时返回完整、可执行且有逐字证据的 findings；没有实质问题时返回空数组，并用简体中文重写 summary。不得为了维持原 status 而编造问题。正文能够在保持 Chapter Plan、Canonical 数据和既定剧情结果不变的前提下修复时，必须设置 auto_fixable=true、requires_human_decision=false；只有答案依赖缺失的 Canonical 事实或用户必须选择的剧情方向时，才设置 requires_human_decision=true。',
+                systemPrompt: '你是 XNovel Review Schema 修复器。只复核指定的一个质量维度，不得修改正文、Chapter Plan、评分、其他维度或 Canonical 数据。原审计声称该维度存在问题，但 findings 没有对应项。请根据正文和计划判断：确有实质问题时返回完整、可执行且有逐字证据的 findings；没有实质问题时返回空数组，并用简体中文重写 summary。不得为了维持原 status 而编造问题。正文能够在保持 Chapter Plan、Canonical 数据和既定剧情结果不变的前提下修复时，必须设置 auto_fixable=true、requires_human_decision=false；只有答案依赖缺失的 Canonical 事实或用户必须选择的剧情方向时，才设置 requires_human_decision=true。'.NarrativeProsePolicy::reviewing(),
                 prompt: '请修复以下单维度审计：'.json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2,
                 maxTokens: (int) config('generation.review_schema_repair_max_output_tokens', 1_500),

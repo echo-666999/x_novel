@@ -7,6 +7,7 @@ use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\NarrativeProsePolicy;
 use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
@@ -465,6 +466,6 @@ class ChapterPlanner
             $prompt .= ' 当前处于收束阶段：不得新增核心人物、主线、硬世界规则或高重要度伏笔；计划必须推进结局契约或降低收束债务。';
         }
 
-        return $prompt;
+        return $prompt.NarrativeProsePolicy::planning();
     }
 }
