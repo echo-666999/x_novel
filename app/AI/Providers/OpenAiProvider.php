@@ -180,7 +180,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             ->acceptJson()
             ->asJson()
             ->connectTimeout((int) ($providerSettings['connect_timeout'] ?? config('ai.providers.openai.connect_timeout', 10)))
-            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.openai.timeout', 60)));
+            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.openai.timeout', 150)));
     }
 
     private function logLegacyEnvironmentWarning(): void

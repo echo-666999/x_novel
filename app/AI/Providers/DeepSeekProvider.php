@@ -117,7 +117,7 @@ class DeepSeekProvider implements AiProvider
         return Http::baseUrl(rtrim((string) ($providerSettings['base_url'] ?? config('ai.providers.deepseek.base_url')), '/'))
             ->withToken($apiKey)->acceptJson()->asJson()
             ->connectTimeout((int) ($providerSettings['connect_timeout'] ?? config('ai.providers.deepseek.connect_timeout', 10)))
-            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.deepseek.timeout', 60)));
+            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.deepseek.timeout', 150)));
     }
 
     /** @param array<string, mixed>|null $schema */

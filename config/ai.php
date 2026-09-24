@@ -44,7 +44,7 @@ return [
             'base_url' => env('OPENAI_BASE_URL') ?: env('AI_BASE_URL', 'https://api.openai.com/v1'),
             'api_key' => env('OPENAI_API_KEY') ?: env('AI_API_KEY'),
             'connect_timeout' => (int) (env('OPENAI_CONNECT_TIMEOUT') ?: env('AI_CONNECT_TIMEOUT', 10)),
-            'timeout' => (int) (env('OPENAI_TIMEOUT') ?: env('AI_TIMEOUT', 60)),
+            'timeout' => (int) (env('OPENAI_TIMEOUT') ?: env('AI_TIMEOUT', 150)),
             'using_legacy_base_url' => ! env('OPENAI_BASE_URL') && filled(env('AI_BASE_URL')),
             'using_legacy_api_key' => ! env('OPENAI_API_KEY') && filled(env('AI_API_KEY')),
         ],
@@ -53,7 +53,7 @@ return [
             'base_url' => env('DEEPSEEK_BASE_URL', 'https://api.deepseek.com'),
             'api_key' => env('DEEPSEEK_API_KEY'),
             'connect_timeout' => (int) env('DEEPSEEK_CONNECT_TIMEOUT', 10),
-            'timeout' => (int) env('DEEPSEEK_TIMEOUT', 60),
+            'timeout' => (int) env('DEEPSEEK_TIMEOUT', 150),
         ],
     ],
 ];

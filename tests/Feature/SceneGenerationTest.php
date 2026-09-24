@@ -610,6 +610,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
     $run = $scene->generationRuns()->sole();
     $inputContext = $run->context_snapshot;
     unset($inputContext['regeneration_batch_id']);
+    unset($inputContext['generation_preferences']['max_completion_tokens']);
     $expectedInputHash = hash('sha256', json_encode([
         'context' => $inputContext,
         'provider' => $run->provider,
@@ -932,6 +933,8 @@ test('a stale running scene is marked interrupted and resumed with a new run', f
 
 test('retryable provider failures are recorded and rethrown for queue retry', function () {
     Queue::fake();
+    config()->set('generation.scene_max_output_tokens', 12_000);
+    config()->set('generation.scene_retry_max_output_tokens', 16_000);
     $fixture = sceneGenerationFixture(1);
     $fixture['plan']->update(['target_words' => 12]);
     $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', 'timeout', true));
@@ -951,6 +954,10 @@ test('retryable provider failures are recorded and rethrown for queue retry', fu
     expect($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
         ->and($fixture['scenes']->first()->generationRuns()->count())->toBe(2)
         ->and($fixture['scenes']->first()->generationRuns()->latest('id')->first()->attempt)->toBe(2)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
+        ->and(data_get($fixture['scenes']->first()->generationRuns()->oldest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
+        ->and(data_get($fixture['scenes']->first()->generationRuns()->latest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
         ->and($fake->requests())->toHaveCount(2);
 });
 

@@ -55,7 +55,7 @@ class AIProviderConnectionForm
                         ->minValue(AiSettingsService::MIN_TIMEOUT_SECONDS)
                         ->maxValue(AiSettingsService::MAX_REQUEST_TIMEOUT_SECONDS)
                         ->gte('connect_timeout')
-                        ->default(60)
+                        ->default(150)
                         ->required(),
                     Toggle::make('is_enabled')
                         ->label('启用')

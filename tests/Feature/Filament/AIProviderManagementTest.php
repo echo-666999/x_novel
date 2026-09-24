@@ -73,6 +73,14 @@ test('provider connection encrypts api key and blank edit preserves it', functio
         ->and($connection->fresh()->getRawOriginal('api_key'))->toBe($ciphertext);
 });
 
+test('provider connection form defaults to the long generation request timeout', function () {
+    Livewire::test(CreateAIProviderConnection::class)
+        ->assertFormSet([
+            'connect_timeout' => 10,
+            'timeout' => 150,
+        ]);
+});
+
 test('provider connection is used before environment fallback and can be verified', function () {
     config()->set('ai.providers.openai.api_key', 'environment-key');
     config()->set('ai.providers.openai.base_url', 'https://environment.example/v1');

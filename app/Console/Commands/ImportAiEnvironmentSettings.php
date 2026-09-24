@@ -44,7 +44,7 @@ class ImportAiEnvironmentSettings extends Command
                         'base_url' => rtrim((string) config("ai.providers.{$provider}.base_url"), '/'),
                         'api_key' => trim($apiKey),
                         'connect_timeout' => (int) config("ai.providers.{$provider}.connect_timeout", 10),
-                        'timeout' => (int) config("ai.providers.{$provider}.timeout", 60),
+                        'timeout' => (int) config("ai.providers.{$provider}.timeout", 150),
                         'is_enabled' => true,
                     ])->save();
                 }
