@@ -30,6 +30,7 @@ class CheckNextAction
 
         if (! (bool) data_get($novel->settings, 'auto_generate', false)
             || $committedChapter?->status !== ChapterStatus::Canonical
+            || blank($committedChapter->summary)
             || $committedChapter->sequence !== $novel->current_chapter_sequence) {
             return null;
         }

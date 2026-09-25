@@ -31,6 +31,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'context_snapshot',
     'error_code',
     'error_message',
+    'error_retryable',
+    'error_metadata',
     'started_at',
     'finished_at',
 ])]
@@ -97,6 +99,8 @@ class GenerationRun extends Model
             'state_version' => 'integer',
             'bible_version' => 'integer',
             'context_snapshot' => 'array',
+            'error_retryable' => 'boolean',
+            'error_metadata' => 'array',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];

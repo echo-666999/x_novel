@@ -188,12 +188,16 @@ Blueprint 至少覆盖：
 
 `StartNovelGenerationAction` 只允许 `draft` 或 `planning` 的小说进入生成。它会检查：
 
+- 存在 Current Outline；
 - 存在当前 Bible；
 - 存在主角；
 - 存在世界设定；
 - 存在一个 Active Volume；
 - 存在推进中的 Story Arc；
 - 存在初始 Canonical Story State。
+- 如果已经存在正式章节，上一正式章的 Canonical Summary 已生成。
+
+`NovelGenerationReadiness` 是 UI 和领域 Action 共用的只读事实来源，返回每项检查的 key、label、ready 和修复提示。小说概览在 `draft/planning` 状态直接展示全部检查项，缺项时禁用“开始正文生成”；Action 仍在锁定 Novel 的事务内重新检查，防止页面加载后规划数据发生变化。AI Outline 采用流程已经初始化 Initial State，因此正常路径不再把初始化作为常规步骤；手工规划或异常恢复仍可显式初始化。
 
 全部通过后，Novel 进入 `generating`。这一步只改变工作流状态，不会绕过章节规划直接写正文。
 
@@ -403,8 +407,10 @@ sequenceDiagram
     Commit->>DB: project Story Arc progress
     Commit->>DB: COMMIT
     Commit-->>Queue: UpdateMemoryJob
-    Commit-->>Queue: RefreshNovelProjectionJob
-    Commit->>Commit: CheckNextAction when this was a new commit
+    Queue->>Queue: GenerateCanonicalChapterSummaryJob
+    Queue->>Queue: RefreshNovelProjectionJob
+    Queue->>Queue: ContinueAutoGenerationJob
+    Queue->>Commit: CheckNextAction after required derived work succeeds
 ```
 
 事务必须满足 All or Nothing。不能出现“章节已 canonical，但 State 没更新”或“事件已写入，但章节仍是 draft”。
@@ -438,12 +444,15 @@ Canonical Commit 会：
 
 它以 Story Event 为来源幂等创建短记忆，按事件类型归类为人物里程碑、关系、物品、伏笔、世界、地点、Arc 等，再派发 `GenerateEmbeddingJob`。Draft、被拒绝的 Rewrite 和未提交事件不能创建正式 Memory。
 
+正式提交后的阻塞链为 `UpdateMemoryJob → GenerateCanonicalChapterSummaryJob → RefreshNovelProjectionJob → ContinueAutoGenerationJob`。前三项任一失败都不撤销正式章节，但会停止自动续写。Embedding 由 Memory 独立派发，可以单独重试，不阻塞下一章。摘要任务只在 Chapter 的 `canonical_artifact_id` 仍与任务来源一致时写入 `chapters.summary`。
+
 ### 8.2 下一章是否自动启动
 
 `CheckNextAction` 只有在下列条件满足时才创建下一章：
 
 - 小说设置 `auto_generate=true`；
 - 刚提交的 Chapter 确实是当前最新正式章节；
+- 该正式 Chapter 的 Summary 已生成；
 - Smoke、Reliability 或 Soak 运行没有达到各自目标；
 - 下一章前置检查和预算通过。
 
@@ -589,25 +598,26 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 ## 12. Prompt 版本与模型调用追踪
 
-用户指定的 `PromptVersionResolver` 是主 AI Stage 的版本入口。它从 `config/prompts.php` 读取版本；缺失、空值、未知 Stage 或错误配置会直接抛出异常，不允许静默使用一个无法追踪的 Prompt。
+用户指定的 `PromptVersionResolver` 是主 AI Stage 的版本入口。它从 `config/prompts.php` 读取阶段版本；缺失、空值、未知 Stage 或错误配置会直接抛出异常，不允许静默使用一个无法追踪的 Prompt。Planner、Writer、Assembler、Reviewer、Rewrite 和 Summary 的有效版本为 `{stage_prompt_version}+{NarrativeProsePolicy::VERSION}`；Extractor 保持独立阶段版本。
 
 当前配置为：
 
-| AI Stage | Prompt Version |
+| AI Stage | Effective Prompt Version |
 |---|---|
-| planner | `chapter-planner-v10` |
-| writer | `scene-writer-v15` |
-| assembler | `assembler-v12` |
+| planner | `chapter-planner-v10+natural-prose-v1` |
+| writer | `scene-writer-v15+natural-prose-v1` |
+| assembler | `assembler-v12+natural-prose-v1` |
 | extractor | `event-extractor-v6` |
-| reviewer | `reviewer-v14` |
-| rewrite | `rewrite-v13` |
-| summary | `summary-v2` |
+| reviewer | `reviewer-v14+natural-prose-v1` |
+| rewrite | `rewrite-v13+natural-prose-v1` |
+| summary | `summary-v2+natural-prose-v1` |
 
 补充边界：
 
 - Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v7`，局部 Outline 修订记录 `novel-outline-node-v2`；两者都不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
-- 每次主模型调用应把 Prompt Version 写入 Generation Run，使历史输出在 Prompt 更新后仍可解释。
+- 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。
+- `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。
 
 ## 13. 数据与职责地图
 
@@ -674,13 +684,13 @@ Ending Contract、Closure Debt 和 Ending Audit 确保系统不仅会继续生�
 
 以下结论来自当前代码核查：
 
-1. `docs/architecture/generation-pipeline.md` 描述了 `RollupSummaryJob` 更新 `chapters.summary`，但当前 `app/Jobs` 中没有该 Job。现有提交后流程实际是 `UpdateMemoryJob → MemoryUpdater → GenerateEmbeddingJob`，并由 `RefreshNovelProjectionJob` 刷新投影。
-2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；Canonical 章节摘要由独立的 `CanonicalChapterSummaryService` 使用 `summary-v2` 生成，不属于 Memory 建立步骤。
+1. Post-Commit 已使用 `UpdateMemoryJob → GenerateCanonicalChapterSummaryJob → RefreshNovelProjectionJob → ContinueAutoGenerationJob` 的 Queue Chain；Embedding 由 Memory 独立派发，不阻塞下一章。
+2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；`GenerateCanonicalChapterSummaryJob` 调用 `CanonicalChapterSummaryService` 使用有效版本 `summary-v2+natural-prose-v1` 生成正式章节摘要，不属于 Memory 建立步骤。
 3. 当前分卷完成由人工触发 `VolumeCompletionGate`；未发现自动激活下一卷的工作流。
 4. 进入收束期由用户显式执行 `EnterCompletingModeAction`；未发现按目标字数自动进入 `completing` 的流程。
 5. `auto_commit` 默认关闭；Review PASS 本身不会自动改变 Canonical Story State。
 
-这些边界不影响主链的正确性，但后续若实现章节摘要、自动卷切换或自动收束触发，需要同步修改本文件与对应架构文档。
+这些边界不影响主链的正确性；后续若实现自动卷切换或自动收束触发，需要同步修改本文件与对应架构文档。
 
 ## 16. 关键不变量检查清单
 
@@ -727,3 +737,13 @@ Ending Contract、Closure Debt 和 Ending Audit 确保系统不仅会继续生�
 - [故事引擎](story-engine.md)
 - [记忆与上下文](memory-context.md)
 - [数据模型](data-model.md)
+
+## 19. 日常操作视图
+
+Dashboard 只汇总跨小说的持久化事实：活跃小说、运行中章节、今日 Usage、最新 Run、最新 Review 和到期伏笔。最近生成入口进入 Chapter Workbench；没有章节的 Run 进入 Generation Run Inspector。
+
+Novel Overview 通过 `NovelOperationsOverview` 汇总当前小说的正式进度、质量指标和当前流水线。正式字数只统计 Canonical Chapter；首轮 Review 通过率与 Rewrite 比例只使用最近 30 个符合条件的章节；失败分类复用 `GenerationFailurePolicy`。
+
+下一动作按准备度、暂停、Review、失败恢复和当前流水线状态确定。Filament Schema 只展示服务结果，不复制失败分类或生成准备度规则。
+
+20/50/100 章验收工具保留在 Dashboard 的诊断区，由 `generation.acceptance_tools_enabled` 显式开启，生产默认隐藏。

@@ -26,7 +26,10 @@ class MemoryUpdater
 {
     public const POLICY_VERSION = 'memory-policy-v1';
 
-    public function __construct(private readonly AiSettingsResolver $settingsResolver) {}
+    public function __construct(
+        private readonly AiSettingsResolver $settingsResolver,
+        private readonly GenerationFailurePolicy $failurePolicy,
+    ) {}
 
     /** @return Collection<int, Memory> */
     public function update(int $chapterId): Collection
@@ -78,6 +81,8 @@ class MemoryUpdater
                     'finished_at' => now(),
                     'error_code' => null,
                     'error_message' => null,
+                    'error_retryable' => null,
+                    'error_metadata' => null,
                 ]);
 
                 return $memories;
@@ -86,12 +91,7 @@ class MemoryUpdater
 
             return $memories;
         } catch (Throwable $exception) {
-            $run->update([
-                'status' => RunStatus::Failed,
-                'finished_at' => now(),
-                'error_code' => 'memory_update_failed',
-                'error_message' => $exception->getMessage(),
-            ]);
+            $this->failurePolicy->record($run, $exception, 'memory_update_failed');
 
             throw $exception;
         }
@@ -166,6 +166,8 @@ class MemoryUpdater
                         'finished_at' => null,
                         'error_code' => null,
                         'error_message' => null,
+                        'error_retryable' => null,
+                        'error_metadata' => null,
                     ]);
                 }
 

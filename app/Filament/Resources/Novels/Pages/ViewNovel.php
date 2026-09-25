@@ -14,6 +14,7 @@ use App\Enums\NovelStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
+use App\Services\NovelGenerationReadiness;
 use App\Services\ResumeResolver;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
@@ -23,6 +24,9 @@ use Illuminate\Validation\ValidationException;
 
 class ViewNovel extends ViewRecord
 {
+    /** @var array<int, array{key: string, label: string, ready: bool, repair_hint: string}>|null */
+    private ?array $generationReadiness = null;
+
     protected static string $resource = NovelResource::class;
 
     protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-home';
@@ -51,11 +55,14 @@ class ViewNovel extends ViewRecord
                 ->label('开始正文生成')
                 ->icon('heroicon-o-rocket-launch')
                 ->color('primary')
-                ->visible(fn (): bool => in_array($this->getRecord()->status, [NovelStatus::Draft, NovelStatus::Planning], true)
-                    && $this->hasPlanningData())
+                ->visible(fn (): bool => in_array($this->getRecord()->status, [NovelStatus::Draft, NovelStatus::Planning], true))
+                ->disabled(fn (): bool => ! app(NovelGenerationReadiness::class)->allReady($this->generationReadiness()))
+                ->tooltip(fn (): ?string => app(NovelGenerationReadiness::class)->allReady($this->generationReadiness())
+                    ? null
+                    : app(NovelGenerationReadiness::class)->missingMessageFor($this->generationReadiness()))
                 ->requiresConfirmation()
                 ->modalHeading('开始正文生成')
-                ->modalDescription('系统会重新检查小说圣经、人物、世界、当前分卷、故事线和初始故事状态。')
+                ->modalDescription('系统会重新检查 Current Outline、小说圣经、主角、世界设定、当前分卷、故事线、初始故事状态和上一章派生数据。')
                 ->action(function (StartNovelGenerationAction $start): void {
                     try {
                         $start->handle($this->getRecord());
@@ -89,9 +96,12 @@ class ViewNovel extends ViewRecord
                         ->send();
                 }),
             Action::make('initializeStoryState')
-                ->label('初始化故事状态')
+                ->label('恢复：初始化故事状态')
                 ->icon('heroicon-o-circle-stack')
-                ->visible(fn (): bool => $this->getRecord()->canonical_state_version_id === null && $this->hasPlanningData())
+                ->color('gray')
+                ->visible(fn (): bool => $this->getRecord()->canonical_state_version_id === null
+                    && in_array($this->getRecord()->status, [NovelStatus::Draft, NovelStatus::Planning], true)
+                    && $this->getRecord()->currentBible()->exists())
                 ->action(function (InitializeNovelStateAction $initializeNovelState): void {
                     $stateVersion = $initializeNovelState->handle($this->getRecord());
 
@@ -227,13 +237,9 @@ class ViewNovel extends ViewRecord
         ];
     }
 
-    private function hasPlanningData(): bool
+    /** @return array<int, array{key: string, label: string, ready: bool, repair_hint: string}> */
+    private function generationReadiness(): array
     {
-        return $this->getRecord()->bibles()->exists()
-            || $this->getRecord()->volumes()->exists()
-            || $this->getRecord()->storyArcs()->exists()
-            || $this->getRecord()->characters()->exists()
-            || $this->getRecord()->worldEntities()->exists()
-            || $this->getRecord()->foreshadowings()->exists();
+        return $this->generationReadiness ??= app(NovelGenerationReadiness::class)->evaluate($this->getRecord());
     }
 }

@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'acceptance_tools_enabled' => (bool) env('GENERATION_ACCEPTANCE_TOOLS_ENABLED', false),
     'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 300),
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),
     'planner_max_output_tokens' => (int) env('PLANNER_MAX_OUTPUT_TOKENS', 12_000),
@@ -8,15 +9,18 @@ return [
     'scene_context_token_budget' => (int) env('SCENE_CONTEXT_TOKEN_BUDGET', 12_000),
     'scene_max_output_tokens' => (int) env('SCENE_MAX_OUTPUT_TOKENS', 12_000),
     'scene_retry_max_output_tokens' => (int) env('SCENE_RETRY_MAX_OUTPUT_TOKENS', 16_000),
+    'scene_length_repair_max_output_tokens' => (int) env('SCENE_LENGTH_REPAIR_MAX_OUTPUT_TOKENS', 4_000),
+    'scene_job_soft_timeout_seconds' => (int) env('SCENE_JOB_SOFT_TIMEOUT_SECONDS', 300),
+    'scene_job_safety_margin_seconds' => (int) env('SCENE_JOB_SAFETY_MARGIN_SECONDS', 20),
     'max_length_repair_attempts' => 1,
     'max_rewrite_length_repair_attempts' => 2,
     'rewrite_length_patch_max_output_tokens' => 4_000,
     'max_coverage_repair_attempts' => 2,
     'coverage_repair_max_output_tokens' => 1_000,
-    'coverage_repair_retry_max_output_tokens' => 4_000,
+    'coverage_repair_retry_max_output_tokens' => 2_000,
     'max_scene_structure_repair_attempts' => 2,
     'scene_structure_repair_max_output_tokens' => 1_000,
-    'scene_structure_repair_retry_max_output_tokens' => 4_000,
+    'scene_structure_repair_retry_max_output_tokens' => 2_000,
     'previous_scene_tail_characters' => (int) env('PREVIOUS_SCENE_TAIL_CHARACTERS', 1_000),
     'assembly_max_output_tokens' => (int) env('ASSEMBLY_MAX_OUTPUT_TOKENS', 12_000),
     'chapter_min_length_ratio' => .85,

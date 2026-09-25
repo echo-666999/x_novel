@@ -12,6 +12,8 @@ use Throwable;
 
 class AutoStopService
 {
+    public function __construct(private readonly GenerationFailurePolicy $failurePolicy) {}
+
     public function stop(Novel $novel, string $code, string $reason, string $recommendedAction, bool $disableAutoGeneration = true): Novel
     {
         return DB::transaction(function () use ($novel, $code, $reason, $recommendedAction, $disableAutoGeneration): Novel {
@@ -55,8 +57,12 @@ class AutoStopService
             $exception instanceof GenerationPreflightException => $exception->reason,
             default => null,
         };
+        $failure = $exception === null ? null : $this->failurePolicy->fromException(
+            $exception,
+            $errorCode ?: 'generation_failed',
+        );
         [$code, $reason, $action] = match (true) {
-            $exception instanceof AiProviderException && $exception->retryable => ['provider_retry_exhausted', 'Provider 重试次数已耗尽。', '检查 Provider 状态后从失败阶段重试。'],
+            $failure?->retryable === true => ['provider_retry_exhausted', 'Provider 或基础设施重试次数已耗尽。', $failure->recommendedAction],
             $errorCode === 'rewrite_exhausted' => ['rewrite_exhausted', 'Rewrite 次数已耗尽。', '人工编辑章节或调整 Review Findings。'],
             str_starts_with((string) $errorCode, 'budget_') => ['budget_limit', '生成已达到预算 Hard Limit。', '检查并调整小说或全局预算。'],
             $errorCode === 'state_version_conflict' => ['state_version_conflict', 'Canonical Story State 版本已经变化。', '基于最新 Story State 重建 Context 后恢复。'],

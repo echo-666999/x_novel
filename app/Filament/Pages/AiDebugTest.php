@@ -76,7 +76,7 @@ class AiDebugTest extends Page
                         }
 
                         $set('model', app(AiSettingsResolver::class)->modelFor($stage));
-                        $set('prompt_version', app(PromptVersionResolver::class)->resolve($stage));
+                        $set('prompt_version', app(PromptVersionResolver::class)->resolveBase($stage));
                     })
                     ->required(),
                 TextInput::make('model')
@@ -221,7 +221,7 @@ class AiDebugTest extends Page
         $this->data = [
             'task_type' => $stage->value,
             'model' => app(AiSettingsResolver::class)->modelFor($stage),
-            'prompt_version' => app(PromptVersionResolver::class)->resolve($stage),
+            'prompt_version' => app(PromptVersionResolver::class)->resolveBase($stage),
             'input' => $fillInput ? 'Reply with OK.' : ($this->data['input'] ?? ''),
         ];
     }

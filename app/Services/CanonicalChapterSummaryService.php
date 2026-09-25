@@ -5,7 +5,6 @@ namespace App\Services;
 use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
-use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
 use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
@@ -29,6 +28,7 @@ class CanonicalChapterSummaryService
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     /** @return array{novel_id: int, novel_title: string, chapters: array<int, array<string, mixed>>, plan_hash: string} */
@@ -177,12 +177,11 @@ class CanonicalChapterSummaryService
             return ['artifact' => $artifact, 'reused' => false, 'applied' => $applied];
         } catch (Throwable $exception) {
             if ($run->fresh()->status !== RunStatus::Succeeded) {
-                $run->update([
-                    'status' => RunStatus::Failed,
-                    'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : ($exception instanceof ValidationException ? 'summary_validation_failed' : 'summary_generation_failed'),
-                    'error_message' => $exception->getMessage(),
-                    'finished_at' => now(),
-                ]);
+                $this->failurePolicy->record(
+                    $run,
+                    $exception,
+                    $exception instanceof ValidationException ? 'summary_validation_failed' : 'summary_generation_failed',
+                );
             }
 
             throw $exception;
@@ -236,6 +235,7 @@ class CanonicalChapterSummaryService
                 'context_snapshot' => [
                     'canonical_artifact_id' => $source->getKey(),
                     'canonical_artifact_checksum' => $source->checksum,
+                    'prompt_version' => $promptVersion,
                     'provider' => $provider,
                     'model' => $model,
                 ],

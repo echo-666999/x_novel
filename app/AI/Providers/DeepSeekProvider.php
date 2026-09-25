@@ -20,7 +20,7 @@ class DeepSeekProvider implements AiProvider
 {
     private const PROVIDER = 'deepseek';
 
-    private const DIAGNOSTIC_METADATA_KEYS = ['generation_run_id', 'novel_id', 'chapter_id', 'scene_id', 'stage'];
+    private const DIAGNOSTIC_METADATA_KEYS = ['generation_run_id', 'novel_id', 'chapter_id', 'scene_id', 'stage', 'substage'];
 
     private const SENSITIVE_LOG_KEYS = ['authorization', 'proxy_authorization', 'api_key', 'openai_api_key', 'deepseek_api_key'];
 
@@ -184,11 +184,12 @@ class DeepSeekProvider implements AiProvider
     {
         $status = $response->status();
         $detail = $this->providerErrorDetail($response);
+        $requestId = $response->header('x-request-id') ?: $response->json('id');
 
         return match ($status) {
-            401, 403 => new AiProviderException('provider_authentication_failed', 'AI Provider 认证失败，请检查 API Key 和访问权限。', false, $status),
-            408, 429 => new AiProviderException($status === 429 ? 'provider_rate_limited' : 'provider_timeout', $status === 429 ? 'AI Provider 请求频率受限，请稍后重试。' : 'AI Provider 请求超时，请稍后重试。', true, $status),
-            default => new AiProviderException('provider_request_failed', $status >= 500 ? "AI Provider 服务暂时不可用（HTTP {$status}），请稍后重试。" : "AI Provider 拒绝了请求（HTTP {$status}）：{$detail}", $status >= 500, $status),
+            401, 403 => new AiProviderException('provider_authentication_failed', 'AI Provider 认证失败，请检查 API Key 和访问权限。', false, $status, providerRequestId: is_string($requestId) ? $requestId : null),
+            408, 429 => new AiProviderException($status === 429 ? 'provider_rate_limited' : 'provider_timeout', $status === 429 ? 'AI Provider 请求频率受限，请稍后重试。' : 'AI Provider 请求超时，请稍后重试。', true, $status, providerRequestId: is_string($requestId) ? $requestId : null),
+            default => new AiProviderException('provider_request_failed', $status >= 500 ? "AI Provider 服务暂时不可用（HTTP {$status}），请稍后重试。" : "AI Provider 拒绝了请求（HTTP {$status}）：{$detail}", $status >= 500, $status, providerRequestId: is_string($requestId) ? $requestId : null),
         };
     }
 
@@ -212,7 +213,16 @@ class DeepSeekProvider implements AiProvider
     /** @return array<string, mixed> */
     private function diagnosticLogContext(AiRequest $request, string $requestLogId): array
     {
-        $context = ['ai_request_log_id' => $requestLogId, 'provider' => self::PROVIDER, 'model' => $request->model, 'endpoint' => '/chat/completions', 'prompt_version' => $request->promptVersion];
+        $context = [
+            'ai_request_log_id' => $requestLogId,
+            'provider' => self::PROVIDER,
+            'model' => $request->model,
+            'endpoint' => '/chat/completions',
+            'prompt_version' => $request->promptVersion,
+            'max_output_tokens' => $request->maxTokens,
+            // DeepSeek adapter does not send the unified reasoning_effort field.
+            'reasoning_effort_sent' => null,
+        ];
         foreach (self::DIAGNOSTIC_METADATA_KEYS as $key) {
             if (array_key_exists($key, $request->metadata)) {
                 $context[$key] = $request->metadata[$key];

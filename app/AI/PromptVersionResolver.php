@@ -7,7 +7,25 @@ use InvalidArgumentException;
 
 final class PromptVersionResolver
 {
+    private const NARRATIVE_POLICY_STAGES = [
+        AiStage::Planner,
+        AiStage::Writer,
+        AiStage::Assembler,
+        AiStage::Reviewer,
+        AiStage::Rewrite,
+        AiStage::Summary,
+    ];
+
     public function resolve(AiStage $stage): string
+    {
+        $version = $this->resolveBase($stage);
+
+        return in_array($stage, self::NARRATIVE_POLICY_STAGES, true)
+            ? $version.'+'.NarrativeProsePolicy::VERSION
+            : $version;
+    }
+
+    public function resolveBase(AiStage $stage): string
     {
         $version = config("prompts.versions.{$stage->value}");
 

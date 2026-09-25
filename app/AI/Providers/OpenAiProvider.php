@@ -32,6 +32,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         'chapter_id',
         'scene_id',
         'stage',
+        'substage',
     ];
 
     private const SENSITIVE_LOG_KEYS = [
@@ -241,6 +242,8 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             'model' => $request->model,
             'endpoint' => '/chat/completions',
             'prompt_version' => $request->promptVersion,
+            'max_output_tokens' => $request->maxTokens,
+            'reasoning_effort_sent' => $request->reasoningEffort,
         ];
 
         foreach (self::DIAGNOSTIC_METADATA_KEYS as $key) {
@@ -372,6 +375,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
     {
         $status = $response->status();
         $detail = $this->providerErrorDetail($response);
+        $requestId = $response->header('x-request-id') ?: $response->json('id');
 
         if ($status === 400 && str_contains(strtolower($detail), 'invalid schema')) {
             return new AiProviderException(
@@ -379,6 +383,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                 'AI Provider 拒绝了响应 Schema（HTTP 400）：'.$detail,
                 false,
                 $status,
+                providerRequestId: is_string($requestId) ? $requestId : null,
             );
         }
 
@@ -388,12 +393,14 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                 'AI Provider 认证失败，请检查 API Key 和访问权限。',
                 false,
                 $status,
+                providerRequestId: is_string($requestId) ? $requestId : null,
             ),
             408, 429 => new AiProviderException(
                 $status === 429 ? 'provider_rate_limited' : 'provider_timeout',
                 $status === 429 ? 'AI Provider 请求频率受限，请稍后重试。' : 'AI Provider 请求超时，请稍后重试。',
                 true,
                 $status,
+                providerRequestId: is_string($requestId) ? $requestId : null,
             ),
             default => new AiProviderException(
                 'provider_request_failed',
@@ -402,6 +409,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                     : "AI Provider 拒绝了请求（HTTP {$status}）：{$detail}",
                 $status >= 500,
                 $status,
+                providerRequestId: is_string($requestId) ? $requestId : null,
             ),
         };
     }

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\AiStage;
 use Illuminate\Validation\ValidationException;
 
 final class SceneDraftStructureRepairer
@@ -20,7 +21,7 @@ final class SceneDraftStructureRepairer
      * @param  array<string, mixed>  $metadata
      * @return array{temporary_state_delta: array<string, mixed>, declared_events: array<int, array<string, mixed>>}
      */
-    public function repair(array $payload, string $model, array $metadata, mixed $sceneTask, ?string $reasoningEffort = null): array
+    public function repair(array $payload, string $provider, string $model, array $metadata, mixed $sceneTask, ?string $reasoningEffort = null, ?callable $beforeRequest = null): array
     {
         $lastException = null;
 
@@ -28,8 +29,10 @@ final class SceneDraftStructureRepairer
             $maxTokens = $attempt === 1
                 ? (int) config('generation.scene_structure_repair_max_output_tokens', 1_000)
                 : (int) config('generation.scene_structure_repair_retry_max_output_tokens', 4_000);
+            $beforeRequest?->__invoke('scene_structure_repair', $provider);
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                provider: $provider,
                 reasoningEffort: $reasoningEffort,
                 systemPrompt: '你是 XNovel 场景辅助字段修复器。不得改写正文、Coverage、场景结果或既定事实。只修复 temporary_state_delta 与 declared_events 的 JSON 语法和对象结构，不得引入输入之外的新信息。temporary_state_delta 必须是 JSON 对象字符串；无法可靠结构化时返回 {}。declared_events 的每一项必须是 JSON 对象字符串；无法可靠结构化的项应删除。只返回符合 Schema 的两个字段。',
                 prompt: '请修复以下场景辅助字段：'.json_encode([
@@ -42,7 +45,7 @@ final class SceneDraftStructureRepairer
                 maxTokens: $maxTokens,
                 responseSchema: self::schema(),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'scene_structure_repair_attempt' => $attempt],
+                metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'scene_structure_repair', 'scene_structure_repair_attempt' => $attempt],
             ));
 
             if ($response->structuredData === null) {

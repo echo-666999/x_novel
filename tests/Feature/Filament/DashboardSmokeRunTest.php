@@ -10,6 +10,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\User;
 use App\Models\Volume;
+use Filament\Actions\Testing\TestAction;
 use Filament\Notifications\Notification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -19,6 +20,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
+    config()->set('generation.acceptance_tools_enabled', true);
 });
 
 test('dashboard shows the long run empty state and start action', function () {
@@ -27,7 +29,7 @@ test('dashboard shows the long run empty state and start action', function () {
         ->assertSee('20 章长跑进度')
         ->assertSee('Long Run Progress')
         ->assertSee('尚未启动 20 章长跑')
-        ->assertActionExists('startSmokeRun');
+        ->assertActionExists(TestAction::make('startSmokeRun')->schemaComponent('acceptanceActions', 'content'));
 });
 
 test('dashboard starts and displays a tracked smoke run', function () {
@@ -38,7 +40,7 @@ test('dashboard starts and displays a tracked smoke run', function () {
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
     Livewire::test(Dashboard::class)
-        ->callAction('startSmokeRun', data: ['novel_id' => $novel->getKey()])
+        ->callAction(TestAction::make('startSmokeRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
         ->assertHasNoActionErrors()
         ->assertNotified('20 章长跑已启动')
         ->assertSee('雾海长明')
@@ -64,7 +66,7 @@ test('dashboard reports an active chapter workflow instead of throwing when star
     ]);
 
     Livewire::test(Dashboard::class)
-        ->callAction('startSmokeRun', data: ['novel_id' => $novel->getKey()])
+        ->callAction(TestAction::make('startSmokeRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
         ->assertHasNoActionErrors()
         ->assertNotified(
             Notification::make()

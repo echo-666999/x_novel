@@ -38,6 +38,7 @@ function smokeRunNovel(int $currentSequence = 0): array
         Chapter::factory()->for($novel)->for($volume)->create([
             'sequence' => $currentSequence,
             'status' => ChapterStatus::Canonical,
+            'summary' => '正式摘要',
         ]);
     }
 
@@ -71,6 +72,7 @@ test('the twentieth canonical chapter completes the run without queuing chapter 
     $chapter = Chapter::factory()->for($novel)->for($volume)->create([
         'sequence' => 20,
         'status' => ChapterStatus::Canonical,
+        'summary' => '第二十章摘要',
     ]);
 
     $next = app(CheckNextAction::class)->handle($novel->fresh(), $chapter->getKey());
@@ -93,7 +95,7 @@ test('twenty sequential commit callbacks create no duplicate or skipped chapter'
 
     foreach (range(1, 20) as $sequence) {
         expect($chapter->sequence)->toBe($sequence);
-        $chapter->update(['status' => ChapterStatus::Canonical]);
+        $chapter->update(['status' => ChapterStatus::Canonical, 'summary' => "第 {$sequence} 章摘要"]);
         $versionState = [...$state, 'timeline' => ['chapter' => $sequence]];
         $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
             'version' => $sequence,

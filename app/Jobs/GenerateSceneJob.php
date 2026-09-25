@@ -4,19 +4,20 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Exceptions\SceneStageDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\Scene;
 use App\Services\AutoStopService;
 use App\Services\SceneGenerator;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-class GenerateSceneJob implements ShouldBeUnique, ShouldQueue
+class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
@@ -56,6 +57,16 @@ class GenerateSceneJob implements ShouldBeUnique, ShouldQueue
             }
 
             $this->releaseGenerationDispatch();
+        } catch (SceneStageDeferredException) {
+            $this->releaseGenerationDispatch();
+            $this->dispatchGenerationJob(new self(
+                $this->sceneId,
+                $this->regenerate,
+                $this->cascade,
+                $this->regenerationBatchId,
+            ));
+
+            return;
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 if (! in_array($exception->errorCode, ['novel_paused', 'previous_scene_incomplete'], true)) {

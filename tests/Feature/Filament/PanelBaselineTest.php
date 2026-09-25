@@ -106,18 +106,20 @@ test('the dashboard provides the initial operational shell', function () {
         ->assertOk()
         ->assertSeeTextInOrder([
             '活跃小说',
-            '当前章节',
+            '运行中章节',
             '今日成本',
-            '需要处理',
+            'Failed',
+            'Blocked',
+            'Needs Attention',
             '最近生成',
             '待处理伏笔',
         ])
-        ->assertSee('暂无活跃小说')
-        ->assertSee('尚未选择章节')
+        ->assertSee('生成中、已暂停或收束中的小说')
+        ->assertSee('Queued / Running 的不同章节')
         ->assertSee('暂无用量记录')
-        ->assertSee('暂无待处理事项')
         ->assertSee('暂无生成活动')
-        ->assertSee('暂无待处理伏笔');
+        ->assertSee('暂无待处理伏笔')
+        ->assertDontSee('诊断与验收');
 });
 
 test('the settings page keeps the remaining operational configuration sections', function () {

@@ -51,6 +51,14 @@ class GenerationPreflightException extends RuntimeException
         return new self('active_workflow_exists', '该小说已有另一个活跃章节工作流。');
     }
 
+    public static function previousChapterSummaryMissing(int $sequence): self
+    {
+        return new self(
+            'previous_chapter_summary_missing',
+            "第 {$sequence} 章的正式摘要尚未生成，请先在生成恢复中心重试章节摘要。",
+        );
+    }
+
     /** @param array<int, string> $foreshadowings */
     public static function criticalForeshadowingOverdue(array $foreshadowings): self
     {

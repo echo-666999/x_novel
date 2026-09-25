@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'latency_ms',
     'estimated_cost',
     'request_id',
+    'request_metadata',
 ])]
 class UsageRecord extends Model
 {
@@ -58,6 +59,7 @@ class UsageRecord extends Model
             'cached_tokens' => 'integer',
             'latency_ms' => 'integer',
             'estimated_cost' => 'decimal:6',
+            'request_metadata' => 'array',
             'created_at' => 'datetime',
         ];
     }

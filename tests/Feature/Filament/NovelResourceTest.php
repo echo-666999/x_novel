@@ -133,7 +133,7 @@ test('novel form validates required fields and positive target words', function 
         ]);
 });
 
-test('the novel workspace overview shows real values and explicit unavailable metrics', function () {
+test('the novel workspace overview shows real operational values', function () {
     $novel = Novel::factory()->create([
         'title' => '雾海长明',
         'genre' => '玄幻',
@@ -159,18 +159,22 @@ test('the novel workspace overview shows real values and explicit unavailable me
             '当前字数',
             '0',
             '当前卷',
-            '尚未接入',
+            '尚无 Active Volume',
             '当前章节',
             '第 12 章',
             '当前故事版本',
             '生成状态',
+            '当前流水线',
+            '推荐操作',
             '质量与运营',
             '今日成本',
-            '¥0.00',
-            'Review 通过率',
+            'USD 0.0000',
+            '首轮 Review 通过率',
             'Rewrite 比例',
             '待处理伏笔',
-            '需要处理',
+            'Failed / Stalled',
+            'Blocked',
+            'Needs Attention',
         ]);
 });
 

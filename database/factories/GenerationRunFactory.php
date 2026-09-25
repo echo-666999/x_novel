@@ -34,6 +34,8 @@ class GenerationRunFactory extends Factory
             'context_snapshot' => [],
             'error_code' => null,
             'error_message' => null,
+            'error_retryable' => null,
+            'error_metadata' => null,
             'started_at' => null,
             'finished_at' => null,
         ];

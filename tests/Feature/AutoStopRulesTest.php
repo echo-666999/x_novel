@@ -66,7 +66,7 @@ test('post commit volume gate failure disables auto generation and queues no nex
     ]);
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
-    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1, 'status' => ChapterStatus::Canonical]);
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1, 'status' => ChapterStatus::Canonical, 'summary' => '正式摘要']);
 
     expect(app(CheckNextAction::class)->handle($novel, $chapter->getKey()))->toBeNull()
         ->and(data_get($novel->fresh()->settings, 'auto_generate'))->toBeFalse()

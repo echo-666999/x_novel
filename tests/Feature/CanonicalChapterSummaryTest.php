@@ -12,6 +12,7 @@ use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -49,7 +50,8 @@ test('a successful canonical summary persists its run artifact usage and input h
         ->and($run->stage)->toBe(GenerationStage::MemorySummary)
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->input_hash)->toHaveLength(64)
-        ->and($run->prompt_version)->toBe('summary-v2')
+        ->and($run->prompt_version)->toBe('summary-v2+natural-prose-v1')
+        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('summary-v2+natural-prose-v1')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得评价文笔、解释主题')
         ->and($result['artifact']->type)->toBe(ArtifactType::Summary)
         ->and(data_get($result['artifact']->data, 'source_canonical_artifact_id'))->toBe($chapter->canonical_artifact_id)
@@ -126,8 +128,33 @@ test('provider failure preserves the existing summary and canonical story state'
     expect($chapter->fresh()->summary)->toBe('原摘要')
         ->and($chapter->novel->fresh()->canonical_state_version_id)->toBe($stateId)
         ->and(GenerationRun::query()->where('scope_type', 'chapter_summary')->sole()->status)->toBe(RunStatus::Failed)
+        ->and(GenerationRun::query()->where('scope_type', 'chapter_summary')->sole()->error_retryable)->toBeTrue()
+        ->and(data_get(GenerationRun::query()->where('scope_type', 'chapter_summary')->sole()->error_metadata, 'category'))->toBe('external_temporary')
         ->and(GenerationArtifact::query()->where('type', ArtifactType::Summary)->count())->toBe(0)
         ->and(UsageRecord::query()->count())->toBe(0);
+});
+
+test('summary job ignores a stale canonical artifact without calling the provider', function () {
+    [$chapter, $source] = canonicalSummaryChapter();
+    $replacementRun = GenerationRun::factory()->for($chapter->novel)->for($chapter)->create([
+        'stage' => GenerationStage::Rewrite,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $replacement = GenerationArtifact::factory()->for($replacementRun)->create([
+        'type' => ArtifactType::RewriteDraft,
+        'content' => '新的正式正文。',
+        'checksum' => hash('sha256', '新的正式正文。'),
+    ]);
+    $chapter->update(['canonical_artifact_id' => $replacement->getKey()]);
+    $fake = (new FakeAiProvider)->enqueue(summaryResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    (new GenerateCanonicalChapterSummaryJob($chapter->getKey(), $source->getKey()))
+        ->handle(app(CanonicalChapterSummaryService::class));
+
+    expect($fake->requests())->toBeEmpty()
+        ->and($chapter->fresh()->summary)->toBeNull()
+        ->and(GenerationRun::query()->where('scope_type', 'chapter_summary')->count())->toBe(0);
 });
 
 test('the backfill command is dry-run by default and requires the reviewed plan hash to execute', function () {

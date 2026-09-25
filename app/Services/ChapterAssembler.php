@@ -36,6 +36,7 @@ class ChapterAssembler
         private readonly GenerationRunLease $runLease,
         private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
         private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     public function assemble(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -54,6 +55,7 @@ class ChapterAssembler
         $settings = $this->settingsResolver->resolve(AiStage::Assembler, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Assembler);
         $context = $this->context($chapter, $artifacts);
+        $context['prompt_version'] = $promptVersion;
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'provider' => $settings->provider,
@@ -101,6 +103,7 @@ class ChapterAssembler
                 chapter: $chapter,
                 artifacts: $artifacts,
                 context: $context,
+                provider: $settings->provider,
                 model: $settings->model,
                 reasoningEffort: $settings->reasoningEffort,
                 metadata: [
@@ -115,6 +118,7 @@ class ChapterAssembler
                 chapter: $chapter,
                 artifacts: $artifacts,
                 context: $context,
+                provider: $settings->provider,
                 model: $settings->model,
                 promptVersion: $promptVersion,
                 reasoningEffort: $settings->reasoningEffort,
@@ -229,6 +233,8 @@ class ChapterAssembler
                     'status' => RunStatus::Failed,
                     'error_code' => 'worker_interrupted',
                     'error_message' => 'Assembly Run 超时未完成，已由后续投递恢复。',
+                    'error_retryable' => false,
+                    'error_metadata' => ['category' => 'worker_lost'],
                     'finished_at' => now(),
                 ]);
             }
@@ -309,7 +315,7 @@ class ChapterAssembler
     /** @param array<string, mixed> $context
      * @param  array<string, mixed>  $metadata
      */
-    private function repairLengthIfNeeded(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $model, string $promptVersion, ?string $reasoningEffort, array $metadata): array
+    private function repairLengthIfNeeded(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $provider, string $model, string $promptVersion, ?string $reasoningEffort, array $metadata): array
     {
         $constraints = $context['writing_constraints'];
 
@@ -326,6 +332,7 @@ class ChapterAssembler
 
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                provider: $provider,
                 reasoningEffort: $reasoningEffort,
                 systemPrompt: ($tooLong
                     ? '你是 XNovel 章节压缩器。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、行为边界、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节，但不得删除 Scene Draft 中唯一能够证明伏笔动作已完成的证据。重新按 Schema 输出覆盖最终 content 的 scene_coverage，并按 foreshadowing_contract 完整返回每个 Scene 的 foreshadowing_coverage；不得改变伏笔 ID、动作或目标 Scene，只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled，仅有主题相近措辞必须标记 missing。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终正文，missing 的 evidence 必须为 null，introduced_major_facts 必须返回 []。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。'
@@ -351,6 +358,7 @@ class ChapterAssembler
                 chapter: $chapter,
                 artifacts: $artifacts,
                 context: $context,
+                provider: $provider,
                 model: $model,
                 reasoningEffort: $reasoningEffort,
                 metadata: $metadata,
@@ -367,7 +375,7 @@ class ChapterAssembler
      * @param  array<string, mixed>  $metadata
      * @return array<string, mixed>
      */
-    private function validatePayloadWithCoverageRepair(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $model, ?string $reasoningEffort, array $metadata): array
+    private function validatePayloadWithCoverageRepair(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $provider, string $model, ?string $reasoningEffort, array $metadata): array
     {
         $repairedIndexes = [];
 
@@ -415,6 +423,7 @@ class ChapterAssembler
                     coverage: is_array($row['foreshadowing_coverage'] ?? null) ? $row['foreshadowing_coverage'] : [],
                     content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
                     expectations: $expectations,
+                    provider: $provider,
                     model: $model,
                     metadata: $metadata,
                     path: "scene_coverage.{$index}.foreshadowing_coverage",
@@ -424,6 +433,7 @@ class ChapterAssembler
                 $coverage = $this->coverageEvidenceRepairer->repair(
                     coverage: collect($row)->except(['scene_id', 'foreshadowing_coverage'])->all(),
                     content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
+                    provider: $provider,
                     model: $model,
                     metadata: $metadata,
                     task: data_get($context, "chapter_plan.scene_plans.{$index}"),
@@ -458,11 +468,6 @@ class ChapterAssembler
 
     private function failRun(GenerationRun $run, Throwable $exception): void
     {
-        $run->update([
-            'status' => RunStatus::Failed,
-            'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'chapter_assembly_failed',
-            'error_message' => $exception->getMessage(),
-            'finished_at' => now(),
-        ]);
+        $this->failurePolicy->record($run, $exception, 'chapter_assembly_failed');
     }
 }

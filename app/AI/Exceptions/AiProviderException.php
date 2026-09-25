@@ -13,6 +13,7 @@ class AiProviderException extends RuntimeException
         public readonly bool $retryable,
         public readonly ?int $statusCode = null,
         ?Throwable $previous = null,
+        public readonly ?string $providerRequestId = null,
     ) {
         parent::__construct($message, $statusCode ?? 0, $previous);
     }

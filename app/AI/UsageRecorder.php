@@ -6,6 +6,7 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Data\EmbeddingRequest;
 use App\AI\Data\EmbeddingResponse;
+use App\Enums\AiStage;
 use App\Models\UsageRecord;
 
 class UsageRecorder
@@ -30,6 +31,14 @@ class UsageRecorder
             'latency_ms' => $response->latencyMs,
             'estimated_cost' => $this->costCalculator->estimate($response, $request->provider),
             'request_id' => $response->providerRequestId,
+            'request_metadata' => array_filter([
+                'stage' => $request->metadata['stage'] ?? null,
+                'substage' => $request->metadata['substage'] ?? null,
+                'route_key' => $request->metadata['route_key'] ?? null,
+                'prompt_version' => $request->promptVersion,
+                'reasoning_effort_sent' => $request->provider === 'deepseek' ? null : $request->reasoningEffort,
+                'max_output_tokens' => $request->maxTokens,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
         ]);
     }
 
@@ -53,6 +62,10 @@ class UsageRecorder
             'latency_ms' => $response->latencyMs,
             'estimated_cost' => $estimatedCost,
             'request_id' => $response->providerRequestId,
+            'request_metadata' => [
+                'stage' => AiStage::Embedding->value,
+                'embedding_dimensions' => $request->dimensions,
+            ],
         ]);
     }
 }

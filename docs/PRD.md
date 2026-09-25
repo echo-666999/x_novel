@@ -501,6 +501,8 @@ schema_version > 0
 
 `novels.current_outline_id` 指向当前采用版本。更换 Current Outline 必须在锁定 Novel 的事务中完成，并保留旧版本为 `superseded`。AI 生成结果只能先成为 Artifact 或 Draft Outline；用户确认采用前不得写入正式 Volume、Story Arc、Character、World Entity 或 Canonical Story State。
 
+开始正文生成前，系统必须通过同一份只读准备度检查确认：Current Outline、Current Bible、主角、世界设定、Active Volume、Active Story Arc、Initial State，以及上一正式章需要的派生摘要均已就绪。Filament 在用户操作前直接显示各项状态和修复提示；`StartNovelGenerationAction` 在锁定 Novel 的事务中再次执行同一检查，页面状态不能替代领域校验。AI Outline 正常采用时自动初始化故事状态；手工规划仍保留显式初始化恢复入口。
+
 `content` 固定为 `Volume → Story Arc → Beat`。Volume、Arc、Beat 的 `key` 在同一 Outline 内唯一，版本创建后不可原地改键；每层 `sequence` 从 1 开始、连续且不重复。每个 Main Arc 至少有一个 Beat，每个 Beat 至少包含：
 
 ```text
@@ -1534,7 +1536,9 @@ CommitChapterJob
 ```text
 UpdateMemoryJob
 GenerateEmbeddingJob
-RollupSummaryJob
+GenerateCanonicalChapterSummaryJob
+RefreshNovelProjectionJob
+ContinueAutoGenerationJob
 EndingAuditJob
 ```
 
@@ -1569,8 +1573,14 @@ ReviewChapterJob
               ↓
          UpdateMemoryJob
               ↓
-         RollupSummaryJob
+GenerateCanonicalChapterSummaryJob
+              ↓
+ RefreshNovelProjectionJob
+              ↓
+ ContinueAutoGenerationJob
 ```
+
+Post-Commit 派生任务使用上述顺序 Queue Chain。Memory、Summary 或 Projection 失败都不会回滚已经成功的 Canonical Commit，但会停止自动续写并保留可恢复的 Generation Run。Embedding 由 Memory 独立派发和重试，不阻塞下一章。手动或自动生成下一章时，上一正式章必须已有 `chapters.summary`；缺失时应进入摘要恢复操作。
 
 Context Builder MVP 可以作为 Service：
 
@@ -1848,28 +1858,32 @@ Runs
 
 # 26. Dashboard
 
-显示：
+Dashboard 是跨小说的日常操作摘要，不承载章节生成领域逻辑。顶部主操作为：
 
 ```text
-当前 Novel
-当前 Volume
-当前 Chapter
-
-总字数
-章节数
-
-最近生成状态
-Review 通过率
-Rewrite 比例
-
-伏笔到期
-Closure Debt
-
-今日 Token
-今日 Cost
-
-Queue 状态
+创建小说
+继续当前小说
+打开恢复中心
 ```
+
+显示真实持久化指标：
+
+```text
+活跃小说
+正在运行章节
+今日 Token / Cost
+Failed
+Blocked
+Needs Attention
+最近 Generation Run
+待处理伏笔
+```
+
+最近生成必须显示 Novel、Chapter、Stage、Status、耗时、成本与时间，并进入 Chapter Workbench 或 Run Inspector。
+
+Novel Overview 显示当前小说的 Canonical 字数、Active Volume、当前流水线、首轮 Review 通过率、Rewrite 比例、待处理伏笔以及失败和审校待办。下一步操作由持久化状态决定，同一时刻只突出一个主操作。
+
+20/50/100 章长跑属于诊断与验收工具，由 `generation.acceptance_tools_enabled` 控制，默认关闭。开启后仍必须选择小说并明确确认。
 
 ---
 

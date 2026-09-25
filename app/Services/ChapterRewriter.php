@@ -28,7 +28,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer, private readonly ChapterRewriteLengthRepairer $chapterLengthRepairer) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer, private readonly ChapterRewriteLengthRepairer $chapterLengthRepairer, private readonly GenerationFailurePolicy $failurePolicy) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -95,6 +95,7 @@ class ChapterRewriter
             'expected_fixes' => collect($findings)->pluck('message')->filter()->values()->all(),
             'must_not_change' => $chapter->latestPlan->only(['must_not_reveal', 'forbidden_conflicts']),
             'state_version' => $chapter->novel->canonicalStateVersion->version,
+            'prompt_version' => $promptVersion,
             'current_state' => $chapter->novel->canonicalStateVersion->state,
             'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
             'locked_facts' => $chapter->novel->facts()->where('locked', true)->where('status', 'active')
@@ -137,6 +138,7 @@ class ChapterRewriter
                 content: $response->content,
                 structuredData: StructuredOutput::require($response, 'rewrite', $sceneId === null ? 'Chapter Rewrite' : 'Scene Rewrite'),
                 sceneRewrite: $sceneId !== null,
+                provider: $settings->provider,
                 model: $settings->model,
                 metadata: $metadata,
                 task: $brief['plan_acceptance'],
@@ -159,6 +161,7 @@ class ChapterRewriter
                     collect($payload)->only(['content', 'scene_coverage', 'introduced_major_facts'])->all(),
                     $chapter,
                     $foreshadowingContract,
+                    $settings->provider,
                     $settings->model,
                     $metadata,
                     $settings->reasoningEffort,
@@ -168,7 +171,7 @@ class ChapterRewriter
 
             return $this->complete($run, $chapter, $sceneId, $source, $review, $payload, $findingHash, $attempt, $brief['state_version']);
         } catch (Throwable $exception) {
-            $run->update(['status' => RunStatus::Failed, 'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'rewrite_failed', 'error_message' => $exception->getMessage(), 'finished_at' => now()]);
+            $this->failurePolicy->record($run, $exception, 'rewrite_failed');
             throw $exception;
         }
     }
@@ -241,7 +244,7 @@ class ChapterRewriter
      * @param  array<string, mixed>|null  $structuredData
      * @return array<string, mixed>
      */
-    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite, ?string $model = null, array $metadata = [], mixed $task = null, ?Chapter $chapter = null, array $foreshadowingContract = [], ?string $reasoningEffort = null): array
+    private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite, ?string $provider = null, ?string $model = null, array $metadata = [], mixed $task = null, ?Chapter $chapter = null, array $foreshadowingContract = [], ?string $reasoningEffort = null): array
     {
         if ($sceneRewrite) {
             if ($structuredData === null) {
@@ -259,6 +262,7 @@ class ChapterRewriter
             $structuredData['self_check'] = $this->coverageEvidenceRepairer->repair(
                 coverage: is_array($structuredData['self_check'] ?? null) ? $structuredData['self_check'] : [],
                 content: is_string($structuredData['content'] ?? null) ? $structuredData['content'] : '',
+                provider: (string) $provider,
                 model: $model,
                 metadata: $metadata,
                 task: $task,
@@ -281,6 +285,7 @@ class ChapterRewriter
             $structuredData,
             $chapter,
             $foreshadowingContract,
+            (string) $provider,
             $model,
             $metadata,
             $reasoningEffort,
@@ -297,7 +302,7 @@ class ChapterRewriter
     }
 
     /** @param array<string, mixed> $payload @param array<string, mixed> $contract @param array<string, mixed> $metadata */
-    private function validateChapterPayloadWithCoverageRepair(array $payload, Chapter $chapter, array $contract, string $model, array $metadata, ?string $reasoningEffort = null): array
+    private function validateChapterPayloadWithCoverageRepair(array $payload, Chapter $chapter, array $contract, string $provider, string $model, array $metadata, ?string $reasoningEffort = null): array
     {
         $sourceArtifacts = $chapter->scenes->sortBy('sequence')->pluck('currentArtifact')->filter()->values();
         $repaired = [];
@@ -330,6 +335,7 @@ class ChapterRewriter
                     coverage: is_array($row['foreshadowing_coverage'] ?? null) ? $row['foreshadowing_coverage'] : [],
                     content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
                     expectations: ForeshadowingCoverage::expectationsForScene($contract, $sceneSequence),
+                    provider: $provider,
                     model: $model,
                     metadata: $metadata,
                     path: "scene_coverage.{$index}.foreshadowing_coverage",
@@ -339,6 +345,7 @@ class ChapterRewriter
                 $coverage = $this->coverageEvidenceRepairer->repair(
                     coverage: collect($row)->except(['scene_id', 'foreshadowing_coverage'])->all(),
                     content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
+                    provider: $provider,
                     model: $model,
                     metadata: $metadata,
                     task: data_get($chapter->latestPlan?->scene_plans, $index),
@@ -489,7 +496,7 @@ class ChapterRewriter
                 return [$active, true];
             }
             if ($active) {
-                $active->update(['status' => RunStatus::Failed, 'error_code' => 'worker_interrupted', 'error_message' => 'Rewrite Run 超时未完成，已由后续投递恢复。', 'finished_at' => now()]);
+                $active->update(['status' => RunStatus::Failed, 'error_code' => 'worker_interrupted', 'error_message' => 'Rewrite Run 超时未完成，已由后续投递恢复。', 'error_retryable' => false, 'error_metadata' => ['category' => 'worker_lost'], 'finished_at' => now()]);
             }
 
             return [GenerationRun::query()->create([

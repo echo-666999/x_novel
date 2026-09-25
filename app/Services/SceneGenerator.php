@@ -17,6 +17,7 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
+use App\Exceptions\SceneStageDeferredException;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Scene;
@@ -36,10 +37,13 @@ class SceneGenerator
         private readonly SceneDraftStructureRepairer $structureRepairer,
         private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
         private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer,
+        private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly SceneExecutionClock $executionClock,
     ) {}
 
     public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null): ?GenerationArtifact
     {
+        $jobStartedAt = $this->executionClock->start();
         $scene = Scene::query()->with([
             'chapter.novel.canonicalStateVersion',
             'chapter.latestPlan',
@@ -63,6 +67,8 @@ class SceneGenerator
 
         $previousArtifacts = $this->previousArtifacts($scene);
         $settings = $this->settingsResolver->resolve(AiStage::Writer, $novel);
+        $extractorSettings = $this->settingsResolver->resolve(AiStage::Extractor, $novel);
+        $rewriteSettings = $this->settingsResolver->resolve(AiStage::Rewrite, $novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Writer);
         $previousArtifact = $previousArtifacts->last();
         $snapshot = $this->contextBuilder->build(new ContextRequest(
@@ -96,6 +102,11 @@ class SceneGenerator
             'initial_max_completion_tokens' => (int) config('generation.scene_max_output_tokens', 12_000),
             'retry_max_completion_tokens' => (int) config('generation.scene_retry_max_output_tokens', 16_000),
         ];
+        $context['generation_preferences']['substage_routes'] = [
+            'prose' => $this->routeSnapshot($settings, AiStage::Writer, $promptVersion, null),
+            'structure_and_coverage' => $this->routeSnapshot($extractorSettings, AiStage::Extractor, 'scene-support-repair-v2', null),
+            'length_repair' => $this->routeSnapshot($rewriteSettings, AiStage::Rewrite, 'scene-length-repair-v2', (int) config('generation.scene_length_repair_max_output_tokens', 4_000)),
+        ];
         $foreshadowingExpectations = ForeshadowingCoverage::expectationsForScene(
             data_get($context, 'l0.foreshadowing_contract', []),
             $scene->sequence,
@@ -106,6 +117,8 @@ class SceneGenerator
             'model' => $settings->model,
             'reasoning_effort' => $settings->reasoningEffort,
             'prompt_version' => $promptVersion,
+            'extractor_route' => $context['generation_preferences']['substage_routes']['structure_and_coverage'],
+            'rewrite_route' => $context['generation_preferences']['substage_routes']['length_repair'],
             'regeneration_batch_id' => $regenerationBatchId,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $baseKey = "scene:{$scene->getKey()}:{$inputHash}:{$promptVersion}:{$settings->model}";
@@ -130,54 +143,79 @@ class SceneGenerator
         $run->update(['context_snapshot' => $runContext]);
 
         try {
-            $response = $this->provider->generate(new AiRequest(
-                model: $settings->model,
-                provider: $settings->provider,
-                reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 场景写作器。只写当前场景。l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约；只能执行 actions 中 target_scene_sequence 等于当前 Scene 序号的动作，未列入 actions 的伏笔不能在本章主动铺设、强化、兑现、延期或放弃。plan_constraints.arc_contributions 和 world_entity_candidates 同样是冻结契约：只推进目标 Scene 等于当前序号的 Arc Beat，只能引入其中批准的重大世界实体，并在正文中使用 candidate_key 对应的名称与定义；不得自由创造未登记的重大地点、物品、阵营、组织、规则或概念。promised_payoff 是作者侧约束，不代表允许向读者直接揭晓；必须同时遵守 plan_constraints.must_not_reveal，并按 plan_action.action 与 acceptance_criteria 控制揭示程度。foreshadowing_coverage 必须按契约顺序返回当前 Scene 的全部伏笔动作；只有正文证据足以证明 acceptance_criteria 已实现时才能标记 fulfilled，主题相近但没有动作结果必须标记 missing，反转既定动作则标记 contradicted。fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。l4 是唯一的 Style Contract；严格保持其中的 POV、时态和主文风，只使用指定辅助文风补充特征，不得让辅助文风覆盖主文风，并执行 expanded_parameters。第一场景必须从 previous_chapter_ending 连续展开，并把 scene_task.transition_from_previous 指定的时间、地点与行动过渡写进正文；不得从上一章结尾直接跳到次日或新地点而省略关键过程。scene_task.continuity_requirements 中 establish 只负责首次建立，persist 只写本场新增影响或必要的最短提醒，change 必须写出状态变化，callback 只在章末自然回扣；不得逐 Scene 重复解释同一伤势、限制、等待状态或监管边界。goal、conflict、turn、outcome 都是不可省略的验收项，尤其不得反转 outcome；正文行为必须位于 outcome_allowed 内且不得出现 outcome_forbidden。self_check 必须逐项返回 fulfilled、missing 或 contradicted；fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。scene_target_words 是当前场景目标字数，maximum_scene_words 是不可超过的硬上限；字数统计排除空白和换行。当 required_scene_words 大于 0 时，正文还必须至少达到该字数，使各场景总量达到章节下限。场景可以短于目标，未使用的字数由后续场景承接。通过完整的动作、对话、环境、感官和人物反应展开既定场景，不得用提纲、摘要、无意义重复或新增重大事实凑字。返回符合 Schema 的 JSON；除固定字段和枚举值外，正文及所有自然语言内容必须使用简体中文。草稿不得修改正式故事状态。'.NarrativeProsePolicy::writing(),
-                prompt: '请根据以下权威上下文生成当前场景：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: 0.7,
-                maxTokens: $maxTokens,
-                responseSchema: SceneDraftPayload::schema(),
-                promptVersion: $promptVersion,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $novel->getKey(),
-                    'chapter_id' => $chapter->getKey(),
-                    'scene_id' => $scene->getKey(),
-                    'stage' => AiStage::Writer->value,
-                ],
-            ));
+            $metadata = [
+                'generation_run_id' => $run->getKey(),
+                'novel_id' => $novel->getKey(),
+                'chapter_id' => $chapter->getKey(),
+                'scene_id' => $scene->getKey(),
+            ];
+            $checkpoint = $this->latestCheckpoint($scene, $inputHash);
+            $payload = $checkpoint['payload'] ?? null;
+            $checkpointRank = $this->checkpointRank($checkpoint['substage'] ?? null);
+            if ($checkpoint !== null && (int) $checkpoint['generation_run_id'] !== $run->getKey()) {
+                $resumeContext = $run->context_snapshot ?? [];
+                $resumeContext['scene_execution']['resumed_from_run_id'] = $checkpoint['generation_run_id'];
+                $resumeContext['scene_execution']['source_artifact_id'] = $checkpoint['artifact_id'];
+                $resumeContext['scene_execution']['resumed_from_substage'] = $checkpoint['substage'];
+                $run->update(['context_snapshot' => $resumeContext]);
+            }
+            $beforeRequest = fn (string $substage, string $provider) => $this->assertProviderCallFits(
+                $run,
+                $jobStartedAt,
+                $provider,
+                $substage,
+            );
 
-            $payload = $this->validatePayloadWithCoverageRepair(
-                payload: StructuredOutput::require($response, 'scene', 'Scene Draft'),
-                context: $context,
-                model: $settings->model,
-                reasoningEffort: $settings->reasoningEffort,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $novel->getKey(),
-                    'chapter_id' => $chapter->getKey(),
-                    'scene_id' => $scene->getKey(),
-                    'stage' => AiStage::Writer->value,
-                ],
-            );
-            $this->validatePlanConstraints($payload['content'], $plan->must_not_reveal ?? []);
-            $payload = $this->repairLengthIfNeeded(
-                payload: $payload,
-                context: $context,
-                model: $settings->model,
-                promptVersion: $promptVersion,
-                reasoningEffort: $settings->reasoningEffort,
-                maxTokens: $maxTokens,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $novel->getKey(),
-                    'chapter_id' => $chapter->getKey(),
-                    'scene_id' => $scene->getKey(),
-                    'stage' => AiStage::Writer->value,
-                ],
-            );
+            if (! is_array($payload)) {
+                $beforeRequest('prose_generation', $settings->provider);
+                $response = $this->provider->generate(new AiRequest(
+                    model: $settings->model,
+                    provider: $settings->provider,
+                    reasoningEffort: $this->sentReasoningEffort($settings->provider, $settings->reasoningEffort),
+                    systemPrompt: '你是 XNovel 场景写作器。只写当前场景。l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约；只能执行 actions 中 target_scene_sequence 等于当前 Scene 序号的动作，未列入 actions 的伏笔不能在本章主动铺设、强化、兑现、延期或放弃。plan_constraints.arc_contributions 和 world_entity_candidates 同样是冻结契约：只推进目标 Scene 等于当前序号的 Arc Beat，只能引入其中批准的重大世界实体，并在正文中使用 candidate_key 对应的名称与定义；不得自由创造未登记的重大地点、物品、阵营、组织、规则或概念。promised_payoff 是作者侧约束，不代表允许向读者直接揭晓；必须同时遵守 plan_constraints.must_not_reveal，并按 plan_action.action 与 acceptance_criteria 控制揭示程度。foreshadowing_coverage 必须按契约顺序返回当前 Scene 的全部伏笔动作；只有正文证据足以证明 acceptance_criteria 已实现时才能标记 fulfilled，主题相近但没有动作结果必须标记 missing，反转既定动作则标记 contradicted。fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。l4 是唯一的 Style Contract；严格保持其中的 POV、时态和主文风，只使用指定辅助文风补充特征，不得让辅助文风覆盖主文风，并执行 expanded_parameters。第一场景必须从 previous_chapter_ending 连续展开，并把 scene_task.transition_from_previous 指定的时间、地点与行动过渡写进正文；不得从上一章结尾直接跳到次日或新地点而省略关键过程。scene_task.continuity_requirements 中 establish 只负责首次建立，persist 只写本场新增影响或必要的最短提醒，change 必须写出状态变化，callback 只在章末自然回扣；不得逐 Scene 重复解释同一伤势、限制、等待状态或监管边界。goal、conflict、turn、outcome 都是不可省略的验收项，尤其不得反转 outcome；正文行为必须位于 outcome_allowed 内且不得出现 outcome_forbidden。self_check 必须逐项返回 fulfilled、missing 或 contradicted；fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。scene_target_words 是当前场景目标字数，maximum_scene_words 是不可超过的硬上限；字数统计排除空白和换行。当 required_scene_words 大于 0 时，正文还必须至少达到该字数，使各场景总量达到章节下限。场景可以短于目标，未使用的字数由后续场景承接。通过完整的动作、对话、环境、感官和人物反应展开既定场景，不得用提纲、摘要、无意义重复或新增重大事实凑字。返回符合 Schema 的 JSON；除固定字段和枚举值外，正文及所有自然语言内容必须使用简体中文。草稿不得修改正式故事状态。'.NarrativeProsePolicy::writing(),
+                    prompt: '请根据以下权威上下文生成当前场景：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    temperature: 0.7,
+                    maxTokens: $maxTokens,
+                    responseSchema: SceneDraftPayload::schema(),
+                    promptVersion: $promptVersion,
+                    metadata: [...$metadata, 'stage' => AiStage::Writer->value, 'substage' => 'prose_generation', 'route_key' => 'prose'],
+                ));
+                $payload = StructuredOutput::require($response, 'scene', 'Scene Draft');
+                $this->saveCheckpoint($run, 'prose_generated', $payload, $inputHash, null);
+                $checkpointRank = 1;
+            }
+
+            if ($checkpointRank < 2) {
+                $payload = $this->validatePayloadWithCoverageRepair(
+                    payload: $payload,
+                    context: $context,
+                    provider: $extractorSettings->provider,
+                    model: $extractorSettings->model,
+                    reasoningEffort: $this->sentReasoningEffort($extractorSettings->provider, $extractorSettings->reasoningEffort),
+                    metadata: [...$metadata, 'route_key' => 'structure_and_coverage'],
+                    beforeRequest: $beforeRequest,
+                );
+                $this->validatePlanConstraints($payload['content'], $plan->must_not_reveal ?? []);
+                $this->saveCheckpoint($run, 'evidence_validated', $payload, $inputHash, 'prose_generated');
+            }
+
+            if ($checkpointRank < 3) {
+                $payload = $this->repairLengthIfNeeded(
+                    payload: $payload,
+                    context: $context,
+                    provider: $rewriteSettings->provider,
+                    model: $rewriteSettings->model,
+                    promptVersion: 'scene-length-repair-v2',
+                    reasoningEffort: $this->sentReasoningEffort($rewriteSettings->provider, $rewriteSettings->reasoningEffort),
+                    maxTokens: (int) config('generation.scene_length_repair_max_output_tokens', 4_000),
+                    metadata: $metadata,
+                    beforeRequest: $beforeRequest,
+                    extractorProvider: $extractorSettings->provider,
+                    extractorModel: $extractorSettings->model,
+                    extractorReasoningEffort: $this->sentReasoningEffort($extractorSettings->provider, $extractorSettings->reasoningEffort),
+                );
+                $this->saveCheckpoint($run, 'length_validated', $payload, $inputHash, 'evidence_validated');
+            }
             $this->validatePlanConstraints($payload['content'], $plan->must_not_reveal ?? []);
             $this->validateLength($payload['content'], $context['writing_constraints']);
 
@@ -270,6 +308,8 @@ class SceneGenerator
                     'status' => RunStatus::Failed,
                     'error_code' => 'worker_interrupted',
                     'error_message' => 'Scene Run 超时未完成，已由后续投递恢复。',
+                    'error_retryable' => false,
+                    'error_metadata' => ['category' => 'worker_lost'],
                     'finished_at' => now(),
                 ]);
             }
@@ -404,8 +444,20 @@ class SceneGenerator
      * @param  array<string, mixed>  $metadata
      * @return array<string, mixed>
      */
-    private function repairLengthIfNeeded(array $payload, array $context, string $model, string $promptVersion, ?string $reasoningEffort, int $maxTokens, array $metadata): array
-    {
+    private function repairLengthIfNeeded(
+        array $payload,
+        array $context,
+        string $provider,
+        string $model,
+        string $promptVersion,
+        ?string $reasoningEffort,
+        int $maxTokens,
+        array $metadata,
+        ?callable $beforeRequest = null,
+        ?string $extractorProvider = null,
+        ?string $extractorModel = null,
+        ?string $extractorReasoningEffort = null,
+    ): array {
         $constraints = $context['writing_constraints'];
         $required = (int) $constraints['required_scene_words'];
         $maximum = (int) $constraints['maximum_scene_words'];
@@ -427,8 +479,10 @@ class SceneGenerator
                 (int) data_get($context, 'scene_task.sequence'),
             );
 
+            $beforeRequest?->__invoke('length_repair', $provider);
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
+                provider: $provider,
                 reasoningEffort: $reasoningEffort,
                 systemPrompt: ($tooLong
                     ? '你是 XNovel 场景压缩器。输入包含一份字数超限的场景草稿。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。请在不改变场景目标、冲突、转折、结果和既定事实的前提下，删除重复解释、重复感受和不推动情节的细节，返回完整替换稿。必须重新按 Schema 检查 goal、conflict、turn、outcome。draft.foreshadowing_coverage 是伏笔 Coverage 的身份模板；返回数组必须保持完全相同的长度、顺序、foreshadowing_id 和 action，模板为空时必须返回 []。current_scene_foreshadowing_actions 只用于重新判断 status 和逐字 evidence，不得加入其他 Scene 的动作。只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。最终正文不得超过 maximum_scene_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。返回符合 Schema 的 JSON，所有自然语言使用简体中文。'
@@ -448,7 +502,7 @@ class SceneGenerator
                 maxTokens: $maxTokens,
                 responseSchema: SceneDraftPayload::schema(),
                 promptVersion: $promptVersion,
-                metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
+                metadata: [...$metadata, 'stage' => AiStage::Rewrite->value, 'substage' => 'length_repair', 'route_key' => 'length_repair', 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
 
             $repairedPayload = StructuredOutput::require($response, 'scene', 'Scene Draft');
@@ -459,9 +513,11 @@ class SceneGenerator
             $payload = $this->validatePayloadWithCoverageRepair(
                 payload: $repairedPayload,
                 context: $context,
-                model: $model,
-                reasoningEffort: $reasoningEffort,
-                metadata: $metadata,
+                provider: $extractorProvider ?? $provider,
+                model: $extractorModel ?? $model,
+                reasoningEffort: $extractorReasoningEffort ?? $reasoningEffort,
+                metadata: [...$metadata, 'route_key' => 'structure_and_coverage'],
+                beforeRequest: $beforeRequest,
             );
         }
 
@@ -476,7 +532,7 @@ class SceneGenerator
      * @param  array<string, mixed>  $metadata
      * @return array<string, mixed>
      */
-    private function validatePayloadWithCoverageRepair(array $payload, array $context, string $model, ?string $reasoningEffort, array $metadata): array
+    private function validatePayloadWithCoverageRepair(array $payload, array $context, string $provider, string $model, ?string $reasoningEffort, array $metadata, ?callable $beforeRequest = null): array
     {
         $structureRepaired = false;
         $coverageRepaired = false;
@@ -495,10 +551,12 @@ class SceneGenerator
                         ...$payload,
                         ...$this->structureRepairer->repair(
                             payload: $payload,
+                            provider: $provider,
                             model: $model,
                             metadata: $metadata,
                             sceneTask: $context['scene_task'] ?? null,
                             reasoningEffort: $reasoningEffort,
+                            beforeRequest: $beforeRequest,
                         ),
                     ];
                     $structureRepaired = true;
@@ -510,11 +568,13 @@ class SceneGenerator
                     $payload['self_check'] = $this->coverageEvidenceRepairer->repair(
                         coverage: is_array($payload['self_check'] ?? null) ? $payload['self_check'] : [],
                         content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
+                        provider: $provider,
                         model: $model,
                         metadata: $metadata,
                         task: $context['scene_task'] ?? null,
                         path: 'self_check',
                         reasoningEffort: $reasoningEffort,
+                        beforeRequest: $beforeRequest,
                     );
                     $coverageRepaired = true;
 
@@ -526,10 +586,12 @@ class SceneGenerator
                         coverage: is_array($payload['foreshadowing_coverage'] ?? null) ? $payload['foreshadowing_coverage'] : [],
                         content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
                         expectations: $foreshadowingExpectations,
+                        provider: $provider,
                         model: $model,
                         metadata: $metadata,
                         path: 'foreshadowing_coverage',
                         reasoningEffort: $reasoningEffort,
+                        beforeRequest: $beforeRequest,
                     );
                     $foreshadowingCoverageRepaired = true;
 
@@ -585,14 +647,128 @@ class SceneGenerator
 
     private function failRun(GenerationRun $run, Throwable $exception): void
     {
-        $code = $exception instanceof AiProviderException
-            ? $exception->errorCode
-            : ($exception instanceof ValidationException ? 'scene_validation_failed' : 'scene_generation_failed');
-        $run->update([
-            'status' => RunStatus::Failed,
-            'error_code' => $code,
-            'error_message' => $exception->getMessage(),
-            'finished_at' => now(),
-        ]);
+        $this->failurePolicy->record(
+            $run,
+            $exception,
+            $exception instanceof ValidationException ? 'scene_validation_failed' : 'scene_generation_failed',
+        );
+    }
+
+    /** @return array{substage: string, payload: array<string, mixed>, artifact_id: int, generation_run_id: int}|null */
+    private function latestCheckpoint(Scene $scene, string $inputHash): ?array
+    {
+        $artifacts = GenerationArtifact::query()
+            ->where('type', ArtifactType::Context)
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('scene_id', $scene->getKey())
+                ->where('stage', GenerationStage::SceneGeneration)
+                ->where('input_hash', $inputHash))
+            ->latest('id')
+            ->get();
+
+        foreach (['length_validated', 'evidence_validated', 'prose_generated'] as $substage) {
+            $artifact = $artifacts->first(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'checkpoint') === $substage
+                && is_array(data_get($artifact->data, 'payload')));
+
+            if ($artifact !== null) {
+                return [
+                    'substage' => $substage,
+                    'payload' => data_get($artifact->data, 'payload'),
+                    'artifact_id' => $artifact->getKey(),
+                    'generation_run_id' => $artifact->generation_run_id,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function saveCheckpoint(GenerationRun $run, string $substage, array $payload, string $inputHash, ?string $sourceCheckpoint): GenerationArtifact
+    {
+        return DB::transaction(function () use ($run, $substage, $payload, $inputHash, $sourceCheckpoint): GenerationArtifact {
+            $lockedRun = GenerationRun::query()->lockForUpdate()->findOrFail($run->getKey());
+            $existing = $lockedRun->artifacts()
+                ->where('type', ArtifactType::Context)
+                ->get()
+                ->first(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'checkpoint') === $substage);
+
+            if ($existing !== null) {
+                return $existing;
+            }
+
+            $data = array_filter([
+                'checkpoint' => $substage,
+                'source_checkpoint' => $sourceCheckpoint,
+                'input_hash' => $inputHash,
+                'state_version' => $lockedRun->state_version,
+                'prompt_version' => $lockedRun->prompt_version,
+                'payload' => $payload,
+            ], static fn (mixed $value): bool => $value !== null);
+
+            return $lockedRun->artifacts()->create([
+                'type' => ArtifactType::Context,
+                'version' => ((int) $lockedRun->artifacts()->where('type', ArtifactType::Context)->max('version')) + 1,
+                'content' => is_string($payload['content'] ?? null) ? $payload['content'] : null,
+                'data' => $data,
+                'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+            ]);
+        });
+    }
+
+    private function checkpointRank(?string $substage): int
+    {
+        return match ($substage) {
+            'prose_generated' => 1,
+            'evidence_validated' => 2,
+            'length_validated' => 3,
+            default => 0,
+        };
+    }
+
+    private function assertProviderCallFits(GenerationRun $run, int $jobStartedAt, string $provider, string $substage): void
+    {
+        // The heartbeat write also proves PostgreSQL is reachable before an external request starts.
+        $run->touch();
+        $softTimeout = (int) config('generation.scene_job_soft_timeout_seconds', 300);
+        $safetyMargin = (int) config('generation.scene_job_safety_margin_seconds', 20);
+        $providerTimeout = (int) config("ai.providers.{$provider}.timeout", 150);
+        $elapsed = $this->executionClock->elapsedSeconds($jobStartedAt);
+        $remaining = max(0, $softTimeout - $elapsed);
+        $required = $providerTimeout + $safetyMargin;
+        $snapshot = $run->fresh()->context_snapshot ?? [];
+        $snapshot['scene_execution'] = [
+            ...(is_array($snapshot['scene_execution'] ?? null) ? $snapshot['scene_execution'] : []),
+            'owning_stage' => GenerationStage::SceneGeneration->value,
+            'substage' => $substage,
+            'job_attempt' => $run->attempt,
+            'elapsed_seconds' => $elapsed,
+            'remaining_job_seconds_at_dispatch' => $remaining,
+            'provider_timeout_seconds' => $providerTimeout,
+        ];
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if ($remaining < $required) {
+            throw new SceneStageDeferredException($substage, $remaining, $required);
+        }
+    }
+
+    private function sentReasoningEffort(string $provider, ?string $reasoningEffort): ?string
+    {
+        return $provider === 'deepseek' ? null : $reasoningEffort;
+    }
+
+    /** @return array<string, mixed> */
+    private function routeSnapshot(object $settings, AiStage $stage, string $promptVersion, ?int $maxTokens): array
+    {
+        return array_filter([
+            'stage' => $stage->value,
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'prompt_version' => $promptVersion,
+            'reasoning_effort_configured' => $settings->reasoningEffort,
+            'reasoning_effort_sent' => $this->sentReasoningEffort($settings->provider, $settings->reasoningEffort),
+            'max_output_tokens' => $maxTokens,
+        ], static fn (mixed $value): bool => $value !== null);
     }
 }
