@@ -915,6 +915,12 @@ GFO-007
 - Event Extraction 使用 4,000 / 8,000 / 12,000，Rewrite 使用 12,000 / 16,000 / 24,000，Canonical Summary 使用 1,200 / 2,400 / 4,000；每个阶段均有回归测试证明连续截断会升级预算，最高档再截断后不会发生第四次 Provider 调用。
 - 本次未重放真实 AI 请求，未修改 Canonical Story State。针对性测试 `243 passed / 1321 assertions`；最终全量测试 `989 passed / 5995 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
 
+**Foreshadowing Event Evidence Lineage Correction（2026-09-25）**
+
+- Run #408 的 Provider 响应、Chapter Draft 和最终 Coverage 均引用 Scene 43。Event 的三条原文证据分别证明未找到者、折返牺牲和无名者执念；Coverage 使用同一 Scene 中更完整的清点说明。旧校验要求其中一条 Event Quote 与单条 Coverage Quote 互相包含，误把互补证据判为不一致。
+- `event-extractor-v8` 在伏笔 ID、动作、目标 Scene 和 fulfilled Coverage 全部匹配后，将已通过 Assembly 逐字校验的 Coverage Evidence 确定性附加到 Event Candidate，同时保留模型返回的其他原文证据。未授权动作、错误生命周期、missing/contradicted Coverage 和跨 Scene 引用仍被拒绝。
+- 本次未重放 #408，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `64 passed / 235 assertions`；最终全量测试 `989 passed / 5995 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 
 ```text

@@ -406,7 +406,7 @@ assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
 
 `ExtractStoryEventsJob` 输入 Chapter Draft、Plan、Current State、Locked Facts；输出 `event_candidate`。
 
-伏笔候选事件只能引用本章冻结动作契约授权的目标，事件类型必须与 `plant / reinforce / pay_off / abandon` 动作一致，目标 Scene 的最终 `foreshadowing_coverage` 必须为 fulfilled。事件 evidence 至少有一项必须引用动作目标 Scene，并与 Coverage 的逐字证据互相包含；未选中伏笔、missing/contradicted Coverage、动作不匹配或只有主题相似内容都不能生成事件。`defer` 不产生正文 Story Event，`abandon` 必须带有与冻结 State Version 一致的人工授权。`foreshadowing_due` 不再生成，因为时间推进不是正文事件。
+伏笔候选事件只能引用本章冻结动作契约授权的目标，事件类型必须与 `plant / reinforce / pay_off / abandon` 动作一致，目标 Scene 的最终 `foreshadowing_coverage` 必须为 fulfilled。Laravel 将已经通过 Assembly 校验的 Coverage 逐字证据确定性附加到匹配事件，并保留模型返回的其他当前正文证据，使 Event Candidate 始终直接携带通过动作契约的原文依据；未选中伏笔、missing/contradicted Coverage、动作不匹配或只有主题相似内容都不能生成事件。`defer` 不产生正文 Story Event，`abandon` 必须带有与冻结 State Version 一致的人工授权。`foreshadowing_due` 不再生成，因为时间推进不是正文事件。
 
 `ForeshadowingEventValidator` 在 Event Candidate 保存前按候选顺序模拟内容生命周期，并在 StateValidator 阶段使用 Event Candidate Run 中冻结的契约再次执行。允许 `idea → planted`、`planted/reinforced → reinforced`、`planted/reinforced → paid_off`，重复 `reinforced → reinforced` 合法；同章 `planted → reinforce` 和 `planted → paid_off` 必须依次输出两个证据充分的事件。新 `idea` 尚未写入 Canonical State 时可以使用领域记录作为铺设起点；其他内容状态必须来自冻结 Canonical State，不能把领域投影当作事件生命周期证据。`paid_off / abandoned` 终态不能由生成事件重新开启。旧 Event Candidate 保持不可变；若包含伏笔事件但缺少匹配的冻结契约 checksum，StateValidator 返回 Hard Finding，不能进入 Canonical Commit。
 
@@ -748,7 +748,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 chapter-planner-v10+natural-prose-v1
 scene-writer-v15+natural-prose-v1
 assembler-v12+natural-prose-v1
-event-extractor-v7
+event-extractor-v8
 reviewer-v14+natural-prose-v1
 rewrite-v13+natural-prose-v1
 review-schema-repair-v3

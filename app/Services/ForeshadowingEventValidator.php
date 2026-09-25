@@ -12,6 +12,72 @@ use App\Models\GenerationArtifact;
 final class ForeshadowingEventValidator
 {
     /**
+     * A fulfilled Assembly Coverage quote is already validated against the final Chapter Draft.
+     * Attach it to the matching event so different, complementary model quotes cannot sever
+     * the event from the exact evidence that passed the frozen action contract.
+     *
+     * @param  array<int, StoryEventCandidate>  $events
+     * @param  array<string, mixed>  $contract
+     * @return array<int, StoryEventCandidate>
+     */
+    public function attachCoverageEvidence(Chapter $chapter, GenerationArtifact $draft, array $events, array $contract): array
+    {
+        $actions = $this->actions($chapter, $draft, $contract);
+        $lastActionIndex = [];
+
+        return collect($events)->map(function (StoryEventCandidate $event) use ($actions, $draft, &$lastActionIndex): StoryEventCandidate {
+            if (! $event->eventType->isForeshadowing() || $event->subjectId === null) {
+                return $event;
+            }
+
+            $foreshadowingId = (int) $event->subjectId;
+            $expectedAction = $this->actionForEvent($event->eventType);
+            $actionIndex = $this->matchingActionIndex(
+                $actions,
+                $foreshadowingId,
+                $expectedAction,
+                $lastActionIndex[$foreshadowingId] ?? -1,
+            );
+
+            if ($actionIndex === null) {
+                return $event;
+            }
+
+            $lastActionIndex[$foreshadowingId] = $actionIndex;
+            $action = $actions[$actionIndex];
+            $coverageEvidence = $action['coverage_evidence'] ?? null;
+            $targetSceneId = (int) ($action['target_scene_id'] ?? 0);
+
+            if (($action['coverage_status'] ?? null) !== 'fulfilled'
+                || ! is_string($coverageEvidence)
+                || trim($coverageEvidence) === ''
+                || $targetSceneId < 1
+                || ! str_contains((string) $draft->content, $coverageEvidence)) {
+                return $event;
+            }
+
+            $evidence = collect($event->evidence);
+            $alreadyAttached = $evidence->contains(fn (array $item): bool => (int) ($item['scene_id'] ?? 0) === $targetSceneId
+                && ($item['quote'] ?? null) === $coverageEvidence);
+
+            if (! $alreadyAttached) {
+                $evidence->push([
+                    'artifact_id' => $draft->getKey(),
+                    'scene_id' => $targetSceneId,
+                    'quote' => $coverageEvidence,
+                    'start_offset' => null,
+                    'end_offset' => null,
+                ]);
+            }
+
+            return StoryEventCandidate::fromArray([
+                ...$event->toArray(),
+                'evidence' => $evidence->values()->all(),
+            ]);
+        })->all();
+    }
+
+    /**
      * @param  array<int, StoryEventCandidate>  $events
      * @param  array<string, mixed>  $contract
      * @return array<int, array{event_index: int, code: string, message: string, related_state_path: string|null, metadata: array<string, mixed>}>

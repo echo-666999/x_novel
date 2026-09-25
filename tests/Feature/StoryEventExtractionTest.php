@@ -188,7 +188,7 @@ function foreshadowingEventResponse(array $fixture, array $events): AiResponse
         'subject_type' => 'foreshadowing',
         'subject_id' => (string) $fixture['foreshadowing']->getKey(),
         'payload' => [],
-        'evidence' => [[
+        'evidence' => $event['evidence'] ?? [[
             'artifact_id' => $fixture['draft']->getKey(),
             'scene_id' => array_key_exists('scene_id', $event) ? $event['scene_id'] : $fixture['scene']->getKey(),
             'quote' => $event['quote'],
@@ -359,7 +359,7 @@ test('extractor rejects unselected mismatched or unfulfilled foreshadowing event
     ],
 ]);
 
-test('extractor rejects a foreshadowing event whose quote does not cover the fulfilled action evidence', function () {
+test('extractor attaches fulfilled coverage evidence while preserving complementary event evidence', function () {
     $fixture = eventForeshadowingFixture(ForeshadowingStatus::Planted, [
         ['action' => 'reinforce'],
     ], [
@@ -367,14 +367,34 @@ test('extractor rejects a foreshadowing event whose quote does not cover the ful
     ]);
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(foreshadowingEventResponse($fixture, [[
         'event_type' => EventType::ForeshadowingReinforced->value,
-        'quote' => '林舟终于抵达洛阳城下。',
+        'evidence' => [
+            [
+                'artifact_id' => $fixture['draft']->getKey(),
+                'scene_id' => $fixture['scene']->getKey(),
+                'quote' => '林舟终于抵达洛阳城下。',
+                'start_offset' => 0,
+                'end_offset' => 12,
+            ],
+            [
+                'artifact_id' => $fixture['draft']->getKey(),
+                'scene_id' => $fixture['scene']->getKey(),
+                'quote' => '地图边缘显出旧王印记。',
+                'start_offset' => null,
+                'end_offset' => null,
+            ],
+        ],
     ]])));
 
-    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
-        ->toThrow(ValidationException::class, '事件证据没有覆盖已通过验收的动作证据');
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.0.evidence.*.quote'))->toBe([
+        '林舟终于抵达洛阳城下。',
+        '地图边缘显出旧王印记。',
+        '地图最终指向潮汐门',
+    ]);
 });
 
-test('extractor binds foreshadowing evidence to the action target scene', function () {
+test('extractor binds inherited foreshadowing coverage evidence to the action target scene', function () {
     $fixture = eventForeshadowingFixture(ForeshadowingStatus::Planted, [
         ['action' => 'reinforce'],
     ], [
@@ -386,8 +406,11 @@ test('extractor binds foreshadowing evidence to the action target scene', functi
         'scene_id' => null,
     ]])));
 
-    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
-        ->toThrow(ValidationException::class, '事件证据没有覆盖已通过验收的动作证据');
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect(data_get($artifact->data, 'events.0.evidence'))->toHaveCount(2)
+        ->and(data_get($artifact->data, 'events.0.evidence.1.scene_id'))->toBe($fixture['scene']->getKey())
+        ->and(data_get($artifact->data, 'events.0.evidence.1.quote'))->toBe('地图最终指向潮汐门');
 });
 
 test('extractor enforces same chapter foreshadowing event order and terminal states', function (ForeshadowingStatus $status, array $actions, array $coverages, array $events, string $message) {
@@ -481,7 +504,7 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v7')
+        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v8')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
         ->and($fake->requests()[0]->systemPrompt)->toContain('内部 type（例如 concept、rule、location、faction）不能作为 subject_type')

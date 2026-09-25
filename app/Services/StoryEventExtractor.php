@@ -303,6 +303,12 @@ class StoryEventExtractor
             }
         })->all();
 
+        $candidates = $this->foreshadowingEventValidator->attachCoverageEvidence(
+            $chapter,
+            $draft,
+            $candidates,
+            $foreshadowingContract,
+        );
         $violations = $this->foreshadowingEventValidator->violations($chapter, $draft, $candidates, $foreshadowingContract);
 
         if ($violations !== []) {
