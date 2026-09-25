@@ -10,6 +10,7 @@ use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Chapter;
 use App\Models\Foreshadowing;
+use App\Services\DueForeshadowingQuery;
 use App\Services\ForeshadowingLifecycleResolver;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
@@ -141,22 +142,7 @@ class DueForeshadowingsWidget extends TableWidget
     /** @return array<int> */
     private function attentionIds(): array
     {
-        return Foreshadowing::query()
-            ->select('foreshadowings.*')
-            ->join('novels', 'novels.id', '=', 'foreshadowings.novel_id')
-            ->with('novel.canonicalStateVersion')
-            ->get()
-            ->filter(function (Foreshadowing $foreshadowing): bool {
-                $timing = ForeshadowingTimingStatus::forTargetChapter(
-                    $this->canonicalStatus($foreshadowing),
-                    $foreshadowing->due_from_chapter,
-                    $foreshadowing->due_to_chapter,
-                    Foreshadowing::nextChapterSequence($foreshadowing->novel->current_chapter_sequence),
-                );
-
-                return in_array($timing, [ForeshadowingTimingStatus::Due, ForeshadowingTimingStatus::Overdue], true);
-            })
-            ->modelKeys();
+        return app(DueForeshadowingQuery::class)->attentionIds();
     }
 
     private function canonicalStatus(Foreshadowing $foreshadowing): ForeshadowingStatus

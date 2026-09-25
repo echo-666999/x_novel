@@ -96,6 +96,7 @@ function autoGenerationFixture(bool $enabled): array
     $chapter = Chapter::factory()->for($novel)->for($volume)->create([
         'sequence' => 4,
         'status' => ChapterStatus::Canonical,
+        'summary' => '上一正式章节摘要。',
     ]);
 
     return [$novel->refresh(), $chapter];

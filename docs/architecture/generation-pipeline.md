@@ -57,9 +57,13 @@ GenerateNextChapterAction
 
 自动策略或用户确认提交
 → CommitChapterJob → CanonicalCommitService
-→ UpdateMemoryJob → GenerateEmbeddingJob → RollupSummaryJob
-→ CheckNextAction
+→ UpdateMemoryJob
+→ GenerateCanonicalChapterSummaryJob
+→ RefreshNovelProjectionJob
+→ ContinueAutoGenerationJob → CheckNextAction
 ```
+
+`GenerateEmbeddingJob` 由 Memory 更新独立派发并重试，不在阻塞自动续写的 Queue Chain 中。
 
 `PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 只在 Review Artifact 对应当前 Draft、小说未暂停、`settings.auto_commit_configured=true` 且 `settings.auto_commit=true` 时自动派发 Commit；遗留的未确认 `auto_commit` 键保持惰性。关闭时只允许用户确认动作启动 Commit。两条路径都调用同一 `CommitChapterJob → CanonicalCommitService`，不得复制或绕过提交门禁。
 
@@ -84,7 +88,9 @@ generation:
 default:
   UpdateMemoryJob
   GenerateEmbeddingJob
-  RollupSummaryJob
+  GenerateCanonicalChapterSummaryJob
+  RefreshNovelProjectionJob
+  ContinueAutoGenerationJob
   EndingAuditJob
 ```
 
@@ -589,13 +595,22 @@ embedding:{memory_id}:{embedding_model}
 
 Embedding 失败只 Retry。
 
-`RollupSummaryJob` 更新 `chapters.summary`；幂等键：
+`GenerateCanonicalChapterSummaryJob` 调用 `CanonicalChapterSummaryService` 更新 `chapters.summary`；幂等键：
 
 ```text
 summary:{canonical_artifact_checksum}:{summary_prompt_version}
 ```
 
-摘要失败不回滚正文。
+Canonical Commit 后按以下 Queue Chain 执行：
+
+```text
+UpdateMemoryJob
+→ GenerateCanonicalChapterSummaryJob
+→ RefreshNovelProjectionJob
+→ ContinueAutoGenerationJob
+```
+
+Memory、摘要或 Projection 失败不回滚正文，但阻止本次自动续写并在 Generation 恢复中心留下恢复点。Embedding 独立重试，不阻塞下一章。Summary Job 必须核对任务携带的 Canonical Artifact ID；来源已经变化时安全结束，不覆盖新摘要。
 
 ## 17. Auto Generate
 
@@ -612,6 +627,8 @@ Chapter N Commit
 → GenerateNextChapterAction
 → Chapter N+1
 ```
+
+手动“生成下一章”同样要求上一正式章节摘要已就绪；缺失时返回 `previous_chapter_summary_missing` 并引导到摘要恢复操作。
 
 下一章必须基于上一章最新 Canonical State。
 
@@ -718,26 +735,30 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v10
-scene-writer-v15
-assembler-v12
+chapter-planner-v10+natural-prose-v1
+scene-writer-v15+natural-prose-v1
+assembler-v12+natural-prose-v1
 event-extractor-v6
-reviewer-v14
-rewrite-v13
+reviewer-v14+natural-prose-v1
+rewrite-v13+natural-prose-v1
 review-schema-repair-v3
 arc-completion-repair-v2
 coverage-judgment-repair-v1
 rewrite-length-patch-v2
-summary-v2
+summary-v2+natural-prose-v1
 ```
 
 `NarrativeProsePolicy::VERSION = natural-prose-v1` 是规划、正文和审校共用的自然表达契约。Novel Planner 与 Chapter Planner 要把抽象主题落成可验证的人物行动、阻力和后果；Scene Writer、Assembler、Rewrite 及其长度修复要通过动作、对白、POV 感知和具体后果呈现信息，抑制解释性套句、机械同构、空泛升华、设定复述和人人同声；Reviewer 及单维审计修复只在这些特征反复出现或实质损害叙事时生成 `STYLE_MISMATCH`；Canonical Summary 只记录事件、状态变化和未决后果。
+
+`PromptVersionResolver` 为 Planner、Writer、Assembler、Reviewer、Rewrite 和 Summary 返回 `{stage_prompt_version}+{narrative_policy_version}`。该有效版本同时进入 Run、Context Snapshot、Input Hash、Idempotency Key 和 Provider 请求诊断；修改任一组成部分都会形成新的复用边界。Extractor 等不注入自然文风策略的结构化阶段保持独立版本。`AiDebugService` 原样执行用户输入，不注入该策略，因此使用基础阶段版本。
 
 当前 21 个 `AiRequest` 调用点均已核查。Story Event 提取、Coverage/Event 逐字证据校对、Scene 辅助 JSON 修复、Arc 完成审计、Coverage 判定复核只承担结构化判断或原文引用，因此保持精确任务 Prompt，不附加正文写作规则。`AiDebugService` 原样执行用户输入，便于诊断 Provider，不注入小说文风。该边界避免“去 AI 味”规则改变证据文本、事件事实或修复结构。
 
 文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。`ai_model_routes` 同时保存各 Stage 的可选 `reasoning_effort`，允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。小说级 Provider/Model 覆盖仍继承同一 Stage 路由的推理程度。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。每个新 Run 在创建时冻结 `provider`、`model_policy` 与推理程度；Provider、Model 或推理程度都参与 `input_hash`，避免错误复用采用不同推理策略生成的旧 Artifact。后台设置变更只影响之后创建的请求和 Run，历史 Run 不改写。
 
 文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。Base URL、API Key 和 Timeout 优先读取 `ai_provider_connections` 中对应的启用连接，API Key 使用 Eloquent `encrypted` cast，后台不回显；连接不存在时才兼容回退环境配置。成本按实际 Provider 和响应 Model 从 `ai_model_prices` 读取启用价格，按 `billing_unit` 计算并保存到 Usage；没有匹配价格时才回退旧全局环境单价。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema。Embedding 固定使用 OpenAI 配置，不随文本 Stage 切换。
+
+Scene Generation 是一个拥有多个实际 Provider 调用的复合 Run。Run 顶层 `provider` / `model_policy` 表示正文 Writer 路由；正文、结构与 Coverage 修复、字数修复的实际路由分别冻结在 `context_snapshot.generation_preferences.substage_routes`。每个请求必须携带明确的 `route_key`，Router 按该键校验冻结的 Provider 与 Model；不得把修复请求错误地与 Run 顶层 Writer Provider 比较，也不得在重试时静默采用最新全局路由。`usage_records.request_metadata` 同步记录 `route_key`，用于区分同一 Run 内的实际调用和费用。
 
 代码和 `.env.example` 当前将 `gpt-5.6-luna` 作为文本生成默认模型，将 `text-embedding-3-small` 作为 Embedding 默认模型。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
 

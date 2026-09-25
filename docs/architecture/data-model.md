@@ -834,7 +834,9 @@ CommitChapterJob
 ```text
 UpdateMemoryJob
 GenerateEmbeddingJob
-RollupSummaryJob
+GenerateCanonicalChapterSummaryJob
+RefreshNovelProjectionJob
+ContinueAutoGenerationJob
 EndingAuditJob
 ```
 

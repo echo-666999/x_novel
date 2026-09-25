@@ -3,14 +3,15 @@
 namespace App\Actions\Novels;
 
 use App\Enums\NovelStatus;
-use App\Enums\StoryArcStatus;
-use App\Enums\VolumeStatus;
 use App\Models\Novel;
+use App\Services\NovelGenerationReadiness;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class StartNovelGenerationAction
 {
+    public function __construct(private readonly NovelGenerationReadiness $readiness) {}
+
     public function handle(Novel $novel): Novel
     {
         // 启动正文生成只切换生命周期状态，不在此处创建章节或调用模型。
@@ -22,18 +23,12 @@ class StartNovelGenerationAction
                 throw ValidationException::withMessages(['novel' => '只有草稿或规划中的小说可以开始正文生成。']);
             }
 
-            // Current Outline 采用后应形成以下最小规划闭环，缺一项都不能进入 Generating。
-            $missing = collect([
-                '小说圣经' => ! $locked->currentBible()->exists(),
-                '主要人物' => ! $locked->characters()->where('role', '主角')->exists(),
-                '世界设定' => ! $locked->worldEntities()->exists(),
-                '进行中的分卷' => ! $locked->volumes()->where('status', VolumeStatus::Active)->exists(),
-                '推进中的故事线' => ! $locked->storyArcs()->where('status', StoryArcStatus::Active)->exists(),
-                '初始故事状态' => $locked->canonical_state_version_id === null,
-            ])->filter()->keys()->implode('、');
-
-            if ($missing !== '') {
-                throw ValidationException::withMessages(['novel' => '规划尚未就绪，缺少：'.$missing.'。']);
+            // UI 与领域动作共享准备度事实；事务内仍要基于已锁定 Novel 重新检查。
+            $readiness = $this->readiness->evaluate($locked);
+            if (! $this->readiness->allReady($readiness)) {
+                throw ValidationException::withMessages([
+                    'novel' => $this->readiness->missingMessageFor($readiness),
+                ]);
             }
 
             $locked->update(['status' => NovelStatus::Generating]);

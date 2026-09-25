@@ -38,11 +38,51 @@ class RoutingAiProvider implements AiProvider
         $runId = $request->metadata['generation_run_id'] ?? null;
 
         if (is_numeric($runId)) {
-            $runProvider = strtolower(trim((string) GenerationRun::query()->whereKey((int) $runId)->value('provider')));
+            $run = GenerationRun::query()->find((int) $runId, ['id', 'provider', 'context_snapshot']);
+            $routeKey = trim((string) ($request->metadata['route_key'] ?? ''));
+
+            if ($run !== null && $routeKey !== '') {
+                $route = data_get($run->context_snapshot, "generation_preferences.substage_routes.{$routeKey}");
+
+                if (! is_array($route) || blank($route['provider'] ?? null)) {
+                    throw new AiProviderException(
+                        'provider_run_route_missing',
+                        "AI request route [{$routeKey}] is not frozen on Generation Run [{$run->getKey()}].",
+                        false,
+                    );
+                }
+
+                $routeProvider = strtolower(trim((string) $route['provider']));
+                $routeModel = trim((string) ($route['model'] ?? ''));
+
+                if ($provider !== '' && $provider !== $routeProvider) {
+                    throw new AiProviderException(
+                        'provider_run_mismatch',
+                        "AI request provider [{$provider}] does not match frozen provider [{$routeProvider}] for route [{$routeKey}] on Generation Run [{$run->getKey()}].",
+                        false,
+                    );
+                }
+
+                if ($routeModel !== '' && $request->model !== $routeModel) {
+                    throw new AiProviderException(
+                        'model_run_mismatch',
+                        "AI request model [{$request->model}] does not match frozen model [{$routeModel}] for route [{$routeKey}] on Generation Run [{$run->getKey()}].",
+                        false,
+                    );
+                }
+
+                return [$routeProvider, true];
+            }
+
+            $runProvider = strtolower(trim((string) $run?->provider));
 
             if ($runProvider !== '') {
                 if ($provider !== '' && $provider !== $runProvider) {
-                    throw new AiProviderException('provider_run_mismatch', 'AI request provider does not match the frozen Generation Run provider.', false);
+                    throw new AiProviderException(
+                        'provider_run_mismatch',
+                        "AI request provider [{$provider}] does not match frozen provider [{$runProvider}] on Generation Run [{$run->getKey()}].",
+                        false,
+                    );
                 }
 
                 return [$runProvider, true];

@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
+use App\Actions\Generation\CheckNextAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\CanonicalCommitData;
 use App\Data\StateValidationResult;
@@ -18,6 +19,8 @@ use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\CommitChapterJob;
+use App\Jobs\ContinueAutoGenerationJob;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\UpdateMemoryJob;
@@ -290,7 +293,11 @@ test('canonical commit atomically persists events state and pointers', function 
         ->and(StoryEvent::query()->count())->toBe(1)
         ->and(StoryEvent::query()->sole()->state_version)->toBe(1)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
-    Queue::assertPushed(RefreshNovelProjectionJob::class, fn (RefreshNovelProjectionJob $job): bool => $job->novelId === $fixture['novel']->getKey() && $job->stateVersionId === $version->getKey());
+    Queue::assertPushedWithChain(UpdateMemoryJob::class, [
+        GenerateCanonicalChapterSummaryJob::class,
+        RefreshNovelProjectionJob::class,
+        ContinueAutoGenerationJob::class,
+    ]);
 });
 
 test('canonical commit closes accepted arc beats and world entity candidates exactly once and rollback reverses them', function () {
@@ -926,7 +933,7 @@ test('canonical commit dispatches memory update after the formal transaction', f
         && $job->queue === 'default');
 });
 
-test('canonical commit starts only the immediate next chapter when auto generation is enabled', function () {
+test('canonical commit starts the next chapter only after required post commit work succeeds', function () {
     Queue::fake();
     $fixture = canonicalCommitFixture();
     NovelBible::factory()->for($fixture['novel'])->create();
@@ -934,8 +941,17 @@ test('canonical commit starts only the immediate next chapter when auto generati
     Volume::factory()->for($fixture['novel'])->create(['status' => VolumeStatus::Active]);
 
     $service = app(CanonicalCommitService::class);
+    $version = $service->commit($fixture['data']);
     $service->commit($fixture['data']);
-    $service->commit($fixture['data']);
+
+    expect($fixture['novel']->chapters()->where('sequence', 2)->doesntExist())->toBeTrue();
+
+    $fixture['chapter']->update(['summary' => '正式章节摘要。']);
+    (new ContinueAutoGenerationJob(
+        $fixture['chapter']->getKey(),
+        $fixture['draft']->getKey(),
+        $version->getKey(),
+    ))->handle(app(CheckNextAction::class));
 
     $nextChapter = $fixture['novel']->chapters()->where('sequence', 2)->sole();
 

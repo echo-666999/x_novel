@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Actions\Generation\CheckNextAction;
 use App\Contracts\StoryEventApplier;
 use App\Data\CanonicalCommitData;
 use App\Data\StatePatch;
@@ -17,6 +16,8 @@ use App\Enums\FactStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\WorldEntityStatus;
+use App\Jobs\ContinueAutoGenerationJob;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
@@ -27,6 +28,7 @@ use App\Models\Novel;
 use App\Models\Review;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -38,7 +40,6 @@ class CanonicalCommitService
         private readonly StatePatchBuilder $statePatchBuilder,
         private readonly StateValidator $stateValidator,
         private readonly StoryStateService $storyState,
-        private readonly CheckNextAction $checkNextAction,
         private readonly EmergencyStopService $emergencyStop,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly StoryEventApplier $storyEventApplier,
@@ -47,7 +48,7 @@ class CanonicalCommitService
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
     {
-        [$stateVersion, $committed] = DB::transaction(function () use ($data): array {
+        [$stateVersion] = DB::transaction(function () use ($data): array {
             $chapter = Chapter::query()->findOrFail($data->chapterId);
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($data->chapterId);
@@ -132,12 +133,14 @@ class CanonicalCommitService
             return [$stateVersion, true];
         }, 3);
 
-        UpdateMemoryJob::dispatch($data->chapterId)->afterCommit();
-        RefreshNovelProjectionJob::dispatch($stateVersion->novel_id, $stateVersion->getKey())->afterCommit();
-
-        if ($committed) {
-            $this->checkNextAction->handle($stateVersion->novel, $data->chapterId);
-        }
+        // Duplicate commits also repair a dispatch gap after a process crash. Every job in
+        // this chain revalidates its canonical source and is independently idempotent.
+        Bus::chain([
+            new UpdateMemoryJob($data->chapterId),
+            new GenerateCanonicalChapterSummaryJob($data->chapterId, $data->artifactId),
+            new RefreshNovelProjectionJob($stateVersion->novel_id, $stateVersion->getKey()),
+            new ContinueAutoGenerationJob($data->chapterId, $data->artifactId, $stateVersion->getKey()),
+        ])->onQueue('default')->dispatch();
 
         return $stateVersion;
     }

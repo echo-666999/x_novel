@@ -13,13 +13,16 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
+use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Review as ReviewModel;
 use App\Models\Scene;
+use App\Services\GenerationFailurePolicy;
 use App\Services\StalledRunRecoveryService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -44,21 +47,6 @@ use Illuminate\Support\Facades\DB;
 class Generation extends Page implements HasTable
 {
     use InteractsWithTable;
-
-    private const RETRYABLE_ERROR_CODES = [
-        'provider_timeout',
-        'provider_connection_failed',
-        'provider_rate_limited',
-        'worker_interrupted',
-        StalledRunRecoveryService::ERROR_CODE,
-    ];
-
-    private const REBUILD_ERROR_CODES = [
-        'state_version_conflict',
-        'stale_context',
-        'stale_plan',
-        'scene_artifact_conflict',
-    ];
 
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-bolt';
 
@@ -308,6 +296,21 @@ class Generation extends Page implements HasTable
                         ->state(fn (GenerationRun $record): string => $this->retryabilityLabel($record))
                         ->badge()
                         ->color(fn (GenerationRun $record): string => $this->isRetryableError($record) ? 'warning' : 'gray'),
+                    TextEntry::make('error_category')
+                        ->label('错误类别')
+                        ->state(fn (GenerationRun $record): string => (string) data_get(app(GenerationFailurePolicy::class)->forRun($record)->metadata, 'category', 'manual_attention'))
+                        ->badge()
+                        ->color('gray'),
+                    TextEntry::make('http_status')
+                        ->label('HTTP Status')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->error_metadata, 'http_status'))
+                        ->placeholder('—'),
+                    TextEntry::make('provider_request_id')
+                        ->label('Provider Request ID')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->error_metadata, 'provider_request_id'))
+                        ->fontFamily('mono')
+                        ->copyable()
+                        ->placeholder('—'),
                     TextEntry::make('recommended_action')
                         ->label('推荐动作')
                         ->state(fn (GenerationRun $record): string => $this->recommendedAction($record))
@@ -323,6 +326,11 @@ class Generation extends Page implements HasTable
                         TextEntry::make('model')->label('Provider / Model')
                             ->formatStateUsing(fn (string $state, $record): string => $record->provider.' / '.$state),
                         TextEntry::make('request_id')->label('Request ID')->fontFamily('mono')->placeholder('—'),
+                        TextEntry::make('request_metadata')
+                            ->label('Request Route')
+                            ->state(fn ($record): string => $this->formatJson($record->request_metadata))
+                            ->fontFamily('mono')
+                            ->columnSpanFull(),
                         TextEntry::make('input_tokens')->label('Input Tokens')->numeric(),
                         TextEntry::make('output_tokens')->label('Output Tokens')->numeric(),
                         TextEntry::make('cached_tokens')->label('Cached Tokens')->numeric(),
@@ -387,6 +395,7 @@ class Generation extends Page implements HasTable
             GenerationStage::ChapterPlanning, GenerationStage::ChapterAssembly, GenerationStage::Review, GenerationStage::Rewrite => $run->chapter_id !== null,
             GenerationStage::EventExtraction => $run->chapter_id !== null,
             GenerationStage::SceneGeneration => $run->scene_id !== null,
+            GenerationStage::MemorySummary => $run->chapter_id !== null && $run->scope_type === 'chapter_summary',
             default => false,
         };
     }
@@ -404,49 +413,17 @@ class Generation extends Page implements HasTable
 
     private function isRetryableError(GenerationRun $run): bool
     {
-        return in_array($run->error_code, self::RETRYABLE_ERROR_CODES, true);
+        return app(GenerationFailurePolicy::class)->forRun($run)->retryable;
     }
 
     private function retryabilityLabel(GenerationRun $run): string
     {
-        if ($this->isRetryableError($run)) {
-            return '是';
-        }
-
-        if ($run->error_code === 'provider_request_failed') {
-            return '需检查 HTTP 状态';
-        }
-
-        return '否';
+        return $this->isRetryableError($run) ? '是' : '否';
     }
 
     private function recommendedAction(GenerationRun $run): string
     {
-        if ($run->error_code === StalledRunRecoveryService::ERROR_CODE) {
-            return '恢复';
-        }
-
-        if ($run->error_code === 'worker_interrupted') {
-            return '继续执行';
-        }
-
-        if ($this->isRetryableError($run)) {
-            return '重试';
-        }
-
-        if (in_array($run->error_code, self::REBUILD_ERROR_CODES, true)) {
-            return '重建 Context 后重试';
-        }
-
-        if ($run->error_code === 'novel_paused') {
-            return '恢复小说后继续';
-        }
-
-        if (str_starts_with((string) $run->error_code, 'budget_')) {
-            return '调整预算设置';
-        }
-
-        return '检查输入并人工处理';
+        return app(GenerationFailurePolicy::class)->forRun($run)->recommendedAction;
     }
 
     private function recommendedActionColor(GenerationRun $run): string
@@ -471,6 +448,10 @@ class Generation extends Page implements HasTable
                 GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
                 GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, $regenerate),
                 GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),
+                GenerationStage::MemorySummary => GenerateCanonicalChapterSummaryJob::dispatch(
+                    (int) $run->chapter_id,
+                    (int) Chapter::query()->whereKey($run->chapter_id)->value('canonical_artifact_id'),
+                ),
                 default => null,
             };
         }

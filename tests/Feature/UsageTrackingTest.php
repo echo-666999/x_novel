@@ -85,6 +85,22 @@ test('tracking provider calculates cost from database pricing', function () {
     expect(UsageRecord::query()->sole()->estimated_cost)->toBe('0.005700');
 });
 
+test('usage metadata does not claim deepseek received reasoning effort', function () {
+    $provider = new TrackingAiProvider(
+        (new FakeAiProvider)->enqueue(usageResponse()),
+        app(UsageRecorder::class),
+    );
+
+    $provider->generate(new AiRequest(
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        reasoningEffort: 'high',
+        prompt: 'Write',
+    ));
+
+    expect(data_get(UsageRecord::query()->sole()->request_metadata, 'reasoning_effort_sent'))->toBeNull();
+});
+
 test('failed and fake only provider calls do not create usage records', function () {
     $fake = (new FakeAiProvider)->enqueue(new TestRuntimeException('failed'));
     $provider = new TrackingAiProvider($fake, app(UsageRecorder::class));

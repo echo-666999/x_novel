@@ -6,8 +6,12 @@ use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Data\BudgetUsage;
 use App\Enums\NovelStatus;
+use App\Filament\Pages\Generation;
+use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use App\Services\ClosureDebtService;
+use App\Services\NovelGenerationReadiness;
+use App\Services\NovelOperationsOverview;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
@@ -42,72 +46,77 @@ class NovelOverview
                         ->placeholder('尚未填写故事前提')
                         ->columnSpanFull(),
                 ]),
-            Section::make('进度与状态')
-                ->description('尚未接入的数据会明确标记，不推测正式故事状态。')
-                ->columns([
-                    'default' => 1,
-                    'md' => 2,
-                    'xl' => 3,
-                ])
+            Section::make('正文生成准备度')
+                ->description('开始正文生成前必须全部满足；缺项会直接显示对应修复入口。')
+                ->visible(fn (Novel $record): bool => in_array($record->status, [NovelStatus::Draft, NovelStatus::Planning], true))
                 ->schema([
-                    TextEntry::make('target_words')
-                        ->label('目标字数')
-                        ->numeric(),
-                    TextEntry::make('current_words')
-                        ->label('当前字数')
-                        ->state(0)
-                        ->numeric(),
-                    TextEntry::make('current_volume')
-                        ->label('当前卷')
-                        ->state('尚未接入')
-                        ->color('gray'),
-                    TextEntry::make('current_chapter_sequence')
-                        ->label('当前章节')
-                        ->placeholder('尚无正式章节')
-                        ->formatStateUsing(fn (?int $state): string => $state === null ? '尚无正式章节' : "第 {$state} 章"),
-                    TextEntry::make('current_state_version')
-                        ->label('当前故事版本')
-                        ->state(fn (Novel $record): string => $record->canonicalStateVersion
-                            ? '当前版本: '.$record->canonicalStateVersion->version
-                            : '故事状态: 未初始化')
-                        ->badge()
-                        ->color(fn (Novel $record): string => $record->canonical_state_version_id ? 'success' : 'warning'),
-                    TextEntry::make('generation_status')
-                        ->label('生成状态')
-                        ->state(fn (Novel $record): string => match ($record->status->value) {
-                            'generating' => '生成中',
-                            'paused' => '已暂停',
-                            'failed' => '生成失败',
-                            default => '尚未运行',
-                        })
-                        ->badge()
-                        ->color(fn (Novel $record): string => match ($record->status->value) {
-                            'generating' => 'info',
-                            'failed' => 'danger',
-                            default => 'gray',
-                        }),
-                    TextEntry::make('auto_generation_status')
-                        ->label('自动生成')
-                        ->state(fn (Novel $record): string => (bool) data_get($record->settings, 'auto_generate', false) ? 'Auto: ON' : 'Auto: OFF')
-                        ->badge()
-                        ->color(fn (Novel $record): string => (bool) data_get($record->settings, 'auto_generate', false) ? 'success' : 'gray'),
-                    TextEntry::make('pause_position')
-                        ->label('暂停位置')
-                        ->state(fn (Novel $record): string => 'Paused at: '.data_get($record->settings, 'pause.label', '等待下一阶段'))
-                        ->badge()
-                        ->color('gray')
-                        ->visible(fn (Novel $record): bool => $record->status === NovelStatus::Paused),
-                    TextEntry::make('auto_stop_reason')
-                        ->label('自动生成已停止')
-                        ->state(fn (Novel $record): ?string => data_get($record->settings, 'auto_stop.reason'))
-                        ->badge()
-                        ->color('danger')
-                        ->visible(fn (Novel $record): bool => filled(data_get($record->settings, 'auto_stop.reason'))),
-                    TextEntry::make('auto_stop_recommended_action')
-                        ->label('推荐操作')
-                        ->state(fn (Novel $record): ?string => data_get($record->settings, 'auto_stop.recommended_action'))
-                        ->color('gray')
-                        ->visible(fn (Novel $record): bool => filled(data_get($record->settings, 'auto_stop.reason'))),
+                    RepeatableEntry::make('generation_readiness')
+                        ->hiddenLabel()
+                        ->state(fn (Novel $record): array => collect(app(NovelGenerationReadiness::class)->evaluate($record))
+                            ->map(fn (array $item): array => [
+                                ...$item,
+                                'detail' => $item['ready'] ? '条件已满足' : $item['repair_hint'],
+                            ])
+                            ->all())
+                        ->schema([
+                            TextEntry::make('label')
+                                ->label('检查项')
+                                ->weight('medium'),
+                            TextEntry::make('ready')
+                                ->label('状态')
+                                ->formatStateUsing(fn (bool $state): string => $state ? '已就绪' : '缺失')
+                                ->badge()
+                                ->color(fn (bool $state): string => $state ? 'success' : 'danger'),
+                            TextEntry::make('detail')
+                                ->label('说明')
+                                ->color('gray')
+                                ->columnSpanFull(),
+                        ])
+                        ->columns(['default' => 1, 'md' => 2]),
+                ]),
+            Section::make('进度与状态')
+                ->description('仅统计已正式提交的章节字数，并显示当前 Active Volume 与正式故事版本。')
+                ->schema([
+                    RepeatableEntry::make('progress_snapshot')
+                        ->hiddenLabel()
+                        ->state(fn (Novel $record): array => [app(NovelOperationsOverview::class)->progress($record)])
+                        ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
+                        ->schema([
+                            TextEntry::make('target_words')->label('目标字数')->numeric(),
+                            TextEntry::make('current_words')->label('当前字数')->numeric(),
+                            TextEntry::make('current_volume')->label('当前卷'),
+                            TextEntry::make('current_chapter')->label('当前章节'),
+                            TextEntry::make('current_state_version')->label('当前故事版本')->badge(),
+                            TextEntry::make('generation_status')->label('生成状态')->badge(),
+                            TextEntry::make('auto_generation_status')->label('自动生成')->badge(),
+                            TextEntry::make('pause_position')->label('暂停位置')->color('gray'),
+                            TextEntry::make('auto_stop_reason')->label('自动生成已停止')->color('gray'),
+                            TextEntry::make('auto_stop_recommended_action')->label('推荐操作')->color('gray'),
+                        ]),
+                ]),
+            Section::make('当前流水线')
+                ->description('显示当前章节、最新阶段、耗时、停止原因与唯一推荐操作。')
+                ->schema([
+                    RepeatableEntry::make('pipeline_snapshot')
+                        ->hiddenLabel()
+                        ->state(fn (Novel $record): array => [self::pipelineSnapshot($record)])
+                        ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
+                        ->schema([
+                            TextEntry::make('chapter')->label('当前章节')->weight('medium'),
+                            TextEntry::make('run')->label('Generation Run'),
+                            TextEntry::make('stage')->label('当前阶段')->badge(),
+                            TextEntry::make('status')->label('状态')->badge(),
+                            TextEntry::make('elapsed')->label('耗时'),
+                            TextEntry::make('stop_reason')->label('停止原因')->columnSpan(['xl' => 2]),
+                            TextEntry::make('failure_category')->label('失败分类')->badge(),
+                            TextEntry::make('next_action')->label('推荐操作')->weight('medium'),
+                            TextEntry::make('action_url')
+                                ->label('操作入口')
+                                ->formatStateUsing(fn (string $state): string => '打开')
+                                ->url(fn (string $state): string => $state)
+                                ->icon('heroicon-o-arrow-right-circle')
+                                ->weight('medium'),
+                        ]),
                 ]),
             Section::make('收束债务')
                 ->description('汇总当前阻碍小说完结的开放故事义务；展开明细可查看具体原因。')
@@ -177,30 +186,21 @@ class NovelOverview
                         ->badge(),
                 ]),
             Section::make('质量与运营')
-                ->description('后续任务接入 Review、Generation、Usage 与 Foreshadowing 数据后自动填充。')
-                ->columns([
-                    'default' => 1,
-                    'md' => 2,
-                    'xl' => 5,
-                ])
+                ->description('基于当前小说的正式章节、最新 Run、最新 Review、Usage 与到期伏笔实时汇总。')
                 ->schema([
-                    TextEntry::make('today_cost')
-                        ->label('今日成本')
-                        ->state('¥0.00'),
-                    TextEntry::make('review_pass_rate')
-                        ->label('Review 通过率')
-                        ->state('尚未接入')
-                        ->color('gray'),
-                    TextEntry::make('rewrite_rate')
-                        ->label('Rewrite 比例')
-                        ->state('尚未接入')
-                        ->color('gray'),
-                    TextEntry::make('due_foreshadowings')
-                        ->label('待处理伏笔')
-                        ->state(0),
-                    TextEntry::make('needs_attention')
-                        ->label('需要处理')
-                        ->state(0),
+                    RepeatableEntry::make('quality_snapshot')
+                        ->hiddenLabel()
+                        ->state(fn (Novel $record): array => [app(NovelOperationsOverview::class)->quality($record)])
+                        ->columns(['default' => 1, 'md' => 2, 'xl' => 4])
+                        ->schema([
+                            TextEntry::make('today_cost')->label('今日成本')->fontFamily('mono'),
+                            TextEntry::make('review_pass_rate')->label('首轮 Review 通过率'),
+                            TextEntry::make('rewrite_rate')->label('Rewrite 比例'),
+                            TextEntry::make('due_foreshadowings')->label('待处理伏笔')->badge(),
+                            TextEntry::make('failed_runs')->label('Failed / Stalled')->badge()->color('danger'),
+                            TextEntry::make('blocked_reviews')->label('Blocked')->badge()->color('danger'),
+                            TextEntry::make('needs_attention_reviews')->label('Needs Attention')->badge()->color('warning'),
+                        ]),
                 ]),
         ]);
     }
@@ -210,5 +210,23 @@ class NovelOverview
         $limit = $usage->limit === null ? '无限制' : number_format($usage->limit, 4);
 
         return data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format($usage->used, 4).' / '.$limit;
+    }
+
+    /** @return array<string, mixed> */
+    private static function pipelineSnapshot(Novel $novel): array
+    {
+        $snapshot = app(NovelOperationsOverview::class)->pipeline($novel);
+
+        return [
+            ...$snapshot,
+            'action_url' => match ($snapshot['next_action_key']) {
+                'complete_planning' => NovelResource::getUrl('outline', ['record' => $novel]),
+                'retry', 'recover', 'inspect_failure' => Generation::getUrl(['tableAction' => 'inspect', 'tableActionRecord' => $snapshot['run_id']]),
+                'view_chapter', 'commit', 'handle_review' => $snapshot['chapter_id'] === null
+                    ? NovelResource::getUrl('view', ['record' => $novel])
+                    : NovelResource::getUrl('chapter', ['record' => $novel, 'chapter' => $snapshot['chapter_id']]),
+                default => NovelResource::getUrl('view', ['record' => $novel]),
+            },
+        ];
     }
 }

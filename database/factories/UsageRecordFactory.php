@@ -22,6 +22,7 @@ class UsageRecordFactory extends Factory
             'latency_ms' => fake()->numberBetween(100, 5_000),
             'estimated_cost' => fake()->randomFloat(6, 0, 1),
             'request_id' => fake()->uuid(),
+            'request_metadata' => null,
         ];
     }
 }

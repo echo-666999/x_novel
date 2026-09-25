@@ -35,6 +35,7 @@ class GenerateNextChapterAction
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
 
             $this->validateNovel($lockedNovel);
+            $this->validateLatestCanonicalSummary($lockedNovel);
 
             $volume = $this->currentVolume($lockedNovel);
             $nextSequence = ($lockedNovel->current_chapter_sequence ?? 0) + 1;
@@ -78,6 +79,8 @@ class GenerateNextChapterAction
                 'status' => RunStatus::Failed,
                 'error_code' => StalledRunRecoveryService::ERROR_CODE,
                 'error_message' => 'Worker 心跳超时，Run 已标记为可恢复。',
+                'error_retryable' => false,
+                'error_metadata' => ['category' => 'worker_lost'],
                 'finished_at' => now(),
             ]);
     }
@@ -117,6 +120,23 @@ class GenerateNextChapterAction
         }
 
         return $volume;
+    }
+
+    private function validateLatestCanonicalSummary(Novel $novel): void
+    {
+        $sequence = $novel->current_chapter_sequence;
+        if ($sequence === null) {
+            return;
+        }
+
+        $chapter = $novel->chapters()
+            ->where('sequence', $sequence)
+            ->where('status', ChapterStatus::Canonical)
+            ->first();
+
+        if ($chapter !== null && blank($chapter->summary)) {
+            throw GenerationPreflightException::previousChapterSummaryMissing($chapter->sequence);
+        }
     }
 
     private function validateWorkflow(Novel $novel, ?Chapter $targetChapter): void

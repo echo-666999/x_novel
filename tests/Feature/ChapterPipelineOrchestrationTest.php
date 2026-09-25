@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Generation\CheckNextAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
@@ -19,7 +20,9 @@ use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\AssembleChapterJob;
+use App\Jobs\ContinueAutoGenerationJob;
 use App\Jobs\ExtractStoryEventsJob;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Jobs\GenerateEmbeddingJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
@@ -40,6 +43,7 @@ use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\User;
 use App\Models\Volume;
+use App\Services\CanonicalChapterSummaryService;
 use App\Services\MemoryUpdater;
 use App\Services\NarrativeStyleProfile;
 use App\Services\ProjectionRebuilder;
@@ -192,6 +196,22 @@ function runQueuedChapterPipeline(?array &$handled = null): void
     throw new RuntimeException('章节测试流水线超过 30 个 Job，可能存在重复派发循环。');
 }
 
+function runPostCommitChain(Chapter $chapter): void
+{
+    $chapter->refresh();
+    $novel = $chapter->novel->fresh();
+    (new UpdateMemoryJob($chapter->getKey()))->handle(app(MemoryUpdater::class));
+    (new GenerateCanonicalChapterSummaryJob($chapter->getKey(), (int) $chapter->canonical_artifact_id))
+        ->handle(app(CanonicalChapterSummaryService::class));
+    (new RefreshNovelProjectionJob($novel->getKey(), (int) $novel->canonical_state_version_id))
+        ->handle(app(ProjectionRebuilder::class));
+    (new ContinueAutoGenerationJob(
+        $chapter->getKey(),
+        (int) $chapter->canonical_artifact_id,
+        (int) $novel->canonical_state_version_id,
+    ))->handle(app(CheckNextAction::class));
+}
+
 test('one trigger reaches pass then manual commit creates canonical state memory work and only the next chapter', function () {
     $fixture = chapterPipelineNovel();
     $provider = new ChapterPipelineFixtureProvider(
@@ -246,6 +266,8 @@ test('one trigger reaches pass then manual commit creates canonical state memory
         ->callAction('commitCanonical')
         ->assertNotified('章节已提交为正式版本');
 
+    expect($fixture['novel']->chapters()->where('sequence', 2)->doesntExist())->toBeTrue();
+    runPostCommitChain($chapter);
     $nextChapter = $fixture['novel']->chapters()->where('sequence', 2)->sole();
 
     expect($chapter->fresh()->status)->toBe(ChapterStatus::Canonical)
@@ -258,8 +280,6 @@ test('one trigger reaches pass then manual commit creates canonical state memory
 
     Queue::assertPushed(UpdateMemoryJob::class, fn (UpdateMemoryJob $job): bool => $job->chapterId === $chapter->getKey());
     Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $nextChapter->getKey());
-
-    (new UpdateMemoryJob($chapter->getKey()))->handle(app(MemoryUpdater::class));
 
     expect(Memory::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1);
     Queue::assertPushed(GenerateEmbeddingJob::class, 1);
@@ -368,10 +388,8 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
             'chapter' => $chapter->getRouteKey(),
         ])->callAction('commitCanonical')->assertNotified('章节已提交为正式版本');
 
+        runPostCommitChain($chapter);
         $novel = $fixture['novel']->fresh();
-        (new RefreshNovelProjectionJob($novel->getKey(), $novel->canonical_state_version_id))
-            ->handle(app(ProjectionRebuilder::class));
-        (new UpdateMemoryJob($chapter->getKey()))->handle(app(MemoryUpdater::class));
 
         expect($chapter->fresh()->status)->toBe(ChapterStatus::Canonical)
             ->and($novel->canonicalStateVersion->version)->toBe($sequence)
@@ -421,6 +439,12 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             AiStage::Extractor->value => $this->events((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Reviewer->value => $this->review((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Rewrite->value => $this->rewrite((int) data_get($request->metadata, 'scene_id')),
+            AiStage::Summary->value => [
+                'summary' => '本章正式摘要。',
+                'key_events' => ['本章核心事件完成。'],
+                'character_changes' => [],
+                'unresolved_threads' => [],
+            ],
             default => throw new RuntimeException("端到端 Fake Provider 不支持 Stage [{$stage}]。"),
         };
 

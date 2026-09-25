@@ -41,6 +41,8 @@ class StalledRunRecoveryService
                 'status' => RunStatus::Failed,
                 'error_code' => self::ERROR_CODE,
                 'error_message' => 'Worker 心跳超时，Run 已标记为可恢复。',
+                'error_retryable' => false,
+                'error_metadata' => ['category' => 'worker_lost'],
                 'finished_at' => now(),
             ]);
     }
@@ -98,6 +100,8 @@ class StalledRunRecoveryService
                     'status' => RunStatus::Failed,
                     'error_code' => self::ERROR_CODE,
                     'error_message' => 'Worker 心跳超时，Run 已标记为可恢复。',
+                    'error_retryable' => false,
+                    'error_metadata' => ['category' => 'worker_lost'],
                     'finished_at' => now(),
                 ]);
 

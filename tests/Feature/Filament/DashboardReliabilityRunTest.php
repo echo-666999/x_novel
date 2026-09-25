@@ -10,6 +10,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\User;
 use App\Models\Volume;
+use Filament\Actions\Testing\TestAction;
 use Filament\Notifications\Notification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -17,7 +18,10 @@ use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
-beforeEach(fn () => $this->actingAs(User::factory()->create()));
+beforeEach(function () {
+    $this->actingAs(User::factory()->create());
+    config()->set('generation.acceptance_tools_enabled', true);
+});
 
 test('dashboard shows reliability summary empty state and start action', function () {
     Livewire::test(Dashboard::class)
@@ -25,7 +29,7 @@ test('dashboard shows reliability summary empty state and start action', functio
         ->assertSee('50 章可靠性汇总')
         ->assertSee('Reliability Summary')
         ->assertSee('尚未启动 50 章可靠性长跑')
-        ->assertActionExists('startReliabilityRun');
+        ->assertActionExists(TestAction::make('startReliabilityRun')->schemaComponent('acceptanceActions', 'content'));
 });
 
 test('dashboard starts and displays reliability run', function () {
@@ -36,7 +40,7 @@ test('dashboard starts and displays reliability run', function () {
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
     Livewire::test(Dashboard::class)
-        ->callAction('startReliabilityRun', data: ['novel_id' => $novel->getKey()])
+        ->callAction(TestAction::make('startReliabilityRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
         ->assertHasNoActionErrors()
         ->assertNotified('50 章可靠性长跑已启动')
         ->assertSee('雾海长明')
@@ -62,7 +66,7 @@ test('dashboard reports an active chapter workflow instead of throwing when star
     ]);
 
     Livewire::test(Dashboard::class)
-        ->callAction('startReliabilityRun', data: ['novel_id' => $novel->getKey()])
+        ->callAction(TestAction::make('startReliabilityRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
         ->assertHasNoActionErrors()
         ->assertNotified(
             Notification::make()

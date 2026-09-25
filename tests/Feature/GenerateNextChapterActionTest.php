@@ -136,6 +136,25 @@ test('preflight rejects a blocked review', function () {
     app(GenerateNextChapterAction::class)->handle($novel);
 })->throws(GenerationPreflightException::class, '存在被审校阻塞的章节');
 
+test('preflight requires the latest canonical chapter summary', function () {
+    $novel = generationReadyNovel(['current_chapter_sequence' => 4]);
+    Chapter::factory()->for($novel)->create([
+        'volume_id' => $novel->volumes()->firstOrFail()->getKey(),
+        'sequence' => 4,
+        'status' => ChapterStatus::Canonical,
+        'summary' => null,
+    ]);
+
+    try {
+        app(GenerateNextChapterAction::class)->handle($novel);
+        $this->fail('Expected the missing summary to block generation.');
+    } catch (GenerationPreflightException $exception) {
+        expect($exception->reason)->toBe('previous_chapter_summary_missing')
+            ->and($exception->getMessage())->toContain('生成恢复中心')
+            ->and($novel->chapters()->where('sequence', 5)->doesntExist())->toBeTrue();
+    }
+});
+
 test('preflight rejects another active chapter workflow', function () {
     $novel = generationReadyNovel(['current_chapter_sequence' => 3]);
     Chapter::factory()->for($novel)->create([

@@ -10,6 +10,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\User;
 use App\Models\Volume;
+use Filament\Actions\Testing\TestAction;
 use Filament\Notifications\Notification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -17,14 +18,17 @@ use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
-beforeEach(fn () => $this->actingAs(User::factory()->create()));
+beforeEach(function () {
+    $this->actingAs(User::factory()->create());
+    config()->set('generation.acceptance_tools_enabled', true);
+});
 
 test('dashboard shows mvp readiness empty state and soak action', function () {
     Livewire::test(Dashboard::class)
         ->assertOk()
         ->assertSee('MVP Readiness')
         ->assertSee('尚未启动 100 章 MVP 浸泡测试')
-        ->assertActionExists('startMvpSoakRun');
+        ->assertActionExists(TestAction::make('startMvpSoakRun')->schemaComponent('acceptanceActions', 'content'));
 });
 
 test('dashboard starts and displays mvp soak progress', function () {
@@ -35,7 +39,7 @@ test('dashboard starts and displays mvp soak progress', function () {
     Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
     Livewire::test(Dashboard::class)
-        ->callAction('startMvpSoakRun', data: ['novel_id' => $novel->getKey()])
+        ->callAction(TestAction::make('startMvpSoakRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
         ->assertHasNoActionErrors()
         ->assertNotified('100 章 MVP 浸泡测试已启动')
         ->assertSee('星河长卷')
@@ -61,7 +65,7 @@ test('dashboard reports an active chapter workflow instead of throwing when star
     ]);
 
     Livewire::test(Dashboard::class)
-        ->callAction('startMvpSoakRun', data: ['novel_id' => $novel->getKey()])
+        ->callAction(TestAction::make('startMvpSoakRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
         ->assertHasNoActionErrors()
         ->assertNotified(
             Notification::make()

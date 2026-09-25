@@ -255,6 +255,35 @@ test('failed run explains retryability and recommended action', function () {
         ->assertTableActionHidden('resume', $run);
 });
 
+test('run inspector uses persisted provider failure facts instead of guessing from the error code', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_request_failed',
+        'error_message' => '服务暂时不可用。',
+        'error_retryable' => true,
+        'error_metadata' => [
+            'category' => 'external_temporary',
+            'http_status' => 503,
+            'provider_request_id' => 'provider-request-503',
+        ],
+    ]);
+
+    Livewire::test(Generation::class)
+        ->mountTableAction('inspect', $run)
+        ->assertSchemaComponentExists('retryable', null, fn ($component): bool => $component->getState() === '是')
+        ->assertSchemaComponentExists('error_category', null, fn ($component): bool => $component->getState() === 'external_temporary')
+        ->assertSchemaComponentExists('http_status', null, fn ($component): bool => $component->getState() === 503)
+        ->assertSchemaComponentExists('provider_request_id', null, fn ($component): bool => $component->getState() === 'provider-request-503')
+        ->assertSchemaComponentExists('recommended_action', null, fn ($component): bool => $component->getState() === '重试')
+        ->unmountAction()
+        ->assertTableActionVisible('retry', $run);
+});
+
 test('retry requeues a supported failed stage and keeps the chapter link', function () {
     Queue::fake();
 

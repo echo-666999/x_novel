@@ -172,6 +172,88 @@ test('router records the frozen provider on usage and does not change an existin
         ->and(UsageRecord::query()->sole()->provider)->toBe('deepseek');
 });
 
+test('router uses the frozen scene substage route instead of the owning run provider', function () {
+    config()->set('ai.providers.openai.api_key', 'openai-test-key');
+    config()->set('ai.providers.openai.base_url', 'https://openai.example/v1');
+    $novel = Novel::factory()->create();
+    $run = GenerationRun::factory()->for($novel)->create([
+        'provider' => 'deepseek',
+        'model_policy' => 'deepseek-v4-pro',
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Running,
+        'context_snapshot' => [
+            'generation_preferences' => [
+                'substage_routes' => [
+                    'prose' => ['provider' => 'deepseek', 'model' => 'deepseek-v4-pro'],
+                    'structure_and_coverage' => ['provider' => 'openai', 'model' => 'gpt-5.6-luna'],
+                ],
+            ],
+        ],
+    ]);
+    Http::fake(['openai.example/*' => Http::response([
+        'id' => 'openai-repair-request',
+        'model' => 'gpt-5.6-luna',
+        'choices' => [['message' => ['content' => 'OK']]],
+        'usage' => ['prompt_tokens' => 2, 'completion_tokens' => 1],
+    ])]);
+
+    app(AiProvider::class)->generate(new AiRequest(
+        model: 'gpt-5.6-luna',
+        provider: 'openai',
+        metadata: [
+            'generation_run_id' => $run->getKey(),
+            'novel_id' => $novel->getKey(),
+            'stage' => AiStage::Extractor->value,
+            'substage' => 'coverage_evidence_repair',
+            'route_key' => 'structure_and_coverage',
+        ],
+    ));
+
+    $usage = UsageRecord::query()->sole();
+    expect($run->fresh()->provider)->toBe('deepseek')
+        ->and($usage->provider)->toBe('openai')
+        ->and(data_get($usage->request_metadata, 'route_key'))->toBe('structure_and_coverage');
+    Http::assertSent(fn (Request $request): bool => $request->url() === 'https://openai.example/v1/chat/completions');
+});
+
+test('router rejects provider or model drift from a frozen substage route', function (string $provider, string $model, string $routeKey, string $code) {
+    config()->set('ai.providers.openai.api_key', 'openai-test-key');
+    $novel = Novel::factory()->create();
+    $run = GenerationRun::factory()->for($novel)->create([
+        'provider' => 'deepseek',
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Running,
+        'context_snapshot' => [
+            'generation_preferences' => [
+                'substage_routes' => [
+                    'structure_and_coverage' => ['provider' => 'openai', 'model' => 'gpt-5.6-luna'],
+                ],
+            ],
+        ],
+    ]);
+    Http::fake();
+
+    try {
+        app(AiProvider::class)->generate(new AiRequest(
+            model: $model,
+            provider: $provider,
+            metadata: [
+                'generation_run_id' => $run->getKey(),
+                'route_key' => $routeKey,
+            ],
+        ));
+        $this->fail('Expected AiProviderException was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe($code);
+    }
+
+    Http::assertNothingSent();
+})->with([
+    'provider drift' => ['deepseek', 'gpt-5.6-luna', 'structure_and_coverage', 'provider_run_mismatch'],
+    'model drift' => ['openai', 'gpt-5.6-sol', 'structure_and_coverage', 'model_run_mismatch'],
+    'missing route' => ['openai', 'gpt-5.6-luna', 'unfrozen_route', 'provider_run_route_missing'],
+]);
+
 test('planner and writer resolve different providers while existing runs remain frozen', function () {
     config()->set('ai.providers.openai.api_key', 'openai-test-key');
     $novel = Novel::factory()->create();

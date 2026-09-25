@@ -34,6 +34,7 @@ class StoryEventExtractor
         private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
         private readonly ContextBuilder $contextBuilder,
         private readonly ForeshadowingEventValidator $foreshadowingEventValidator,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false): ?GenerationArtifact
@@ -203,6 +204,8 @@ class StoryEventExtractor
                     'status' => RunStatus::Failed,
                     'error_code' => 'worker_interrupted',
                     'error_message' => 'Event Extraction Run 超时未完成，已由后续投递恢复。',
+                    'error_retryable' => false,
+                    'error_metadata' => ['category' => 'worker_lost'],
                     'finished_at' => now(),
                 ]);
             }
@@ -427,13 +430,10 @@ class StoryEventExtractor
 
     private function failRun(GenerationRun $run, Throwable $exception): void
     {
-        $run->update([
-            'status' => RunStatus::Failed,
-            'error_code' => $exception instanceof AiProviderException
-                ? $exception->errorCode
-                : ($exception instanceof ValidationException ? 'event_validation_failed' : 'event_extraction_failed'),
-            'error_message' => $exception->getMessage(),
-            'finished_at' => now(),
-        ]);
+        $this->failurePolicy->record(
+            $run,
+            $exception,
+            $exception instanceof ValidationException ? 'event_validation_failed' : 'event_extraction_failed',
+        );
     }
 }

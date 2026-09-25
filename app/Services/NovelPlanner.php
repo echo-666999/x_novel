@@ -39,6 +39,7 @@ class NovelPlanner
         private readonly NovelOutlineValidator $outlineValidator,
         private readonly NovelOutlineChecksum $outlineChecksum,
         private readonly CreateNovelOutlineVersionAction $createOutlineVersion,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     public function generate(Novel $novel, int $volumeCount = 5): GenerationArtifact
@@ -158,12 +159,7 @@ class NovelPlanner
             return $artifact;
         } catch (Throwable $exception) {
             // 失败 Run 也必须落库；它不会被成功结果复用查询命中。
-            $run->update([
-                'status' => RunStatus::Failed,
-                'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'novel_planning_failed',
-                'error_message' => $exception->getMessage(),
-                'finished_at' => now(),
-            ]);
+            $this->failurePolicy->record($run, $exception, 'novel_planning_failed');
 
             throw $exception;
         }
@@ -279,12 +275,7 @@ class NovelPlanner
 
             return $created;
         } catch (Throwable $exception) {
-            $run->update([
-                'status' => RunStatus::Failed,
-                'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'outline_regeneration_failed',
-                'error_message' => $exception->getMessage(),
-                'finished_at' => now(),
-            ]);
+            $this->failurePolicy->record($run, $exception, 'outline_regeneration_failed');
 
             throw $exception;
         }

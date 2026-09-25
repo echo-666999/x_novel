@@ -42,7 +42,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly ReviewDimensionAuditRepairer $dimensionAuditRepairer, private readonly PlanCoverageJudgmentRepairer $coverageJudgmentRepairer, private readonly PlanningReviewAudit $planningReviewAudit, private readonly ArcCompletionAuditRepairer $arcCompletionAuditRepairer) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly ReviewDimensionAuditRepairer $dimensionAuditRepairer, private readonly PlanCoverageJudgmentRepairer $coverageJudgmentRepairer, private readonly PlanningReviewAudit $planningReviewAudit, private readonly ArcCompletionAuditRepairer $arcCompletionAuditRepairer, private readonly GenerationFailurePolicy $failurePolicy) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -101,6 +101,7 @@ class ChapterReviewer
 
         $settings = $this->settingsResolver->resolve(AiStage::Reviewer, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Reviewer);
+        $context['prompt_version'] = $promptVersion;
         $reviewOperationId = $regenerate ? $operationId : null;
         $input = [
             'context' => $context,
@@ -357,7 +358,7 @@ class ChapterReviewer
                 return [$active, true];
             }
             if ($active) {
-                $active->update(['status' => RunStatus::Failed, 'error_code' => 'worker_interrupted', 'error_message' => 'Review Run 超时未完成，已由后续投递恢复。', 'finished_at' => now()]);
+                $active->update(['status' => RunStatus::Failed, 'error_code' => 'worker_interrupted', 'error_message' => 'Review Run 超时未完成，已由后续投递恢复。', 'error_retryable' => false, 'error_metadata' => ['category' => 'worker_lost'], 'finished_at' => now()]);
             }
             if ((! $regenerate || $operationId !== null)
                 && ($done = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
@@ -930,6 +931,10 @@ class ChapterReviewer
 
     private function failRun(GenerationRun $run, Throwable $e): void
     {
-        $run->update(['status' => RunStatus::Failed, 'error_code' => $e instanceof AiProviderException ? $e->errorCode : ($e instanceof ValidationException ? 'review_validation_failed' : 'review_failed'), 'error_message' => $e->getMessage(), 'finished_at' => now()]);
+        $this->failurePolicy->record(
+            $run,
+            $e,
+            $e instanceof ValidationException ? 'review_validation_failed' : 'review_failed',
+        );
     }
 }

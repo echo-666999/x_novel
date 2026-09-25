@@ -33,7 +33,7 @@ function mvpSoakNovel(int $currentSequence = 0): array
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
 
     if ($currentSequence > 0) {
-        Chapter::factory()->for($novel)->for($volume)->create(['sequence' => $currentSequence, 'status' => ChapterStatus::Canonical]);
+        Chapter::factory()->for($novel)->for($volume)->create(['sequence' => $currentSequence, 'status' => ChapterStatus::Canonical, 'summary' => '正式摘要']);
     }
 
     return [$novel->fresh(), $volume];
@@ -63,7 +63,7 @@ test('one hundred sequential canonical callbacks produce no duplicates or skippe
 
     foreach (range(1, 100) as $sequence) {
         expect($chapter->sequence)->toBe($sequence);
-        $chapter->update(['status' => ChapterStatus::Canonical]);
+        $chapter->update(['status' => ChapterStatus::Canonical, 'summary' => "第 {$sequence} 章摘要"]);
         $versionState = [...$state, 'timeline' => ['chapter' => $sequence]];
         $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
             'version' => $sequence,

@@ -6,8 +6,8 @@ use App\AI\AiSettingsResolver;
 use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Data\EmbeddingRequest;
 use App\AI\Exceptions\AiProviderException;
-use App\Enums\GenerationStage;
 use App\Enums\AiStage;
+use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
@@ -20,6 +20,7 @@ class MemoryEmbedder
     public function __construct(
         private readonly EmbeddingProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     public function embed(int $memoryId): Memory
@@ -73,17 +74,14 @@ class MemoryEmbedder
                     'finished_at' => now(),
                     'error_code' => null,
                     'error_message' => null,
+                    'error_retryable' => null,
+                    'error_metadata' => null,
                 ]);
 
                 return $lockedMemory->refresh();
             });
         } catch (Throwable $exception) {
-            $run->update([
-                'status' => RunStatus::Failed,
-                'finished_at' => now(),
-                'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'embedding_failed',
-                'error_message' => $exception->getMessage(),
-            ]);
+            $this->failurePolicy->record($run, $exception, 'embedding_failed');
 
             throw $exception;
         }
@@ -91,18 +89,16 @@ class MemoryEmbedder
 
     public function markTerminalFailure(int $memoryId, Throwable $exception): void
     {
-        GenerationRun::query()
+        $run = GenerationRun::query()
             ->where('scope_type', 'memory')
             ->where('scope_id', $memoryId)
             ->where('stage', GenerationStage::Embedding)
             ->latest('id')
-            ->first()
-            ?->update([
-                'status' => RunStatus::Failed,
-                'finished_at' => now(),
-                'error_code' => $exception instanceof AiProviderException ? $exception->errorCode : 'embedding_failed',
-                'error_message' => $exception->getMessage(),
-            ]);
+            ->first();
+
+        if ($run !== null) {
+            $this->failurePolicy->record($run, $exception, 'embedding_failed');
+        }
     }
 
     /** @return array{GenerationRun, bool} */
@@ -125,6 +121,8 @@ class MemoryEmbedder
                         'finished_at' => null,
                         'error_code' => null,
                         'error_message' => null,
+                        'error_retryable' => null,
+                        'error_metadata' => null,
                     ]);
 
                     return [$run, true];

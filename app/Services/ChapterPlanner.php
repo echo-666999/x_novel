@@ -44,6 +44,7 @@ class ChapterPlanner
         private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
         private readonly StoryArcBeatContract $storyArcBeatContract,
         private readonly OutlineContextBuilder $outlineContextBuilder,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -60,6 +61,7 @@ class ChapterPlanner
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Planner);
         $context = $this->context($chapter, $regenerate);
+        $context['prompt_version'] = $promptVersion;
         $context['generation_preferences']['planner_token_budget'] = [
             'initial_max_completion_tokens' => (int) config('generation.planner_max_output_tokens', 12_000),
             'retry_max_completion_tokens' => (int) config('generation.planner_retry_max_output_tokens', 16_000),
@@ -230,6 +232,8 @@ class ChapterPlanner
                     'status' => RunStatus::Failed,
                     'error_code' => 'worker_interrupted',
                     'error_message' => '规划 Run 超时未完成，已由后续投递恢复。',
+                    'error_retryable' => false,
+                    'error_metadata' => ['category' => 'worker_lost'],
                     'finished_at' => now(),
                 ]);
             }
@@ -311,8 +315,11 @@ class ChapterPlanner
 
     private function fail(GenerationRun $run, Throwable $exception): void
     {
-        $code = $exception instanceof AiProviderException ? $exception->errorCode : ($exception instanceof ValidationException ? 'plan_validation_failed' : 'plan_generation_failed');
-        $run->update(['status' => RunStatus::Failed, 'error_code' => $code, 'error_message' => $exception->getMessage(), 'finished_at' => now()]);
+        $this->failurePolicy->record(
+            $run,
+            $exception,
+            $exception instanceof ValidationException ? 'plan_validation_failed' : 'plan_generation_failed',
+        );
     }
 
     /** @return array<string, mixed> */

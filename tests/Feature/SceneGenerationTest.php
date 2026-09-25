@@ -6,6 +6,8 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\AI\Providers\TrackingAiProvider;
+use App\AI\UsageRecorder;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
@@ -24,11 +26,14 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
+use App\Models\UsageRecord;
 use App\Services\DraftLengthPolicy;
 use App\Services\ForeshadowingCoverage;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
+use App\Services\PlanCoverageEvidenceRepairer;
 use App\Services\SceneDraftPayload;
 use App\Services\SceneDraftStructureRepairer;
+use App\Services\SceneExecutionClock;
 use App\Services\SceneGenerator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -75,7 +80,7 @@ function sceneSelfCheck(string $content, array $overrides = []): array
     ];
 }
 
-function sceneResponse(string $content, array $delta = [], ?array $selfCheck = null, array $foreshadowingCoverage = []): AiResponse
+function sceneResponse(string $content, array $delta = [], ?array $selfCheck = null, array $foreshadowingCoverage = [], string $requestId = 'scene-request'): AiResponse
 {
     $payload = [
         'content' => $content,
@@ -93,7 +98,7 @@ function sceneResponse(string $content, array $delta = [], ?array $selfCheck = n
         outputTokens: 200,
         cachedTokens: 0,
         latencyMs: 350,
-        providerRequestId: 'scene-request',
+        providerRequestId: $requestId,
         model: 'writer-test',
     );
 }
@@ -581,8 +586,89 @@ test('coverage evidence repair retries with a larger budget after a truncated re
         ->and($fake->requests())->toHaveCount(3)
         ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
         ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1)
-        ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(2_000)
         ->and(data_get($fake->requests()[2]->metadata, 'coverage_repair_attempt'))->toBe(2);
+});
+
+test('scene prose evidence repair and length repair use independent routes and budgets', function () {
+    config()->set('ai.models.writer', 'writer-route-model');
+    config()->set('ai.models.extractor', 'extractor-route-model');
+    config()->set('ai.models.rewrite', 'rewrite-route-model');
+    $fixture = sceneGenerationFixture(1);
+    $fixture['plan']->update(['target_words' => 10]);
+    $longContent = str_repeat('长', 20);
+    $invalidCoverage = sceneSelfCheck($longContent, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '不存在的证据'],
+    ]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse($longContent, selfCheck: $invalidCoverage))
+        ->enqueue(sceneCoverageResponse(sceneSelfCheck($longContent)))
+        ->enqueue(sceneResponse(str_repeat('短', 10), requestId: 'length-repair-request'));
+    app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+    $usage = UsageRecord::query()->orderBy('id')->get();
+
+    expect($artifact?->content)->toBe(str_repeat('短', 10))
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[0]->model)->toBe('writer-route-model')
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->model)->toBe('extractor-route-model')
+        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and($fake->requests()[1]->promptVersion)->toBe(PlanCoverageEvidenceRepairer::PROMPT_VERSION)
+        ->and($fake->requests()[2]->model)->toBe('rewrite-route-model')
+        ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
+        ->and($fake->requests()[2]->promptVersion)->toBe('scene-length-repair-v2')
+        ->and($usage)->toHaveCount(3)
+        ->and(data_get($usage[0]->request_metadata, 'substage'))->toBe('prose_generation')
+        ->and(data_get($usage[0]->request_metadata, 'route_key'))->toBe('prose')
+        ->and(data_get($usage[1]->request_metadata, 'substage'))->toBe('coverage_evidence_repair')
+        ->and(data_get($usage[1]->request_metadata, 'route_key'))->toBe('structure_and_coverage')
+        ->and(data_get($usage[2]->request_metadata, 'substage'))->toBe('length_repair')
+        ->and(data_get($usage[2]->request_metadata, 'route_key'))->toBe('length_repair')
+        ->and(data_get($usage[2]->request_metadata, 'max_output_tokens'))->toBe(4_000);
+});
+
+test('scene job hands off before the hard timeout and resumes from the prose checkpoint', function () {
+    Queue::fake();
+    config()->set('generation.scene_job_soft_timeout_seconds', 300);
+    config()->set('generation.scene_job_safety_margin_seconds', 20);
+    config()->set('ai.providers.openai.timeout', 150);
+    $fixture = sceneGenerationFixture(1);
+    $content = '林舟进入灯塔。';
+    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    $invalidCoverage = sceneSelfCheck($content, [
+        'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
+    ]);
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse($content, selfCheck: $invalidCoverage))
+        ->enqueue(sceneCoverageResponse(sceneSelfCheck($content)));
+    app()->instance(AiProvider::class, $fake);
+    $clock = Mockery::mock(SceneExecutionClock::class);
+    $clock->shouldReceive('start')->once()->andReturn(1);
+    $clock->shouldReceive('elapsedSeconds')->twice()->andReturn(0, 200);
+    app()->instance(SceneExecutionClock::class, $clock);
+
+    (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
+
+    $firstRun = $fixture['scenes']->first()->generationRuns()->sole();
+    expect($fake->requests())->toHaveCount(1)
+        ->and($firstRun->status)->toBe(RunStatus::Failed)
+        ->and($firstRun->error_code)->toBe('scene_stage_deferred')
+        ->and($firstRun->artifacts()->where('type', ArtifactType::Context)->count())->toBe(1);
+    Queue::assertPushed(GenerateSceneJob::class, 1);
+
+    $resumeClock = Mockery::mock(SceneExecutionClock::class);
+    $resumeClock->shouldReceive('start')->once()->andReturn(1);
+    $resumeClock->shouldReceive('elapsedSeconds')->once()->andReturn(0);
+    app()->instance(SceneExecutionClock::class, $resumeClock);
+    (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
+
+    expect($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe(PlanCoverageEvidenceRepairer::PROMPT_VERSION)
+        ->and($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
+        ->and($fixture['scenes']->first()->generationRuns()->count())->toBe(2)
+        ->and($fixture['scenes']->first()->generationRuns()->latest('id')->first()->artifacts()->where('type', ArtifactType::SceneDraft)->exists())->toBeTrue();
 });
 
 test('unverifiable coverage evidence becomes a rewrite finding after repair is exhausted', function () {
@@ -643,12 +729,15 @@ test('scene generator persists an immutable draft artifact and temporary state d
     $inputContext = $run->context_snapshot;
     unset($inputContext['regeneration_batch_id']);
     unset($inputContext['generation_preferences']['max_completion_tokens']);
+    unset($inputContext['scene_execution']);
     $expectedInputHash = hash('sha256', json_encode([
         'context' => $inputContext,
         'provider' => $run->provider,
         'model' => $run->model_policy,
         'reasoning_effort' => null,
         'prompt_version' => $run->prompt_version,
+        'extractor_route' => $inputContext['generation_preferences']['substage_routes']['structure_and_coverage'],
+        'rewrite_route' => $inputContext['generation_preferences']['substage_routes']['length_repair'],
         'regeneration_batch_id' => null,
     ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
@@ -723,7 +812,7 @@ test('a final scene budget shortfall is expanded once before the chapter is bloc
     expect($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Failed)
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked)
         ->and($fixture['scenes']->first()->generationRuns()->where('error_code', 'scene_budget_shortfall')->count())->toBe(1)
-        ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts')->count())->toBe(0);
+        ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts', fn ($query) => $query->where('type', ArtifactType::SceneDraft))->count())->toBe(0);
     expect($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->systemPrompt)->toContain('场景扩写器')
         ->and($fake->requests()[1]->systemPrompt)->toContain('POV、时态、主文风')
@@ -801,7 +890,7 @@ test('an overlength scene is rejected when compression still exceeds the hard ma
 
     expect($fixture['scenes']->first()->fresh()->current_artifact_id)->toBeNull()
         ->and($fixture['scenes']->first()->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
-        ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts')->count())->toBe(0)
+        ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts', fn ($query) => $query->where('type', ArtifactType::SceneDraft))->count())->toBe(0)
         ->and($fake->requests())->toHaveCount(2);
 });
 
