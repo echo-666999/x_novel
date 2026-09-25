@@ -325,7 +325,7 @@ Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Assembler、Event Ex
 
 同一 Context 还必须携带冻结的 `arc_contributions` 和 `world_entity_candidates`。Writer 只能使用这些候选临时键引入重大世界资料；Reviewer 对每个计划 Beat、Arc Completion Condition 和 Entity Candidate 输出逐字证据审计，并单独列出未批准的重大实体。缺少、错序、引用其他小说或 Volume 的 Arc、与现有实体冲突、证据无法逐字命中，都会形成确定性 Finding 并阻止其进入 Canonical Commit。
 
-Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
+Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；当 fulfilled 审校的模型证据为拼接引用时，Laravel 使用同一伏笔 ID、动作和目标 Scene 下已经通过逐字校验的 Coverage Evidence。`rewrite_required / needs_attention` 的模型证据若包含多个分号或省略号分隔的片段，Laravel 逐段映射当前正文并保留最长的连续逐字片段；至少一段可验证时不因格式问题丢弃整个 Review，全部无法验证时仍拒绝。原始 Provider 响应保留在请求日志中。rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
 
 整章 Rewrite 使用与 Assembly 相同的结构化 `content + scene_coverage + introduced_major_facts` 契约，但允许重写在实际修正文后把原先 missing/contradicted 的 Coverage 重新判为 fulfilled；证据仍须逐字校验，必要时只修复证据引用。整章 Rewrite Artifact 保存新的 `scene_coverage` 和 `plan_findings`，随后推进器因 source artifact 已变化而重新执行 Event Extraction、State Patch 和 Review。Scene 级 Rewrite 仍先回到 Assembly，再执行同一完整下游链。Rewrite 不能写 Story Event、伏笔领域投影或 Canonical State。
 
@@ -749,7 +749,7 @@ chapter-planner-v10+natural-prose-v1
 scene-writer-v15+natural-prose-v1
 assembler-v12+natural-prose-v1
 event-extractor-v8
-reviewer-v14+natural-prose-v1
+reviewer-v15+natural-prose-v1
 rewrite-v13+natural-prose-v1
 review-schema-repair-v3
 arc-completion-repair-v2

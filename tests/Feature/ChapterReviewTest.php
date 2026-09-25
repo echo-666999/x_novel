@@ -578,6 +578,63 @@ test('review turns one foreshadowing root cause into one complete automatic rewr
         ->and($fake->requests()[0]->systemPrompt)->toContain('仅提及关键词不能证明完成强化或兑现');
 });
 
+test('review reduces composite rewrite required evidence to one exact draft excerpt', function () {
+    $fixture = reviewForeshadowingFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'rewrite_required',
+        'summary' => '正文只完成了普通承诺，需要补足伏笔兑现动作。',
+        'evidence' => '“林舟守住城门”；“兑现了向同伴作出的承诺”',
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit)));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
+        ->and(data_get($review->artifact->data, 'foreshadowing_audits.0.evidence'))
+        ->toBe('兑现了向同伴作出的承诺');
+});
+
+test('review keeps a valid representative excerpt when composite foreshadowing evidence contains an invalid quote', function () {
+    $fixture = reviewForeshadowingFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'needs_attention',
+        'summary' => '需要用户决定是否调整伏笔承诺。',
+        'evidence' => '“正文中不存在的句子”；“兑现了向同伴作出的承诺”',
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit)));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(data_get($review->artifact->data, 'foreshadowing_audits.0.evidence'))
+        ->toBe('兑现了向同伴作出的承诺');
+});
+
+test('review rejects composite foreshadowing evidence when no excerpt exists in the draft', function () {
+    $fixture = reviewForeshadowingFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'rewrite_required',
+        'summary' => '正文需要补足伏笔兑现动作。',
+        'evidence' => '“正文中不存在的第一句”；“正文中不存在的第二句”',
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit)));
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '伏笔审校证据必须逐字来自当前正文');
+});
+
 test('review routes a required foreshadowing promise or window change to needs attention', function () {
     $fixture = reviewForeshadowingFixture();
     bindStateValidation(new StateValidationResult([]));
@@ -613,6 +670,26 @@ test('review cannot pass a foreshadowing action without coverage and matching ev
 
     expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
         ->toThrow(ValidationException::class, '缺少匹配 Event Candidate');
+});
+
+test('fulfilled foreshadowing audit uses validated coverage evidence instead of a composite model citation', function () {
+    $fixture = reviewForeshadowingFixture(coverageStatus: 'fulfilled', withEvent: true);
+    bindStateValidation(new StateValidationResult([]));
+    $audit = [[
+        'foreshadowing_id' => $fixture['foreshadowing']->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'status' => 'fulfilled',
+        'summary' => '正文完成了伏笔兑现，并有 Coverage 与 Event Candidate 支持。',
+        'evidence' => '“林舟守住城门”；“兑现了向同伴作出的承诺”',
+    ]];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(reviewResponse(foreshadowingAudits: $audit)));
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect(data_get($review->artifact->data, 'foreshadowing_audits.0.status'))->toBe('fulfilled')
+        ->and(data_get($review->artifact->data, 'foreshadowing_audits.0.evidence'))
+        ->toBe('兑现了向同伴作出的承诺');
 });
 
 test('review deterministically normalizes pass status when the finding set contains that dimension', function () {

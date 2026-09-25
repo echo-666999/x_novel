@@ -6,7 +6,7 @@ return [
         'writer' => 'scene-writer-v15',
         'assembler' => 'assembler-v12',
         'extractor' => 'event-extractor-v8',
-        'reviewer' => 'reviewer-v14',
+        'reviewer' => 'reviewer-v15',
         'rewrite' => 'rewrite-v13',
         'summary' => 'summary-v2',
     ],

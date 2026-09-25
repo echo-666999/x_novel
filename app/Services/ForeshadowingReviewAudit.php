@@ -65,9 +65,17 @@ final class ForeshadowingReviewAudit
                 throw ValidationException::withMessages(["foreshadowing_audits.{$index}" => '伏笔审校项字段无效。']);
             }
 
-            $evidence = is_string($audit['evidence']) ? trim($audit['evidence']) : null;
+            $evidence = $audit['status'] === 'fulfilled'
+                ? $this->fulfilledCoverageEvidence(
+                    $chapter,
+                    $draft,
+                    (int) $id,
+                    $action->value,
+                    (int) $targetSceneSequence,
+                ) ?? (is_string($audit['evidence']) ? trim($audit['evidence']) : null)
+                : (is_string($audit['evidence']) ? trim($audit['evidence']) : null);
             if ($evidence !== null && $evidence !== '') {
-                $evidence = PlanCoverage::resolveExactEvidence($draft->content, $evidence);
+                $evidence = PlanCoverage::resolveRepresentativeExactEvidence($draft->content, $evidence);
                 if (! str_contains($draft->content, $evidence)) {
                     throw ValidationException::withMessages(["foreshadowing_audits.{$index}.evidence" => '伏笔审校证据必须逐字来自当前正文。']);
                 }
@@ -99,6 +107,30 @@ final class ForeshadowingReviewAudit
         }
 
         return array_values($audits);
+    }
+
+    private function fulfilledCoverageEvidence(
+        Chapter $chapter,
+        GenerationArtifact $draft,
+        int $foreshadowingId,
+        string $action,
+        int $targetSceneSequence,
+    ): ?string {
+        $sceneId = (int) ($chapter->scenes->firstWhere('sequence', $targetSceneSequence)?->getKey() ?? 0);
+        $coverage = collect(data_get($draft->data, 'scene_coverage', []))->firstWhere('scene_id', $sceneId);
+        $row = collect(data_get($coverage, 'foreshadowing_coverage', []))->first(
+            fn (mixed $item): bool => is_array($item)
+                && (int) ($item['foreshadowing_id'] ?? 0) === $foreshadowingId
+                && ($item['action'] ?? null) === $action
+                && ($item['status'] ?? null) === 'fulfilled',
+        );
+        $evidence = is_array($row) && is_string($row['evidence'] ?? null)
+            ? trim($row['evidence'])
+            : '';
+
+        return $sceneId > 0 && $evidence !== '' && str_contains((string) $draft->content, $evidence)
+            ? $evidence
+            : null;
     }
 
     /** @param array<int, array<string, mixed>> $audits @param array<string, mixed> $contract @return array<int, array<string, mixed>> */

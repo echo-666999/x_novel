@@ -213,6 +213,54 @@ final class PlanCoverage
             ?? $evidence;
     }
 
+    /**
+     * Reduce a model-composed list of quotations to one verifiable contiguous excerpt.
+     *
+     * Provider responses occasionally join several valid excerpts with punctuation even
+     * though the persisted evidence contract accepts one string. Keep the strongest
+     * verifiable excerpt so a formatting mistake cannot discard an otherwise usable
+     * Review, while the original provider response remains available in request logs.
+     */
+    public static function resolveRepresentativeExactEvidence(string $content, string $evidence): string
+    {
+        $evidence = trim($evidence);
+        $resolved = self::resolveExactEvidence($content, $evidence);
+
+        if ($resolved === '' || str_contains($content, $resolved)) {
+            return $resolved;
+        }
+
+        $candidates = preg_split('/(?:……|…{1,}|\.{3,}|[；;])/u', $evidence) ?: [];
+        preg_match_all("/(?:“([^”]+)”|‘([^’]+)’|「([^」]+)」|『([^』]+)』|\"([^\"]+)\"|'([^']+)')/u", $evidence, $quoted, PREG_SET_ORDER);
+        foreach ($quoted as $match) {
+            foreach (array_slice($match, 1) as $quote) {
+                if ($quote !== '') {
+                    $candidates[] = $quote;
+                    break;
+                }
+            }
+        }
+
+        $best = null;
+        foreach (array_unique($candidates) as $candidate) {
+            $candidate = trim($candidate, " \t\n\r\0\x0B\"'“”‘’「」『』");
+            if ($candidate === '') {
+                continue;
+            }
+
+            $candidate = self::resolveExactEvidence($content, $candidate);
+            if (! str_contains($content, $candidate)) {
+                continue;
+            }
+
+            if ($best === null || mb_strlen($candidate) > mb_strlen($best)) {
+                $best = $candidate;
+            }
+        }
+
+        return $best ?? $evidence;
+    }
+
     private static function resolveWhitespaceEquivalentEvidence(string $content, string $evidence): ?string
     {
         $contentCharacters = preg_split('//u', $content, -1, PREG_SPLIT_NO_EMPTY);

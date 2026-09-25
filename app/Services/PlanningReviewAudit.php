@@ -214,33 +214,15 @@ class PlanningReviewAudit
             }
             $fulfilled = in_array($audit[$statusKey], ['fulfilled', 'introduced'], true);
             if ($fulfilled || $audit[$statusKey] === 'contradicted') {
-                $audit['evidence'] = $this->normalizeQuotedEvidence($audit['evidence'] ?? null, (string) $draft->content);
+                $audit['evidence'] = is_string($audit['evidence'] ?? null)
+                    ? PlanCoverage::resolveRepresentativeExactEvidence((string) $draft->content, $audit['evidence'])
+                    : $audit['evidence'];
                 $audits[$index] = $audit;
             }
             $this->validateEvidence($fulfilled || $audit[$statusKey] === 'contradicted', $audit['evidence'] ?? null, $draft, $key);
         }
 
         return $audits;
-    }
-
-    private function normalizeQuotedEvidence(mixed $evidence, string $draft): mixed
-    {
-        if (! is_string($evidence) || str_contains($draft, $evidence)) {
-            return $evidence;
-        }
-
-        $trimmed = trim($evidence, " \t\n\r\0\x0B\"'“”‘’");
-        if ($trimmed !== '' && str_contains($draft, $trimmed)) {
-            return $trimmed;
-        }
-
-        $candidates = preg_split('/(?:……|…{1,}|\.{3,}|[；;])/u', $trimmed) ?: [];
-
-        return collect($candidates)
-            ->map(fn (string $candidate): string => trim($candidate, " \t\n\r\0\x0B\"'“”‘’"))
-            ->filter(fn (string $candidate): bool => $candidate !== '' && str_contains($draft, $candidate))
-            ->sortByDesc(fn (string $candidate): int => mb_strlen($candidate))
-            ->first() ?? $evidence;
     }
 
     private function validateEvidence(bool $required, mixed $evidence, GenerationArtifact $draft, string $field): void

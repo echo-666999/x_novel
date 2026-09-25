@@ -232,7 +232,7 @@ error_metadata    nullable jsonb
 
 ```text
 scene-writer-v15+natural-prose-v1
-reviewer-v14+natural-prose-v1
+reviewer-v15+natural-prose-v1
 summary-v2+natural-prose-v1
 ```
 
@@ -920,6 +920,14 @@ GFO-007
 - Run #408 的 Provider 响应、Chapter Draft 和最终 Coverage 均引用 Scene 43。Event 的三条原文证据分别证明未找到者、折返牺牲和无名者执念；Coverage 使用同一 Scene 中更完整的清点说明。旧校验要求其中一条 Event Quote 与单条 Coverage Quote 互相包含，误把互补证据判为不一致。
 - `event-extractor-v8` 在伏笔 ID、动作、目标 Scene 和 fulfilled Coverage 全部匹配后，将已通过 Assembly 逐字校验的 Coverage Evidence 确定性附加到 Event Candidate，同时保留模型返回的其他原文证据。未授权动作、错误生命周期、missing/contradicted Coverage 和跨 Scene 引用仍被拒绝。
 - 本次未重放 #408，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `64 passed / 235 assertions`；最终全量测试 `989 passed / 5995 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+
+**Foreshadowing Review Evidence Normalization（2026-09-25）**
+
+- Run #409 的 Review 将三段真实原文用中文引号和分号拼成一个 `foreshadowing_audits.evidence` 字符串；各片段存在于正文，但拼接串不是连续原文，因此旧校验以 `review_validation_failed` 拒绝。
+- `fulfilled` 审校现在只在伏笔 ID、动作、目标 Scene、fulfilled Coverage 和匹配 Event Candidate 全部成立时，将证据归一化为已通过 Assembly 逐字验证的 Coverage Evidence。`rewrite_required`、`needs_attention` 和普通 Narrative Finding 的证据规则不变。
+- 本次未重放 #409，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `140 passed / 718 assertions`；最终全量测试 `990 passed / 5997 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+- Run #410 进一步暴露 `rewrite_required` 分支仍直接校验模型拼接串。共享 Evidence Resolver 现在先尝试完整逐字映射，再拆分分号或省略号连接的片段，逐段映射当前正文并保留最长的有效连续片段；真假混合引用保留真实片段，全部片段无效时仍以 `review_validation_failed` 拒绝。Story Arc 规划审校复用同一实现。
+- Reviewer Prompt 升级为 `reviewer-v15+natural-prose-v1`，要求每个 evidence 只返回一段连续原文；后端仍保留确定性容错，不依赖模型完全遵守格式。本次未重放 #410，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `70 passed / 232 assertions`；最终全量测试 `993 passed / 6003 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
 
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 
