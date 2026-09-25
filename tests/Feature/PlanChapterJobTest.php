@@ -104,6 +104,21 @@ function plannerResponse(array $payload): AiResponse
     );
 }
 
+function truncatedPlannerResponse(int $outputTokens): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: $outputTokens,
+        cachedTokens: 0,
+        latencyMs: 50,
+        providerRequestId: 'truncated-plan-request',
+        model: 'planner-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 function plannerOutlineContent(int $maximum = 2): array
 {
     return [
@@ -328,6 +343,41 @@ test('outline retries and duplicate delivery keep the same frozen outline contex
         ->and(data_get($runs[0]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
         ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
         ->and($chapter->plans()->count())->toBe(1);
+});
+
+test('planner truncation escalates to the final budget and then stops before another provider request', function () {
+    config()->set('generation.planner_max_output_tokens', 12_000);
+    config()->set('generation.planner_retry_max_output_tokens', 16_000);
+    config()->set('generation.planner_final_retry_max_output_tokens', 24_000);
+    [$chapter] = plannerChapter();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedPlannerResponse(12_000))
+        ->enqueue(truncatedPlannerResponse(16_000))
+        ->enqueue(truncatedPlannerResponse(24_000));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    foreach ([12_000, 16_000, 24_000] as $budget) {
+        try {
+            $planner->generate($chapter->getKey());
+            $this->fail("Expected planner truncation at {$budget} tokens.");
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('plan_output_truncated');
+        }
+    }
+
+    try {
+        $planner->generate($chapter->getKey());
+        $this->fail('Expected exhausted planner output budget.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('plan_output_budget_exhausted')
+            ->and($exception->retryable)->toBeFalse();
+    }
+
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(24_000);
 });
 
 test('the model payload cannot authorize defer or abandon actions', function (string $action) {

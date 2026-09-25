@@ -101,6 +101,7 @@ class SceneGenerator
         $context['generation_preferences']['scene_token_budget'] = [
             'initial_max_completion_tokens' => (int) config('generation.scene_max_output_tokens', 12_000),
             'retry_max_completion_tokens' => (int) config('generation.scene_retry_max_output_tokens', 16_000),
+            'final_retry_max_completion_tokens' => (int) config('generation.scene_final_retry_max_output_tokens', 24_000),
         ];
         $context['generation_preferences']['substage_routes'] = [
             'prose' => $this->routeSnapshot($settings, AiStage::Writer, $promptVersion, null),
@@ -135,14 +136,8 @@ class SceneGenerator
             return $artifact;
         }
 
-        $maxTokens = $run->attempt > 1
-            ? (int) config('generation.scene_retry_max_output_tokens', 16_000)
-            : (int) config('generation.scene_max_output_tokens', 12_000);
-        $runContext = $run->context_snapshot ?? $context;
-        data_set($runContext, 'generation_preferences.max_completion_tokens', $maxTokens);
-        $run->update(['context_snapshot' => $runContext]);
-
         try {
+            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
             $metadata = [
                 'generation_run_id' => $run->getKey(),
                 'novel_id' => $novel->getKey(),
@@ -724,6 +719,45 @@ class SceneGenerator
             'length_validated' => 3,
             default => 0,
         };
+    }
+
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    {
+        $priorTruncatedRuns = GenerationRun::query()
+            ->where('scene_id', $run->scene_id)
+            ->where('stage', GenerationStage::SceneGeneration)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('id', '<', $run->getKey())
+            ->where('error_code', 'scene_output_truncated')
+            ->get(['idempotency_key', 'context_snapshot'])
+            ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
+                || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
+            ->values();
+        $retryOrdinal = max($priorTruncatedRuns->count() + 1, min($run->attempt, 3));
+        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.scene_token_budget', []);
+        $maxTokens = match ($retryOrdinal) {
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
+            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
+        };
+        $priorMaximum = $priorTruncatedRuns
+            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
+            ->max();
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.scene_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+            throw new AiProviderException(
+                'scene_output_budget_exhausted',
+                "Scene Draft 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Writer 模型后再重试。",
+                false,
+            );
+        }
+
+        return $maxTokens;
     }
 
     private function assertProviderCallFits(GenerationRun $run, int $jobStartedAt, string $provider, string $substage): void

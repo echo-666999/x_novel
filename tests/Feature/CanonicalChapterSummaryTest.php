@@ -134,6 +134,39 @@ test('provider failure preserves the existing summary and canonical story state'
         ->and(UsageRecord::query()->count())->toBe(0);
 });
 
+test('canonical summary increases frozen output budgets and stops before a fourth provider call', function () {
+    config()->set('generation.summary_max_output_tokens', 100);
+    config()->set('generation.summary_retry_max_output_tokens', 200);
+    config()->set('generation.summary_final_retry_max_output_tokens', 300);
+    [$chapter] = canonicalSummaryChapter();
+    $truncated = new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 100,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'truncated-summary-request',
+        model: 'summary-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+    $fake = (new FakeAiProvider)->enqueue($truncated)->enqueue($truncated)->enqueue($truncated);
+    app()->instance(AiProvider::class, $fake);
+    $service = app(CanonicalChapterSummaryService::class);
+
+    foreach ([100, 200, 300] as $expectedBudget) {
+        expect(fn () => $service->generate($chapter->getKey()))
+            ->toThrow(AiProviderException::class, '因输出 Token 用尽而被截断');
+        expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
+    }
+
+    expect(fn () => $service->generate($chapter->getKey()))
+        ->toThrow(AiProviderException::class, '已在冻结的最高输出预算 300 Token 下被截断');
+    expect($fake->requests())->toHaveCount(3)
+        ->and(GenerationRun::query()->where('scope_type', 'chapter_summary')->latest('id')->first()->error_code)
+        ->toBe('summary_output_budget_exhausted');
+});
+
 test('summary job ignores a stale canonical artifact without calling the provider', function () {
     [$chapter, $source] = canonicalSummaryChapter();
     $replacementRun = GenerationRun::factory()->for($chapter->novel)->for($chapter)->create([

@@ -178,6 +178,21 @@ function truncatedCoverageResponse(): AiResponse
     );
 }
 
+function truncatedSceneResponse(int $outputTokens): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: $outputTokens,
+        cachedTokens: 0,
+        latencyMs: 350,
+        providerRequestId: 'truncated-scene-request',
+        model: 'writer-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 function sceneStructureResponse(string $temporaryStateDelta, array $declaredEvents = []): AiResponse
 {
     $payload = [
@@ -729,6 +744,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
     $inputContext = $run->context_snapshot;
     unset($inputContext['regeneration_batch_id']);
     unset($inputContext['generation_preferences']['max_completion_tokens']);
+    unset($inputContext['generation_preferences']['scene_retry_ordinal']);
     unset($inputContext['scene_execution']);
     $expectedInputHash = hash('sha256', json_encode([
         'context' => $inputContext,
@@ -1131,6 +1147,43 @@ test('truncated structured scene output is retried as a technical failure', func
     expect($run->error_code)->toBe('scene_output_truncated')
         ->and($run->status)->toBe(RunStatus::Failed)
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Generating);
+});
+
+test('scene truncation escalates to the final budget and then stops before another provider request', function () {
+    config()->set('generation.scene_max_output_tokens', 12_000);
+    config()->set('generation.scene_retry_max_output_tokens', 16_000);
+    config()->set('generation.scene_final_retry_max_output_tokens', 24_000);
+    $fixture = sceneGenerationFixture(1);
+    $scene = $fixture['scenes']->first();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedSceneResponse(12_000))
+        ->enqueue(truncatedSceneResponse(16_000))
+        ->enqueue(truncatedSceneResponse(24_000))
+        ->enqueue(sceneResponse('不应被调用。'));
+    app()->instance(AiProvider::class, $fake);
+    $generator = app(SceneGenerator::class);
+
+    foreach ([12_000, 16_000, 24_000] as $budget) {
+        try {
+            $generator->generate($scene->getKey());
+            $this->fail("Expected scene truncation at {$budget} tokens.");
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('scene_output_truncated');
+        }
+    }
+
+    try {
+        $generator->generate($scene->getKey());
+        $this->fail('Expected exhausted scene output budget.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('scene_output_budget_exhausted')
+            ->and($exception->retryable)->toBeFalse();
+    }
+
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(24_000);
 });
 
 test('terminal failure blocks the scene and chapter while preserving earlier artifacts', function () {

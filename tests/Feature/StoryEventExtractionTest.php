@@ -121,6 +121,21 @@ function truncatedEventEvidenceResponse(): AiResponse
     );
 }
 
+function truncatedEventExtractionResponse(): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 100,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'truncated-event-extraction-request',
+        model: 'extractor-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 function eventForeshadowingFixture(ForeshadowingStatus $status, array $actions, array $coverages): array
 {
     $fixture = eventExtractionFixture();
@@ -466,16 +481,111 @@ test('extractor creates a candidate artifact without changing canonical story st
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v6')
+        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v7')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
         ->and($fake->requests()[0]->systemPrompt)->toContain('内部 type（例如 concept、rule、location、faction）不能作为 subject_type')
         ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and($fake->requests()[0]->systemPrompt)->toContain('没有有效主体时必须省略该事件')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得把 sequence 当作 scene_id')
         ->and(data_get($run->context_snapshot, 'event_subject_type_rules.promise_made'))->toBe(['relationship'])
         ->and(data_get($run->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($run->context_snapshot, 'foreshadowing_contract.checksum'))
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
+});
+
+test('extractor repairs a foreign scene id when the verbatim evidence uniquely identifies a current scene', function () {
+    $fixture = eventExtractionFixture();
+    $otherChapter = Chapter::factory()->for($fixture['novel'])->create();
+    $foreignScene = Scene::factory()->for($otherChapter)->create(['sequence' => 1]);
+    $nonMatchingScene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 2]);
+    $nonMatchingRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'scene_id' => $nonMatchingScene->getKey(),
+        'scope_type' => 'scene',
+        'scope_id' => $nonMatchingScene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $nonMatchingArtifact = GenerationArtifact::factory()->for($nonMatchingRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => '这个场景不包含目标引文。',
+        'checksum' => hash('sha256', '这个场景不包含目标引文。'),
+    ]);
+    $nonMatchingScene->update(['current_artifact_id' => $nonMatchingArtifact->getKey()]);
+    $sceneRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'scene_id' => $scene->getKey(),
+        'scope_type' => 'scene',
+        'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $sceneArtifact = GenerationArtifact::factory()->for($sceneRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => $fixture['draft']->content,
+        'checksum' => hash('sha256', $fixture['draft']->content),
+    ]);
+    $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
+    $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => $foreignScene->getKey(),
+            'quote' => '林舟终于抵达洛阳城下。',
+            'start_offset' => 0,
+            'end_offset' => 12,
+        ]],
+    ]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+
+    expect($foreignScene->getKey())->toBe($nonMatchingScene->sequence)
+        ->and(data_get($artifact->data, 'events.0.evidence.0.scene_id'))->toBe($scene->getKey())
+        ->and(data_get($fake->requests()[0]->metadata, 'chapter_id'))->toBe($fixture['chapter']->getKey())
+        ->and(data_get($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->context_snapshot, 'current_scene_references.1'))->toBe([
+            'scene_id' => $scene->getKey(),
+            'sequence' => 2,
+            'source_artifact_id' => $sceneArtifact->getKey(),
+        ]);
+});
+
+test('extractor does not guess a foreign scene id when the evidence quote matches multiple current scenes', function () {
+    $fixture = eventExtractionFixture();
+    $otherChapter = Chapter::factory()->for($fixture['novel'])->create();
+    $foreignScene = Scene::factory()->for($otherChapter)->create(['sequence' => 1]);
+
+    foreach ([1, 2] as $sequence) {
+        $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => $sequence]);
+        $sceneRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scene_id' => $scene->getKey(),
+            'scope_type' => 'scene',
+            'scope_id' => $scene->getKey(),
+            'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $sceneArtifact = GenerationArtifact::factory()->for($sceneRun)->create([
+            'type' => ArtifactType::SceneDraft,
+            'content' => $fixture['draft']->content,
+            'checksum' => hash('sha256', $fixture['draft']->content),
+        ]);
+        $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
+    }
+
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
+        'evidence' => [[
+            'artifact_id' => $fixture['draft']->getKey(),
+            'scene_id' => $foreignScene->getKey(),
+            'quote' => '林舟终于抵达洛阳城下。',
+            'start_offset' => 0,
+            'end_offset' => 12,
+        ]],
+    ])));
+
+    expect(fn () => app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, 'Candidate Evidence 引用了其他 Chapter 的 Scene');
+
+    expect(GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)->count())->toBe(0)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole()->status)->toBe(RunStatus::Failed);
 });
 
 test('the event workflow automatically builds the matching state patch before review', function () {
@@ -681,6 +791,31 @@ test('retryable provider failure is recorded and retried from event extraction',
 
     expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->count())->toBe(2)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->status)->toBe(RunStatus::Succeeded);
+});
+
+test('event extraction increases frozen output budgets and stops before a fourth provider call', function () {
+    config()->set('generation.event_extraction_max_output_tokens', 100);
+    config()->set('generation.event_extraction_retry_max_output_tokens', 200);
+    config()->set('generation.event_extraction_final_retry_max_output_tokens', 300);
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedEventExtractionResponse())
+        ->enqueue(truncatedEventExtractionResponse())
+        ->enqueue(truncatedEventExtractionResponse());
+    app()->instance(AiProvider::class, $fake);
+    $extractor = app(StoryEventExtractor::class);
+
+    foreach ([100, 200, 300] as $expectedBudget) {
+        expect(fn () => $extractor->extract($fixture['chapter']->getKey()))
+            ->toThrow(AiProviderException::class, '因输出 Token 用尽而被截断');
+        expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
+    }
+
+    expect(fn () => $extractor->extract($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '已在冻结的最高输出预算 300 Token 下被截断');
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->error_code)
+        ->toBe('event_output_budget_exhausted');
 });
 
 test('stale event extraction run is marked interrupted before recovery', function () {

@@ -42,7 +42,10 @@ class StoryEventExtractor
         $chapter = Chapter::query()->with([
             'novel.canonicalStateVersion',
             'latestPlan',
-            'scenes:id,chapter_id',
+            'scenes' => fn ($query) => $query
+                ->select(['id', 'chapter_id', 'sequence', 'current_artifact_id'])
+                ->orderBy('sequence'),
+            'scenes.currentArtifact:id,content',
         ])->findOrFail($chapterId);
 
         if ($chapter->novel->status === NovelStatus::Paused) {
@@ -51,6 +54,11 @@ class StoryEventExtractor
 
         $draft = $this->latestChapterDraft($chapter);
         $context = $this->context($chapter, $draft);
+        $context['generation_preferences']['event_token_budget'] = [
+            'initial_max_completion_tokens' => (int) config('generation.event_extraction_max_output_tokens', 4_000),
+            'retry_max_completion_tokens' => (int) config('generation.event_extraction_retry_max_output_tokens', 8_000),
+            'final_retry_max_completion_tokens' => (int) config('generation.event_extraction_final_retry_max_output_tokens', 12_000),
+        ];
         $settings = $this->settingsResolver->resolve(AiStage::Extractor, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Extractor);
         $inputHash = hash('sha256', json_encode([
@@ -68,6 +76,7 @@ class StoryEventExtractor
         }
 
         try {
+            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
             $metadata = [
                 'generation_run_id' => $run->getKey(),
                 'novel_id' => $chapter->novel_id,
@@ -78,10 +87,10 @@ class StoryEventExtractor
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；evidence.scene_id 只能填 current_scene_references[].scene_id 中的数据库 ID，不得把 sequence 当作 scene_id。未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: (int) config('generation.event_extraction_max_output_tokens', 4_000),
+                maxTokens: $maxTokens,
                 responseSchema: $this->responseSchema(),
                 promptVersion: $promptVersion,
                 metadata: $metadata,
@@ -170,6 +179,11 @@ class StoryEventExtractor
                 'foreshadowing_actions', 'character_candidates',
                 'arc_contributions', 'world_entity_candidates',
             ]),
+            'current_scene_references' => $chapter->scenes->map(fn ($scene): array => [
+                'scene_id' => $scene->getKey(),
+                'sequence' => $scene->sequence,
+                'source_artifact_id' => $scene->current_artifact_id,
+            ])->values()->all(),
             'bible_version' => $foreshadowingContract['bible_version'],
             'state_version' => $chapter->novel->canonicalStateVersion->version,
             'current_state' => $chapter->novel->canonicalStateVersion->state,
@@ -258,7 +272,7 @@ class StoryEventExtractor
             }
 
             try {
-                $event = $this->normalizeEvidence($event, $draft);
+                $event = $this->normalizeEvidence($event, $chapter, $draft);
 
                 try {
                     $candidate = StoryEventCandidate::fromArray($event);
@@ -276,7 +290,7 @@ class StoryEventExtractor
                         eventIndex: $index,
                         reasoningEffort: $reasoningEffort,
                     );
-                    $event = $this->normalizeEvidence($event, $draft);
+                    $event = $this->normalizeEvidence($event, $chapter, $draft);
                     $candidate = StoryEventCandidate::fromArray($event);
                     $this->validateEvidence($candidate, $chapter, $draft);
                 }
@@ -303,9 +317,9 @@ class StoryEventExtractor
     /** @param array<string, mixed> $event
      * @return array<string, mixed>
      */
-    private function normalizeEvidence(array $event, GenerationArtifact $draft): array
+    private function normalizeEvidence(array $event, Chapter $chapter, GenerationArtifact $draft): array
     {
-        $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($draft): mixed {
+        $event['evidence'] = collect($event['evidence'] ?? [])->map(function (mixed $evidence) use ($chapter, $draft): mixed {
             if (! is_array($evidence)) {
                 return $evidence;
             }
@@ -317,10 +331,32 @@ class StoryEventExtractor
                 $evidence['quote'] = $this->evidenceQuoteResolver->resolve((string) $draft->content, $evidence['quote']);
             }
 
+            $evidence['scene_id'] = $this->resolveEvidenceSceneId($evidence, $chapter);
+
             return $evidence;
         })->all();
 
         return $event;
+    }
+
+    /** @param array<string, mixed> $evidence */
+    private function resolveEvidenceSceneId(array $evidence, Chapter $chapter): mixed
+    {
+        if (! is_int($evidence['scene_id'] ?? null) || ! is_string($evidence['quote'] ?? null)) {
+            return $evidence['scene_id'] ?? null;
+        }
+
+        $matchingSceneIds = $chapter->scenes
+            ->filter(fn ($scene): bool => $scene->currentArtifact !== null
+                && str_contains((string) $scene->currentArtifact->content, $evidence['quote']))
+            ->values()
+            ->modelKeys();
+
+        // A verbatim quote that occurs in exactly one current Scene Draft is authoritative.
+        // This safely repairs the common model error of returning a Scene sequence as scene_id.
+        return count($matchingSceneIds) === 1
+            ? $matchingSceneIds[0]
+            : $evidence['scene_id'];
     }
 
     private function isEvidenceQuoteMismatch(ValidationException $exception): bool
@@ -331,6 +367,45 @@ class StoryEventExtractor
             && collect($errors['evidence'])->contains(
                 fn (string $message): bool => str_contains($message, 'Evidence quote 必须逐字来自当前 Chapter Draft'),
             );
+    }
+
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    {
+        $priorTruncatedRuns = GenerationRun::query()
+            ->where('chapter_id', $run->chapter_id)
+            ->where('stage', GenerationStage::EventExtraction)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('id', '<', $run->getKey())
+            ->where('error_code', 'event_output_truncated')
+            ->get(['idempotency_key', 'context_snapshot'])
+            ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
+                || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
+            ->values();
+        $retryOrdinal = $priorTruncatedRuns->count() + 1;
+        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.event_token_budget', []);
+        $maxTokens = match ($retryOrdinal) {
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 4_000),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 8_000),
+            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 12_000),
+        };
+        $priorMaximum = $priorTruncatedRuns
+            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
+            ->max();
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.event_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+            throw new AiProviderException(
+                'event_output_budget_exhausted',
+                "Story Event Extraction 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Extractor 模型后再重试。",
+                false,
+            );
+        }
+
+        return $maxTokens;
     }
 
     private function withCandidateIndex(ValidationException $exception, int $index): ValidationException

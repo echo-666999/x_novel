@@ -61,6 +61,10 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
             $this->fail($exception);
 
             return;
+        } catch (Throwable $exception) {
+            $this->handleUnexpectedGenerationFailure($exception);
+
+            return;
         }
 
         $this->releaseGenerationDispatch();

@@ -59,6 +59,8 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
                 return;
             }
             throw $exception;
+        } catch (Throwable $exception) {
+            $this->handleUnexpectedGenerationFailure($exception);
         }
     }
 

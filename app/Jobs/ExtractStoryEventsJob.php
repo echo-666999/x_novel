@@ -67,6 +67,8 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
             $this->fail($exception);
 
             return;
+        } catch (Throwable $exception) {
+            $this->handleUnexpectedGenerationFailure($exception);
         }
     }
 

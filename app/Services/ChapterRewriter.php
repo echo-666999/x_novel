@@ -114,13 +114,20 @@ class ChapterRewriter
             ],
             'content' => $source->content,
         ];
+        $brief['generation_preferences']['rewrite_token_budget'] = [
+            'initial_max_completion_tokens' => (int) config('generation.rewrite_max_output_tokens', 12_000),
+            'retry_max_completion_tokens' => (int) config('generation.rewrite_retry_max_output_tokens', 16_000),
+            'final_retry_max_completion_tokens' => (int) config('generation.rewrite_final_retry_max_output_tokens', 24_000),
+        ];
         $inputHash = hash('sha256', json_encode([$brief, $settings->provider, $settings->model, $settings->reasoningEffort, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $baseKey = "rewrite:{$source->getKey()}:{$findingHash}:{$attempt}:{$promptVersion}";
         [$run, $reused] = $this->startRun($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $settings->provider, $settings->model, $promptVersion);
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::RewriteDraft)->first();
         }
 
         try {
+            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
             $metadata = ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value];
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
@@ -129,7 +136,7 @@ class ChapterRewriter
                 systemPrompt: $this->systemPrompt($sceneId !== null),
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
-                maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
+                maxTokens: $maxTokens,
                 responseSchema: $sceneId === null ? ChapterAssemblyPayload::schema() : SceneRewritePayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: $metadata,
@@ -510,6 +517,45 @@ class ChapterRewriter
                 'context_snapshot' => [...collect($brief)->except('content')->all(), 'finding_hash' => $findingHash], 'started_at' => now(),
             ]), false];
         });
+    }
+
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    {
+        $priorTruncatedRuns = GenerationRun::query()
+            ->where('chapter_id', $run->chapter_id)
+            ->where('stage', GenerationStage::Rewrite)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('id', '<', $run->getKey())
+            ->where('error_code', 'rewrite_output_truncated')
+            ->get(['idempotency_key', 'context_snapshot'])
+            ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
+                || str_starts_with($prior->idempotency_key, $baseKey.':retry:'))
+            ->values();
+        $retryOrdinal = $priorTruncatedRuns->count() + 1;
+        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.rewrite_token_budget', []);
+        $maxTokens = match ($retryOrdinal) {
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
+            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
+        };
+        $priorMaximum = $priorTruncatedRuns
+            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
+            ->max();
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.rewrite_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+            throw new AiProviderException(
+                'rewrite_output_budget_exhausted',
+                "Rewrite 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Rewrite 模型后再重试。",
+                false,
+            );
+        }
+
+        return $maxTokens;
     }
 
     private function complete(GenerationRun $run, Chapter $chapter, ?int $sceneId, GenerationArtifact $source, Review $review, array $payload, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact

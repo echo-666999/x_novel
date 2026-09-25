@@ -65,6 +65,7 @@ class ChapterPlanner
         $context['generation_preferences']['planner_token_budget'] = [
             'initial_max_completion_tokens' => (int) config('generation.planner_max_output_tokens', 12_000),
             'retry_max_completion_tokens' => (int) config('generation.planner_retry_max_output_tokens', 16_000),
+            'final_retry_max_completion_tokens' => (int) config('generation.planner_final_retry_max_output_tokens', 24_000),
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
@@ -85,14 +86,8 @@ class ChapterPlanner
             return is_numeric($planId) ? ChapterPlan::query()->find((int) $planId) : null;
         }
 
-        $maxTokens = $run->attempt > 1
-            ? (int) config('generation.planner_retry_max_output_tokens', 16_000)
-            : (int) config('generation.planner_max_output_tokens', 12_000);
-        $runContext = $context;
-        $runContext['generation_preferences']['max_completion_tokens'] = $maxTokens;
-        $run->update(['context_snapshot' => $runContext]);
-
         try {
+            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -135,6 +130,45 @@ class ChapterPlanner
             $this->fail($run, $exception);
             throw $exception;
         }
+    }
+
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    {
+        $priorTruncatedRuns = GenerationRun::query()
+            ->where('chapter_id', $run->chapter_id)
+            ->where('stage', GenerationStage::ChapterPlanning)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('id', '<', $run->getKey())
+            ->whereIn('error_code', ['plan_output_truncated', 'provider_output_truncated'])
+            ->get(['idempotency_key', 'context_snapshot'])
+            ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
+                || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
+            ->values();
+        $retryOrdinal = max($priorTruncatedRuns->count() + 1, min($run->attempt, 3));
+        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.planner_token_budget', []);
+        $maxTokens = match ($retryOrdinal) {
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
+            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
+        };
+        $priorMaximum = $priorTruncatedRuns
+            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
+            ->max();
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.planner_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+            throw new AiProviderException(
+                'plan_output_budget_exhausted',
+                "Chapter Plan 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Planner 模型后再重试。",
+                false,
+            );
+        }
+
+        return $maxTokens;
     }
 
     /**

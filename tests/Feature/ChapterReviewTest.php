@@ -88,6 +88,85 @@ function reviewResponse(string $decision = 'PASS', int $score = 90, array $findi
     return new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'review-request', model: 'review-test');
 }
 
+function truncatedReviewResponse(int $outputTokens): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: $outputTokens,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'truncated-review-request',
+        model: 'review-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
+test('review escalates output budget after truncation and succeeds without repeating the same cap', function () {
+    config()->set('generation.review_max_output_tokens', 4_000);
+    config()->set('generation.review_retry_max_output_tokens', 8_000);
+    config()->set('generation.review_final_retry_max_output_tokens', 12_000);
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedReviewResponse(4_000))
+        ->enqueue(truncatedReviewResponse(8_000))
+        ->enqueue(reviewResponse());
+    app()->instance(AiProvider::class, $fake);
+    $reviewer = app(ChapterReviewer::class);
+
+    expect(fn () => $reviewer->review($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '输出 Token 用尽');
+    expect(fn () => $reviewer->review($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '输出 Token 用尽');
+    $review = $reviewer->review($fixture['chapter']->getKey());
+
+    $runs = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::Review)->orderBy('id')->get();
+    expect($review->decision)->toBe(ReviewDecision::Pass)
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[0]->maxTokens)->toBe(4_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(8_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(12_000)
+        ->and($runs->pluck('input_hash')->unique())->toHaveCount(1)
+        ->and($runs->map(fn (GenerationRun $run): int => (int) data_get($run->context_snapshot, 'generation_preferences.review_retry_ordinal'))->all())->toBe([1, 2, 3]);
+});
+
+test('review stops before another provider request after the highest output budget was truncated', function () {
+    config()->set('generation.review_max_output_tokens', 4_000);
+    config()->set('generation.review_retry_max_output_tokens', 8_000);
+    config()->set('generation.review_final_retry_max_output_tokens', 12_000);
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedReviewResponse(4_000))
+        ->enqueue(truncatedReviewResponse(8_000))
+        ->enqueue(truncatedReviewResponse(12_000))
+        ->enqueue(reviewResponse());
+    app()->instance(AiProvider::class, $fake);
+    $reviewer = app(ChapterReviewer::class);
+
+    foreach ([4_000, 8_000, 12_000] as $budget) {
+        try {
+            $reviewer->review($fixture['chapter']->getKey());
+            $this->fail("Expected review truncation at {$budget} tokens.");
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('review_output_truncated');
+        }
+    }
+
+    try {
+        $reviewer->review($fixture['chapter']->getKey());
+        $this->fail('Expected exhausted review output budget.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('review_output_budget_exhausted')
+            ->and($exception->retryable)->toBeFalse();
+    }
+
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fixture['chapter']->generationRuns()->latest('id')->first()->error_code)->toBe('review_output_budget_exhausted');
+});
+
 test('planning review audits require verbatim evidence and surface missing or unapproved world data', function () {
     $fixture = reviewFixture();
     $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);

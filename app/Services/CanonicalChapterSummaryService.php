@@ -5,6 +5,7 @@ namespace App\Services;
 use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
+use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
 use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
@@ -97,12 +98,18 @@ class CanonicalChapterSummaryService
         $source = $this->canonicalArtifact($chapter);
         $settings = $this->settingsResolver->resolve(AiStage::Summary, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Summary);
+        $tokenBudget = [
+            'initial_max_completion_tokens' => (int) config('generation.summary_max_output_tokens', 1_200),
+            'retry_max_completion_tokens' => (int) config('generation.summary_retry_max_output_tokens', 2_400),
+            'final_retry_max_completion_tokens' => (int) config('generation.summary_final_retry_max_output_tokens', 4_000),
+        ];
         $inputHash = hash('sha256', json_encode([
             'canonical_artifact_checksum' => $source->checksum,
             'prompt_version' => $promptVersion,
             'provider' => $settings->provider,
             'model' => $settings->model,
             'reasoning_effort' => $settings->reasoningEffort,
+            'token_budget' => $tokenBudget,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
         [$run, $reusable] = $this->startRun($chapter, $source, $inputHash, $promptVersion, $settings->provider, $settings->model);
@@ -121,7 +128,12 @@ class CanonicalChapterSummaryService
             ];
         }
 
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.summary_token_budget', $tokenBudget);
+        $run->update(['context_snapshot' => $snapshot]);
+
         try {
+            $maxTokens = $this->resolveRequestBudget($run);
             $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -136,7 +148,7 @@ class CanonicalChapterSummaryService
                     'canonical_content' => $source->content,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: 1_200,
+                maxTokens: $maxTokens,
                 responseSchema: $this->schema(),
                 promptVersion: $promptVersion,
                 metadata: [
@@ -242,6 +254,44 @@ class CanonicalChapterSummaryService
                 'started_at' => now(),
             ]), false];
         });
+    }
+
+    private function resolveRequestBudget(GenerationRun $run): int
+    {
+        $priorTruncatedRuns = GenerationRun::query()
+            ->where('chapter_id', $run->chapter_id)
+            ->where('stage', GenerationStage::MemorySummary)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('prompt_version', $run->prompt_version)
+            ->where('input_hash', $run->input_hash)
+            ->where('id', '<', $run->getKey())
+            ->where('error_code', 'summary_output_truncated')
+            ->get(['context_snapshot']);
+        $retryOrdinal = $priorTruncatedRuns->count() + 1;
+        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.summary_token_budget', []);
+        $maxTokens = match ($retryOrdinal) {
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 1_200),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 2_400),
+            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 4_000),
+        };
+        $priorMaximum = $priorTruncatedRuns
+            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
+            ->max();
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.summary_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+            throw new AiProviderException(
+                'summary_output_budget_exhausted',
+                "Canonical Chapter Summary 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Summary 模型后再重试。",
+                false,
+            );
+        }
+
+        return $maxTokens;
     }
 
     private function canonicalArtifact(Chapter $chapter): GenerationArtifact

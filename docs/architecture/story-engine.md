@@ -309,6 +309,8 @@ MVP：
 
 offset 可以暂时可选，但 `artifact_id` 与正文证据必须可追踪。
 
+`scene_id` 是 Scene 数据库主键，不是章内序号。Event Extraction 必须向 Provider 提供冻结的 Scene ID / Sequence 映射。候选引用不属于当前章节时，只允许根据在当前 Scene Draft 中唯一命中的逐字 quote 做确定性纠正；无法唯一确认时必须拒绝候选事件。
+
 ---
 
 # 8. Ambiguous Event

@@ -35,11 +35,15 @@ AI 全书大纲必须异步执行。Filament Action 只向 `generation` 队列�
 
 进入 `generating` 后执行章节流水线：
 
-Chapter Planner 的 completion token 上限独立于 Scene Writer：首次请求默认 12,000，失败后的新 Run 默认 16,000，并把实际采用值冻结到 `context_snapshot.generation_preferences.max_completion_tokens`。OpenAI 的推理 Token 与结构化正文共用 completion 额度；若 `finish_reason=length`，Provider 必须返回实际 Token 用量供费用追踪，再由结构化输出层标记为可重试的 `plan_output_truncated`，不能让同一低上限重复消耗全部重试次数。
+Chapter Planner 的 completion token 上限独立于 Scene Writer：首次、第一次重试和最终重试默认依次为 12,000、16,000、24,000，并把预算序号与实际采用值冻结到 `context_snapshot.generation_preferences`。OpenAI 的推理 Token 与结构化正文共用 completion 额度；若 `finish_reason=length`，Provider 必须返回实际 Token 用量供费用追踪，再由结构化输出层标记为可重试的 `plan_output_truncated`。最高预算仍截断时，下一次在 Provider 请求前转为 `plan_output_budget_exhausted`。
 
-Scene Writer 同样为推理 Token 和结构化正文保留独立额度：首次请求默认 12,000，后续 Run 默认 16,000，实际值冻结进 Run Snapshot。Provider 连接请求超时默认 150 秒；Scene 最多包含一次长度修复，因此两次最坏请求仍须小于 330 秒 Job timeout。旧版默认值创建且仍保持 60 秒的 DeepSeek 连接在迁移时提升到 150 秒，后台人工设置为其他值的连接不覆盖。
+Scene Writer 同样为推理 Token 和结构化正文保留独立额度：三级默认为 12,000、16,000、24,000，实际值冻结进 Run Snapshot；最高预算被截断后转为 `scene_output_budget_exhausted`，不再重复请求。Provider 连接请求超时默认 150 秒；Scene 最多包含一次长度修复，因此两次最坏请求仍须小于 330 秒 Job timeout。旧版默认值创建且仍保持 60 秒的 DeepSeek 连接在迁移时提升到 150 秒，后台人工设置为其他值的连接不覆盖。
 
 Chapter Assembly 的完整正文、Scene Coverage 和伏笔 Coverage 共用 completion 额度。首次请求默认 12,000；连续截断时按同一输入、Provider、Model 和 Prompt Version 依次提升到 16,000、24,000，并把预算序号和实际采用值冻结到 Run Snapshot。技术重试不得重复使用已经截断的相同最高预算；最高预算仍被截断时，在发起下一次 Provider 请求前转为 `assembly_output_budget_exhausted`，要求调整 Assembler 模型或预算。Assembly 后续的长度修复沿用当前 Run 已冻结的实际预算。
+
+Narrative Review 使用 4,000、8,000、12,000 三级输出预算。因 reasoning Token 用尽而返回空正文时，后续 Run 必须提升预算；最高预算仍截断时以 `review_output_budget_exhausted` 在 Provider 请求前停止。
+
+Story Event Extraction 使用 4,000、8,000、12,000，Rewrite 使用 12,000、16,000、24,000，Canonical Chapter Summary 使用 1,200、2,400、4,000。三者都按同一输入、Provider、Model 与 Prompt Version 识别连续截断，并将冻结预算和重试序号写入 Run Snapshot；达到最高预算后，下一次分别以 `event_output_budget_exhausted`、`rewrite_output_budget_exhausted`、`summary_output_budget_exhausted` 在 Provider 请求前停止。预算升级只处理 `finish_reason=length`，不能把确定性的 Schema、业务校验或代码错误伪装成技术重试。
 
 ```text
 GenerateNextChapterAction
@@ -185,6 +189,8 @@ context
 ```
 
 技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 且没有可解析结构化结果时，必须记录为对应阶段的 `*_output_truncated` 技术故障，不能把它误记为普通 Schema 内容错误。使用固定预算的全书大纲请求遇到截断时终止当前 Job，避免相同参数自动重试并重复计费；其他阶段只有在提高后续请求预算时才允许重试。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
+
+Queue Job 必须区分可重试的外部或数据库故障与不可重试的应用代码异常。`QueryException` 等临时基础设施错误可由 Queue 退避重试；`ErrorException`、`TypeError`、未定义数组键等本地代码故障必须立即终止当前 Job，进入失败与阻断流程，不得再次调用 AI Provider。
 
 Filament 发起生成任务时，必须在派发前写入带 TTL 的临时待执行标记，并在标记存在或数据库已有 `queued / running` Run 时禁用本章的生成操作。Queue Job 同时使用按阶段与业务对象定义的唯一键，防止页面刷新、多标签页或并发请求重复入队。Job 成功或最终失败后清除临时标记；Worker 异常退出时由 TTL 自动释放。该标记只用于弥补 Job 入队到 `GenerationRun` 创建之间的可见性窗口，业务恢复与执行进度仍以 PostgreSQL 中的 Run 和 Artifact 为准。
 
@@ -407,6 +413,8 @@ assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
 确定性校验能证明动作授权、Coverage 结论、证据来源和生命周期顺序一致，不能仅凭字符串证明正文语义真正满足 `acceptance_criteria` 或 `promised_payoff`；该语义验收由 Reviewer 执行。
 
 `subject_type` 必须同时通过 Provider JSON Schema 和 Laravel 业务校验。`current_state.world.entities` 中的实体统一引用为 `world_entity`，不得把实体内部的 `concept`、`rule`、`location` 或 `faction` 分类直接作为 `subject_type`。Laravel 还必须校验事件类型与主体类型匹配，例如 `foreshadowing_*` 只能引用 `foreshadowing`。校验失败信息必须包含候选事件序号、字段、错误值和允许值。若候选事件只有 evidence quote 未逐字命中，系统可以在保持事件类型、主体、payload、时间和置信度不变的前提下单独修复 quote；外层引号、空白或省略号差异可以确定性映射回连续原文，模型省略说话人插入语时只保留与原文至少 80% 高度重合且不少于 8 字的连续片段。无法可靠定位的 Evidence Item 丢弃；事件至少保留一项逐字证据，否则拒绝创建 Event Candidate。轻量修复响应被 Token 截断时允许以更高预算重试一次。
+
+Extractor Context 同时冻结 `current_scene_references`，每项明确区分数据库 `scene_id`、章内 `sequence` 和当前 Scene Draft Artifact。Provider 只能把前者写入 `evidence.scene_id`。当模型误把 sequence 或其他章节 Scene ID 写入该字段时，Laravel 只在 evidence quote 逐字且唯一命中当前章节某个 Scene Draft 时纠正为该 Scene 的数据库 ID。零命中或多命中时不猜测，仍以 `event_validation_failed` 拒绝。
 
 幂等键：
 
@@ -740,7 +748,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 chapter-planner-v10+natural-prose-v1
 scene-writer-v15+natural-prose-v1
 assembler-v12+natural-prose-v1
-event-extractor-v6
+event-extractor-v7
 reviewer-v14+natural-prose-v1
 rewrite-v13+natural-prose-v1
 review-schema-repair-v3

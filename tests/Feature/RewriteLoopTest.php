@@ -55,6 +55,21 @@ function rewriteResponse(string $content = '修订后的章节正文'): AiRespon
     return new AiResponse(content: json_encode($data, JSON_UNESCAPED_UNICODE), structuredData: $data, inputTokens: 100, outputTokens: 100, cachedTokens: 0, latencyMs: 100, providerRequestId: 'rewrite', model: 'rewrite-test');
 }
 
+function truncatedRewriteResponse(): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 100,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'truncated-rewrite-request',
+        model: 'rewrite-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 function chapterRewriteCoverageResponse(Chapter $chapter, string $content = '修订后的完整章节'): AiResponse
 {
     $fulfilled = ['status' => 'fulfilled', 'evidence' => $content];
@@ -482,6 +497,31 @@ test('retryable provider failure records a failed run before retry succeeds', fu
     expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->where('status', RunStatus::Failed)->count())->toBe(1)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->where('status', RunStatus::Succeeded)->count())->toBe(1);
+});
+
+test('rewrite increases frozen output budgets and stops before a fourth provider call', function () {
+    config()->set('generation.rewrite_max_output_tokens', 100);
+    config()->set('generation.rewrite_retry_max_output_tokens', 200);
+    config()->set('generation.rewrite_final_retry_max_output_tokens', 300);
+    $fixture = rewriteFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedRewriteResponse())
+        ->enqueue(truncatedRewriteResponse())
+        ->enqueue(truncatedRewriteResponse());
+    app()->instance(AiProvider::class, $fake);
+    $rewriter = app(ChapterRewriter::class);
+
+    foreach ([100, 200, 300] as $expectedBudget) {
+        expect(fn () => $rewriter->rewrite($fixture['chapter']->getKey()))
+            ->toThrow(AiProviderException::class, '因输出 Token 用尽而被截断');
+        expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
+    }
+
+    expect(fn () => $rewriter->rewrite($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '已在冻结的最高输出预算 300 Token 下被截断');
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->latest('id')->first()->error_code)
+        ->toBe('rewrite_output_budget_exhausted');
 });
 
 test('an overlength rewrite is compressed once before it becomes a rewrite draft', function () {

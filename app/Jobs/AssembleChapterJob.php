@@ -65,6 +65,8 @@ class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
             }
 
             throw $exception;
+        } catch (Throwable $exception) {
+            $this->handleUnexpectedGenerationFailure($exception);
         }
     }
 

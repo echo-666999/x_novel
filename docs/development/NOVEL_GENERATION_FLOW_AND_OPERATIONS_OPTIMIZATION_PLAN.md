@@ -900,6 +900,21 @@ GFO-007
 - 最高预算已经截断时，后续重复操作会在 Provider 调用前以 `assembly_output_budget_exhausted` 停止，并建议调整 Assembler 模型路由或输出预算，避免相同请求继续产生费用。
 - 本次未自动重放真实 AI 请求，未修改小说、章节、Artifact 或 Canonical 数据。针对性测试 `43 passed / 316 assertions`；最终全量测试 `979 passed / 5907 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细；Pint 与 `git diff --check` 通过。
 
+**Event Evidence Scene Reference Correction（2026-09-25）**
+
+- Run #401 与 #402 使用同一 Chapter Draft 和 `event-extractor-v6`，模型把章内 Scene Sequence `1` 当成了数据库 `scene_id`。当前 Chapter 的实际 Scene ID 为 43、44、45，ID 1 属于其他 Chapter，因此 Laravel 的跨章校验正确拒绝了候选事件。
+- Extractor Context 新增冻结的 `current_scene_references`，明确区分 `scene_id`、`sequence` 和 Scene Draft Artifact；Prompt 明确禁止将 sequence 填入 `evidence.scene_id`，版本提升为 `event-extractor-v7`。
+- Laravel 在入库前用逐字 quote 对当前 Scene Draft 执行唯一命中解析。只有一个 Scene 命中时才纠正 ID；零命中、多命中或真实跨章引用仍失败，不降低 Event Validation 标准。
+- 本次未自动重放 #401/#402，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `46 passed / 147 assertions`；最终全量测试 `981 passed / 5916 assertions / 27 skipped / 1 warning`；Pint 与 `git diff --check` 通过。Horizon 已优雅重启并恢复 `generation` / `default` Worker。
+
+**Generation Job Exception Closure Correction（2026-09-25）**
+
+- 数据库确认 `Undefined array key 0` 发生在 Run #403，不是 #404；#404 已成功并产生 Event Candidate。根因是 Laravel Collection `filter()` 保留原键，唯一命中第 2/3 个 Scene 时结果没有键 `0`。唯一命中集合现在先 `values()` 重建索引，回归测试强制使用“非首个 Scene 命中”。
+- #405、#406 为同一 Review 输入，两次 4,000 Token 均被 reasoning 用尽且返回空正文。Review 现按 4,000 / 8,000 / 12,000 递增，现有两次截断后的下一次恢复直接使用 12,000；最高预算再截断时不发起第四次请求。
+- Planner、Scene、Assembly、Review、Event Extraction、Rewrite 与 Canonical Summary 均具有分阶段递增预算与最高预算熔断。核心生成 Job、全书大纲、Canonical Summary 和 Embedding 统一将未知代码故障视为不可重试，只保留数据库等明确临时故障的 Queue Retry，避免本地 Bug 重复调用 Provider。
+- Event Extraction 使用 4,000 / 8,000 / 12,000，Rewrite 使用 12,000 / 16,000 / 24,000，Canonical Summary 使用 1,200 / 2,400 / 4,000；每个阶段均有回归测试证明连续截断会升级预算，最高档再截断后不会发生第四次 Provider 调用。
+- 本次未重放真实 AI 请求，未修改 Canonical Story State。针对性测试 `243 passed / 1321 assertions`；最终全量测试 `989 passed / 5995 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 
 ```text

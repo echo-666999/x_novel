@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Services\GenerationFailurePolicy;
 use App\Services\MemoryEmbedder;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -39,6 +40,15 @@ class GenerateEmbeddingJob implements ShouldQueue
             }
 
             throw $exception;
+        } catch (Throwable $exception) {
+            $failure = app(GenerationFailurePolicy::class)
+                ->fromException($exception, 'embedding_code_failure');
+
+            if ($failure->retryable) {
+                throw $exception;
+            }
+
+            $this->fail($exception);
         }
     }
 

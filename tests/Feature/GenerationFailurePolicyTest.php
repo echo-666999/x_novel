@@ -4,6 +4,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\Enums\RunStatus;
 use App\Models\GenerationRun;
 use App\Services\GenerationFailurePolicy;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -71,4 +72,18 @@ test('exhausted structured output budget recommends changing the model route or 
 
     expect($failure->metadata['category'])->toBe('structured_output')
         ->and($failure->recommendedAction)->toBe('调整模型路由或输出预算');
+});
+
+test('unexpected code failures are terminal while database failures remain retryable', function () {
+    $policy = app(GenerationFailurePolicy::class);
+    $codeFailure = $policy->fromException(new ErrorException('Undefined array key 0'), 'generation_code_failure');
+    $databaseFailure = $policy->fromException(
+        new QueryException('pgsql', 'select 1', [], new RuntimeException('connection lost')),
+        'generation_code_failure',
+    );
+
+    expect($codeFailure->retryable)->toBeFalse()
+        ->and($codeFailure->metadata['category'])->toBe('manual_attention')
+        ->and($databaseFailure->retryable)->toBeTrue()
+        ->and($databaseFailure->metadata['category'])->toBe('infrastructure_temporary');
 });

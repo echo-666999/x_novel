@@ -70,6 +70,8 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
             $this->fail($e);
 
             return;
+        } catch (Throwable $e) {
+            $this->handleUnexpectedGenerationFailure($e);
         }
     }
 

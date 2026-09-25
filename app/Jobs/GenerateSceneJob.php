@@ -80,6 +80,8 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
             }
 
             throw $exception;
+        } catch (Throwable $exception) {
+            $this->handleUnexpectedGenerationFailure($exception);
         }
     }
 

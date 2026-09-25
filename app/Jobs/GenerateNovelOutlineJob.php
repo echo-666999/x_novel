@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Models\Novel;
+use App\Services\GenerationFailurePolicy;
 use App\Services\NovelPlanner;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -12,6 +13,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class GenerateNovelOutlineJob implements ShouldBeUnique, ShouldQueue
 {
@@ -52,6 +54,15 @@ class GenerateNovelOutlineJob implements ShouldBeUnique, ShouldQueue
             throw $exception;
         } catch (ValidationException $exception) {
             // Schema 或领域校验失败需要修正输入，重复调用模型不会自行恢复。
+            $this->fail($exception);
+        } catch (Throwable $exception) {
+            $failure = app(GenerationFailurePolicy::class)
+                ->fromException($exception, 'novel_planning_code_failure');
+
+            if ($failure->retryable) {
+                throw $exception;
+            }
+
             $this->fail($exception);
         }
     }

@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\AI\Exceptions\AiProviderException;
 use App\Models\Chapter;
 use App\Services\CanonicalChapterSummaryService;
+use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -12,6 +13,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
 {
@@ -55,6 +57,15 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
 
             throw $exception;
         } catch (ValidationException $exception) {
+            $this->fail($exception);
+        } catch (Throwable $exception) {
+            $failure = app(GenerationFailurePolicy::class)
+                ->fromException($exception, 'summary_code_failure');
+
+            if ($failure->retryable) {
+                throw $exception;
+            }
+
             $this->fail($exception);
         }
     }
