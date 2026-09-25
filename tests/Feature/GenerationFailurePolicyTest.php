@@ -62,3 +62,13 @@ test('frozen provider route drift is classified as provider configuration', func
     'provider_run_route_missing',
     'model_run_mismatch',
 ]);
+
+test('exhausted structured output budget recommends changing the model route or budget', function () {
+    $failure = app(GenerationFailurePolicy::class)->fromException(
+        new AiProviderException('assembly_output_budget_exhausted', 'Budget exhausted.', false),
+        'chapter_assembly_failed',
+    );
+
+    expect($failure->metadata['category'])->toBe('structured_output')
+        ->and($failure->recommendedAction)->toBe('调整模型路由或输出预算');
+});

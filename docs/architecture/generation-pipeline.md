@@ -39,6 +39,8 @@ Chapter Planner 的 completion token 上限独立于 Scene Writer：首次请求
 
 Scene Writer 同样为推理 Token 和结构化正文保留独立额度：首次请求默认 12,000，后续 Run 默认 16,000，实际值冻结进 Run Snapshot。Provider 连接请求超时默认 150 秒；Scene 最多包含一次长度修复，因此两次最坏请求仍须小于 330 秒 Job timeout。旧版默认值创建且仍保持 60 秒的 DeepSeek 连接在迁移时提升到 150 秒，后台人工设置为其他值的连接不覆盖。
 
+Chapter Assembly 的完整正文、Scene Coverage 和伏笔 Coverage 共用 completion 额度。首次请求默认 12,000；连续截断时按同一输入、Provider、Model 和 Prompt Version 依次提升到 16,000、24,000，并把预算序号和实际采用值冻结到 Run Snapshot。技术重试不得重复使用已经截断的相同最高预算；最高预算仍被截断时，在发起下一次 Provider 请求前转为 `assembly_output_budget_exhausted`，要求调整 Assembler 模型或预算。Assembly 后续的长度修复沿用当前 Run 已冻结的实际预算。
+
 ```text
 GenerateNextChapterAction
 → PlanChapterJob

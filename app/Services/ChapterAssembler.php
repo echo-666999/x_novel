@@ -56,6 +56,11 @@ class ChapterAssembler
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Assembler);
         $context = $this->context($chapter, $artifacts);
         $context['prompt_version'] = $promptVersion;
+        $context['generation_preferences']['assembly_token_budget'] = [
+            'initial_max_completion_tokens' => (int) config('generation.assembly_max_output_tokens', 12_000),
+            'retry_max_completion_tokens' => (int) config('generation.assembly_retry_max_output_tokens', 16_000),
+            'final_retry_max_completion_tokens' => (int) config('generation.assembly_final_retry_max_output_tokens', 24_000),
+        ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
             'provider' => $settings->provider,
@@ -81,6 +86,7 @@ class ChapterAssembler
         }
 
         try {
+            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -88,7 +94,7 @@ class ChapterAssembler
                 systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须保留各动作在指定 Scene 中已经实现的内容，不得把未列入 actions 的伏笔改写成本章主动处理目标，也不得把 promised_payoff 当作允许直接揭晓的正文信息；始终遵守 chapter_plan.must_not_reveal。l4 是唯一的 Style Contract；保持各 Scene 已有的 POV、时态和叙述声音，不得重新选择文风来源或让辅助文风覆盖主文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折、结果及 outcome_allowed / outcome_forbidden 行为边界；按 continuity_requirements 合并跨 Scene 持续状态，只保留首次建立、真实变化和章末回扣，persist 场景只保留推动本场动作所需的最短增量表达。scene_coverage 必须按 Scene 顺序逐项返回 goal、conflict、turn、outcome 的 fulfilled、missing 或 contradicted 状态；每个 Scene 的 foreshadowing_coverage 必须按契约顺序完整返回分配给该 Scene 的全部伏笔动作。只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled；仅有主题相近措辞、但没有动作结果时必须标记 missing；正文反转既定动作时标记 contradicted。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。Assembler 不能创作 Scene Draft 中不存在的重大剧情结果来补齐 coverage，也不得删除 Scene Draft 中唯一能够证明伏笔动作已完成的证据；introduced_major_facts 必须返回 []。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，返回符合 Schema 的 JSON。'.NarrativeProsePolicy::writing(),
                 prompt: '请组装以下场景并返回结构化章节结果：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.3,
-                maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
+                maxTokens: $maxTokens,
                 responseSchema: ChapterAssemblyPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [
@@ -122,6 +128,7 @@ class ChapterAssembler
                 model: $settings->model,
                 promptVersion: $promptVersion,
                 reasoningEffort: $settings->reasoningEffort,
+                maxTokens: $maxTokens,
                 metadata: [
                     'generation_run_id' => $run->getKey(),
                     'novel_id' => $chapter->novel_id,
@@ -315,7 +322,7 @@ class ChapterAssembler
     /** @param array<string, mixed> $context
      * @param  array<string, mixed>  $metadata
      */
-    private function repairLengthIfNeeded(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $provider, string $model, string $promptVersion, ?string $reasoningEffort, array $metadata): array
+    private function repairLengthIfNeeded(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $provider, string $model, string $promptVersion, ?string $reasoningEffort, int $maxTokens, array $metadata): array
     {
         $constraints = $context['writing_constraints'];
 
@@ -348,7 +355,7 @@ class ChapterAssembler
                     'draft' => $payload,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: (int) config('generation.assembly_max_output_tokens', 12_000),
+                maxTokens: $maxTokens,
                 responseSchema: ChapterAssemblyPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
@@ -469,5 +476,44 @@ class ChapterAssembler
     private function failRun(GenerationRun $run, Throwable $exception): void
     {
         $this->failurePolicy->record($run, $exception, 'chapter_assembly_failed');
+    }
+
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    {
+        $priorTruncatedRuns = GenerationRun::query()
+            ->where('chapter_id', $run->chapter_id)
+            ->where('stage', GenerationStage::ChapterAssembly)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('id', '<', $run->getKey())
+            ->where('error_code', 'assembly_output_truncated')
+            ->get(['idempotency_key', 'context_snapshot'])
+            ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
+                || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
+            ->values();
+        $retryOrdinal = $priorTruncatedRuns->count() + 1;
+        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.assembly_token_budget', []);
+        $maxTokens = match ($retryOrdinal) {
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
+            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
+        };
+        $priorMaximum = $priorTruncatedRuns
+            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
+            ->max();
+        $snapshot = $run->context_snapshot ?? [];
+        data_set($snapshot, 'generation_preferences.assembly_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        $run->update(['context_snapshot' => $snapshot]);
+
+        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+            throw new AiProviderException(
+                'assembly_output_budget_exhausted',
+                "Chapter Assembly 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Assembler 模型后再重试。",
+                false,
+            );
+        }
+
+        return $maxTokens;
     }
 }

@@ -23,6 +23,8 @@ return [
     'scene_structure_repair_retry_max_output_tokens' => 2_000,
     'previous_scene_tail_characters' => (int) env('PREVIOUS_SCENE_TAIL_CHARACTERS', 1_000),
     'assembly_max_output_tokens' => (int) env('ASSEMBLY_MAX_OUTPUT_TOKENS', 12_000),
+    'assembly_retry_max_output_tokens' => (int) env('ASSEMBLY_RETRY_MAX_OUTPUT_TOKENS', 16_000),
+    'assembly_final_retry_max_output_tokens' => (int) env('ASSEMBLY_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000),
     'chapter_min_length_ratio' => .85,
     'chapter_max_length_ratio' => 1.15,
     'event_extraction_max_output_tokens' => (int) env('EVENT_EXTRACTION_MAX_OUTPUT_TOKENS', 4_000),

@@ -96,7 +96,7 @@ final class GenerationFailurePolicy
         if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException) {
             return $exception instanceof QueryException ? 'infrastructure_temporary' : 'external_temporary';
         }
-        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json')) {
+        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json') || str_contains($code, 'output_budget_exhausted')) {
             return 'structured_output';
         }
         if (str_contains($code, 'state_version') || str_starts_with($code, 'stale_') || str_contains($code, 'artifact_conflict')) {
@@ -122,6 +122,9 @@ final class GenerationFailurePolicy
         }
         if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
             return '修复 AI 配置';
+        }
+        if (str_contains($code, 'output_budget_exhausted')) {
+            return '调整模型路由或输出预算';
         }
         if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated')) {
             return '检查请求结构或输出预算';

@@ -892,6 +892,14 @@ GFO-007
 - Usage 诊断新增 `route_key`；Provider/Model 漂移归类为 `provider_configuration`，错误信息包含 Run、路由键、请求值和冻结值。
 - 未重新调用 Run #395 的真实 AI 请求，未修改小说、章节、Artifact 或 Canonical 数据。针对性测试 `75 passed / 363 assertions`；最终全量测试 `976 passed / 5886 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细；Pint 与 `git diff --check` 通过。
 
+**Assembly Truncation Correction（2026-09-25）**
+
+- Run #397、#398、#399 的 Chapter、输入哈希、Provider、Model、Prompt Version 与 12,000 Token 上限完全相同；对应 Usage 的输出分别为 12,000、11,999、12,000 Token，Provider 响应均为 `finish_reason=length`，且 `reasoning_tokens` 占满可用额度。三次重试没有提高预算，因此重复执行了相同的必败请求。
+- Chapter Assembly 现在冻结三级输出预算：首次 12,000、第一次截断后 16,000、再次截断后 24,000。预算等级按同一章节输入、Provider、Model 和 Prompt Version 的历史截断记录计算，现有 #397～#399 后的下一次恢复会直接采用 24,000，而不会再次使用 12,000。
+- Run Snapshot 记录完整预算计划、当前截断序号和实际 `max_completion_tokens`；Assembly 长度修复沿用当前 Run 的实际预算。
+- 最高预算已经截断时，后续重复操作会在 Provider 调用前以 `assembly_output_budget_exhausted` 停止，并建议调整 Assembler 模型路由或输出预算，避免相同请求继续产生费用。
+- 本次未自动重放真实 AI 请求，未修改小说、章节、Artifact 或 Canonical 数据。针对性测试 `43 passed / 316 assertions`；最终全量测试 `979 passed / 5907 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细；Pint 与 `git diff --check` 通过。
+
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 
 ```text

@@ -131,6 +131,21 @@ function assemblyCoverageRepairResponse(array $coverage): AiResponse
     );
 }
 
+function truncatedAssemblyResponse(int $outputTokens): AiResponse
+{
+    return new AiResponse(
+        content: '{"content":"partial',
+        structuredData: null,
+        inputTokens: 300,
+        outputTokens: $outputTokens,
+        cachedTokens: 0,
+        latencyMs: 500,
+        providerRequestId: 'assembly-truncated-request',
+        model: 'assembler-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null],
+    );
+}
+
 function assemblyForeshadowingAction(array $fixture, int $sceneSequence = 1): Foreshadowing
 {
     $foreshadowing = Foreshadowing::factory()->for($fixture['novel'])->create([
@@ -457,6 +472,72 @@ test('retryable assembly failures are recorded and retry from assembly only', fu
     expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::ChapterAssembly)->count())->toBe(2)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::ChapterAssembly)->latest('id')->first()->status)->toBe(RunStatus::Succeeded)
         ->and($fixture['scenes']->every(fn (Scene $scene): bool => $scene->fresh()->status === SceneStatus::Draft))->toBeTrue();
+});
+
+test('assembly truncation retries increase and freeze the output budget', function () {
+    config()->set('generation.assembly_max_output_tokens', 12_000);
+    config()->set('generation.assembly_retry_max_output_tokens', 16_000);
+    config()->set('generation.assembly_final_retry_max_output_tokens', 24_000);
+    $fixture = chapterAssemblyFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedAssemblyResponse(12_000))
+        ->enqueue(truncatedAssemblyResponse(16_000))
+        ->enqueue(assemblyResponse('重试后完整正文'));
+    app()->instance(AiProvider::class, $fake);
+    $assembler = app(ChapterAssembler::class);
+
+    expect(fn () => $assembler->assemble($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '输出 Token 用尽');
+    expect(fn () => $assembler->assemble($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '输出 Token 用尽');
+    $artifact = $assembler->assemble($fixture['chapter']->getKey());
+
+    $runs = $fixture['chapter']->generationRuns()
+        ->where('stage', GenerationStage::ChapterAssembly)
+        ->orderBy('id')
+        ->get();
+    expect($artifact?->content)->toBe('重试后完整正文')
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(24_000)
+        ->and($runs->pluck('input_hash')->unique())->toHaveCount(1)
+        ->and($runs->map(fn (GenerationRun $run): int => (int) data_get($run->context_snapshot, 'generation_preferences.assembly_retry_ordinal'))->all())->toBe([1, 2, 3])
+        ->and($runs->map(fn (GenerationRun $run): int => (int) data_get($run->context_snapshot, 'generation_preferences.max_completion_tokens'))->all())->toBe([12_000, 16_000, 24_000]);
+});
+
+test('assembly does not repeat a request after the final output budget was truncated', function () {
+    config()->set('generation.assembly_max_output_tokens', 12_000);
+    config()->set('generation.assembly_retry_max_output_tokens', 16_000);
+    config()->set('generation.assembly_final_retry_max_output_tokens', 24_000);
+    $fixture = chapterAssemblyFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedAssemblyResponse(12_000))
+        ->enqueue(truncatedAssemblyResponse(16_000))
+        ->enqueue(truncatedAssemblyResponse(24_000))
+        ->enqueue(assemblyResponse('不应被调用'));
+    app()->instance(AiProvider::class, $fake);
+    $assembler = app(ChapterAssembler::class);
+
+    foreach ([12_000, 16_000, 24_000] as $budget) {
+        try {
+            $assembler->assemble($fixture['chapter']->getKey());
+            $this->fail("Expected truncation at {$budget} tokens.");
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('assembly_output_truncated');
+        }
+    }
+
+    try {
+        $assembler->assemble($fixture['chapter']->getKey());
+        $this->fail('Expected exhausted assembly output budget.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('assembly_output_budget_exhausted')
+            ->and($exception->retryable)->toBeFalse();
+    }
+
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fixture['chapter']->generationRuns()->latest('id')->first()->error_code)->toBe('assembly_output_budget_exhausted');
 });
 
 test('an overlength assembly is compressed once before it becomes a chapter draft', function () {
