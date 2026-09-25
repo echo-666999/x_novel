@@ -609,7 +609,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 | assembler | `assembler-v12+natural-prose-v1` |
 | extractor | `event-extractor-v7` |
 | reviewer | `reviewer-v16+natural-prose-v1` |
-| rewrite | `rewrite-v13+natural-prose-v1` |
+| rewrite | `rewrite-v14+natural-prose-v1` |
 | summary | `summary-v2+natural-prose-v1` |
 
 补充边界：

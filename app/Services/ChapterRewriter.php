@@ -115,8 +115,8 @@ class ChapterRewriter
             'content' => $source->content,
         ];
         $brief['generation_preferences']['rewrite_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.rewrite_max_output_tokens', 12_000),
-            'retry_max_completion_tokens' => (int) config('generation.rewrite_retry_max_output_tokens', 16_000),
+            'initial_max_completion_tokens' => (int) config('generation.rewrite_max_output_tokens', 16_000),
+            'retry_max_completion_tokens' => (int) config('generation.rewrite_retry_max_output_tokens', 20_000),
             'final_retry_max_completion_tokens' => (int) config('generation.rewrite_final_retry_max_output_tokens', 24_000),
         ];
         $inputHash = hash('sha256', json_encode([$brief, $settings->provider, $settings->model, $settings->reasoningEffort, $promptVersion], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -242,7 +242,7 @@ class ChapterRewriter
 
         $scope = $sceneRewrite
             ? '当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'
-            : '当前 scope=chapter，按 Schema 返回完整的简体中文章节替换稿、全部 Scene 的 scene_coverage 和 introduced_major_facts=[]。Coverage 必须基于最终重写正文重新判断，允许把已修复的问题从 missing/contradicted 更新为 fulfilled；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。';
+            : '当前 scope=chapter，按 Schema 返回完整的简体中文章节替换稿、全部 Scene 的 scene_coverage 和 introduced_major_facts=[]。scene_coverage 必须严格按 plan_acceptance.scenes 顺序返回；scene_id 必须复制其中的数据库 Scene ID，不得填写章内 sequence。Coverage 必须基于最终重写正文重新判断，允许把已修复的问题从 missing/contradicted 更新为 fulfilled；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。';
 
         return $base.$scope.NarrativeProsePolicy::writing();
     }
@@ -535,8 +535,8 @@ class ChapterRewriter
         $retryOrdinal = $priorTruncatedRuns->count() + 1;
         $budget = (array) data_get($run->context_snapshot, 'generation_preferences.rewrite_token_budget', []);
         $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
+            1 => (int) ($budget['initial_max_completion_tokens'] ?? 16_000),
+            2 => (int) ($budget['retry_max_completion_tokens'] ?? 20_000),
             default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
         };
         $priorMaximum = $priorTruncatedRuns

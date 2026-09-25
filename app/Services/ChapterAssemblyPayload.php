@@ -67,6 +67,14 @@ final class ChapterAssemblyPayload
         $scenes = $chapter->scenes->sortBy('sequence')->values();
         $expectedSceneIds = $scenes->modelKeys();
         $actualSceneIds = collect($validated['scene_coverage'])->pluck('scene_id')->all();
+        $expectedSceneSequences = $scenes->pluck('sequence')->map(fn ($sequence): int => (int) $sequence)->all();
+
+        if ($actualSceneIds === $expectedSceneSequences) {
+            foreach ($expectedSceneIds as $index => $sceneId) {
+                $validated['scene_coverage'][$index]['scene_id'] = $sceneId;
+            }
+            $actualSceneIds = $expectedSceneIds;
+        }
 
         if (count($actualSceneIds) !== count(array_unique($actualSceneIds, SORT_REGULAR))
             || $actualSceneIds !== $expectedSceneIds) {

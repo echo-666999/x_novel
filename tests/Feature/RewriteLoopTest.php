@@ -70,13 +70,14 @@ function truncatedRewriteResponse(): AiResponse
     );
 }
 
-function chapterRewriteCoverageResponse(Chapter $chapter, string $content = '修订后的完整章节'): AiResponse
+/** @param array<int, int>|null $sceneReferences */
+function chapterRewriteCoverageResponse(Chapter $chapter, string $content = '修订后的完整章节', ?array $sceneReferences = null): AiResponse
 {
     $fulfilled = ['status' => 'fulfilled', 'evidence' => $content];
     $data = [
         'content' => $content,
-        'scene_coverage' => $chapter->scenes()->orderBy('sequence')->get()->map(fn (Scene $scene): array => [
-            'scene_id' => $scene->getKey(),
+        'scene_coverage' => $chapter->scenes()->orderBy('sequence')->get()->values()->map(fn (Scene $scene, int $index): array => [
+            'scene_id' => $sceneReferences[$index] ?? $scene->getKey(),
             'goal' => $fulfilled,
             'conflict' => $fulfilled,
             'turn' => $fulfilled,
@@ -311,6 +312,58 @@ test('chapter rewrite reruns and persists full scene coverage before event extra
         ->and($fake->requests()[0]->systemPrompt)->toContain('Coverage 必须基于最终重写正文重新判断');
 });
 
+test('chapter rewrite maps ordered scene sequences to frozen database scene ids', function () {
+    $otherNovel = Novel::factory()->create();
+    $otherChapter = Chapter::factory()->for($otherNovel)->create();
+    Scene::factory()->count(3)->for($otherChapter)->sequence(
+        ['sequence' => 1],
+        ['sequence' => 2],
+        ['sequence' => 3],
+    )->create();
+    $fixture = sceneRewriteFixture();
+    $fixture['review']->update(['findings' => [[
+        'code' => 'STYLE_MISMATCH',
+        'dimension' => 'style',
+        'severity' => 'error',
+        'scene_id' => null,
+        'scope' => 'chapter',
+        'auto_fixable' => true,
+        'requires_human_decision' => false,
+        'message' => '全章需要统一调整。',
+        'evidence' => '原始章节正文',
+    ]]]);
+    $expectedIds = $fixture['chapter']->scenes()->orderBy('sequence')->pluck('id')->all();
+    expect($expectedIds)->not->toBe([1, 2]);
+    $fake = (new FakeAiProvider)->enqueue(chapterRewriteCoverageResponse($fixture['chapter'], sceneReferences: [1, 2]));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
+
+    expect(collect($artifact->data['scene_coverage'])->pluck('scene_id')->all())->toBe($expectedIds)
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得填写章内 sequence');
+});
+
+test('chapter rewrite still rejects reordered scene sequences', function () {
+    $fixture = sceneRewriteFixture();
+    $fixture['review']->update(['findings' => [[
+        'code' => 'STYLE_MISMATCH',
+        'dimension' => 'style',
+        'severity' => 'error',
+        'scene_id' => null,
+        'scope' => 'chapter',
+        'auto_fixable' => true,
+        'requires_human_decision' => false,
+        'message' => '全章需要统一调整。',
+        'evidence' => '原始章节正文',
+    ]]]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(
+        chapterRewriteCoverageResponse($fixture['chapter'], sceneReferences: [2, 1]),
+    ));
+
+    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, 'Assembly Coverage 必须按顺序且不重复地引用本章全部 Scene');
+});
+
 test('chapter rewrite receives the previous canonical ending for continuity repair', function () {
     $fixture = rewriteFixture();
     $fixture['chapter']->update(['sequence' => 2]);
@@ -497,6 +550,12 @@ test('retryable provider failure records a failed run before retry succeeds', fu
     expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->where('status', RunStatus::Failed)->count())->toBe(1)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->where('status', RunStatus::Succeeded)->count())->toBe(1);
+});
+
+test('rewrite defaults reserve enough output budget for full chapter reasoning and content', function () {
+    expect(config('generation.rewrite_max_output_tokens'))->toBe(16_000)
+        ->and(config('generation.rewrite_retry_max_output_tokens'))->toBe(20_000)
+        ->and(config('generation.rewrite_final_retry_max_output_tokens'))->toBe(24_000);
 });
 
 test('rewrite increases frozen output budgets and stops before a fourth provider call', function () {

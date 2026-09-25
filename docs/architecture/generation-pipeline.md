@@ -43,7 +43,7 @@ Chapter Assembly 的完整正文、Scene Coverage 和伏笔 Coverage 共用 comp
 
 Narrative Review 使用 12,000、16,000、24,000 三级输出预算，为完整七维审校、规划/伏笔契约和高推理路由共同使用的 completion 额度留出空间。因 reasoning Token 用尽而返回空正文时，后续 Run 必须提升预算；最高预算仍截断时以 `review_output_budget_exhausted` 在 Provider 请求前停止。提高上限不改变三级熔断，也不允许 Schema 或业务校验失败伪装为技术重试。
 
-Story Event Extraction 使用 4,000、8,000、12,000，Rewrite 使用 12,000、16,000、24,000，Canonical Chapter Summary 使用 1,200、2,400、4,000。三者都按同一输入、Provider、Model 与 Prompt Version 识别连续截断，并将冻结预算和重试序号写入 Run Snapshot；达到最高预算后，下一次分别以 `event_output_budget_exhausted`、`rewrite_output_budget_exhausted`、`summary_output_budget_exhausted` 在 Provider 请求前停止。预算升级只处理 `finish_reason=length`，不能把确定性的 Schema、业务校验或代码错误伪装成技术重试。
+Story Event Extraction 使用 4,000、8,000、12,000，Rewrite 使用 16,000、20,000、24,000，Canonical Chapter Summary 使用 1,200、2,400、4,000。三者都按同一输入、Provider、Model 与 Prompt Version 识别连续截断，并将冻结预算和重试序号写入 Run Snapshot；达到最高预算后，下一次分别以 `event_output_budget_exhausted`、`rewrite_output_budget_exhausted`、`summary_output_budget_exhausted` 在 Provider 请求前停止。预算升级只处理 `finish_reason=length`，不能把确定性的 Schema、业务校验或代码错误伪装成技术重试。
 
 ```text
 GenerateNextChapterAction
@@ -327,7 +327,7 @@ Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Assembler、Event Ex
 
 Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；当 fulfilled 审校的模型证据为拼接引用时，Laravel 使用同一伏笔 ID、动作和目标 Scene 下已经通过逐字校验的 Coverage Evidence。`rewrite_required / needs_attention` 的模型证据若包含多个分号或省略号分隔的片段，Laravel 逐段映射当前正文并保留最长的连续逐字片段；至少一段可验证时不因格式问题丢弃整个 Review，全部无法验证时仍拒绝。原始 Provider 响应保留在请求日志中。rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
 
-整章 Rewrite 使用与 Assembly 相同的结构化 `content + scene_coverage + introduced_major_facts` 契约，但允许重写在实际修正文后把原先 missing/contradicted 的 Coverage 重新判为 fulfilled；证据仍须逐字校验，必要时只修复证据引用。整章 Rewrite Artifact 保存新的 `scene_coverage` 和 `plan_findings`，随后推进器因 source artifact 已变化而重新执行 Event Extraction、State Patch 和 Review。Scene 级 Rewrite 仍先回到 Assembly，再执行同一完整下游链。Rewrite 不能写 Story Event、伏笔领域投影或 Canonical State。
+整章 Rewrite 使用与 Assembly 相同的结构化 `content + scene_coverage + introduced_major_facts` 契约，但允许重写在实际修正文后把原先 missing/contradicted 的 Coverage 重新判为 fulfilled；证据仍须逐字校验，必要时只修复证据引用。`scene_id` 应使用数据库主键；如果模型返回的完整 Coverage 数组严格等于冻结 Scene 的章内 sequence 顺序，Laravel 将其一一映射为对应数据库 ID。只有完整、同序且不重复的 sequence 列表可以映射，乱序、重复、部分混用、跨章或无法解析的引用仍然拒绝。整章 Rewrite Artifact 保存新的 `scene_coverage` 和 `plan_findings`，随后推进器因 source artifact 已变化而重新执行 Event Extraction、State Patch 和 Review。Scene 级 Rewrite 仍先回到 Assembly，再执行同一完整下游链。Rewrite 不能写 Story Event、伏笔领域投影或 Canonical State。
 
 ## 8. Temporary Chapter State
 
@@ -752,7 +752,7 @@ scene-writer-v15+natural-prose-v1
 assembler-v12+natural-prose-v1
 event-extractor-v8
 reviewer-v16+natural-prose-v1
-rewrite-v13+natural-prose-v1
+rewrite-v14+natural-prose-v1
 review-schema-repair-v3
 arc-completion-repair-v2
 coverage-judgment-repair-v1

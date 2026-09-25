@@ -7,7 +7,7 @@ return [
         'assembler' => 'assembler-v12',
         'extractor' => 'event-extractor-v8',
         'reviewer' => 'reviewer-v16',
-        'rewrite' => 'rewrite-v13',
+        'rewrite' => 'rewrite-v14',
         'summary' => 'summary-v2',
     ],
 ];

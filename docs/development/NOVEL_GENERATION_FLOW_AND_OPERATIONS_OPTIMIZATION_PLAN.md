@@ -912,7 +912,7 @@ GFO-007
 - 数据库确认 `Undefined array key 0` 发生在 Run #403，不是 #404；#404 已成功并产生 Event Candidate。根因是 Laravel Collection `filter()` 保留原键，唯一命中第 2/3 个 Scene 时结果没有键 `0`。唯一命中集合现在先 `values()` 重建索引，回归测试强制使用“非首个 Scene 命中”。
 - #405、#406 为同一 Review 输入，两次 4,000 Token 均被 reasoning 用尽且返回空正文。Review 现按 4,000 / 8,000 / 12,000 递增，现有两次截断后的下一次恢复直接使用 12,000；最高预算再截断时不发起第四次请求。
 - Planner、Scene、Assembly、Review、Event Extraction、Rewrite 与 Canonical Summary 均具有分阶段递增预算与最高预算熔断。核心生成 Job、全书大纲、Canonical Summary 和 Embedding 统一将未知代码故障视为不可重试，只保留数据库等明确临时故障的 Queue Retry，避免本地 Bug 重复调用 Provider。
-- Event Extraction 使用 4,000 / 8,000 / 12,000，Rewrite 使用 12,000 / 16,000 / 24,000，Canonical Summary 使用 1,200 / 2,400 / 4,000；每个阶段均有回归测试证明连续截断会升级预算，最高档再截断后不会发生第四次 Provider 调用。
+- Event Extraction 使用 4,000 / 8,000 / 12,000，Rewrite 使用 16,000 / 20,000 / 24,000，Canonical Summary 使用 1,200 / 2,400 / 4,000；每个阶段均有回归测试证明连续截断会升级预算，最高档再截断后不会发生第四次 Provider 调用。
 - 本次未重放真实 AI 请求，未修改 Canonical Story State。针对性测试 `243 passed / 1321 assertions`；最终全量测试 `989 passed / 5995 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
 
 **Foreshadowing Event Evidence Lineage Correction（2026-09-25）**
@@ -934,6 +934,12 @@ GFO-007
 - Run #411 在 `gpt-5.6-sol + high` 下把 4,000 completion Token 全部用于 reasoning，返回空正文和 `finish_reason=length`。Reviewer 三级预算调整为 `12,000 / 16,000 / 24,000`，同时更新运行环境、示例配置、代码默认值和 Run Snapshot fallback；最高预算熔断保持不变。
 - Run #412 的 Arc Beat ID、Beat Key、顺序和 `missing + evidence=null` 均正确，只把冻结目标 Scene 43 返回为 `null`。规划审计现在只在数量、顺序、标识和 `missing + evidence=null` 全部成立时确定性补入冻结目标 Scene；`fulfilled / introduced / contradicted` 的错误 Scene、错误标识和错序仍被拒绝。
 - Reviewer Prompt 升级为 `reviewer-v16+natural-prose-v1`，明确 missing 审计仍须返回目标数据库 Scene ID。本次未重放 #411/#412，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `72 passed / 241 assertions`；最终全量测试 `995 passed / 6012 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+
+**Rewrite Budget and Scene Reference Normalization（2026-09-25）**
+
+- Run #414 的 12,000 completion Token 中有 8,796 被 reasoning 使用，结构化 JSON 在正文和 Coverage 尚未闭合时截断。Rewrite 三级预算调整为 `16,000 / 20,000 / 24,000`；保持原有 24,000 最高上限和三级熔断，避免扩大无界输出风险。
+- Run #415 完整返回三条 Coverage，但把数据库 Scene ID `43 / 44 / 45` 写成章内 sequence `1 / 2 / 3`。共享 Assembly Payload 校验现在只在完整数组严格等于冻结 Scene sequence 顺序时执行一一映射；乱序、重复、部分混用、跨章和无法解析引用仍然拒绝。
+- Rewrite Prompt 升级为 `rewrite-v14+natural-prose-v1`，明确 scene_coverage 必须复制数据库 Scene ID。本次未重放 #414/#415，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `60 passed / 280 assertions`；最终全量测试 `998 passed / 6020 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
 
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 
