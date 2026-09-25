@@ -103,6 +103,12 @@ function truncatedReviewResponse(int $outputTokens): AiResponse
     );
 }
 
+test('reviewer defaults reserve enough output budget for high reasoning structured review', function () {
+    expect(config('generation.review_max_output_tokens'))->toBe(12_000)
+        ->and(config('generation.review_retry_max_output_tokens'))->toBe(16_000)
+        ->and(config('generation.review_final_retry_max_output_tokens'))->toBe(24_000);
+});
+
 test('review escalates output budget after truncation and succeeds without repeating the same cap', function () {
     config()->set('generation.review_max_output_tokens', 4_000);
     config()->set('generation.review_retry_max_output_tokens', 8_000);
@@ -202,11 +208,11 @@ test('planning review audits require verbatim evidence and surface missing or un
         ]],
         'character_candidate_audits' => [[
             'candidate_key' => 'character-guide', 'status' => 'missing', 'evidence' => null,
-            'scene_id' => $scene->getKey(),
+            'scene_id' => null,
         ]],
         'world_entity_candidate_audits' => [[
             'candidate_key' => 'wec-city-gate', 'status' => 'missing', 'evidence' => null,
-            'scene_id' => $scene->getKey(),
+            'scene_id' => null,
         ]],
         'unapproved_world_entities' => [[
             'name' => '黑塔', 'type' => 'location', 'evidence' => '城门', 'scene_id' => $scene->getKey(),
@@ -225,11 +231,64 @@ test('planning review audits require verbatim evidence and surface missing or un
         'WORLD_ENTITY_CANDIDATE_NOT_INTRODUCED',
         'UNAPPROVED_WORLD_ENTITY',
     )
-        ->and($codes)->not->toContain('ARC_BEAT_NOT_FULFILLED');
+        ->and($codes)->not->toContain('ARC_BEAT_NOT_FULFILLED')
+        ->and(data_get($validated, 'character_candidate_audits.0.scene_id'))->toBe($scene->getKey())
+        ->and(data_get($validated, 'world_entity_candidate_audits.0.scene_id'))->toBe($scene->getKey());
 
     $payload['arc_beat_audits'][0]['evidence'] = '正文中不存在的证据';
     expect(fn () => app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']))
         ->toThrow(ValidationException::class, '正文逐字证据');
+});
+
+test('planning review binds a missing arc audit to its frozen target scene without accepting a wrong scene for fulfilled evidence', function () {
+    $fixture = reviewFixture();
+    $targetScene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $otherScene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 2]);
+    $arc = StoryArc::factory()->for($fixture['novel'])->create([
+        'status' => StoryArcStatus::Active,
+        'beats' => ['守住城门'],
+    ]);
+    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $fixture['chapter']->latestPlan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $beatKey,
+        'beat_index' => 1,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确守住城门。',
+    ]]]);
+    $payload = [
+        'arc_beat_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'beat_key' => $beatKey,
+            'status' => 'missing',
+            'evidence' => null,
+            'scene_id' => null,
+        ]],
+        'arc_completion_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'status' => 'not_met',
+            'evidence' => null,
+        ]],
+        'character_candidate_audits' => [],
+        'world_entity_candidate_audits' => [],
+        'unapproved_world_entities' => [],
+        'unapproved_characters' => [],
+    ];
+
+    $validated = app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']);
+
+    expect(data_get($validated, 'arc_beat_audits.0.scene_id'))->toBe($targetScene->getKey());
+
+    $payload['arc_beat_audits'][0] = [
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $beatKey,
+        'status' => 'fulfilled',
+        'evidence' => '守住城门',
+        'scene_id' => $otherScene->getKey(),
+    ];
+
+    expect(fn () => app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']))
+        ->toThrow(ValidationException::class, '规划契约验收的标识、顺序或目标 Scene 不一致');
 });
 
 test('planning review audits normalize quoted evidence with an omission marker to a verbatim excerpt', function () {
@@ -575,7 +634,8 @@ test('review turns one foreshadowing root cause into one complete automatic rewr
         ->and($foreshadowingFindings->first()['code'])->toBe('FORESHADOWING_SEMANTIC_REWRITE_REQUIRED')
         ->and(data_get($review->artifact->data, 'rewrite_scope.scene_id'))->toBe($fixture['scene']->getKey())
         ->and(data_get($review->generationRun->context_snapshot, 'event_candidate.events'))->toBe([])
-        ->and($fake->requests()[0]->systemPrompt)->toContain('仅提及关键词不能证明完成强化或兑现');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('仅提及关键词不能证明完成强化或兑现')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('即使 status=missing，scene_id 仍必须复制 Chapter Plan');
 });
 
 test('review reduces composite rewrite required evidence to one exact draft excerpt', function () {

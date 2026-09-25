@@ -232,7 +232,7 @@ error_metadata    nullable jsonb
 
 ```text
 scene-writer-v15+natural-prose-v1
-reviewer-v15+natural-prose-v1
+reviewer-v16+natural-prose-v1
 summary-v2+natural-prose-v1
 ```
 
@@ -928,6 +928,12 @@ GFO-007
 - 本次未重放 #409，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `140 passed / 718 assertions`；最终全量测试 `990 passed / 5997 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
 - Run #410 进一步暴露 `rewrite_required` 分支仍直接校验模型拼接串。共享 Evidence Resolver 现在先尝试完整逐字映射，再拆分分号或省略号连接的片段，逐段映射当前正文并保留最长的有效连续片段；真假混合引用保留真实片段，全部片段无效时仍以 `review_validation_failed` 拒绝。Story Arc 规划审校复用同一实现。
 - Reviewer Prompt 升级为 `reviewer-v15+natural-prose-v1`，要求每个 evidence 只返回一段连续原文；后端仍保留确定性容错，不依赖模型完全遵守格式。本次未重放 #410，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `70 passed / 232 assertions`；最终全量测试 `993 passed / 6003 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+
+**Reviewer Budget and Missing Target Scene Normalization（2026-09-25）**
+
+- Run #411 在 `gpt-5.6-sol + high` 下把 4,000 completion Token 全部用于 reasoning，返回空正文和 `finish_reason=length`。Reviewer 三级预算调整为 `12,000 / 16,000 / 24,000`，同时更新运行环境、示例配置、代码默认值和 Run Snapshot fallback；最高预算熔断保持不变。
+- Run #412 的 Arc Beat ID、Beat Key、顺序和 `missing + evidence=null` 均正确，只把冻结目标 Scene 43 返回为 `null`。规划审计现在只在数量、顺序、标识和 `missing + evidence=null` 全部成立时确定性补入冻结目标 Scene；`fulfilled / introduced / contradicted` 的错误 Scene、错误标识和错序仍被拒绝。
+- Reviewer Prompt 升级为 `reviewer-v16+natural-prose-v1`，明确 missing 审计仍须返回目标数据库 Scene ID。本次未重放 #411/#412，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `72 passed / 241 assertions`；最终全量测试 `995 passed / 6012 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
 
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 

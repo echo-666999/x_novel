@@ -41,7 +41,7 @@ Scene Writer 同样为推理 Token 和结构化正文保留独立额度：三级
 
 Chapter Assembly 的完整正文、Scene Coverage 和伏笔 Coverage 共用 completion 额度。首次请求默认 12,000；连续截断时按同一输入、Provider、Model 和 Prompt Version 依次提升到 16,000、24,000，并把预算序号和实际采用值冻结到 Run Snapshot。技术重试不得重复使用已经截断的相同最高预算；最高预算仍被截断时，在发起下一次 Provider 请求前转为 `assembly_output_budget_exhausted`，要求调整 Assembler 模型或预算。Assembly 后续的长度修复沿用当前 Run 已冻结的实际预算。
 
-Narrative Review 使用 4,000、8,000、12,000 三级输出预算。因 reasoning Token 用尽而返回空正文时，后续 Run 必须提升预算；最高预算仍截断时以 `review_output_budget_exhausted` 在 Provider 请求前停止。
+Narrative Review 使用 12,000、16,000、24,000 三级输出预算，为完整七维审校、规划/伏笔契约和高推理路由共同使用的 completion 额度留出空间。因 reasoning Token 用尽而返回空正文时，后续 Run 必须提升预算；最高预算仍截断时以 `review_output_budget_exhausted` 在 Provider 请求前停止。提高上限不改变三级熔断，也不允许 Schema 或业务校验失败伪装为技术重试。
 
 Story Event Extraction 使用 4,000、8,000、12,000，Rewrite 使用 12,000、16,000、24,000，Canonical Chapter Summary 使用 1,200、2,400、4,000。三者都按同一输入、Provider、Model 与 Prompt Version 识别连续截断，并将冻结预算和重试序号写入 Run Snapshot；达到最高预算后，下一次分别以 `event_output_budget_exhausted`、`rewrite_output_budget_exhausted`、`summary_output_budget_exhausted` 在 Provider 请求前停止。预算升级只处理 `finish_reason=length`，不能把确定性的 Schema、业务校验或代码错误伪装成技术重试。
 
@@ -469,6 +469,8 @@ Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scen
 
 Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。`findings` 是问题集合的权威来源；Laravel 根据最终 Findings 确定性派生 `dimension_audits.status = pass|issues_found`，并同时保存模型原始状态和归一化状态。原状态声称有问题但没有 Finding 时，执行一次 `review-schema-repair-v3` 单维结构修复；修复绑定相同 Draft、State Version、Bible Version 与 Reviewer Prompt 来源链，不重新运行完整 Review，也不消耗正文 Rewrite 配额。修复失败生成带 `ai_request_log_id` 的 NEEDS_ATTENTION，不把 Chapter 标为 blocked。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。
 
+规划契约审计的 ID、顺序和目标 Scene 以冻结 Chapter Plan 为准。模型返回 `missing + evidence=null + scene_id=null` 时，Laravel 只在审计数量、顺序、`arc_id / beat_key / candidate_key` 全部匹配且目标 Scene 可解析时，确定性补入目标数据库 Scene ID；不改变 `missing` 状态，也不生成 evidence。`fulfilled / introduced / contradicted` 仍必须返回正确目标 Scene 和逐字证据，错误 Scene 不得被覆盖，以免把其他 Scene 的证据绑定到当前契约。
+
 Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Findings 作为回归清单，为每项保存 `resolved / still_present / replaced` 结果，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
 
 Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 使用确定性规则选择最小安全范围：单一有效 `scene_id` 进入 Scene Rewrite；Paragraph Finding 只在 evidence 能唯一命中一个当前 Scene Artifact 时映射到该 Scene；任一 Chapter Finding 或多个 Scene 受影响时进入 Chapter Rewrite。无效 Scene 引用、不支持的 scope 或不唯一的段落证据会追加 `REWRITE_SCOPE_UNRESOLVED` 并转为 `NEEDS_ATTENTION`，不猜测修复位置。Review Artifact 固定保存 `rewrite_scope`，队列派发与暂停恢复均优先使用该不可变路由。
@@ -749,7 +751,7 @@ chapter-planner-v10+natural-prose-v1
 scene-writer-v15+natural-prose-v1
 assembler-v12+natural-prose-v1
 event-extractor-v8
-reviewer-v15+natural-prose-v1
+reviewer-v16+natural-prose-v1
 rewrite-v13+natural-prose-v1
 review-schema-repair-v3
 arc-completion-repair-v2

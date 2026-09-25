@@ -206,12 +206,21 @@ class PlanningReviewAudit
             $expectedSceneId = $sceneIds[(int) ($contract['target_scene_sequence'] ?? 0)] ?? null;
             $expectedKeys = array_values(array_filter([$parentKey, $key, $statusKey, 'evidence', 'scene_id']));
             if (! is_array($audit) || ! $this->hasExactKeys($audit, $expectedKeys)
+                || $expectedSceneId === null
                 || ($parentKey !== null && (int) ($audit[$parentKey] ?? 0) !== (int) ($contract[$parentKey] ?? 0))
                 || ($audit[$key] ?? null) !== ($contract[$key] ?? null)
-                || ! in_array($audit[$statusKey] ?? null, $statuses, true)
-                || ($audit['scene_id'] ?? null) !== $expectedSceneId) {
+                || ! in_array($audit[$statusKey] ?? null, $statuses, true)) {
                 throw ValidationException::withMessages([$key => '规划契约验收的标识、顺序或目标 Scene 不一致。']);
             }
+
+            $missing = $audit[$statusKey] === 'missing';
+            if ($missing && $audit['scene_id'] === null) {
+                $audit['scene_id'] = $expectedSceneId;
+                $audits[$index] = $audit;
+            } elseif ($audit['scene_id'] !== $expectedSceneId) {
+                throw ValidationException::withMessages([$key => '规划契约验收的标识、顺序或目标 Scene 不一致。']);
+            }
+
             $fulfilled = in_array($audit[$statusKey], ['fulfilled', 'introduced'], true);
             if ($fulfilled || $audit[$statusKey] === 'contradicted') {
                 $audit['evidence'] = is_string($audit['evidence'] ?? null)

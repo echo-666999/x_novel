@@ -11,7 +11,7 @@ test('prompt versions follow the documented convention', function () {
         'writer' => 'scene-writer-v15+natural-prose-v1',
         'assembler' => 'assembler-v12+natural-prose-v1',
         'extractor' => 'event-extractor-v8',
-        'reviewer' => 'reviewer-v15+natural-prose-v1',
+        'reviewer' => 'reviewer-v16+natural-prose-v1',
         'rewrite' => 'rewrite-v13+natural-prose-v1',
         'summary' => 'summary-v2+natural-prose-v1',
     ]);
@@ -24,7 +24,7 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
     'writer' => [AiStage::Writer, 'scene-writer-v15+natural-prose-v1'],
     'assembler' => [AiStage::Assembler, 'assembler-v12+natural-prose-v1'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v8'],
-    'reviewer' => [AiStage::Reviewer, 'reviewer-v15+natural-prose-v1'],
+    'reviewer' => [AiStage::Reviewer, 'reviewer-v16+natural-prose-v1'],
     'rewrite' => [AiStage::Rewrite, 'rewrite-v13+natural-prose-v1'],
     'summary' => [AiStage::Summary, 'summary-v2+natural-prose-v1'],
 ]);
