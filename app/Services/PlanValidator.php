@@ -25,15 +25,24 @@ use Illuminate\Support\Collection;
 
 class PlanValidator
 {
+    private string $validatingRecord = 'chapter_plan:candidate';
+
     public function __construct(
         private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
         private readonly StoryArcBeatContract $storyArcBeatContract,
         private readonly OutlineProgressResolver $outlineProgressResolver,
         private readonly NovelOutlineChecksum $outlineChecksum,
+        private readonly ContextBuilder $contextBuilder,
+        private readonly DraftLengthPolicy $lengthPolicy,
     ) {}
 
-    public function validate(ChapterPlan $plan): PlanValidationResult
-    {
+    /** @param array<string, mixed>|null $admissionSnapshot */
+    public function validate(
+        ChapterPlan $plan,
+        ?array $admissionSnapshot = null,
+        ?int $expectedBibleVersion = null,
+    ): PlanValidationResult {
+        $this->validatingRecord = 'chapter_plan:'.($plan->getKey() ?? 'candidate');
         $plan->loadMissing('chapter.novel');
         $chapter = $plan->chapter;
         $novel = $chapter->novel;
@@ -64,6 +73,10 @@ class PlanValidator
         $this->validateArcContributions($plan, $findings);
         $this->validateCharacterCandidates($plan, $findings);
         $this->validateWorldEntityCandidates($plan, $findings);
+
+        if ($admissionSnapshot !== null) {
+            $this->validateAdmissionSnapshot($plan, $admissionSnapshot, $findings, $expectedBibleVersion);
+        }
 
         if ($novel->status === NovelStatus::Completing) {
             $this->validateCompletingRestrictions($plan, $foreshadowings, $findings);
@@ -116,7 +129,9 @@ class PlanValidator
             || $plan->primary_outline_milestone_id !== $target->outlineMilestoneId
             || (int) ($primaryContribution['arc_id'] ?? 0) !== $target->arcId
             || $primaryBeatKey !== ($target->beat['key'] ?? null)
-            || (int) ($primaryContribution['beat_index'] ?? 0) !== (int) ($target->beat['sequence'] ?? 0)) {
+            || (int) ($primaryContribution['beat_index'] ?? 0) !== (int) ($target->beat['sequence'] ?? 0)
+            || ($primaryContribution['milestone_key'] ?? null) !== ($target->milestone['key'] ?? null)
+            || (int) ($primaryContribution['milestone_sequence'] ?? 0) !== (int) ($target->milestone['sequence'] ?? 0)) {
             $findings[] = $this->blocked('OUTLINE_BEAT_OUT_OF_ORDER', 'Primary Plan 外键和 Contribution 必须引用顺序最早的未完成 Main Beat/Milestone。');
         }
 
@@ -138,9 +153,9 @@ class PlanValidator
             }
         }
 
-        foreach (array_unique([...($target->beat['must_include'] ?? []), ...($target->milestone['must_include'] ?? [])]) as $required) {
+        foreach (array_unique($target->milestone['must_include'] ?? []) as $required) {
             if (! in_array($required, $plan->must_reveal ?? [], true)) {
-                $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', "当前 Beat 的必须内容「{$required}」未合并到 must_reveal。");
+                $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', "当前 Milestone 的必须内容「{$required}」未合并到 must_reveal。");
             }
         }
         $forbiddenConstraints = [...($plan->must_not_reveal ?? []), ...($plan->forbidden_conflicts ?? [])];
@@ -253,6 +268,8 @@ class PlanValidator
             $sceneSequence = filter_var($contribution['target_scene_sequence'] ?? null, FILTER_VALIDATE_INT);
             $beatKey = trim((string) ($contribution['beat_key'] ?? ''));
             $criteria = trim((string) ($contribution['acceptance_criteria'] ?? ''));
+            $milestoneKey = $contribution['milestone_key'] ?? null;
+            $milestoneSequence = $contribution['milestone_sequence'] ?? null;
             $arc = $arcId === false ? null : $arcs->get($arcId);
 
             if ($arc === null || $arc->status !== StoryArcStatus::Active) {
@@ -274,6 +291,11 @@ class PlanValidator
 
             if ($sceneSequence === false || $sceneSequence < 1 || $sceneSequence > count($plan->scene_plans ?? []) || $criteria === '') {
                 $findings[] = $this->blocked('INVALID_ARC_BEAT_ACCEPTANCE', "Story Arc 推进项 {$position} 缺少有效目标 Scene 或验收条件。");
+            }
+
+            if (($contribution['role'] ?? null) === 'secondary'
+                && ($milestoneKey !== null || $milestoneSequence !== null)) {
+                $findings[] = $this->blocked('INVALID_ARC_CONTRIBUTION', "Story Arc 推进项 {$position} 的 Secondary Contribution 不能声明 Main Milestone。");
             }
 
             $fingerprint = $arcId.':'.$beatKey;
@@ -344,12 +366,40 @@ class PlanValidator
             $findings[] = $this->blocked('INVALID_PLAN_SCHEMA', '目标字数必须大于 0，且至少包含一个 Scene Plan。');
         }
 
+        if (! array_is_list($plan->scene_plans ?? [])) {
+            $findings[] = $this->blocked(
+                'INVALID_SCENE_SEQUENCE',
+                'Scene Plan 必须使用从 1 开始且无缺口的数组顺序。',
+                'scene_plans',
+                "chapter_plan:{$plan->getKey()}",
+                '重新保存 Chapter Plan，使 Scene 顺序连续。',
+            );
+        }
+
         foreach (array_values($plan->scene_plans ?? []) as $index => $scenePlan) {
+            if (! is_array($scenePlan)) {
+                $findings[] = $this->blocked('INVALID_SCENE_PLAN', 'Scene '.($index + 1).' 结构无效。');
+
+                continue;
+            }
+
             foreach (['goal', 'conflict', 'turn', 'outcome'] as $field) {
                 if (! isset($scenePlan[$field]) || trim((string) $scenePlan[$field]) === '') {
                     $findings[] = $this->blocked(
                         'INVALID_SCENE_PLAN',
                         'Scene '.($index + 1).' 缺少 '.$field.'。',
+                    );
+                }
+            }
+
+            foreach (['outcome_allowed', 'outcome_forbidden', 'continuity_requirements'] as $field) {
+                if (array_key_exists($field, $scenePlan) && ! is_array($scenePlan[$field])) {
+                    $findings[] = $this->blocked(
+                        'INVALID_SCENE_PLAN',
+                        'Scene '.($index + 1)." 的 {$field} 必须是数组。",
+                        "scene_plans.{$index}.{$field}",
+                        "chapter_plan:{$plan->getKey()}",
+                        '修正该 Scene 的结构化边界后重新执行 Plan Admission。',
                     );
                 }
             }
@@ -363,6 +413,191 @@ class PlanValidator
             $findings[] = $this->blocked(
                 'MISSING_CHAPTER_TRANSITION',
                 '第一场景必须说明如何承接上一章正式结尾；如有时间、地点或行动跳跃，需要写明正文中的过渡过程。',
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     * @param  array<int, PlanFinding>  $findings
+     */
+    private function validateAdmissionSnapshot(
+        ChapterPlan $plan,
+        array $snapshot,
+        array &$findings,
+        ?int $expectedBibleVersion = null,
+    ): void {
+        $novel = $plan->chapter->novel;
+        $target = $this->outlineProgressResolver->resolve($novel);
+        $outline = $novel->currentOutline()->first();
+        $expectedBibleVersion ??= $this->contextBuilder->bibleVersionForChapter($plan->chapter);
+        $expectedStateVersion = $novel->canonicalStateVersion?->version;
+        $record = "chapter_plan:{$plan->getKey()}";
+
+        $required = [
+            'plan_checksum', 'input_hash', 'bible_version', 'state_version',
+            'novel_outline_id', 'outline_version', 'outline_checksum',
+            'primary_outline_arc_id', 'primary_outline_beat_id', 'primary_outline_milestone_id',
+            'handoff_checksum', 'routes', 'capacity',
+        ];
+        foreach ($required as $field) {
+            if (! array_key_exists($field, $snapshot) || $snapshot[$field] === null || $snapshot[$field] === '') {
+                $findings[] = $this->blocked(
+                    'ADMISSION_SOURCE_NOT_FROZEN',
+                    "Plan Admission 缺少冻结字段 {$field}。",
+                    "admission_snapshot.{$field}",
+                    $record,
+                    '重新执行 Chapter Planning 或 Plan Admission 生成完整冻结快照。',
+                );
+            }
+        }
+        if (! array_key_exists('handoff_next_beat_id', $snapshot)) {
+            $findings[] = $this->blocked(
+                'ADMISSION_SOURCE_NOT_FROZEN',
+                'Plan Admission 缺少冻结字段 handoff_next_beat_id。',
+                'admission_snapshot.handoff_next_beat_id',
+                $record,
+                '重新执行 Chapter Planning 或 Plan Admission 生成完整冻结快照。',
+            );
+        }
+
+        if (is_array($plan->admission_snapshot)
+            && ($plan->checksum === null || $plan->checksum !== ($snapshot['plan_checksum'] ?? null))) {
+            $findings[] = $this->blocked(
+                'PLAN_CHECKSUM_NOT_FROZEN',
+                'Chapter Plan 顶层 checksum 与 Admission Snapshot 不一致。',
+                'checksum',
+                $record,
+                '恢复原 Plan 或创建新的 Plan Version 并重新执行 Admission。',
+            );
+        }
+        if (is_array($plan->admission_snapshot)
+            && ($plan->input_hash === null || $plan->input_hash !== ($snapshot['input_hash'] ?? null))) {
+            $findings[] = $this->blocked(
+                'PLAN_INPUT_HASH_NOT_FROZEN',
+                'Chapter Plan 顶层 input_hash 与 Admission Snapshot 不一致。',
+                'input_hash',
+                $record,
+                '创建新的 Plan Version 并重新执行 Admission。',
+            );
+        }
+
+        if (($snapshot['plan_checksum'] ?? null) !== $plan->semanticChecksum()) {
+            $findings[] = $this->blocked(
+                'PLAN_CHECKSUM_MISMATCH',
+                'Chapter Plan 内容已在 Admission 后变化。',
+                'checksum',
+                $record,
+                '创建新的 Plan Version，并从 Scene 1 重新执行。',
+            );
+        }
+
+        if ($outline === null
+            || (int) ($snapshot['novel_outline_id'] ?? 0) !== $outline->getKey()
+            || (int) ($snapshot['outline_version'] ?? 0) !== $outline->version
+            || ($snapshot['outline_checksum'] ?? null) !== $outline->checksum
+            || $target === null
+            || (int) ($snapshot['primary_outline_arc_id'] ?? 0) !== $target->outlineArcId
+            || (int) ($snapshot['primary_outline_beat_id'] ?? 0) !== $target->outlineBeatId
+            || (int) ($snapshot['primary_outline_milestone_id'] ?? 0) !== $target->outlineMilestoneId) {
+            $findings[] = $this->blocked(
+                'ADMISSION_OUTLINE_MISMATCH',
+                'Admission 冻结的 Outline Version 或 Primary Arc/Beat/Milestone 已不是 Current Target。',
+                'admission_snapshot.novel_outline_id',
+                $record,
+                '基于当前 Outline Target 创建新的 Plan Version。',
+            );
+        }
+
+        if ((int) ($snapshot['bible_version'] ?? 0) !== $expectedBibleVersion) {
+            $findings[] = $this->blocked(
+                'ADMISSION_BIBLE_VERSION_MISMATCH',
+                'Admission 冻结的 Bible Version 与本章 Pipeline Bible 不一致。',
+                'admission_snapshot.bible_version',
+                $record,
+                '按当前 Bible 重新规划本章。',
+            );
+        }
+        if ($expectedStateVersion === null || (int) ($snapshot['state_version'] ?? -1) !== $expectedStateVersion) {
+            $findings[] = $this->blocked(
+                'ADMISSION_STATE_VERSION_MISMATCH',
+                'Admission 冻结的 State Version 已过期。',
+                'admission_snapshot.state_version',
+                $record,
+                '基于最新 Canonical State 创建新的 Plan Version。',
+            );
+        }
+
+        if ($target !== null) {
+            $handoff = $target->beat['handoff'];
+            $handoffChecksum = hash('sha256', json_encode($handoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+            if (($snapshot['handoff_next_beat_id'] ?? null) !== $handoff['next_beat_id']
+                || ($snapshot['handoff_checksum'] ?? null) !== $handoffChecksum) {
+                $findings[] = $this->blocked(
+                    'ADMISSION_HANDOFF_MISMATCH',
+                    'Admission 冻结的 Handoff 与当前 Beat 契约不一致。',
+                    'admission_snapshot.handoff_next_beat_id',
+                    "outline_beat:{$target->outlineBeatId}",
+                    '重新执行 Chapter Planning，冻结当前 Beat 的 Handoff。',
+                );
+            }
+        }
+
+        foreach (['writer', 'assembler', 'extractor', 'reviewer', 'rewrite', 'summary'] as $stage) {
+            $route = data_get($snapshot, "routes.{$stage}");
+            if (! is_array($route)
+                || blank($route['provider'] ?? null)
+                || blank($route['model'] ?? null)
+                || ! array_key_exists('reasoning_effort', $route)
+                || blank($route['prompt_version'] ?? null)
+                || (int) ($route['max_output_tokens'] ?? 0) < 1) {
+                $findings[] = $this->blocked(
+                    'PROVIDER_ROUTE_NOT_FROZEN',
+                    "{$stage} 的 Provider、Model、Prompt Version 或输出容量未完整冻结。",
+                    "admission_snapshot.routes.{$stage}",
+                    $record,
+                    '在 AI 设置中修复该 Stage Route 后重新执行 Plan Admission。',
+                );
+            }
+        }
+
+        $sceneAllocations = data_get($snapshot, 'capacity.scene_allocations');
+        $minimumWords = $this->lengthPolicy->chapterMinimum((int) $plan->target_words);
+        if (! is_array($sceneAllocations)
+            || count($sceneAllocations) !== count($plan->scene_plans ?? [])
+            || collect($sceneAllocations)->sum('target_words') < $minimumWords) {
+            $findings[] = $this->blocked(
+                'SCENE_WORD_BUDGET_UNREACHABLE',
+                'Scene 字数分配无法覆盖章节硬下限。',
+                'admission_snapshot.capacity.scene_allocations',
+                $record,
+                '调整章节目标字数或 Scene 数量后重新规划。',
+            );
+        } elseif (collect($sceneAllocations)->contains(
+            fn (mixed $allocation, int $index): bool => ! is_array($allocation)
+                || (int) ($allocation['sequence'] ?? 0) !== $index + 1
+                || (int) ($allocation['target_words'] ?? 0) < 1
+                || (int) ($allocation['target_words'] ?? 0) > (int) ($allocation['writer_max_output_tokens'] ?? 0),
+        )) {
+            $findings[] = $this->blocked(
+                'SCENE_OUTPUT_CAPACITY_EXCEEDED',
+                '至少一个 Scene 的目标输出超过冻结 Writer Route 的容量。',
+                'admission_snapshot.capacity.scene_allocations',
+                $record,
+                '拆分 Scene、降低目标字数或选择更大输出容量的 Writer Route。',
+            );
+        }
+
+        $reviewInput = (int) data_get($snapshot, 'capacity.review.estimated_input_words', 0);
+        $reviewContext = (int) data_get($snapshot, 'capacity.review.context_token_budget', 0);
+        $reviewOutput = (int) data_get($snapshot, 'capacity.review.max_output_tokens', 0);
+        if ($reviewInput < 1 || $reviewContext < $reviewInput || $reviewOutput < 1) {
+            $findings[] = $this->blocked(
+                'REVIEW_CAPACITY_EXCEEDED',
+                '冻结的 Reviewer Context 或输出容量无法容纳本章审校。',
+                'admission_snapshot.capacity.review',
+                $record,
+                '降低章节规模或提高 Reviewer Context/输出预算后重新执行 Plan Admission。',
             );
         }
     }
@@ -773,9 +1008,18 @@ class PlanValidator
         }
     }
 
-    private function blocked(string $code, string $message): PlanFinding
-    {
-        return new PlanFinding(PlanFindingSeverity::Blocked, $code, $message);
+    private function blocked(
+        string $code,
+        string $message,
+        ?string $field = null,
+        ?string $relatedRecord = null,
+        ?string $repairAction = null,
+    ): PlanFinding {
+        $field ??= 'chapter_plan';
+        $relatedRecord ??= $this->validatingRecord;
+        $repairAction ??= '修正对应 Plan 字段后重新执行 Plan Admission。';
+
+        return new PlanFinding(PlanFindingSeverity::Blocked, $code, $message, $field, $relatedRecord, $repairAction);
     }
 
     private function warning(string $code, string $message): PlanFinding

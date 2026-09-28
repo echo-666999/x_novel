@@ -1123,8 +1123,8 @@ flowchart TD
 | NGC-002A | 关系化 Outline 数据模型 | P0 | DONE | NGC-001 |
 | NGC-002B | 分阶段 Outline 生成与恢复 | P0 | DONE | NGC-002A |
 | NGC-003 | Canonical Milestone Progress | P0 | DONE | NGC-002B |
-| NGC-004 | Chapter Planner 选择当前 Milestone | P0 | TODO | NGC-003 |
-| NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | TODO | NGC-004 |
+| NGC-004 | Chapter Planner 选择当前 Milestone | P0 | DONE | NGC-003 |
+| NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | DONE | NGC-004 |
 | NGC-005 | Review、Event、Commit 完成语义 | P0 | TODO | NGC-004A |
 | NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | TODO | NGC-005 |
 | NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | TODO | NGC-006A |
@@ -1463,7 +1463,7 @@ Next Task
 ## NGC-004 — Chapter Planner 选择当前 Milestone
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-003
 
 ### 实现
@@ -1488,10 +1488,26 @@ Next Task
 - 连续生成两章时，第二章能看到第一章正式完成的 Milestone 进度。
 - 同一 Beat 内不会因全量 `must_include` 每章重复而被强制复述。
 
+### 实施结果（2026-09-28）
+
+- `CurrentOutlineTarget` 和 Planner Context Snapshot 现在同时冻结 Current Outline Version/Checksum、Arc/Beat/Milestone ID、按关系顺序排列的正式完成 ID/Key、当前 Milestone、剩余验收条件、章节预算以及完整 Handoff；Handoff 另有目标 Beat ID 和独立 Checksum。
+- Primary Contribution 增加 `milestone_key` 与 `milestone_sequence`。AI 与手工计划入口都由 Laravel 覆盖 Outline ID、完整 Primary 父链和 Arc/Beat/Milestone Key/Sequence；`PlanValidator` 在保存前核对最早未完成目标，Secondary Contribution 不得声明 Main Milestone。
+- Planner 和手工计划都只把当前未完成 Milestone 的 `must_include` 合并到 `must_reveal`，不再逐章注入 Beat 全量要求；Beat 与 Milestone 当前有效的 `must_not_include` 仍持续合并到禁止约束。
+- `chapter_budget.max` 的 Provider 调用前异常停留保护保持不变；未增加 `chapter_budget.min` 完成门槛，也未提前实现 NGC-004A 的 Scene 前统一 Admission Gate 或 NGC-005 的完成判定。
+
+### 验证结果（2026-09-28）
+
+- 针对性回归：60 tests，60 passed，386 assertions；Filament 手工计划回归：12 tests，12 passed，126 assertions。
+- 新增双章节用例：第一章正式完成 `beat-map-m01` 后，第二章冻结 `beat-map-m02`，能够同时读取 Canonical Milestone Progress、Previous Chapter Ending 与出站 Handoff；模型返回后续 Beat/Milestone 标识时由 Laravel 恢复当前目标。
+- 同一用例确认第二章不再收到已完成 Milestone 或 Beat 全量 `must_include`，并用实际 Provider Request Context 重算校验 Generation Run `input_hash`。
+- 全量 `php artisan test`：1015 tests，992 passed，23 skipped，5914 assertions，0 failures，3 warnings。
+- `vendor/bin/pint --dirty` 与 `git diff --check`：通过。
+- 未执行真实 Provider 调用或业务数据库写入；Provider 契约与上下文由 Fake Provider Feature Tests 验证，本任务没有新增 Migration。
+
 ## NGC-004A — Chapter Plan 调用前准备度门禁
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-004
 
 ### 实现
@@ -1514,6 +1530,23 @@ Next Task
 
 - 能确定性发现的计划错误不会消耗 Scene Writer 请求。
 - 准备度错误包含字段、关联记录和明确修复动作。
+
+### 实施结果（2026-09-28）
+
+- `chapter_plans` 增加 `checksum`、`input_hash`、`admission_snapshot` 和 `admitted_at`；历史 Plan 保持可读，新 Plan/首次执行旧 Ready Plan 时通过 `PlanAdmissionService` 冻结完整门禁快照。
+- Admission Snapshot 固化 Current Bible/State/Outline Version、Outline/Plan Checksum、Primary Arc/Beat/Milestone、Handoff、Writer/Assembler/Extractor/Reviewer/Rewrite/Summary Route，以及 Scene 字数分配和 Review 容量。
+- `AdvanceChapterPipelineAction` 在同步或派发 Scene 1 前执行门禁，`SceneGenerator` 在创建 Run 前再次复核并使用冻结的 Writer/Extractor/Rewrite Route；确定性错误不会创建 Scene Run 或消耗 Provider 请求。
+- 相同语义输入和冻结来源得到相同 `input_hash`，AI 与手工计划入口复用现有 Ready Plan；语义变化创建新版本，只清除该章 Scene/Chapter 当前指针并保留历史 Run、Artifact 和其他章节状态。
+- 所有 Blocked Plan Finding 现在携带字段、关联记录和修复动作，抛出的 Validation Error 同步呈现这些信息。首版仍未增加 AI Plan Reviewer，也未实施 NGC-005 的完成判定。
+
+### 验证结果（2026-09-28）
+
+- Admission、Scene、Planner、Pipeline、Resume、Rewrite 与 Filament 针对性回归：160 tests，160 passed，1060 assertions。
+- 新增固定响应测试确认合法 Plan 不调用 Provider；Scene Sequence、容量、缺失 Route、State/Bible/Outline/Handoff 漂移均在 Scene Run 前失败，并返回字段、关联记录和修复动作。
+- 同哈希测试确认复用现有 Ready Plan；语义变化测试确认只清除当前章节 Scene/Chapter 当前指针，历史 Run/Artifact 与其他章节指针保持不变。
+- 全量 `php artisan test`：1021 tests，998 passed，23 skipped，5953 assertions，0 failures，3 warnings。
+- `vendor/bin/pint --dirty` 与 `git diff --check`：通过。
+- 未执行真实 Provider 调用或业务数据库写入；新增 Migration 已由 SQLite 测试数据库完整执行，未在 PostgreSQL `public` Schema 运行。
 
 ## NGC-005 — Review、Event、Commit 完成语义
 

@@ -45,6 +45,8 @@ function validPlan(array $attributes = []): ChapterPlan
             'arc_id' => $target->arcId,
             'beat_key' => $target->beat['key'],
             'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
             'target_scene_sequence' => 1,
             'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
         ]]]);

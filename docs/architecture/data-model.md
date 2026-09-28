@@ -1327,7 +1327,7 @@ Source of Truth 边界：
 - `story_events` 保存正式 Milestone/Beat Completion，不回写 Outline 表。
 - 运行态 `volumes.source_outline_volume_id`、`story_arcs.source_outline_arc_id` 非空且唯一。
 - 删除 `volumes.outline_key`、`story_arcs.outline_key` 和 `story_arcs.beats`。
-- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链。
+- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链；`checksum`、`input_hash`、`admission_snapshot` 和 `admitted_at` 固化 Scene 1 前通过门禁的语义输入、Bible/State/Outline/Handoff 来源、下游 Route 与容量。
 - 不保留 `baseline_completions`、旧 JSONB Outline 双读或 Key 回退。
 
 版本创建在一个事务中按 Volume、Arc、Beat、Milestone 顺序写入，随后按稳定 `beat_key` 回填 Handoff 自外键，并从持久化关系重新计算 Checksum。任一引用、顺序、邻接或 Checksum 校验失败都回滚整个版本。`source=ai` 时 `source_artifact_id` 必须引用同小说同规划批次的最终 `outline_blueprint` Artifact，且一个 Finalize Artifact 最多创建一个 Outline Version。

@@ -38,6 +38,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'foreshadowing_actions',
     'world_entity_candidates',
     'scene_plans',
+    'checksum',
+    'input_hash',
+    'admission_snapshot',
+    'admitted_at',
     'status',
 ])]
 class ChapterPlan extends Model
@@ -121,6 +125,43 @@ class ChapterPlan extends Model
         return $this->legacyForeshadowingIds() !== [];
     }
 
+    /** @return array<string, mixed> 只包含会改变章节执行结果的规范化计划输入。 */
+    public function semanticPayload(): array
+    {
+        return $this->only([
+            'novel_outline_id',
+            'primary_outline_arc_id',
+            'primary_outline_beat_id',
+            'primary_outline_milestone_id',
+            'chapter_function',
+            'arc_contribution',
+            'arc_contributions',
+            'character_candidates',
+            'reader_promise',
+            'target_words',
+            'pov_character_id',
+            'tone',
+            'time_anchor',
+            'hook_type',
+            'must_reveal',
+            'may_hint',
+            'must_not_reveal',
+            'required_facts',
+            'forbidden_conflicts',
+            'foreshadowing_actions',
+            'world_entity_candidates',
+            'scene_plans',
+        ]);
+    }
+
+    public function semanticChecksum(): string
+    {
+        return hash('sha256', json_encode(
+            $this->semanticPayload(),
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        ));
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
@@ -143,6 +184,8 @@ class ChapterPlan extends Model
             'character_candidates' => 'array',
             'world_entity_candidates' => 'array',
             'scene_plans' => 'array',
+            'admission_snapshot' => 'array',
+            'admitted_at' => 'datetime',
             'status' => PlanStatus::class,
         ];
     }

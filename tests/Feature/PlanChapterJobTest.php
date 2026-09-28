@@ -68,6 +68,8 @@ function plannerPayload(int $characterId, array $overrides = []): array
             'arc_id' => $target->arcId,
             'beat_key' => $target->beat['key'],
             'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
             'target_scene_sequence' => 1,
             'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
         ]],
@@ -146,7 +148,7 @@ function plannerOutlineContent(int $maximum = 2): array
                 'beats' => [[
                     'key' => 'beat-map', 'sequence' => 1, 'mainline_sequence' => 1, 'title' => '取得地图', 'summary' => '主角取得可靠地图。',
                     'chapter_budget' => ['min' => 1, 'max' => $maximum], 'acceptance_criteria' => ['主角取得真实地图'],
-                    'must_include' => ['地图来源可验证'], 'must_not_include' => ['直接穿过城门'],
+                    'must_include' => ['完成取得地图 Beat 的全部目标'], 'must_not_include' => ['直接穿过城门'],
                     'character_candidates' => [], 'world_entity_candidates' => [],
                     'milestones' => [[
                         'key' => 'beat-map-m01', 'sequence' => 1, 'title' => '取得地图', 'objective' => '确认地图来源。',
@@ -176,11 +178,11 @@ function plannerOutlineContent(int $maximum = 2): array
     ];
 }
 
-function outlinePlannerChapter(int $maximum = 2): array
+function outlinePlannerChapter(int $maximum = 2, ?array $content = null): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     NovelBible::factory()->for($novel)->create(['version' => 1]);
-    $content = plannerOutlineContent($maximum);
+    $content ??= plannerOutlineContent($maximum);
     $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle($novel, $content);
     $outline->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
     $novel->update(['current_outline_id' => $outline->getKey()]);
@@ -217,6 +219,8 @@ function outlinePlannerPayload(Character $character, NovelOutline $outline, Stor
             'arc_id' => $arc->getKey(),
             'beat_key' => $beatKey,
             'beat_index' => $beatSequence,
+            'milestone_key' => $beatKey === 'beat-map' ? 'beat-map-m01' : 'beat-gate-m01',
+            'milestone_sequence' => 1,
             'target_scene_sequence' => 1,
             'acceptance_criteria' => $criteria,
         ]],
@@ -261,6 +265,9 @@ test('the planner freezes the earliest unfinished outline beat and source versio
         ->and(data_get($snapshot, 'outline_version'))->toBe(1)
         ->and(data_get($snapshot, 'outline_checksum'))->toBe($outline->checksum)
         ->and(data_get($snapshot, 'primary_arc_id'))->toBe($arc->getKey())
+        ->and(data_get($snapshot, 'primary_outline_arc_id'))->toBe($outline->arcs()->where('arc_key', 'arc-departure')->value('id'))
+        ->and(data_get($snapshot, 'primary_outline_beat_id'))->toBe($outline->beats()->where('beat_key', 'beat-map')->value('id'))
+        ->and(data_get($snapshot, 'primary_outline_milestone_id'))->toBe($outline->milestones()->where('milestone_key', 'beat-map-m01')->value('id'))
         ->and(data_get($snapshot, 'primary_beat_key'))->toBe('beat-map')
         ->and(data_get($snapshot, 'chapter_budget'))->toBe(['min' => 1, 'max' => 2])
         ->and(data_get($snapshot, 'current_outline_target.beat.key'))->toBe('beat-map')
@@ -278,6 +285,8 @@ test('the planner restores authoritative outline constraints before validating t
     $payload['arc_contributions'][0]['arc_id'] = $arc->getKey() + 100;
     $payload['arc_contributions'][0]['beat_key'] = 'model-rewritten-beat';
     $payload['arc_contributions'][0]['beat_index'] = 99;
+    $payload['arc_contributions'][0]['milestone_key'] = 'model-rewritten-milestone';
+    $payload['arc_contributions'][0]['milestone_sequence'] = 99;
     $payload['must_reveal'] = [
         '地图来源可验证：需要在正文中交代证据链。',
         '模型补充的本章揭示项',
@@ -295,7 +304,10 @@ test('the planner restores authoritative outline constraints before validating t
         ->and(data_get($plan->arc_contributions, '0.arc_id'))->toBe($arc->getKey())
         ->and(data_get($plan->arc_contributions, '0.beat_key'))->toBe('beat-map')
         ->and(data_get($plan->arc_contributions, '0.beat_index'))->toBe(1)
+        ->and(data_get($plan->arc_contributions, '0.milestone_key'))->toBe('beat-map-m01')
+        ->and(data_get($plan->arc_contributions, '0.milestone_sequence'))->toBe(1)
         ->and($plan->must_reveal)->toBe(['地图来源可验证', '模型补充的本章揭示项'])
+        ->and($plan->must_reveal)->not->toContain('完成取得地图 Beat 的全部目标')
         ->and($plan->must_not_reveal)->toBe(['直接穿过城门', '模型补充的禁止项']);
 });
 
@@ -337,6 +349,110 @@ test('the planner advances to the next beat only after an active completion even
         ->and(data_get($chapter->generationRuns()->sole()->context_snapshot, 'canonical_completed_beat_keys'))->toBe(['beat-map']);
 });
 
+test('the next chapter freezes the earliest unfinished milestone with canonical progress ending and handoff', function () {
+    $content = plannerOutlineContent();
+    $content['volumes'][0]['arcs'][0]['beats'][0]['milestones'][] = [
+        'key' => 'beat-map-m02',
+        'sequence' => 2,
+        'title' => '确认路线',
+        'objective' => '确认地图指向的离城路线。',
+        'acceptance_criteria' => ['主角确认地图指向城门'],
+        'must_include' => ['地图方向已确认'],
+        'must_not_include' => [],
+    ];
+    [$firstChapter, $character, $outline, $volume, $arc] = outlinePlannerChapter(content: $content);
+
+    $firstPayload = outlinePlannerPayload($character, $outline, $arc);
+    $secondPayload = outlinePlannerPayload($character, $outline, $arc);
+    $secondPayload['arc_contributions'][0] = [
+        ...$secondPayload['arc_contributions'][0],
+        // 模拟模型试图跳到后续 Beat；Laravel 必须恢复当前 m02 的完整标识。
+        'beat_key' => 'beat-gate',
+        'beat_index' => 2,
+        'milestone_key' => 'beat-gate-m01',
+        'milestone_sequence' => 1,
+        'acceptance_criteria' => '主角确认地图指向城门',
+    ];
+    $secondPayload['must_reveal'] = ['地图方向已确认'];
+    $secondPayload['scene_plans'][0]['transition_from_previous'] = '承接上一章收起地图并望向城门的动作，继续核对地图所指路线。';
+    $fake = (new FakeAiProvider)
+        ->enqueue(plannerResponse($firstPayload))
+        ->enqueue(plannerResponse($secondPayload));
+    app()->instance(AiProvider::class, $fake);
+
+    $firstPlan = app(ChapterPlanner::class)->generate($firstChapter->getKey());
+    $firstMilestone = $outline->milestones()->where('milestone_key', 'beat-map-m01')->sole();
+    $secondMilestone = $outline->milestones()->where('milestone_key', 'beat-map-m02')->sole();
+    $mapBeat = $outline->beats()->where('beat_key', 'beat-map')->sole();
+    $gateBeat = $outline->beats()->where('beat_key', 'beat-gate')->sole();
+    $sourceArc = $outline->arcs()->where('arc_key', 'arc-departure')->sole();
+
+    $endingRun = GenerationRun::factory()->for($firstChapter->novel)->for($firstChapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $endingArtifact = GenerationArtifact::factory()->for($endingRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '林舟收起已验证来源的地图，抬头望向城门。',
+    ]);
+    $firstChapter->update([
+        'status' => ChapterStatus::Canonical,
+        'canonical_artifact_id' => $endingArtifact->getKey(),
+    ]);
+    StoryEvent::factory()->create([
+        'novel_id' => $firstChapter->novel_id,
+        'chapter_id' => $firstChapter->getKey(),
+        'event_type' => EventType::StoryArcBeatMilestoneCompleted,
+        'subject_type' => 'story_arc',
+        'subject_id' => (string) $arc->getKey(),
+        'payload' => ['beat_key' => 'beat-map', 'milestone_key' => 'beat-map-m01'],
+        'novel_outline_id' => $outline->getKey(),
+        'novel_outline_arc_id' => $sourceArc->getKey(),
+        'novel_outline_beat_id' => $mapBeat->getKey(),
+        'novel_outline_milestone_id' => $firstMilestone->getKey(),
+    ]);
+
+    $secondChapter = Chapter::factory()->for($firstChapter->novel)->for($volume)->create(['sequence' => 2]);
+    $secondPlan = app(ChapterPlanner::class)->generate($secondChapter->getKey());
+    $run = $secondChapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->sole();
+    $snapshot = $run->context_snapshot;
+    $request = $fake->requests()[1];
+    $requestContext = json_decode(explode('上下文：', $request->prompt, 2)[1], true, flags: JSON_THROW_ON_ERROR);
+    $expectedInputHash = hash('sha256', json_encode([
+        'context' => $requestContext,
+        'provider' => $request->provider,
+        'model' => $request->model,
+        'reasoning_effort' => $request->reasoningEffort,
+        'prompt_version' => $request->promptVersion,
+    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+
+    expect($firstPlan->primary_outline_milestone_id)->toBe($firstMilestone->getKey())
+        ->and($secondPlan->primary_outline_arc_id)->toBe($sourceArc->getKey())
+        ->and($secondPlan->primary_outline_beat_id)->toBe($mapBeat->getKey())
+        ->and($secondPlan->primary_outline_milestone_id)->toBe($secondMilestone->getKey())
+        ->and(data_get($secondPlan->arc_contributions, '0.beat_key'))->toBe('beat-map')
+        ->and(data_get($secondPlan->arc_contributions, '0.beat_index'))->toBe(1)
+        ->and(data_get($secondPlan->arc_contributions, '0.milestone_key'))->toBe('beat-map-m02')
+        ->and(data_get($secondPlan->arc_contributions, '0.milestone_sequence'))->toBe(2)
+        ->and($secondPlan->must_reveal)->toContain('地图方向已确认')
+        ->and($secondPlan->must_reveal)->not->toContain('地图来源可验证', '完成取得地图 Beat 的全部目标')
+        ->and(data_get($snapshot, 'outline_version'))->toBe(1)
+        ->and(data_get($snapshot, 'outline_checksum'))->toBe($outline->checksum)
+        ->and(data_get($snapshot, 'primary_outline_arc_id'))->toBe($sourceArc->getKey())
+        ->and(data_get($snapshot, 'primary_outline_beat_id'))->toBe($mapBeat->getKey())
+        ->and(data_get($snapshot, 'primary_outline_milestone_id'))->toBe($secondMilestone->getKey())
+        ->and(data_get($snapshot, 'current_milestone.key'))->toBe('beat-map-m02')
+        ->and(data_get($snapshot, 'canonical_completed_milestone_ids'))->toBe([$firstMilestone->getKey()])
+        ->and(data_get($snapshot, 'canonical_completed_milestone_keys'))->toBe(['beat-map-m01'])
+        ->and(data_get($snapshot, 'remaining_conditions.must_include'))->toBe(['地图方向已确认'])
+        ->and(data_get($snapshot, 'handoff.next_beat_id'))->toBe($gateBeat->getKey())
+        ->and(data_get($snapshot, 'handoff_next_beat_id'))->toBe($gateBeat->getKey())
+        ->and(data_get($snapshot, 'handoff_checksum'))->toHaveLength(64)
+        ->and(data_get($snapshot, 'previous_chapter_ending.text'))->toBe('林舟收起已验证来源的地图，抬头望向城门。')
+        ->and(data_get($requestContext, 'handoff_next_beat_id'))->toBe($gateBeat->getKey())
+        ->and($run->input_hash)->toBe($expectedInputHash);
+});
+
 test('an exhausted outline beat budget stops planning before a run or provider call', function () {
     [$chapter, $character, $outline, $volume, $arc] = outlinePlannerChapter(1);
     $canonical = Chapter::factory()->for($chapter->novel)->for($volume)->create([
@@ -347,6 +463,7 @@ test('an exhausted outline beat budget stops planning before a run or provider c
         'novel_outline_id' => $outline->getKey(),
         'arc_contributions' => [[
             'role' => 'primary', 'arc_id' => $arc->getKey(), 'beat_key' => 'beat-map', 'beat_index' => 1,
+            'milestone_key' => 'beat-map-m01', 'milestone_sequence' => 1,
             'target_scene_sequence' => 1, 'acceptance_criteria' => '主角取得真实地图',
         ]],
     ]);

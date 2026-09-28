@@ -14,6 +14,8 @@ readonly class CurrentOutlineTarget
      * @param  array<string, mixed>  $milestone
      * @param  array<int, string>  $canonicalCompletedBeatKeys
      * @param  array<int, string>  $canonicalCompletedMilestoneKeys
+     * @param  array<int, int>  $canonicalCompletedBeatIds
+     * @param  array<int, int>  $canonicalCompletedMilestoneIds
      */
     public function __construct(
         public int $outlineId,
@@ -30,6 +32,8 @@ readonly class CurrentOutlineTarget
         public array $milestone,
         public array $canonicalCompletedBeatKeys,
         public array $canonicalCompletedMilestoneKeys,
+        public array $canonicalCompletedBeatIds,
+        public array $canonicalCompletedMilestoneIds,
         public int $chaptersUsedForCurrentBeat,
     ) {}
 
@@ -46,11 +50,15 @@ readonly class CurrentOutlineTarget
             'primary_outline_arc_id' => $this->outlineArcId,
             'primary_outline_beat_id' => $this->outlineBeatId,
             'primary_outline_milestone_id' => $this->outlineMilestoneId,
+            'primary_beat_id' => $this->outlineBeatId,
+            'primary_milestone_id' => $this->outlineMilestoneId,
             'arc' => $this->arc,
             'beat' => $this->beat,
             'milestone' => $this->milestone,
             'canonical_completed_beat_keys' => $this->canonicalCompletedBeatKeys,
             'canonical_completed_milestone_keys' => $this->canonicalCompletedMilestoneKeys,
+            'canonical_completed_beat_ids' => $this->canonicalCompletedBeatIds,
+            'canonical_completed_milestone_ids' => $this->canonicalCompletedMilestoneIds,
             'chapters_used_for_current_beat' => $this->chaptersUsedForCurrentBeat,
         ];
     }

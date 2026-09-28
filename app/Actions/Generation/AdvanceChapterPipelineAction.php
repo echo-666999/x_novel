@@ -27,6 +27,7 @@ use App\Services\AutoStopService;
 use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationRunLease;
 use App\Services\GenerationStageGate;
+use App\Services\PlanAdmissionService;
 use App\Services\RewriteScopeResolver;
 use App\Services\StatePatchBuilder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -44,6 +45,7 @@ class AdvanceChapterPipelineAction
         private readonly RewriteScopeResolver $rewriteScopeResolver,
         private readonly BudgetService $budgetService,
         private readonly AutoStopService $autoStop,
+        private readonly PlanAdmissionService $planAdmission,
     ) {}
 
     public function handle(int $chapterId, ?string $regenerationBatchId = null): ?GenerationStage
@@ -108,6 +110,8 @@ class AdvanceChapterPipelineAction
         if ($chapter->latestPlan?->status !== PlanStatus::Ready) {
             return [GenerationStage::ChapterPlanning, new PlanChapterJob($chapter->getKey())];
         }
+
+        $this->planAdmission->admit($chapter->latestPlan);
 
         if ($chapter->scenes->isEmpty()) {
             $this->syncScenes->execute($chapter);

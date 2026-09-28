@@ -117,10 +117,14 @@ class OutlineProgressResolver
             ]);
         }
 
-        $completedBeatKeys = NovelOutlineBeat::query()->whereIn('id', $completedBeatIds)
-            ->orderBy('mainline_sequence')->pluck('beat_key')->all();
-        $completedMilestoneKeys = $outline->milestones()->whereIn('id', $completedMilestoneIds)
-            ->orderBy('novel_outline_beat_id')->orderBy('sequence')->pluck('milestone_key')->all();
+        $completedBeats = NovelOutlineBeat::query()->whereIn('id', $completedBeatIds)
+            ->orderBy('mainline_sequence')->get(['id', 'beat_key']);
+        $completedMilestones = $outline->milestones()->whereIn('id', $completedMilestoneIds)
+            ->orderBy('novel_outline_beat_id')->orderBy('sequence')->get(['id', 'milestone_key']);
+        $completedBeatIds = $completedBeats->modelKeys();
+        $completedMilestoneIds = $completedMilestones->modelKeys();
+        $completedBeatKeys = $completedBeats->pluck('beat_key')->all();
+        $completedMilestoneKeys = $completedMilestones->pluck('milestone_key')->all();
         $sourceVolume = $volume->sourceOutlineVolume;
         $sourceArc = $runtimeArc->sourceOutlineArc;
 
@@ -164,6 +168,7 @@ class OutlineProgressResolver
                 'character_candidates' => $beat->character_candidates,
                 'world_entity_candidates' => $beat->world_entity_candidates,
                 'handoff' => [
+                    'next_beat_id' => $beat->handoff_next_beat_id,
                     'next_beat_key' => $beat->handoffNextBeat?->beat_key,
                     'transition_mode' => $beat->handoff_transition_mode,
                     'exit_result' => $beat->handoff_exit_result,
@@ -185,6 +190,8 @@ class OutlineProgressResolver
             ],
             canonicalCompletedBeatKeys: $completedBeatKeys,
             canonicalCompletedMilestoneKeys: $completedMilestoneKeys,
+            canonicalCompletedBeatIds: $completedBeatIds,
+            canonicalCompletedMilestoneIds: $completedMilestoneIds,
             chaptersUsedForCurrentBeat: $this->chaptersUsed($novel, $outline->getKey(), $beat->getKey()),
         );
     }

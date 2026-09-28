@@ -19,6 +19,7 @@ use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Character;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
@@ -27,6 +28,7 @@ use App\Models\Review;
 use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Services\ChapterRewriter;
+use App\Services\OutlineProgressResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 
@@ -38,7 +40,30 @@ function rewriteFixture(): array
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Rewrite]);
-    ChapterPlan::factory()->for($chapter)->create(['target_words' => 8, 'status' => PlanStatus::Ready]);
+    $pov = Character::factory()->for($novel)->create();
+    $plan = ChapterPlan::factory()->for($chapter)->create([
+        'target_words' => 8,
+        'pov_character_id' => $pov->getKey(),
+        'status' => PlanStatus::Ready,
+    ]);
+    $target = app(OutlineProgressResolver::class)->resolve($novel->fresh());
+    $plan->update([
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]],
+        'must_reveal' => $target->milestone['must_include'],
+        'must_not_reveal' => array_values(array_unique([
+            ...$target->beat['must_not_include'],
+            ...$target->milestone['must_not_include'],
+        ])),
+    ]);
     $assembly = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
     $draft = GenerationArtifact::factory()->for($assembly)->create(['type' => ArtifactType::ChapterDraft, 'content' => '原始章节正文', 'checksum' => hash('sha256', '原始章节正文')]);
     $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded]);

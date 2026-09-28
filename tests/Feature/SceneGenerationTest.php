@@ -20,6 +20,7 @@ use App\Enums\SceneStatus;
 use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Character;
 use App\Models\Foreshadowing;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -30,6 +31,7 @@ use App\Models\UsageRecord;
 use App\Services\DraftLengthPolicy;
 use App\Services\ForeshadowingCoverage;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
+use App\Services\OutlineProgressResolver;
 use App\Services\PlanCoverageEvidenceRepairer;
 use App\Services\SceneDraftPayload;
 use App\Services\SceneDraftStructureRepairer;
@@ -50,7 +52,9 @@ function sceneGenerationFixture(int $sceneCount = 2): array
         'sequence' => 20,
         'status' => ChapterStatus::Generating,
     ]);
+    $pov = Character::factory()->for($novel)->create();
     $plan = ChapterPlan::factory()->for($chapter)->create([
+        'pov_character_id' => $pov->getKey(),
         'must_not_reveal' => ['终局真相'],
         'scene_plans' => [],
         'target_words' => $sceneCount * 8,
@@ -63,6 +67,35 @@ function sceneGenerationFixture(int $sceneCount = 2): array
             'goal' => "Scene {$sequence} 目标",
             'status' => SceneStatus::Planned,
         ]));
+    $plan->update(['scene_plans' => $scenes->map(fn (Scene $scene): array => [
+        'goal' => $scene->goal,
+        'conflict' => $scene->conflict,
+        'turn' => $scene->turn,
+        'outcome' => $scene->outcome,
+        'outcome_allowed' => [],
+        'outcome_forbidden' => [],
+        'continuity_requirements' => [],
+        'transition_from_previous' => null,
+    ])->all()]);
+    $target = app(OutlineProgressResolver::class)->resolve($novel->fresh());
+    $plan->update([
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]],
+        'must_reveal' => $target->milestone['must_include'],
+        'must_not_reveal' => array_values(array_unique([
+            '终局真相',
+            ...$target->beat['must_not_include'],
+            ...$target->milestone['must_not_include'],
+        ])),
+    ]);
 
     return compact('novel', 'chapter', 'plan', 'scenes');
 }
@@ -727,9 +760,14 @@ test('scene generator persists an immutable draft artifact and temporary state d
     $fixture['plan']->update([
         'target_words' => 11,
         'scene_plans' => [[
+            'goal' => $fixture['scenes'][0]->goal,
+            'conflict' => $fixture['scenes'][0]->conflict,
+            'turn' => $fixture['scenes'][0]->turn,
+            'outcome' => $fixture['scenes'][0]->outcome,
             'transition_from_previous' => '先写抵达学院和入住过程，再进入次日清晨。',
             'outcome_allowed' => ['进入灯塔大厅并保持警戒'],
             'outcome_forbidden' => ['直接取得灯塔控制权'],
+            'continuity_requirements' => [],
         ]],
     ]);
     $fixture['novel']->update(['settings' => ['editorial' => ['primary_style' => 'light_humorous', 'secondary_styles' => [], 'style_parameters' => []]]]);
@@ -871,9 +909,9 @@ test('an overlength scene is compressed once before it becomes the current draft
 });
 
 test('length repair discards a foreshadowing action assigned to another scene', function () {
-    $fixture = sceneGenerationFixture(1);
+    $fixture = sceneGenerationFixture(2);
     $foreshadowing = sceneForeshadowingAction($fixture, 2);
-    $fixture['plan']->update(['target_words' => 100]);
+    $fixture['plan']->update(['target_words' => 140]);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('超', 120)))
         ->enqueue(sceneResponse(

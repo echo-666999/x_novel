@@ -35,7 +35,12 @@ readonly class PlanValidationResult
         }
 
         $messages = array_map(
-            fn (PlanFinding $finding): string => "[{$finding->code}] {$finding->message}",
+            fn (PlanFinding $finding): string => implode('；', array_filter([
+                "[{$finding->code}] {$finding->message}",
+                $finding->field === null ? null : "字段：{$finding->field}",
+                $finding->relatedRecord === null ? null : "关联记录：{$finding->relatedRecord}",
+                $finding->repairAction === null ? null : "修复动作：{$finding->repairAction}",
+            ])),
             array_values(array_filter(
                 $this->findings,
                 fn (PlanFinding $finding): bool => $finding->severity === PlanFindingSeverity::Blocked,

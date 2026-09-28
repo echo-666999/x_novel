@@ -36,6 +36,7 @@ return [
     'event_evidence_repair_max_output_tokens' => 1_000,
     'event_evidence_repair_retry_max_output_tokens' => 4_000,
     'review_max_output_tokens' => (int) env('REVIEW_MAX_OUTPUT_TOKENS', 12_000),
+    'review_context_token_budget' => (int) env('REVIEW_CONTEXT_TOKEN_BUDGET', 32_000),
     'review_retry_max_output_tokens' => (int) env('REVIEW_RETRY_MAX_OUTPUT_TOKENS', 16_000),
     'review_final_retry_max_output_tokens' => (int) env('REVIEW_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000),
     'review_schema_repair_max_output_tokens' => 1_500,

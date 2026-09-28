@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Actions\Chapters\InvalidateChapterPlanDownstreamAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
@@ -34,6 +35,7 @@ class ChapterPlanner
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly PlanValidator $planValidator,
+        private readonly PlanAdmissionService $planAdmission,
         private readonly ClosureDebtService $closureDebt,
         private readonly SyncScenesFromChapterPlanAction $syncScenes,
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
@@ -45,6 +47,7 @@ class ChapterPlanner
         private readonly StoryArcBeatContract $storyArcBeatContract,
         private readonly OutlineContextBuilder $outlineContextBuilder,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly InvalidateChapterPlanDownstreamAction $invalidatePlanDownstream,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -96,8 +99,8 @@ class ChapterPlanner
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
-                    .'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，不能替代 Main Primary Beat。'
-                    .'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择并逐字段复制，没有 Candidate 时必须返回 []。Beat 与 Milestone 的 must_include 必须合并到 must_reveal，must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
+                    .'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。'
+                    .'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择并逐字段复制，没有 Candidate 时必须返回 []。只把当前 Milestone 的 must_include 合并到 must_reveal；不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
                     .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据和目标 Scene，不需要新实体时返回 []。'
                     .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
@@ -206,6 +209,8 @@ class ChapterPlanner
             $contribution['arc_id'] = (int) $outlineTarget['primary_arc_id'];
             $contribution['beat_key'] = (string) $outlineTarget['primary_beat_key'];
             $contribution['beat_index'] = (int) $outlineTarget['primary_beat_sequence'];
+            $contribution['milestone_key'] = (string) $outlineTarget['primary_milestone_key'];
+            $contribution['milestone_sequence'] = (int) $outlineTarget['primary_milestone_sequence'];
         }
         unset($contribution);
 
@@ -305,7 +310,7 @@ class ChapterPlanner
 
     private function complete(GenerationRun $run, Chapter $chapter, array $payload, string $content, int $expectedStateVersion, bool $regenerate): ChapterPlan
     {
-        return DB::transaction(function () use ($run, $chapter, $payload, $content, $expectedStateVersion, $regenerate): ChapterPlan {
+        return DB::transaction(function () use ($run, $chapter, $payload, $content, $expectedStateVersion): ChapterPlan {
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
 
@@ -331,19 +336,43 @@ class ChapterPlanner
             }
 
             $version = ((int) $chapter->plans()->max('version')) + 1;
+            $candidate = new ChapterPlan(['version' => $version, 'status' => PlanStatus::Ready, ...$payload]);
+            $candidate->setRelation('chapter', $chapter);
+            $admission = $this->planAdmission->prepare($candidate, $run->bible_version);
+            $reusable = $this->planAdmission->reusableReadyPlan($chapter, $admission['input_hash']);
+
+            if ($reusable !== null) {
+                $run->artifacts()->create([
+                    'type' => ArtifactType::ChapterPlan,
+                    'version' => 1,
+                    'content' => $content,
+                    'data' => $payload,
+                    'checksum' => $candidate->semanticChecksum(),
+                ]);
+                $run->update([
+                    'status' => RunStatus::Succeeded,
+                    'context_snapshot' => [...($run->context_snapshot ?? []), 'chapter_plan_id' => $reusable->getKey(), 'plan_reused' => true],
+                    'finished_at' => now(),
+                ]);
+
+                return $reusable;
+            }
+
             $chapter->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
-            $plan = $chapter->plans()->create(['version' => $version, 'status' => PlanStatus::Ready, ...$payload]);
-            $checksum = hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-            $run->artifacts()->create(['type' => ArtifactType::ChapterPlan, 'version' => 1, 'content' => $content, 'data' => $payload, 'checksum' => $checksum]);
+            $plan = $chapter->plans()->create([
+                'version' => $version,
+                'status' => PlanStatus::Ready,
+                ...$payload,
+                ...$admission,
+            ]);
+            $run->artifacts()->create(['type' => ArtifactType::ChapterPlan, 'version' => 1, 'content' => $content, 'data' => $payload, 'checksum' => $plan->checksum]);
             $run->update([
                 'status' => RunStatus::Succeeded,
                 'context_snapshot' => [...($run->context_snapshot ?? []), 'chapter_plan_id' => $plan->getKey()],
                 'finished_at' => now(),
             ]);
-            $this->syncScenes->execute(
-                $chapter,
-                replaceGenerated: $regenerate && $chapter->status === ChapterStatus::Void,
-            );
+            $this->invalidatePlanDownstream->execute($chapter);
+            $this->syncScenes->execute($chapter);
             $chapter->update(['status' => ChapterStatus::Generating]);
 
             return $plan;

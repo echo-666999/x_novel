@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
-use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Data\ContextRequest;
 use App\Enums\AiStage;
@@ -29,8 +27,7 @@ class SceneGenerator
 {
     public function __construct(
         private readonly AiProvider $provider,
-        private readonly AiSettingsResolver $settingsResolver,
-        private readonly PromptVersionResolver $promptVersionResolver,
+        private readonly PlanAdmissionService $planAdmission,
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly GenerationRunLease $runLease,
@@ -66,10 +63,11 @@ class SceneGenerator
         }
 
         $previousArtifacts = $this->previousArtifacts($scene);
-        $settings = $this->settingsResolver->resolve(AiStage::Writer, $novel);
-        $extractorSettings = $this->settingsResolver->resolve(AiStage::Extractor, $novel);
-        $rewriteSettings = $this->settingsResolver->resolve(AiStage::Rewrite, $novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Writer);
+        $plan = $this->planAdmission->admit($plan);
+        $settings = $this->planAdmission->routeFor($plan, AiStage::Writer);
+        $extractorSettings = $this->planAdmission->routeFor($plan, AiStage::Extractor);
+        $rewriteSettings = $this->planAdmission->routeFor($plan, AiStage::Rewrite);
+        $promptVersion = $this->planAdmission->promptVersionFor($plan, AiStage::Writer);
         $previousArtifact = $previousArtifacts->last();
         $snapshot = $this->contextBuilder->build(new ContextRequest(
             novelId: $novel->getKey(),

@@ -10,5 +10,8 @@ readonly class PlanFinding
         public PlanFindingSeverity $severity,
         public string $code,
         public string $message,
+        public ?string $field = null,
+        public ?string $relatedRecord = null,
+        public ?string $repairAction = null,
     ) {}
 }

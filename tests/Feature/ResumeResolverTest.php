@@ -19,6 +19,7 @@ use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Character;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
@@ -26,6 +27,7 @@ use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
 use App\Models\Volume;
+use App\Services\OutlineProgressResolver;
 use App\Services\ResumeResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -137,18 +139,15 @@ test('resume restores the previous status and dispatches exactly one job for eac
 
     $withPlan = pausedResumeNovel();
     $planChapter = resumeChapter($withPlan);
-    ChapterPlan::factory()->for($planChapter)->create([
-        'status' => PlanStatus::Ready,
-        'scene_plans' => [[
-            'goal' => '找到线索', 'conflict' => '守卫阻拦', 'turn' => '密门开启', 'outcome' => '进入遗迹',
-        ]],
-    ]);
+    resumeReadyPlan($planChapter, [[
+        'goal' => '找到线索', 'conflict' => '守卫阻拦', 'turn' => '密门开启', 'outcome' => '进入遗迹',
+    ]]);
     $scenePoint = $resolver->resume($withPlan);
     $syncedScene = $planChapter->scenes()->sole();
 
     $complete = pausedResumeNovel();
     $completeChapter = resumeChapter($complete);
-    ChapterPlan::factory()->for($completeChapter)->create(['status' => PlanStatus::Ready]);
+    resumeReadyPlan($completeChapter);
     resumeScenes($completeChapter, true);
     $resolver->resume($complete);
 
@@ -247,6 +246,37 @@ function resumeChapter(Novel $novel, ChapterStatus $status = ChapterStatus::Gene
         'sequence' => $sequence,
         'status' => $status,
     ]);
+}
+
+/** @param array<int, array<string, mixed>>|null $scenePlans */
+function resumeReadyPlan(Chapter $chapter, ?array $scenePlans = null): ChapterPlan
+{
+    $pov = Character::factory()->for($chapter->novel)->create();
+    $plan = ChapterPlan::factory()->for($chapter)->create([
+        'status' => PlanStatus::Ready,
+        'pov_character_id' => $pov->getKey(),
+        ...($scenePlans === null ? [] : ['scene_plans' => $scenePlans]),
+    ]);
+    $target = app(OutlineProgressResolver::class)->resolve($chapter->novel->fresh());
+    $plan->update([
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]],
+        'must_reveal' => $target->milestone['must_include'],
+        'must_not_reveal' => array_values(array_unique([
+            ...$target->beat['must_not_include'],
+            ...$target->milestone['must_not_include'],
+        ])),
+    ]);
+
+    return $plan->fresh();
 }
 
 /** @return array{Scene, Scene} */

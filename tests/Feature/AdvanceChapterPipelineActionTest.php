@@ -19,15 +19,18 @@ use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Character;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
 use App\Services\ChapterAssembler;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterReviewer;
 use App\Services\ChapterRewriter;
+use App\Services\OutlineProgressResolver;
 use App\Services\SceneGenerator;
 use App\Services\StoryEventExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -48,12 +51,43 @@ function pipelineChapter(): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     $state = app(InitializeNovelStateAction::class)->handle($novel);
+    NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create([
         'sequence' => 1,
         'status' => ChapterStatus::Planned,
     ]);
 
     return compact('novel', 'state', 'chapter');
+}
+
+function pipelineReadyPlan(Chapter $chapter, array $scenePlans): ChapterPlan
+{
+    $pov = Character::factory()->for($chapter->novel)->create();
+    $plan = ChapterPlan::factory()->for($chapter)->create([
+        'status' => PlanStatus::Ready,
+        'pov_character_id' => $pov->getKey(),
+        'scene_plans' => $scenePlans,
+    ]);
+    $target = app(OutlineProgressResolver::class)->resolve($chapter->novel->fresh());
+    $plan->update([
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]],
+        'must_reveal' => $target->milestone['must_include'],
+        'must_not_reveal' => array_values(array_unique([
+            ...$target->beat['must_not_include'],
+            ...$target->milestone['must_not_include'],
+        ])),
+    ]);
+
+    return $plan->fresh();
 }
 
 function pipelineArtifact(
@@ -120,12 +154,9 @@ test('one pipeline start advances each persisted stage in order and stops at pas
     expect($advance->handle($chapter->getKey()))->toBe(GenerationStage::ChapterPlanning);
     Queue::assertPushed(PlanChapterJob::class, 1);
 
-    ChapterPlan::factory()->for($chapter)->create([
-        'status' => PlanStatus::Ready,
-        'scene_plans' => [
-            ['goal' => '进入城门', 'conflict' => '守卫阻拦', 'turn' => '令牌生效', 'outcome' => '成功入城', 'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => null],
-            ['goal' => '寻找线人', 'conflict' => '追兵抵达', 'turn' => '线人现身', 'outcome' => '获得线索', 'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => null],
-        ],
+    pipelineReadyPlan($chapter, [
+        ['goal' => '进入城门', 'conflict' => '守卫阻拦', 'turn' => '令牌生效', 'outcome' => '成功入城', 'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => null],
+        ['goal' => '寻找线人', 'conflict' => '追兵抵达', 'turn' => '线人现身', 'outcome' => '获得线索', 'outcome_allowed' => [], 'outcome_forbidden' => [], 'transition_from_previous' => null],
     ]);
     $chapter->update(['status' => ChapterStatus::Generating]);
 

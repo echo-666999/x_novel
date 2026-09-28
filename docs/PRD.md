@@ -724,6 +724,11 @@ foreshadowing_actions JSONB
 world_entity_candidates JSONB
 scene_plans JSONB
 
+checksum char(64)
+input_hash char(64)
+admission_snapshot JSONB
+admitted_at
+
 status
 created_at
 updated_at
@@ -733,7 +738,7 @@ updated_at
 
 Primary Contribution 使用 `novel_outline_arc_id + novel_outline_beat_id + novel_outline_milestone_id` 引用冻结 Outline 的完整父链，并记录目标 Scene 与验收条件；每个新 Plan 必须恰有一个 Primary，Secondary 只能推进获准支线，不能替代或提前完成后续 Main Beat/Milestone。`character_candidates` 与 `world_entity_candidates` 保存稳定临时键、名称或类型、描述、去重依据、潜在重复对象、引入理由与目标 Scene。三者在 Review PASS 前都只是 Draft 契约。
 
-Chapter Plan 必须冻结 Outline ID、Checksum、Primary Arc/Beat/Milestone ID 和 Handoff 契约。Generation Run 的 Context Snapshot 同时记录已完成 Milestone/Beat IDs、当前 Beat 已使用的 Canonical Chapter 数和章节预算；后续大纲修订不得把旧 Plan 静默改挂到新版本。
+Chapter Plan 必须冻结 Outline ID、Checksum、Primary Arc/Beat/Milestone ID 和 Handoff 契约。`admission_snapshot` 在 Scene 1 前同时冻结 Bible/State/Outline/Plan 来源、下游 AI Stage Route 和 Scene/Review 容量；相同 `input_hash` 复用 Ready Plan，语义输入变化创建新 Plan Version。Generation Run 的 Context Snapshot 同时记录已完成 Milestone/Beat IDs、当前 Beat 已使用的 Canonical Chapter 数和章节预算；后续大纲修订不得把旧 Plan 静默改挂到新版本。
 
 ---
 

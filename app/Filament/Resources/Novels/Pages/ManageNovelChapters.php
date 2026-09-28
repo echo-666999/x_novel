@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\InvalidateChapterPlanDownstreamAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\AiSettingsService;
 use App\Enums\ChapterStatus;
@@ -15,6 +16,7 @@ use App\Models\ChapterPlan;
 use App\Models\Foreshadowing;
 use App\Services\ForeshadowingLifecycleResolver;
 use App\Services\OutlineProgressResolver;
+use App\Services\PlanAdmissionService;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
@@ -189,7 +191,13 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->slideOver()
                     ->fillForm(fn (Chapter $record): array => $this->chapterPlanFormData($record))
                     ->schema($this->chapterPlanSchema())
-                    ->action(function (Chapter $record, array $data): void {
+                    ->action(function (
+                        Chapter $record,
+                        array $data,
+                        PlanAdmissionService $planAdmission,
+                        InvalidateChapterPlanDownstreamAction $invalidatePlanDownstream,
+                        SyncScenesFromChapterPlanAction $syncScenes,
+                    ): void {
                         // 手工计划也必须冻结 Current Outline 的完整父链，不能创建空来源或由用户提交数据库 ID。
                         $target = app(OutlineProgressResolver::class)->resolve($record->novel);
                         if ($target === null) {
@@ -206,12 +214,13 @@ class ManageNovelChapters extends ManageRelatedRecords
                             'arc_id' => $target->arcId,
                             'beat_key' => $target->beat['key'],
                             'beat_index' => $target->beat['sequence'],
+                            'milestone_key' => $target->milestone['key'],
+                            'milestone_sequence' => $target->milestone['sequence'],
                             'target_scene_sequence' => 1,
                             'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
                         ]];
                         $data['must_reveal'] = array_values(array_unique([
                             ...($data['must_reveal'] ?? []),
-                            ...($target->beat['must_include'] ?? []),
                             ...($target->milestone['must_include'] ?? []),
                         ]));
                         $data['must_not_reveal'] = array_values(array_unique([
@@ -219,6 +228,15 @@ class ManageNovelChapters extends ManageRelatedRecords
                             ...($target->beat['must_not_include'] ?? []),
                             ...($target->milestone['must_not_include'] ?? []),
                         ]));
+                        $data['scene_plans'] = collect($data['scene_plans'] ?? [])->map(
+                            fn (array $scene): array => [
+                                ...$scene,
+                                'outcome_allowed' => array_values(array_filter($scene['outcome_allowed'] ?? [], 'is_string')),
+                                'outcome_forbidden' => array_values(array_filter($scene['outcome_forbidden'] ?? [], 'is_string')),
+                                'continuity_requirements' => array_values(array_filter($scene['continuity_requirements'] ?? [], 'is_array')),
+                                'transition_from_previous' => $scene['transition_from_previous'] ?? null,
+                            ],
+                        )->values()->all();
                         $data['required_facts'] = array_map('intval', $data['required_facts'] ?? []);
                         // The prior Plan version preserves legacy IDs; every newly saved version uses contracts only.
                         $data['due_foreshadowings'] = [];
@@ -230,10 +248,23 @@ class ManageNovelChapters extends ManageRelatedRecords
                         $candidate = new ChapterPlan(['version' => $version, ...$data]);
                         $candidate->setRelation('chapter', $record);
                         app(PlanValidator::class)->validate($candidate)->assertCanGenerate();
+                        $admission = $planAdmission->prepare($candidate);
+                        $reusable = $planAdmission->reusableReadyPlan($record, $admission['input_hash']);
 
-                        DB::transaction(function () use ($record, $data, $version): void {
+                        if ($reusable !== null) {
+                            Notification::make()
+                                ->title('Chapter Plan 输入未变化，已复用当前 Ready Plan')
+                                ->success()
+                                ->send();
+
+                            return;
+                        }
+
+                        DB::transaction(function () use ($record, $data, $version, $admission, $invalidatePlanDownstream, $syncScenes): void {
                             $record->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
-                            $record->plans()->create(['version' => $version, ...$data]);
+                            $record->plans()->create(['version' => $version, ...$data, ...$admission]);
+                            $invalidatePlanDownstream->execute($record);
+                            $syncScenes->execute($record);
                         });
 
                         Notification::make()
