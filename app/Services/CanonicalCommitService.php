@@ -258,6 +258,27 @@ class CanonicalCommitService
             // 进度事件的权威节点由冻结 Plan 覆盖，绝不信任模型返回数据库 ID。
             $outlineReferences = $this->outlineReferencesForEvent($chapter, $event);
 
+            if (in_array($event->eventType, [EventType::StoryArcBeatCompleted, EventType::StoryArcBeatMilestoneCompleted], true)) {
+                // Novel 行已在事务入口锁定；并发 Commit 会在这里串行化，并复用先到者
+                // 写入的 Active Completion。数据库 Partial Unique Index 是最终防线。
+                $existing = $novel->storyEvents()
+                    ->active()
+                    ->where('event_type', $event->eventType->value)
+                    ->where('subject_type', 'story_arc')
+                    ->where('subject_id', $event->subjectId)
+                    ->where('novel_outline_beat_id', $outlineReferences['novel_outline_beat_id'])
+                    ->when(
+                        $event->eventType === EventType::StoryArcBeatMilestoneCompleted,
+                        fn ($query) => $query->where('novel_outline_milestone_id', $outlineReferences['novel_outline_milestone_id']),
+                        fn ($query) => $query->whereNull('novel_outline_milestone_id'),
+                    )
+                    ->first();
+
+                if ($existing !== null) {
+                    return $existing;
+                }
+            }
+
             return $novel->storyEvents()->create([
                 'chapter_id' => $chapter->getKey(),
                 'scene_id' => $event->evidence[0]['scene_id'],

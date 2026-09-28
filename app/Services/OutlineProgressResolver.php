@@ -58,28 +58,52 @@ class OutlineProgressResolver
         $completedBeatIds = $novel->storyEvents()
             ->where('event_type', EventType::StoryArcBeatCompleted->value)
             ->where('status', StoryEventStatus::Active->value)
+            ->where('subject_type', 'story_arc')
+            ->where('subject_id', (string) $runtimeArc->getKey())
             ->where('novel_outline_id', $outline->getKey())
+            ->where('novel_outline_arc_id', $runtimeArc->source_outline_arc_id)
             ->whereNotNull('novel_outline_beat_id')
             ->pluck('novel_outline_beat_id')
             ->map(fn ($id): int => (int) $id)
+            ->unique()
             ->all();
         $completedMilestoneIds = $novel->storyEvents()
             ->where('event_type', EventType::StoryArcBeatMilestoneCompleted->value)
             ->where('status', StoryEventStatus::Active->value)
+            ->where('subject_type', 'story_arc')
+            ->where('subject_id', (string) $runtimeArc->getKey())
             ->where('novel_outline_id', $outline->getKey())
+            ->where('novel_outline_arc_id', $runtimeArc->source_outline_arc_id)
             ->whereNotNull('novel_outline_milestone_id')
             ->pluck('novel_outline_milestone_id')
             ->map(fn ($id): int => (int) $id)
+            ->unique()
             ->all();
 
-        $beat = NovelOutlineBeat::query()
+        $beats = NovelOutlineBeat::query()
             ->where('novel_outline_id', $outline->getKey())
             ->where('novel_outline_arc_id', $runtimeArc->source_outline_arc_id)
             ->whereNotNull('mainline_sequence')
-            ->when($completedBeatIds !== [], fn ($query) => $query->whereNotIn('id', $completedBeatIds))
             ->with(['milestones', 'handoffNextBeat'])
             ->orderBy('mainline_sequence')
-            ->first();
+            ->get();
+
+        // Beat Completion 只能在其全部 Milestone 已正式完成后生效。解析器必须拒绝
+        // 不完整的 Canonical Event 集合，不能因为一个提前写入的 Beat Event 跳过中间目标。
+        foreach ($beats->whereIn('id', $completedBeatIds) as $completedBeat) {
+            $incompleteMilestone = $completedBeat->milestones->first(
+                fn ($candidate): bool => ! in_array($candidate->getKey(), $completedMilestoneIds, true),
+            );
+            if ($incompleteMilestone !== null) {
+                throw ValidationException::withMessages([
+                    'outline' => "Main Beat {$completedBeat->beat_key} 已有 Beat Completion Event，但 Milestone {$incompleteMilestone->milestone_key} 尚未正式完成。",
+                ]);
+            }
+        }
+
+        $beat = $beats->first(
+            fn ($candidate): bool => ! in_array($candidate->getKey(), $completedBeatIds, true),
+        );
         if ($beat === null) {
             return null;
         }
@@ -96,7 +120,7 @@ class OutlineProgressResolver
         $completedBeatKeys = NovelOutlineBeat::query()->whereIn('id', $completedBeatIds)
             ->orderBy('mainline_sequence')->pluck('beat_key')->all();
         $completedMilestoneKeys = $outline->milestones()->whereIn('id', $completedMilestoneIds)
-            ->orderBy('id')->pluck('milestone_key')->all();
+            ->orderBy('novel_outline_beat_id')->orderBy('sequence')->pluck('milestone_key')->all();
         $sourceVolume = $volume->sourceOutlineVolume;
         $sourceArc = $runtimeArc->sourceOutlineArc;
 

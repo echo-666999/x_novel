@@ -331,6 +331,41 @@ test('canonical commit closes accepted arc beats and world entity candidates exa
         ->and(WorldEntity::query()->count())->toBe(0);
 });
 
+test('canonical commit reuses duplicate active milestone completion effects', function () {
+    $fixture = canonicalCommitFixture();
+    addPlanningClosureToCanonicalFixture($fixture);
+    $plan = $fixture['chapter']->latestPlan;
+    $candidateData = $fixture['candidate']->fresh()->data;
+    $beatEvent = collect($candidateData['events'])->firstWhere(
+        'event_type',
+        EventType::StoryArcBeatCompleted->value,
+    );
+    $milestoneEvent = [
+        ...$beatEvent,
+        'event_type' => EventType::StoryArcBeatMilestoneCompleted->value,
+        'payload' => [
+            'beat_key' => $plan->primaryOutlineBeat->beat_key,
+            'milestone_key' => $plan->primaryOutlineMilestone->milestone_key,
+        ],
+    ];
+    DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
+        'data' => json_encode([
+            ...$candidateData,
+            'events' => [...$candidateData['events'], $milestoneEvent, $milestoneEvent],
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $service = app(CanonicalCommitService::class);
+
+    $service->commit($fixture['data']);
+    $service->commit($fixture['data']);
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
+        ->and(StoryEvent::query()
+            ->where('event_type', EventType::StoryArcBeatMilestoneCompleted)
+            ->where('status', 'active')
+            ->count())->toBe(1);
+});
+
 test('canonical commit rejects an unconfirmed character candidate without creating it', function () {
     $fixture = canonicalCommitFixture();
     addCharacterIntroductionToCanonicalFixture($fixture);

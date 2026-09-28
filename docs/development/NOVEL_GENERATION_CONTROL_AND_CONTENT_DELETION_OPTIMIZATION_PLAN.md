@@ -1122,7 +1122,7 @@ flowchart TD
 | NGC-001 | Source of Truth 与产品语义对齐 | P0 | DONE | 无 |
 | NGC-002A | 关系化 Outline 数据模型 | P0 | DONE | NGC-001 |
 | NGC-002B | 分阶段 Outline 生成与恢复 | P0 | DONE | NGC-002A |
-| NGC-003 | Canonical Milestone Progress | P0 | TODO | NGC-002B |
+| NGC-003 | Canonical Milestone Progress | P0 | DONE | NGC-002B |
 | NGC-004 | Chapter Planner 选择当前 Milestone | P0 | TODO | NGC-003 |
 | NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | TODO | NGC-004 |
 | NGC-005 | Review、Event、Commit 完成语义 | P0 | TODO | NGC-004A |
@@ -1413,7 +1413,7 @@ Next Task
 ## NGC-003 — Canonical Milestone Progress
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-002B
 
 ### 实现
@@ -1443,6 +1443,22 @@ Next Task
 
 - 本轮实施和测试阶段通过回退代码后重新执行 `migrate:fresh` 恢复；不为已经放弃的旧结构提供事件数据迁移。
 - 新结构一旦产生需要保留的数据，后续回滚必须另行设计可审计迁移，不能直接收窄 CHECK Constraint。
+
+### 实施结果（2026-09-28）
+
+- 确认 NGC-002A 已提前落地 `EventType::StoryArcBeatMilestoneCompleted`、Completion 外键父链和 `CurrentOutlineTarget` 基础字段；本任务保留这些已存在能力，并新增独立 Migration 显式刷新 PostgreSQL `story_events_type_check`。
+- Active Milestone Completion 的唯一效果键固定为 `story_arc subject_id + novel_outline_beat_id + novel_outline_milestone_id`；Active Beat Completion 固定为 `story_arc subject_id + novel_outline_beat_id`。两个 Partial Unique Index 都排除 Invalidated Event。
+- `OutlineProgressResolver` 只读取 Current Outline 对应 Story Arc 的 Active Canonical Completion Events，按 Main Beat 与 Milestone Sequence 选择最早未完成目标；若 Beat Completion 早于任一 Milestone Completion，解析立即失败，不会跳到下一 Beat。
+- `CanonicalCommitService` 在 Novel 行锁事务内复用已经存在的同逻辑键 Active Completion；同一候选重复出现或 Commit Job 重复投递不会产生第二个正式进度效果，数据库唯一索引继续承担最终并发约束。
+- 未实现 Milestone/Beat Completion Candidate 的 Review、Extractor 和完整 Handoff 完成判定；这些仍属于 NGC-005，不在本任务范围内。
+
+### 验证结果（2026-09-28）
+
+- SQLite 针对性测试覆盖：初始 Milestone、Milestone 顺序推进、重复 Active Event、Invalidation 后重新完成、未完成 Milestone 阻止 Beat 推进、完整 Beat 推进，以及 Canonical Commit 重复 Completion 幂等复用。
+- PostgreSQL 隔离 Schema 已实际执行全部 Migration；确认新 Event Type 可写入、两个 Partial Unique Index 存在、重复 Active Completion 被数据库拒绝，且 Invalidated Event 不占用唯一键。验证结束后已通过 Migration Down 清空并删除隔离 Schema，未修改 `public` Schema 业务数据。
+- 受影响回归：60 tests，58 passed，2 skipped，250 assertions，0 failures，2 warnings。
+- 全量 `php artisan test`：1014 tests，991 passed，23 skipped，5883 assertions，0 failures，3 warnings。
+- `vendor/bin/pint --dirty` 与 `git diff --check`：通过。
 
 ## NGC-004 — Chapter Planner 选择当前 Milestone
 

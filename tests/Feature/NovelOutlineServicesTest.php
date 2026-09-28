@@ -67,6 +67,16 @@ test('outline progress reads active canonical completion references only', funct
     $chapter = Chapter::factory()->for($novel)->create();
 
     StoryEvent::factory()->for($novel)->for($chapter)->create([
+        'event_type' => EventType::StoryArcBeatMilestoneCompleted,
+        'status' => StoryEventStatus::Active,
+        'subject_type' => 'story_arc',
+        'subject_id' => (string) $arc->getKey(),
+        'novel_outline_id' => $target->outlineId,
+        'novel_outline_arc_id' => $target->outlineArcId,
+        'novel_outline_beat_id' => $target->outlineBeatId,
+        'novel_outline_milestone_id' => $target->outlineMilestoneId,
+    ]);
+    StoryEvent::factory()->for($novel)->for($chapter)->create([
         'event_type' => EventType::StoryArcBeatCompleted,
         'status' => StoryEventStatus::Active,
         'subject_type' => 'story_arc',

@@ -301,6 +301,20 @@ test('the planner restores authoritative outline constraints before validating t
 
 test('the planner advances to the next beat only after an active completion event', function () {
     [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
+    $sourceArc = $outline->arcs()->where('arc_key', 'arc-departure')->sole();
+    $sourceBeat = $outline->beats()->where('beat_key', 'beat-map')->sole();
+    StoryEvent::factory()->create([
+        'novel_id' => $chapter->novel_id,
+        'chapter_id' => $chapter->getKey(),
+        'event_type' => EventType::StoryArcBeatMilestoneCompleted,
+        'subject_type' => 'story_arc',
+        'subject_id' => (string) $arc->getKey(),
+        'payload' => ['beat_key' => 'beat-map', 'milestone_key' => 'beat-map-m01'],
+        'novel_outline_id' => $outline->getKey(),
+        'novel_outline_arc_id' => $sourceArc->getKey(),
+        'novel_outline_beat_id' => $sourceBeat->getKey(),
+        'novel_outline_milestone_id' => $sourceBeat->milestones()->sole()->getKey(),
+    ]);
     StoryEvent::factory()->create([
         'novel_id' => $chapter->novel_id,
         'chapter_id' => $chapter->getKey(),
@@ -309,8 +323,8 @@ test('the planner advances to the next beat only after an active completion even
         'subject_id' => (string) $arc->getKey(),
         'payload' => ['beat_key' => 'beat-map'],
         'novel_outline_id' => $outline->getKey(),
-        'novel_outline_arc_id' => $outline->arcs()->where('arc_key', 'arc-departure')->sole()->getKey(),
-        'novel_outline_beat_id' => $outline->beats()->where('beat_key', 'beat-map')->sole()->getKey(),
+        'novel_outline_arc_id' => $sourceArc->getKey(),
+        'novel_outline_beat_id' => $sourceBeat->getKey(),
         'novel_outline_milestone_id' => null,
     ]);
     $fake = (new FakeAiProvider)->enqueue(plannerResponse(outlinePlannerPayload($character, $outline, $arc, 'beat-gate', 2)));

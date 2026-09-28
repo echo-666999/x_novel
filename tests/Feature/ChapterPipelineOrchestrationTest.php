@@ -312,7 +312,7 @@ test('one trigger reaches pass then manual commit creates canonical state memory
 
     expect($chapter->fresh()->status)->toBe(ChapterStatus::Canonical)
         ->and($fixture['novel']->fresh()->current_chapter_sequence)->toBe(1)
-        ->and(StoryEvent::query()->where('chapter_id', $chapter->getKey())->count())->toBe(2)
+        ->and(StoryEvent::query()->where('chapter_id', $chapter->getKey())->count())->toBe(3)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2)
         ->and(data_get($fixture['novel']->fresh()->canonicalStateVersion->state, 'characters.'.$fixture['character']->getKey().'.location'))->toBe('灯塔')
         ->and($nextChapter->status)->toBe(ChapterStatus::Planned)
@@ -321,8 +321,8 @@ test('one trigger reaches pass then manual commit creates canonical state memory
     Queue::assertPushed(UpdateMemoryJob::class, fn (UpdateMemoryJob $job): bool => $job->chapterId === $chapter->getKey());
     Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $nextChapter->getKey());
 
-    expect(Memory::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
-    Queue::assertPushed(GenerateEmbeddingJob::class, 2);
+    expect(Memory::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(3);
+    Queue::assertPushed(GenerateEmbeddingJob::class, 3);
 });
 
 test('one trigger performs a targeted scene rewrite and revalidates fresh downstream artifacts before pass', function () {
@@ -413,7 +413,7 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
 
         expect($chapter->fresh()->status)->toBe(ChapterStatus::Review)
             ->and($review->decision)->toBe(ReviewDecision::Pass)
-            ->and($fixture['novel']->storyEvents()->count())->toBe(($sequence - 1) * 2)
+            ->and($fixture['novel']->storyEvents()->count())->toBe(($sequence - 1) * 3)
             ->and($fixture['novel']->fresh()->canonicalStateVersion->version)->toBe($sequence - 1)
             ->and($contextRun->state_version)->toBe($sequence - 1)
             ->and(data_get($contextRun->context_snapshot, 'l0.foreshadowing_contract.actions.0.content_status'))
@@ -450,7 +450,7 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
     )->and($foreshadowing->fresh()->payoff_chapter_id)->toBe(
         $fixture['novel']->chapters()->where('sequence', 3)->value('id'),
     )->and(app(ProjectionRebuilder::class)->inspect($fixture['novel']->fresh())->isHealthy())->toBeTrue()
-        ->and(Memory::query()->where('novel_id', $fixture['novel']->getKey())->where('status', MemoryStatus::Active)->count())->toBe(6);
+        ->and(Memory::query()->where('novel_id', $fixture['novel']->getKey())->where('status', MemoryStatus::Active)->count())->toBe(9);
 });
 
 final class ChapterPipelineFixtureProvider implements AiProvider
@@ -630,6 +630,14 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'story_time' => "第{$chapter->sequence}日夜晚",
             'confidence' => 0.98,
         ];
+        $milestoneEvent = [
+            ...$arcEvent,
+            'event_type' => EventType::StoryArcBeatMilestoneCompleted->value,
+            'payload' => [
+                'beat_key' => $primary['beat_key'],
+                'milestone_key' => $chapter->latestPlan->primaryOutlineMilestone->milestone_key,
+            ],
+        ];
 
         if ($this->foreshadowingId !== null) {
             $scene = $chapter->scenes()->orderBy('sequence')->firstOrFail();
@@ -648,7 +656,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 ]],
                 'story_time' => "第{$chapter->sequence}日夜晚",
                 'confidence' => 0.98,
-            ], $arcEvent]];
+            ], $milestoneEvent, $arcEvent]];
         }
 
         return ['events' => [[
@@ -665,7 +673,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             ]],
             'story_time' => '第一日夜晚',
             'confidence' => 0.98,
-        ], $arcEvent]];
+        ], $milestoneEvent, $arcEvent]];
     }
 
     /** @return array<string, mixed> */
