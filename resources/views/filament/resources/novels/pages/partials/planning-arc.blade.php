@@ -23,7 +23,7 @@
             {{ round($arc->progress * 100) }}%
         </p>
         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Canonical {{ data_get($arc->progress_summary, 'canonical_completed', 0) }}/{{ data_get($arc->progress_summary, 'total', count($arc->beats ?? [])) }}
+            Canonical {{ data_get($arc->progress_summary, 'canonical_completed', 0) }}/{{ data_get($arc->progress_summary, 'total', $arc->sourceOutlineArc?->beats->count() ?? 0) }}
             @if (data_get($arc->progress_summary, 'draft_pending', 0) > 0)
                 · 活跃草稿预计 +{{ data_get($arc->progress_summary, 'draft_pending') }} Beat
             @endif
@@ -45,16 +45,16 @@
 
     <div>
         <p class="text-xs font-medium text-gray-500 dark:text-gray-400">关键节拍</p>
-        @if (count($arc->beats ?? []) === 0)
+        @if (($arc->sourceOutlineArc?->beats->count() ?? 0) === 0)
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">尚未设置关键节拍。</p>
         @else
             <ol class="mt-2 space-y-1.5">
-                @foreach ($arc->beats as $beat)
+                @foreach ($arc->sourceOutlineArc->beats as $beat)
                     <li class="flex gap-2 text-sm text-gray-700 dark:text-gray-300">
                         <span class="mt-0.5 shrink-0 font-mono text-xs tabular-nums text-gray-400 dark:text-gray-500">
                             {{ $loop->iteration }}.
                         </span>
-                        <span>{{ $beat }}</span>
+                        <span>{{ $beat->title }}</span>
                     </li>
                 @endforeach
             </ol>

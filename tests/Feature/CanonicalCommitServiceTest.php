@@ -47,7 +47,6 @@ use App\Services\LatestCanonicalChapterRollback;
 use App\Services\MemoryInvalidator;
 use App\Services\ProjectionRebuilder;
 use App\Services\StateValidator;
-use App\Services\StoryArcBeatContract;
 use App\Services\StoryArcProgressProjector;
 use App\Services\StoryStateRebuilder;
 use App\Services\StoryStateService;
@@ -142,12 +141,10 @@ function canonicalCommitFixture(array $patchOverrides = [], ReviewDecision $deci
 /** @param array<string, mixed> $fixture */
 function addPlanningClosureToCanonicalFixture(array $fixture): StoryArc
 {
-    $arc = StoryArc::factory()->for($fixture['novel'])->create([
-        'status' => StoryArcStatus::Active,
-        'beats' => ['发现星图'],
-        'completion_conditions' => [],
-    ]);
-    $beatKey = app(StoryArcBeatContract::class)->key('发现星图');
+    // NGC-002A 后运行态 Arc/Beat 必须复用 Chapter Plan 已冻结的关系化来源。
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $beatKey = $plan->primaryOutlineBeat->beat_key;
     $fixture['chapter']->latestPlan->update([
         'arc_contributions' => [[
             'arc_id' => $arc->getKey(),

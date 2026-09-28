@@ -14,6 +14,7 @@ use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Foreshadowing;
 use App\Services\ForeshadowingLifecycleResolver;
+use App\Services\OutlineProgressResolver;
 use App\Services\PlanValidator;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
@@ -34,6 +35,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\HtmlString;
 use Illuminate\Validation\Rules\Unique;
+use Illuminate\Validation\ValidationException;
 
 class ManageNovelChapters extends ManageRelatedRecords
 {
@@ -188,6 +190,35 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->fillForm(fn (Chapter $record): array => $this->chapterPlanFormData($record))
                     ->schema($this->chapterPlanSchema())
                     ->action(function (Chapter $record, array $data): void {
+                        // 手工计划也必须冻结 Current Outline 的完整父链，不能创建空来源或由用户提交数据库 ID。
+                        $target = app(OutlineProgressResolver::class)->resolve($record->novel);
+                        if ($target === null) {
+                            throw ValidationException::withMessages([
+                                'plan' => 'Current Outline 没有可规划的 Main Beat/Milestone。',
+                            ]);
+                        }
+                        $data['novel_outline_id'] = $target->outlineId;
+                        $data['primary_outline_arc_id'] = $target->outlineArcId;
+                        $data['primary_outline_beat_id'] = $target->outlineBeatId;
+                        $data['primary_outline_milestone_id'] = $target->outlineMilestoneId;
+                        $data['arc_contributions'] = [[
+                            'role' => 'primary',
+                            'arc_id' => $target->arcId,
+                            'beat_key' => $target->beat['key'],
+                            'beat_index' => $target->beat['sequence'],
+                            'target_scene_sequence' => 1,
+                            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+                        ]];
+                        $data['must_reveal'] = array_values(array_unique([
+                            ...($data['must_reveal'] ?? []),
+                            ...($target->beat['must_include'] ?? []),
+                            ...($target->milestone['must_include'] ?? []),
+                        ]));
+                        $data['must_not_reveal'] = array_values(array_unique([
+                            ...($data['must_not_reveal'] ?? []),
+                            ...($target->beat['must_not_include'] ?? []),
+                            ...($target->milestone['must_not_include'] ?? []),
+                        ]));
                         $data['required_facts'] = array_map('intval', $data['required_facts'] ?? []);
                         // The prior Plan version preserves legacy IDs; every newly saved version uses contracts only.
                         $data['due_foreshadowings'] = [];

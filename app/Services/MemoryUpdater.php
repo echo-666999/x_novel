@@ -225,7 +225,7 @@ class MemoryUpdater
             EventType::WorldRuleRevealed, EventType::WorldRuleChanged, EventType::WorldStateChanged,
             EventType::WorldEntityIntroduced,
             EventType::FactionStateChanged => MemoryType::World,
-            EventType::StoryArcBeatCompleted => MemoryType::Arc,
+            EventType::StoryArcBeatMilestoneCompleted, EventType::StoryArcBeatCompleted => MemoryType::Arc,
             EventType::LocationStateChanged, EventType::CharacterMoved => MemoryType::Location,
             EventType::ConflictStarted, EventType::ConflictEscalated, EventType::ConflictResolved,
             EventType::ThreadOpened, EventType::ThreadProgressed, EventType::ThreadClosed => MemoryType::Arc,
@@ -238,7 +238,7 @@ class MemoryUpdater
         return match ($event->event_type) {
             EventType::ForeshadowingPaidOff, EventType::ForeshadowingDue,
             EventType::CharacterIntroduced, EventType::WorldRuleRevealed, EventType::WorldRuleChanged, EventType::WorldEntityIntroduced,
-            EventType::StoryArcBeatCompleted => 0.900,
+            EventType::StoryArcBeatMilestoneCompleted, EventType::StoryArcBeatCompleted => 0.900,
             EventType::CharacterStatusChanged, EventType::CharacterAbilityAcquired,
             EventType::CharacterLearned, EventType::RelationshipChanged,
             EventType::ConflictStarted, EventType::ConflictResolved => 0.800,

@@ -254,17 +254,60 @@ class CanonicalCommitService
     /** @param array<int, StoryEventCandidate> $events @return array<int, StoryEvent> */
     private function persistEvents(Novel $novel, Chapter $chapter, array $events, int $stateVersion): array
     {
-        return array_map(fn (StoryEventCandidate $event): StoryEvent => $novel->storyEvents()->create([
-            'chapter_id' => $chapter->getKey(),
-            'scene_id' => $event->evidence[0]['scene_id'],
-            'event_type' => $event->eventType,
-            'subject_type' => $event->subjectType,
-            'subject_id' => $event->subjectId,
-            'payload' => $event->payload,
-            'evidence' => $event->evidence,
-            'story_time' => $event->storyTime,
-            'state_version' => $stateVersion,
-        ]), $events);
+        return array_map(function (StoryEventCandidate $event) use ($novel, $chapter, $stateVersion): StoryEvent {
+            // 进度事件的权威节点由冻结 Plan 覆盖，绝不信任模型返回数据库 ID。
+            $outlineReferences = $this->outlineReferencesForEvent($chapter, $event);
+
+            return $novel->storyEvents()->create([
+                'chapter_id' => $chapter->getKey(),
+                'scene_id' => $event->evidence[0]['scene_id'],
+                'event_type' => $event->eventType,
+                'subject_type' => $event->subjectType,
+                'subject_id' => $event->subjectId,
+                'payload' => $event->payload,
+                'evidence' => $event->evidence,
+                'story_time' => $event->storyTime,
+                'state_version' => $stateVersion,
+                ...$outlineReferences,
+            ]);
+        }, $events);
+    }
+
+    /** @return array<string, int|null> */
+    private function outlineReferencesForEvent(Chapter $chapter, StoryEventCandidate $event): array
+    {
+        $empty = [
+            'novel_outline_id' => null,
+            'novel_outline_arc_id' => null,
+            'novel_outline_beat_id' => null,
+            'novel_outline_milestone_id' => null,
+        ];
+        if (! in_array($event->eventType, [EventType::StoryArcBeatCompleted, EventType::StoryArcBeatMilestoneCompleted], true)) {
+            return $empty;
+        }
+
+        $plan = $chapter->latestPlan;
+        if ($plan === null
+            || $plan->novel_outline_id === null
+            || $plan->primary_outline_arc_id === null
+            || $plan->primary_outline_beat_id === null
+            || $plan->primary_outline_milestone_id === null) {
+            throw ValidationException::withMessages(['story_events' => 'Completion Event 缺少冻结的 Outline Version/Arc/Beat/Milestone 来源。']);
+        }
+
+        $arc = $chapter->novel->storyArcs()->find((int) $event->subjectId);
+        if ($arc === null || $arc->source_outline_arc_id !== $plan->primary_outline_arc_id) {
+            throw ValidationException::withMessages(['story_events' => 'Completion Event 的 Story Arc 与 Chapter Plan 冻结的 Outline Arc 不一致。']);
+        }
+
+        return [
+            'novel_outline_id' => $plan->novel_outline_id,
+            'novel_outline_arc_id' => $plan->primary_outline_arc_id,
+            'novel_outline_beat_id' => $plan->primary_outline_beat_id,
+            'novel_outline_milestone_id' => $event->eventType === EventType::StoryArcBeatMilestoneCompleted
+                ? $plan->primary_outline_milestone_id
+                : null,
+        ];
     }
 
     /** @param array<int, StoryEvent> $events */

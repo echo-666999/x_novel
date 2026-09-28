@@ -19,6 +19,7 @@ use App\Models\Foreshadowing;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Review;
+use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\User;
@@ -176,7 +177,9 @@ test('the chapter page stays inside the novel workspace', function () {
 
 test('the owner can create a complete executable chapter plan without ai', function () {
     $novel = Novel::factory()->create();
-    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 4]);
+    $volume = Volume::factory()->for($novel)->create(['status' => 'active']);
+    StoryArc::factory()->for($novel)->forVolume($volume)->create(['status' => 'active']);
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 4]);
     $pov = Character::factory()->for($novel)->create(['name' => '林舟']);
     $fact = Fact::factory()->for($novel)->create();
     $foreshadowing = Foreshadowing::factory()->for($novel)->create([
@@ -271,7 +274,9 @@ test('the chapter plan picker uses canonical progress for foreshadowing timing',
 test('manual defer stores current user and canonical authorization context', function () {
     $novel = Novel::factory()->create(['current_chapter_sequence' => null]);
     app(InitializeNovelStateAction::class)->handle($novel);
-    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1]);
+    $volume = Volume::factory()->for($novel)->create(['status' => 'active']);
+    StoryArc::factory()->for($novel)->forVolume($volume)->create(['status' => 'active']);
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 1]);
     $pov = Character::factory()->for($novel)->create();
     $foreshadowing = Foreshadowing::factory()->for($novel)->create([
         'importance' => 'critical',

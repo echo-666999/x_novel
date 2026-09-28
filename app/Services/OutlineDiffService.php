@@ -72,7 +72,12 @@ class OutlineDiffService
                 $nodes[$arc['key']] = $this->node('arc', $volume['key'], $arc, 'beats');
                 foreach ($arc['beats'] ?? [] as $beat) {
                     if (is_array($beat) && is_string($beat['key'] ?? null)) {
-                        $nodes[$beat['key']] = $this->node('beat', $arc['key'], $beat, null);
+                        $nodes[$beat['key']] = $this->node('beat', $arc['key'], $beat, 'milestones');
+                        foreach ($beat['milestones'] ?? [] as $milestone) {
+                            if (is_array($milestone) && is_string($milestone['key'] ?? null)) {
+                                $nodes[$milestone['key']] = $this->node('milestone', $beat['key'], $milestone, null);
+                            }
+                        }
                     }
                 }
             }

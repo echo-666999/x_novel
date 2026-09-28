@@ -11,16 +11,18 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * 表示小说当前运行态 Story Arc，并追踪其权威 Outline 来源。
+ */
 #[Fillable([
     'novel_id',
     'volume_id',
-    'outline_key',
+    'source_outline_arc_id',
     'sequence',
     'type',
     'title',
     'goal',
     'stakes',
-    'beats',
     'completion_conditions',
     'progress',
     'status',
@@ -42,6 +44,12 @@ class StoryArc extends Model
         return $this->belongsTo(Volume::class);
     }
 
+    /** @return BelongsTo<NovelOutlineArc, $this> 运行态 Arc 采用的权威大纲来源。 */
+    public function sourceOutlineArc(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineArc::class, 'source_outline_arc_id');
+    }
+
     /** @return HasMany<Foreshadowing, $this> */
     public function foreshadowings(): HasMany
     {
@@ -53,8 +61,8 @@ class StoryArc extends Model
     {
         return [
             'type' => StoryArcType::class,
+            'source_outline_arc_id' => 'integer',
             'sequence' => 'integer',
-            'beats' => 'array',
             'completion_conditions' => 'array',
             'progress' => 'float',
             'status' => StoryArcStatus::class,

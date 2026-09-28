@@ -76,6 +76,7 @@ class ViewNovelPlanning extends ViewRecord
 
         $volumes = $novel->volumes()
             ->with(['storyArcs' => fn ($query) => $query
+                ->with('sourceOutlineArc.beats')
                 ->when($arcStatus, fn ($query) => $query->where('status', $arcStatus))
                 ->orderByRaw("CASE WHEN type = 'main' THEN 0 ELSE 1 END")
                 ->orderBy('title')])

@@ -44,6 +44,7 @@ enum EventType: string
     case FactionStateChanged = 'faction_state_changed';
     case WorldStateChanged = 'world_state_changed';
     case WorldEntityIntroduced = 'world_entity_introduced';
+    case StoryArcBeatMilestoneCompleted = 'story_arc_beat_milestone_completed';
     case StoryArcBeatCompleted = 'story_arc_beat_completed';
     case EventCorrected = 'event_corrected';
     case EventInvalidated = 'event_invalidated';
@@ -119,6 +120,7 @@ enum EventType: string
             self::WorldStateChanged,
             self::WorldEntityIntroduced => ['world', 'world_entity'],
 
+            self::StoryArcBeatMilestoneCompleted,
             self::StoryArcBeatCompleted => ['story_arc'],
 
             self::LocationStateChanged => ['location', 'world_entity'],

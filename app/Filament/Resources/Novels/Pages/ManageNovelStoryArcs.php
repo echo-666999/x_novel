@@ -6,10 +6,6 @@ use App\Enums\StoryArcStatus;
 use App\Enums\StoryArcType;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\StoryArc;
-use Filament\Actions\CreateAction;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\EditAction;
-use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -81,18 +77,6 @@ class ManageNovelStoryArcs extends ManageRelatedRecords
             Section::make('推进与完成')
                 ->description('按发生顺序记录关键节拍，并写明故事线何时算真正完成。')
                 ->schema([
-                    Repeater::make('beats')
-                        ->label('关键节拍')
-                        ->simple(TextInput::make('beat')->required()->maxLength(500))
-                        ->addActionLabel('添加节拍')
-                        ->reorderable()
-                        ->default([]),
-                    Repeater::make('completion_conditions')
-                        ->label('完成条件')
-                        ->simple(TextInput::make('condition')->required()->maxLength(500))
-                        ->addActionLabel('添加条件')
-                        ->reorderable()
-                        ->default([]),
                     TextInput::make('progress')
                         ->label('进度')
                         ->numeric()
@@ -115,7 +99,7 @@ class ManageNovelStoryArcs extends ManageRelatedRecords
     public function table(Table $table): Table
     {
         return $table
-            ->modifyQueryUsing(fn ($query) => $query->with('volume'))
+            ->modifyQueryUsing(fn ($query) => $query->with(['volume', 'sourceOutlineArc.beats']))
             ->columns([
                 TextColumn::make('type')
                     ->label('类型')
@@ -133,7 +117,7 @@ class ManageNovelStoryArcs extends ManageRelatedRecords
                     ->tooltip(fn (StoryArc $record): string => $record->stakes),
                 TextColumn::make('beats')
                     ->label('关键节拍')
-                    ->state(fn (StoryArc $record): string => count($record->beats ?? []).' 项')
+                    ->state(fn (StoryArc $record): string => $record->sourceOutlineArc?->beats->count().' 项')
                     ->alignEnd(),
                 TextColumn::make('completion_conditions')
                     ->label('完成条件')
@@ -169,19 +153,12 @@ class ManageNovelStoryArcs extends ManageRelatedRecords
             ->emptyStateHeading('尚未规划故事线')
             ->emptyStateDescription('创建主线或支线，明确目标、风险、关键节拍与完成条件。')
             ->emptyStateIcon('heroicon-o-arrows-right-left')
-            ->recordActions([
-                EditAction::make()->label('编辑'),
-                DeleteAction::make()->label('删除'),
-            ]);
+            ->recordActions([]);
     }
 
     protected function getHeaderActions(): array
     {
-        return [
-            CreateAction::make()
-                ->label('创建故事线')
-                ->modalHeading('创建故事线')
-                ->icon('heroicon-o-plus'),
-        ];
+        // 运行态 Story Arc 由 Current Outline 投影，必须通过大纲修订创建或调整。
+        return [];
     }
 }

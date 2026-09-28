@@ -29,6 +29,10 @@ class StoryEventFactory extends Factory
             'state_version' => 1,
             'status' => StoryEventStatus::Active,
             'invalidated_at' => null,
+            'novel_outline_id' => null,
+            'novel_outline_arc_id' => null,
+            'novel_outline_beat_id' => null,
+            'novel_outline_milestone_id' => null,
         ];
     }
 }

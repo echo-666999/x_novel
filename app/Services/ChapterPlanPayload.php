@@ -24,7 +24,7 @@ final class ChapterPlanPayload
                 'foreshadowing_actions', 'world_entity_candidates', 'scene_plans',
             ],
             'properties' => [
-                'novel_outline_id' => ['type' => ['integer', 'null'], 'minimum' => 1],
+                'novel_outline_id' => ['type' => 'integer', 'minimum' => 1],
                 'chapter_function' => ['type' => 'string'],
                 'arc_contribution' => ['type' => 'string'],
                 'arc_contributions' => [
@@ -212,7 +212,7 @@ final class ChapterPlanPayload
         }
 
         return Validator::make($payload, [
-            'novel_outline_id' => ['present', 'nullable', 'integer', 'min:1'],
+            'novel_outline_id' => ['required', 'integer', 'min:1'],
             'chapter_function' => ['required', 'string'],
             'arc_contribution' => ['required', 'string'],
             'arc_contributions' => ['present', 'array'],

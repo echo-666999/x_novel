@@ -14,6 +14,7 @@ enum ArtifactType: string
     case Summary = 'summary';
     case Context = 'context';
     case EndingAudit = 'ending_audit';
+    case OutlineBlueprint = 'outline_blueprint';
 
     public function getLabel(): string
     {

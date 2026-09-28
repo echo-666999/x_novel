@@ -9,6 +9,7 @@ use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
 use App\AI\StructuredOutput;
+use App\Data\NormalizedNovelOutline;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
@@ -36,7 +37,7 @@ class NovelPlanner
     public function __construct(
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
-        private readonly NovelOutlineValidator $outlineValidator,
+        private readonly NormalizedNovelOutlineValidator $outlineValidator,
         private readonly NovelOutlineChecksum $outlineChecksum,
         private readonly CreateNovelOutlineVersionAction $createOutlineVersion,
         private readonly GenerationFailurePolicy $failurePolicy,
@@ -87,7 +88,7 @@ class NovelPlanner
             ->latest('id')
             ->first();
 
-        $artifact = $reusable?->artifacts()->where('type', ArtifactType::Context)->first();
+        $artifact = $reusable?->artifacts()->where('type', ArtifactType::OutlineBlueprint)->first();
 
         if ($artifact instanceof GenerationArtifact) {
             // Artifact 是可重放的完整蓝图；即使 Draft 被清理，也可据此恢复而不重复付费。
@@ -126,7 +127,7 @@ class NovelPlanner
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat 嵌套：Volume key 只能是 vol-01、vol-02 这类两位顺序键，Arc key 只能是 arc-01 这类键，Beat key 只能是 beat-01 这类键。所有节点 key 全局唯一，sequence 在同级数组内从 1 连续。每一个 Volume 都必须是实际叙事分卷，禁止用“说明”“备注”“占位”“校准”“修正”等元数据节点凑数；结构要求应融入真实叙事节点。每个 Main Arc 至少一个结构化 Beat；Beat 必须给出章节预算、验收条件和必须/禁止内容。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。'.NarrativeProsePolicy::planning(),
+                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat → Milestone 嵌套：Volume key 只能是 vol-01、vol-02 这类两位顺序键，Arc key 只能是 arc-01 这类键，Beat key 只能是 beat-01 这类键。所有节点 key 在同类节点内唯一，sequence 在同级数组内从 1 连续。每一个 Volume 都必须是实际叙事分卷，禁止用元数据节点凑数。Main Arc/Beat 必须给出连续的 mainline_sequence；每个 Main Beat 至少一个 Milestone，并通过 Handoff 精确指向下一个 Main Beat，最后一个 Main Beat 的 next_beat_key 必须为 null。Subplot 的 mainline_sequence 必须为 null，Milestone 必须为空且不能设置 Handoff 目标。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。'.NarrativeProsePolicy::planning(),
                 prompt: '请根据以下小说信息生成初始小说圣经、初始角色、初始世界实体、全书 Outline 和伏笔候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.5,
                 maxTokens: self::MAX_COMPLETION_TOKENS,
@@ -146,7 +147,7 @@ class NovelPlanner
             );
             // 先冻结完整 Blueprint Artifact，再从其中派生可供用户确认的 Draft Outline。
             $artifact = $run->artifacts()->create([
-                'type' => ArtifactType::Context,
+                'type' => ArtifactType::OutlineBlueprint,
                 'version' => 1,
                 'content' => $response->content,
                 'data' => $blueprint,
@@ -174,6 +175,7 @@ class NovelPlanner
     ): NovelOutline {
         $novel->refresh();
         $outline->refresh();
+        $outlineData = NormalizedNovelOutline::fromModel($outline)->toArray();
         $nodeKey = trim($nodeKey);
         $instruction = trim($instruction);
 
@@ -181,7 +183,7 @@ class NovelPlanner
         if ($outline->novel_id !== $novel->getKey() || $outline->status !== NovelOutlineStatus::Draft) {
             throw new AiProviderException('outline_regeneration_unavailable', '局部重新生成只接受当前小说的 Draft Outline。', false);
         }
-        if ($instruction === '' || ! in_array($nodeKey, $this->nodeKeys($outline->content), true)) {
+        if ($instruction === '' || ! in_array($nodeKey, $this->nodeKeys($outlineData), true)) {
             throw new AiProviderException('outline_regeneration_target_invalid', '必须选择有效节点并填写局部修改要求。', false);
         }
         // 修订必须继承同一小说的完整 Blueprint，避免丢失 Bible、人物、世界资料和伏笔来源。
@@ -198,7 +200,7 @@ class NovelPlanner
             'base_outline_checksum' => $outline->checksum,
             'target_node_key' => $nodeKey,
             'instruction' => $instruction,
-            'outline' => $outline->content,
+            'outline' => $outlineData,
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
@@ -247,7 +249,7 @@ class NovelPlanner
             $revised = StructuredOutput::require($response, 'outline_node_regeneration', '大纲局部修订');
             $this->outlineValidator->assertValid($revised);
             // Prompt 约束不能作为安全边界，服务端再次确认模型没有修改目标节点之外的内容。
-            $this->assertOnlyTargetChanged($outline->content, $revised, $nodeKey);
+            $this->assertOnlyTargetChanged($outlineData, $revised, $nodeKey);
 
             // 新 Artifact 保留原始蓝图的其他部分，仅替换通过校验的 Outline 并记录修订来源。
             $artifactData = $sourceArtifact->data;
@@ -258,8 +260,8 @@ class NovelPlanner
                 'target_node_key' => $nodeKey,
                 'instruction' => $instruction,
             ];
-            $run->artifacts()->create([
-                'type' => ArtifactType::Context,
+            $revisionArtifact = $run->artifacts()->create([
+                'type' => ArtifactType::OutlineBlueprint,
                 'version' => 1,
                 'content' => $response->content,
                 'data' => $artifactData,
@@ -267,9 +269,10 @@ class NovelPlanner
             ]);
             $created = $this->createOutlineVersion->handle(
                 novel: $novel,
-                content: $revised,
+                outline: $revised,
                 source: NovelOutlineSource::Revision,
                 basedOn: $outline,
+                sourceArtifact: $revisionArtifact,
             );
             $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
 
@@ -289,7 +292,10 @@ class NovelPlanner
                 $volume['key'],
                 ...collect($volume['arcs'] ?? [])->flatMap(fn (array $arc): array => [
                     $arc['key'],
-                    ...collect($arc['beats'] ?? [])->pluck('key')->all(),
+                    ...collect($arc['beats'] ?? [])->flatMap(fn (array $beat): array => [
+                        $beat['key'],
+                        ...collect($beat['milestones'] ?? [])->pluck('key')->all(),
+                    ])->all(),
                 ])->all(),
             ];
         })->filter(fn (mixed $key): bool => is_string($key) && $key !== '')->values()->all();
@@ -325,12 +331,23 @@ class NovelPlanner
             if (($volume['key'] ?? null) === $targetKey) {
                 return collect($volume['arcs'] ?? [])->flatMap(fn (array $arc): array => [
                     $arc['key'],
-                    ...collect($arc['beats'] ?? [])->pluck('key')->all(),
+                    ...collect($arc['beats'] ?? [])->flatMap(fn (array $beat): array => [
+                        $beat['key'],
+                        ...collect($beat['milestones'] ?? [])->pluck('key')->all(),
+                    ])->all(),
                 ])->all();
             }
             foreach ($volume['arcs'] ?? [] as $arc) {
                 if (($arc['key'] ?? null) === $targetKey) {
-                    return collect($arc['beats'] ?? [])->pluck('key')->all();
+                    return collect($arc['beats'] ?? [])->flatMap(fn (array $beat): array => [
+                        $beat['key'],
+                        ...collect($beat['milestones'] ?? [])->pluck('key')->all(),
+                    ])->all();
+                }
+                foreach ($arc['beats'] ?? [] as $beat) {
+                    if (($beat['key'] ?? null) === $targetKey) {
+                        return collect($beat['milestones'] ?? [])->pluck('key')->all();
+                    }
                 }
             }
         }
@@ -355,9 +372,10 @@ class NovelPlanner
         // Artifact 只保存 AI 产物；用户可查看和采用的业务对象仍是不可变 Outline Version。
         $this->createOutlineVersion->handle(
             novel: $novel,
-            content: $content,
-            source: $existing === null ? NovelOutlineSource::Ai : NovelOutlineSource::Revision,
+            outline: $content,
+            source: NovelOutlineSource::Ai,
             basedOn: $existing,
+            sourceArtifact: $artifact,
         );
     }
 
@@ -485,6 +503,8 @@ class NovelPlanner
             return $outline;
         }
 
+        $mainArcSequence = 0;
+        $mainBeatSequence = 0;
         foreach ($outline['volumes'] as $volumeIndex => &$volume) {
             if (! is_array($volume)) {
                 continue;
@@ -499,6 +519,8 @@ class NovelPlanner
                     continue;
                 }
                 $arc['sequence'] = $arcIndex + 1;
+                $isMain = ($arc['type'] ?? null) === 'main';
+                $arc['mainline_sequence'] = $isMain ? ++$mainArcSequence : null;
 
                 if (! is_array($arc['beats'] ?? null)) {
                     continue;
@@ -506,6 +528,15 @@ class NovelPlanner
                 foreach ($arc['beats'] as $beatIndex => &$beat) {
                     if (is_array($beat)) {
                         $beat['sequence'] = $beatIndex + 1;
+                        $beat['mainline_sequence'] = $isMain ? ++$mainBeatSequence : null;
+                        if (is_array($beat['milestones'] ?? null)) {
+                            foreach ($beat['milestones'] as $milestoneIndex => &$milestone) {
+                                if (is_array($milestone)) {
+                                    $milestone['sequence'] = $milestoneIndex + 1;
+                                }
+                            }
+                            unset($milestone);
+                        }
                     }
                 }
                 unset($beat);
@@ -564,20 +595,26 @@ class NovelPlanner
         $characterCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'name', 'role', 'motivation', 'profile', 'personality', 'abilities', 'knowledge', 'deduplication_basis', 'possible_duplicate_character_ids', 'introduction_reason', 'target_scene_sequence'], 'properties' => [
             'candidate_key' => $stableKey, 'name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'motivation' => ['type' => 'string'], 'profile' => $stringArray, 'personality' => $stringArray, 'abilities' => $stringArray, 'knowledge' => $stringArray, 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_character_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
         ]];
-        $baselineCompletion = ['type' => 'object', 'additionalProperties' => false, 'required' => ['beat_key', 'chapter_ids', 'evidence', 'reason', 'confirmed_by', 'confirmed_at'], 'properties' => [
-            'beat_key' => ['type' => 'string'], 'chapter_ids' => $integerArray, 'evidence' => ['type' => 'string'], 'reason' => ['type' => 'string'], 'confirmed_by' => ['type' => 'string'], 'confirmed_at' => ['type' => 'string'],
-        ]];
         $worldCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'type', 'name', 'description', 'deduplication_basis', 'possible_duplicate_entity_ids', 'introduction_reason', 'target_scene_sequence'], 'properties' => [
             'candidate_key' => $stableKey, 'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_entity_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
         ]];
-        $beat = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'title', 'summary', 'chapter_budget', 'acceptance_criteria', 'must_include', 'must_not_include', 'character_candidates', 'world_entity_candidates'], 'properties' => [
-            'key' => $beatKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'summary' => ['type' => 'string'],
+        $milestone = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'title', 'objective', 'acceptance_criteria', 'must_include', 'must_not_include'], 'properties' => [
+            'key' => $stableKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'objective' => ['type' => 'string'],
+            'acceptance_criteria' => ['type' => 'array', 'minItems' => 1, 'items' => ['type' => 'string']], 'must_include' => $stringArray, 'must_not_include' => $stringArray,
+        ]];
+        $handoff = ['type' => 'object', 'additionalProperties' => false, 'required' => ['next_beat_key', 'transition_mode', 'exit_result', 'next_trigger', 'carried_states', 'open_threads', 'required_transition', 'forbidden_jump'], 'properties' => [
+            'next_beat_key' => ['type' => ['string', 'null']], 'transition_mode' => ['type' => ['string', 'null']], 'exit_result' => ['type' => ['string', 'null']], 'next_trigger' => ['type' => ['string', 'null']],
+            'carried_states' => $stringArray, 'open_threads' => $stringArray, 'required_transition' => $stringArray, 'forbidden_jump' => $stringArray,
+        ]];
+        $beat = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'mainline_sequence', 'title', 'summary', 'chapter_budget', 'acceptance_criteria', 'must_include', 'must_not_include', 'character_candidates', 'world_entity_candidates', 'milestones', 'handoff'], 'properties' => [
+            'key' => $beatKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'mainline_sequence' => ['type' => ['integer', 'null'], 'minimum' => 1], 'title' => ['type' => 'string'], 'summary' => ['type' => 'string'],
             'chapter_budget' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['min', 'max'], 'properties' => ['min' => ['type' => 'integer', 'minimum' => 1], 'max' => ['type' => ['integer', 'null'], 'minimum' => 1]]],
             'acceptance_criteria' => ['type' => 'array', 'minItems' => 1, 'items' => ['type' => 'string']], 'must_include' => $stringArray, 'must_not_include' => $stringArray,
             'character_candidates' => ['type' => 'array', 'items' => $characterCandidate], 'world_entity_candidates' => ['type' => 'array', 'items' => $worldCandidate],
+            'milestones' => ['type' => 'array', 'items' => $milestone], 'handoff' => $handoff,
         ]];
-        $arc = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'type', 'title', 'goal', 'stakes', 'completion_conditions', 'beats'], 'properties' => [
-            'key' => $arcKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'type' => ['type' => 'string', 'enum' => ['main', 'subplot']], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'stakes' => ['type' => 'string'], 'completion_conditions' => $stringArray, 'beats' => ['type' => 'array', 'minItems' => 1, 'items' => $beat],
+        $arc = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'mainline_sequence', 'type', 'title', 'goal', 'stakes', 'completion_conditions', 'beats'], 'properties' => [
+            'key' => $arcKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'mainline_sequence' => ['type' => ['integer', 'null'], 'minimum' => 1], 'type' => ['type' => 'string', 'enum' => ['main', 'subplot']], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'stakes' => ['type' => 'string'], 'completion_conditions' => $stringArray, 'beats' => ['type' => 'array', 'minItems' => 1, 'items' => $beat],
         ]];
         $volume = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'title', 'goal', 'climax', 'target_words', 'arcs'], 'properties' => [
             'key' => $volumeKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'goal' => ['type' => 'string'], 'climax' => ['type' => 'string'], 'target_words' => ['type' => 'integer', 'minimum' => 1], 'arcs' => ['type' => 'array', 'minItems' => 1, 'items' => $arc],
@@ -593,11 +630,9 @@ class NovelPlanner
         return [
             'type' => 'object',
             'additionalProperties' => false,
-            'required' => ['title', 'summary', 'must_include', 'must_not_include', 'baseline_completions', 'volumes'],
+            'required' => ['title', 'summary', 'must_include', 'must_not_include', 'volumes'],
             'properties' => [
                 'title' => ['type' => 'string'], 'summary' => ['type' => 'string'], 'must_include' => $stringArray, 'must_not_include' => $stringArray,
-                // AI 新规划不得伪造历史完成记录；完整 item Schema 仅用于满足严格结构化输出校验。
-                'baseline_completions' => ['type' => 'array', 'maxItems' => 0, 'items' => $baselineCompletion],
                 'volumes' => $volumes,
             ],
         ];

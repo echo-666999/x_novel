@@ -2,11 +2,13 @@
 
 use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\CreateBibleVersionAction;
+use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Novels\StartNovelGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Providers\FakeAiProvider;
+use App\Data\NormalizedNovelOutline;
 use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
@@ -16,11 +18,9 @@ use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Jobs\GenerateNovelOutlineJob;
 use App\Models\Chapter;
 use App\Models\Novel;
-use App\Models\NovelOutline;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\User;
-use App\Services\NovelOutlineChecksum;
 use App\Services\NovelPlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -79,23 +79,39 @@ function novelBlueprint(): array
             'summary' => '林昼寻找太阳档案并恢复城市光明。',
             'must_include' => ['恢复太阳档案'],
             'must_not_include' => ['机械降神'],
-            'baseline_completions' => [],
             'volumes' => [[
                 'key' => 'v1', 'sequence' => 1, 'title' => '余光', 'goal' => '越过第一道环墙', 'climax' => '发现太阳档案', 'target_words' => 200000,
                 'arcs' => [[
-                    'key' => 'a1', 'sequence' => 1, 'type' => 'main', 'title' => '失落太阳',
+                    'key' => 'a1', 'sequence' => 1, 'mainline_sequence' => 1, 'type' => 'main', 'title' => '失落太阳',
                     'goal' => '寻找太阳档案', 'stakes' => '城市将永远失去光',
                     'completion_conditions' => ['确认档案位置'],
                     'beats' => [[
-                        'key' => 'beat-map', 'sequence' => 1, 'title' => '获得地图', 'summary' => '林昼获得穿越环墙所需的地图。',
+                        'key' => 'beat-map', 'sequence' => 1, 'mainline_sequence' => 1, 'title' => '获得地图', 'summary' => '林昼获得穿越环墙所需的地图。',
                         'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['林昼取得真实地图'],
                         'must_include' => ['地图来源可验证'], 'must_not_include' => ['直接抵达终点'],
                         'character_candidates' => [], 'world_entity_candidates' => [],
+                        'milestones' => [[
+                            'key' => 'beat-map-m01', 'sequence' => 1, 'title' => '取得地图', 'objective' => '确认地图来源。',
+                            'acceptance_criteria' => ['林昼取得真实地图'], 'must_include' => ['地图来源可验证'], 'must_not_include' => [],
+                        ]],
+                        'handoff' => [
+                            'next_beat_key' => 'beat-wall', 'transition_mode' => 'causal', 'exit_result' => '地图来源已经确认。',
+                            'next_trigger' => '地图指向第一道环墙。', 'carried_states' => [], 'open_threads' => [],
+                            'required_transition' => [], 'forbidden_jump' => [],
+                        ],
                     ], [
-                        'key' => 'beat-wall', 'sequence' => 2, 'title' => '穿过环墙', 'summary' => '林昼付出代价穿过第一道环墙。',
+                        'key' => 'beat-wall', 'sequence' => 2, 'mainline_sequence' => 2, 'title' => '穿过环墙', 'summary' => '林昼付出代价穿过第一道环墙。',
                         'chapter_budget' => ['min' => 1, 'max' => 3], 'acceptance_criteria' => ['林昼穿过第一道环墙'],
                         'must_include' => ['跨环代价'], 'must_not_include' => ['无代价通行'],
                         'character_candidates' => [], 'world_entity_candidates' => [],
+                        'milestones' => [[
+                            'key' => 'beat-wall-m01', 'sequence' => 1, 'title' => '跨越环墙', 'objective' => '付出代价后通过环墙。',
+                            'acceptance_criteria' => ['林昼穿过第一道环墙'], 'must_include' => ['跨环代价'], 'must_not_include' => [],
+                        ]],
+                        'handoff' => [
+                            'next_beat_key' => null, 'transition_mode' => null, 'exit_result' => null, 'next_trigger' => null,
+                            'carried_states' => [], 'open_threads' => [], 'required_transition' => [], 'forbidden_jump' => [],
+                        ],
                     ]],
                 ]],
             ]],
@@ -185,7 +201,7 @@ test('ai planning response schema contains only strict objects accepted by the p
     $inspect($schema);
 
     expect($invalidObjects)->toBe([])
-        ->and(data_get($schema, 'properties.outline.properties.baseline_completions.maxItems'))->toBe(0)
+        ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.beats.items.properties.milestones.type'))->toBe('array')
         ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.key.pattern'))->toBe('^vol-[0-9]{2}$')
         ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.key.pattern'))->toBe('^arc-[0-9]{2,}$')
         ->and(data_get($schema, 'properties.outline.properties.volumes.items.properties.arcs.items.properties.beats.items.properties.key.pattern'))->toBe('^beat-[0-9]{2,}$')
@@ -239,9 +255,9 @@ test('adopting a blueprint creates coherent planning data and refreshes an early
         ->and($novel->storyArcs()->count())->toBe(1)
         ->and($novel->foreshadowings()->count())->toBe(1)
         ->and($novel->currentOutline->status->value)->toBe('current')
-        ->and($novel->volumes()->sole()->outline_key)->toBe('v1')
-        ->and($novel->storyArcs()->sole()->outline_key)->toBe('a1')
-        ->and($novel->storyArcs()->sole()->beats[0]['key'])->toBe('beat-map')
+        ->and($novel->volumes()->sole()->sourceOutlineVolume->volume_key)->toBe('v1')
+        ->and($novel->storyArcs()->sole()->sourceOutlineArc->arc_key)->toBe('a1')
+        ->and($novel->storyArcs()->sole()->sourceOutlineArc->beats()->firstOrFail()->beat_key)->toBe('beat-map')
         ->and($novel->canonicalStateVersion->state['characters'])->not->toBeEmpty();
 });
 
@@ -346,7 +362,7 @@ test('manual outline creation calls no provider and editing creates a new immuta
     expect($fake->requests())->toHaveCount(0)
         ->and($novel->outlines()->count())->toBe(2)
         ->and($firstVersion->fresh()->status)->toBe(NovelOutlineStatus::Superseded)
-        ->and($novel->outlines()->latest('version')->first()->content['summary'])->toBe('人工修订后的全书摘要。')
+        ->and($novel->outlines()->latest('version')->first()->summary)->toBe('人工修订后的全书摘要。')
         ->and($novel->generationRuns()->count())->toBe(0);
 });
 
@@ -356,11 +372,11 @@ test('a manual outline can be adopted without a provider after its bible is prep
     app()->instance(AiProvider::class, $fake);
     app(CreateBibleVersionAction::class)->execute($novel, novelBlueprint()['bible']);
     $content = novelBlueprint()['outline'];
-    $outline = NovelOutline::factory()->for($novel)->create([
-        'source' => NovelOutlineSource::Manual,
-        'content' => $content,
-        'checksum' => app(NovelOutlineChecksum::class)->for($content),
-    ]);
+    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle(
+        $novel,
+        $content,
+        NovelOutlineSource::Manual,
+    );
 
     app(ApplyNovelBlueprintAction::class)->handle($novel, $outline);
 
@@ -403,7 +419,7 @@ test('editing an ai outline preserves its artifact and local regeneration create
     expect($firstOutline->fresh()->status)->toBe(NovelOutlineStatus::Superseded)
         ->and($secondOutline->version)->toBe(2)
         ->and($secondOutline->based_on_outline_id)->toBe($firstOutline->getKey())
-        ->and(data_get($secondOutline->content, 'volumes.0.arcs.0.beats.0.summary'))->toContain('旧档案保管人')
+        ->and(data_get(NormalizedNovelOutline::fromModel($secondOutline)->toArray(), 'volumes.0.arcs.0.beats.0.summary'))->toContain('旧档案保管人')
         ->and($novel->generationRuns()->count())->toBe(2)
         ->and($novel->generationRuns()->withCount('artifacts')->get()->sum('artifacts_count'))->toBe(2);
 });
@@ -454,10 +470,7 @@ test('apply failure rolls back the complete initial planning transaction', funct
 
 test('first outline apply rejects novels that already have a chapter or story event', function (string $existing) {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
-    $outline = NovelOutline::factory()->for($novel)->create([
-        'content' => novelBlueprint()['outline'],
-        'checksum' => app(NovelOutlineChecksum::class)->for(novelBlueprint()['outline']),
-    ]);
+    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle($novel, novelBlueprint()['outline']);
 
     if ($existing === 'chapter') {
         Chapter::factory()->for($novel)->create();

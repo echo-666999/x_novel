@@ -12,7 +12,10 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use LogicException;
 
-#[Fillable(['novel_id', 'chapter_id', 'scene_id', 'event_type', 'subject_type', 'subject_id', 'payload', 'evidence', 'story_time', 'state_version', 'status', 'invalidated_at'])]
+/**
+ * 保存 Canonical Story Event 及其可审计的 Outline 完成来源父链。
+ */
+#[Fillable(['novel_id', 'chapter_id', 'scene_id', 'event_type', 'subject_type', 'subject_id', 'payload', 'evidence', 'story_time', 'state_version', 'status', 'invalidated_at', 'novel_outline_id', 'novel_outline_arc_id', 'novel_outline_beat_id', 'novel_outline_milestone_id'])]
 class StoryEvent extends Model
 {
     /** @use HasFactory<StoryEventFactory> */
@@ -56,6 +59,30 @@ class StoryEvent extends Model
         return $this->belongsTo(Scene::class);
     }
 
+    /** @return BelongsTo<NovelOutline, $this> 完成事件发生时冻结的大纲版本。 */
+    public function novelOutline(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutline::class);
+    }
+
+    /** @return BelongsTo<NovelOutlineArc, $this> 完成事件引用的 Arc 定义。 */
+    public function novelOutlineArc(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineArc::class);
+    }
+
+    /** @return BelongsTo<NovelOutlineBeat, $this> 完成事件引用的 Beat 定义。 */
+    public function novelOutlineBeat(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineBeat::class);
+    }
+
+    /** @return BelongsTo<NovelOutlineMilestone, $this> Milestone 完成事件引用的定义。 */
+    public function novelOutlineMilestone(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineMilestone::class);
+    }
+
     protected function casts(): array
     {
         return [
@@ -63,6 +90,10 @@ class StoryEvent extends Model
             'payload' => 'array',
             'evidence' => 'array',
             'state_version' => 'integer',
+            'novel_outline_id' => 'integer',
+            'novel_outline_arc_id' => 'integer',
+            'novel_outline_beat_id' => 'integer',
+            'novel_outline_milestone_id' => 'integer',
             'status' => StoryEventStatus::class,
             'invalidated_at' => 'datetime',
             'created_at' => 'datetime',

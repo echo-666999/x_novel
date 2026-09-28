@@ -3,6 +3,7 @@
 namespace App\Actions\Novels;
 
 use App\Actions\Story\InitializeNovelStateAction;
+use App\Data\NormalizedNovelOutline;
 use App\Enums\CharacterStatus;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\NovelOutlineSource;
@@ -14,20 +15,26 @@ use App\Enums\WorldEntityStatus;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
 use App\Models\NovelOutline;
+use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlineChecksum;
-use App\Services\NovelOutlineValidator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
+/**
+ * 原子采用关系化 Outline，并建立对应的运行态 Volume 与 Arc。
+ */
 class ApplyNovelBlueprintAction
 {
     public function __construct(
         private readonly CreateBibleVersionAction $createBibleVersion,
         private readonly InitializeNovelStateAction $initializeNovelState,
-        private readonly NovelOutlineValidator $outlineValidator,
+        private readonly NormalizedNovelOutlineValidator $outlineValidator,
         private readonly NovelOutlineChecksum $outlineChecksum,
     ) {}
 
+    /**
+     * 校验冻结版本和来源后，在同一事务内完成首次正式采用。
+     */
     public function handle(Novel $novel, NovelOutline $outline, ?GenerationArtifact $artifact = null): Novel
     {
         // 首次采用是正式规划数据的边界，所有写入必须在同一事务内全有或全无。
@@ -50,8 +57,8 @@ class ApplyNovelBlueprintAction
             }
 
             // 采用前重新校验结构和 checksum，不能仅依赖候选创建时的验证结果。
-            $this->outlineValidator->assertValid($selected->content);
-            if (! hash_equals($selected->checksum, $this->outlineChecksum->for($selected->content))) {
+            $this->outlineValidator->assertValid(NormalizedNovelOutline::fromModel($selected));
+            if (! hash_equals($selected->checksum, $this->outlineChecksum->for($selected))) {
                 throw ValidationException::withMessages(['outline' => 'Outline checksum 与冻结内容不一致。']);
             }
 
@@ -76,32 +83,32 @@ class ApplyNovelBlueprintAction
 
             // 第一卷及其故事线立即激活，后续卷保持 Planned，供章节规划按顺序推进。
             $arcs = collect();
-            foreach ($selected->content['volumes'] as $volumeData) {
+            $selected->load('volumes.arcs');
+            foreach ($selected->volumes as $volumeData) {
                 $volume = $locked->volumes()->create([
-                    'outline_key' => $volumeData['key'],
-                    'sequence' => $volumeData['sequence'],
-                    'title' => $volumeData['title'],
-                    'goal' => $volumeData['goal'],
-                    'climax' => $volumeData['climax'],
-                    'target_words' => $volumeData['target_words'],
-                    'status' => $volumeData['sequence'] === 1 ? VolumeStatus::Active : VolumeStatus::Planned,
+                    'source_outline_volume_id' => $volumeData->getKey(),
+                    'sequence' => $volumeData->sequence,
+                    'title' => $volumeData->title,
+                    'goal' => $volumeData->goal,
+                    'climax' => $volumeData->climax,
+                    'target_words' => $volumeData->target_words,
+                    'status' => $volumeData->sequence === 1 ? VolumeStatus::Active : VolumeStatus::Planned,
                 ]);
 
-                foreach ($volumeData['arcs'] as $arcData) {
+                foreach ($volumeData->arcs as $arcData) {
                     $arc = $locked->storyArcs()->create([
                         'volume_id' => $volume->getKey(),
-                        'outline_key' => $arcData['key'],
-                        'sequence' => $arcData['sequence'],
-                        'type' => $arcData['type'],
-                        'title' => $arcData['title'],
-                        'goal' => $arcData['goal'],
-                        'stakes' => $arcData['stakes'],
-                        'beats' => $arcData['beats'],
-                        'completion_conditions' => $arcData['completion_conditions'],
+                        'source_outline_arc_id' => $arcData->getKey(),
+                        'sequence' => $arcData->sequence,
+                        'type' => $arcData->type,
+                        'title' => $arcData->title,
+                        'goal' => $arcData->goal,
+                        'stakes' => $arcData->stakes,
+                        'completion_conditions' => $arcData->completion_conditions,
                         'progress' => 0,
-                        'status' => $volumeData['sequence'] === 1 ? StoryArcStatus::Active : StoryArcStatus::Planned,
+                        'status' => $volumeData->sequence === 1 ? StoryArcStatus::Active : StoryArcStatus::Planned,
                     ]);
-                    $arcs->put($arcData['key'], $arc);
+                    $arcs->put($arcData->arc_key, $arc);
                 }
             }
 
@@ -140,7 +147,7 @@ class ApplyNovelBlueprintAction
         });
     }
 
-    /** @return array<string, mixed>|null */
+    /** @return array<string, mixed>|null 读取 AI 根版本的初始化资料；手工版本返回空。 */
     private function bootstrapData(Novel $novel, NovelOutline $outline, ?GenerationArtifact $artifact): ?array
     {
         // 沿 based_on 链找到根版本，判断该修订链最初来自 AI 还是人工创建。
@@ -157,15 +164,17 @@ class ApplyNovelBlueprintAction
             return null;
         }
 
-        if ($artifact === null || $artifact->generationRun()
-            ->where('novel_id', $novel->getKey())
-            ->where('scope_type', 'novel')
-            ->doesntExist()) {
+        $sourceArtifact = $root->sourceArtifact;
+        if ($sourceArtifact === null
+            || ($artifact !== null && $artifact->getKey() !== $sourceArtifact->getKey())
+            || $sourceArtifact->generationRun()
+                ->where('novel_id', $novel->getKey())
+                ->doesntExist()) {
             throw ValidationException::withMessages(['blueprint' => 'AI Outline 缺少属于当前小说的来源 Artifact。']);
         }
 
         // checksum 绑定 Outline 与来源 Artifact，防止把其他小说或其他候选的初始化资料混入。
-        $artifactOutline = data_get($artifact->data, 'outline');
+        $artifactOutline = data_get($sourceArtifact->data, 'outline');
         $artifactChecksum = is_array($artifactOutline) ? $this->outlineChecksum->for($artifactOutline) : null;
         if ($artifactChecksum === null
             || (! hash_equals($root->checksum, $artifactChecksum) && ! hash_equals($outline->checksum, $artifactChecksum))) {
@@ -173,11 +182,14 @@ class ApplyNovelBlueprintAction
         }
 
         /** @var array<string, mixed> $data */
-        $data = $artifact->data;
+        $data = $sourceArtifact->data;
 
         return $data;
     }
 
+    /**
+     * 拒绝 AI 初始化覆盖已经存在的人工 Bible、人物、世界资料或伏笔。
+     */
     private function assertEmptyBootstrapTables(Novel $novel): void
     {
         // AI 初始化不能覆盖或合并人工资料；出现既有内容时要求用户先明确处理冲突。
@@ -186,7 +198,7 @@ class ApplyNovelBlueprintAction
         }
     }
 
-    /** @param array<string, mixed> $data */
+    /** @param array<string, mixed> $data 保存 AI 规划中开篇即成立的正式基础资料。 */
     private function persistAiBootstrap(Novel $novel, array $data): void
     {
         // 这里只写入开篇即成立的资料；Beat Candidate 要等 Canonical Commit 后才能转为正式对象。

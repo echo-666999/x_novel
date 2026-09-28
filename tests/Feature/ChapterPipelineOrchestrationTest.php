@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Generation\CheckNextAction;
+use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
@@ -13,6 +14,7 @@ use App\Enums\ForeshadowingImportance;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
 use App\Enums\MemoryStatus;
+use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
@@ -39,6 +41,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\User;
@@ -46,7 +49,9 @@ use App\Models\Volume;
 use App\Services\CanonicalChapterSummaryService;
 use App\Services\MemoryUpdater;
 use App\Services\NarrativeStyleProfile;
+use App\Services\OutlineProgressResolver;
 use App\Services\ProjectionRebuilder;
+use Database\Factories\Support\NormalizedOutlineDefinition;
 use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -103,7 +108,42 @@ function chapterPipelineNovel(bool $withForeshadowing = false): array
         ])
         : null;
     app(InitializeNovelStateAction::class)->handle($novel);
-    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+
+    // 端到端夹具提供三个可依次完成的 Main Beat，覆盖连续三章的正式推进。
+    $outlineDefinition = NormalizedOutlineDefinition::make();
+    $templateBeat = $outlineDefinition['volumes'][0]['arcs'][0]['beats'][0];
+    $outlineDefinition['volumes'][0]['arcs'][0]['beats'] = collect(range(1, 3))
+        ->map(function (int $sequence) use ($templateBeat): array {
+            return [
+                ...$templateBeat,
+                'key' => "pipeline-beat-{$sequence}",
+                'sequence' => $sequence,
+                'mainline_sequence' => $sequence,
+                'title' => "流水线 Beat {$sequence}",
+                'acceptance_criteria' => ["完成第 {$sequence} 章的主线推进。"],
+                'milestones' => [[
+                    ...$templateBeat['milestones'][0],
+                    'key' => "pipeline-milestone-{$sequence}",
+                    'title' => "流水线 Milestone {$sequence}",
+                    'acceptance_criteria' => ["第 {$sequence} 章正文完成既定推进。"],
+                ]],
+                'handoff' => [
+                    'next_beat_key' => $sequence < 3 ? 'pipeline-beat-'.($sequence + 1) : null,
+                    'transition_mode' => $sequence < 3 ? 'next_chapter' : null,
+                    'exit_result' => $sequence < 3 ? "第 {$sequence} 章结果已成立。" : null,
+                    'next_trigger' => $sequence < 3 ? '承接上一章结果。' : null,
+                    'carried_states' => [],
+                    'open_threads' => [],
+                    'required_transition' => [],
+                    'forbidden_jump' => [],
+                ],
+            ];
+        })->all();
+    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle($novel, $outlineDefinition);
+    $outline->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
+    $novel->update(['current_outline_id' => $outline->getKey()]);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->for($novel)->forVolume($volume)->create(['status' => 'active']);
 
     return compact('novel', 'bible', 'character', 'foreshadowing');
 }
@@ -272,7 +312,7 @@ test('one trigger reaches pass then manual commit creates canonical state memory
 
     expect($chapter->fresh()->status)->toBe(ChapterStatus::Canonical)
         ->and($fixture['novel']->fresh()->current_chapter_sequence)->toBe(1)
-        ->and(StoryEvent::query()->where('chapter_id', $chapter->getKey())->count())->toBe(1)
+        ->and(StoryEvent::query()->where('chapter_id', $chapter->getKey())->count())->toBe(2)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2)
         ->and(data_get($fixture['novel']->fresh()->canonicalStateVersion->state, 'characters.'.$fixture['character']->getKey().'.location'))->toBe('灯塔')
         ->and($nextChapter->status)->toBe(ChapterStatus::Planned)
@@ -281,8 +321,8 @@ test('one trigger reaches pass then manual commit creates canonical state memory
     Queue::assertPushed(UpdateMemoryJob::class, fn (UpdateMemoryJob $job): bool => $job->chapterId === $chapter->getKey());
     Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $nextChapter->getKey());
 
-    expect(Memory::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1);
-    Queue::assertPushed(GenerateEmbeddingJob::class, 1);
+    expect(Memory::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
+    Queue::assertPushed(GenerateEmbeddingJob::class, 2);
 });
 
 test('one trigger performs a targeted scene rewrite and revalidates fresh downstream artifacts before pass', function () {
@@ -373,7 +413,7 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
 
         expect($chapter->fresh()->status)->toBe(ChapterStatus::Review)
             ->and($review->decision)->toBe(ReviewDecision::Pass)
-            ->and($fixture['novel']->storyEvents()->count())->toBe($sequence - 1)
+            ->and($fixture['novel']->storyEvents()->count())->toBe(($sequence - 1) * 2)
             ->and($fixture['novel']->fresh()->canonicalStateVersion->version)->toBe($sequence - 1)
             ->and($contextRun->state_version)->toBe($sequence - 1)
             ->and(data_get($contextRun->context_snapshot, 'l0.foreshadowing_contract.actions.0.content_status'))
@@ -397,10 +437,10 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
             ->and(data_get($novel->canonicalStateVersion->state, "foreshadowings.{$foreshadowing->getKey()}.reinforce_count"))->toBe($reinforceCount)
             ->and($foreshadowing->fresh()->status)->toBe($status)
             ->and($foreshadowing->fresh()->reinforce_count)->toBe($reinforceCount)
-            ->and($chapter->storyEvents()->active()->sole()->event_type)->toBe($eventType)
+            ->and($chapter->storyEvents()->active()->where('event_type', $eventType->value)->sole()->event_type)->toBe($eventType)
             ->and(Memory::query()->where('novel_id', $novel->getKey())
                 ->where('source_type', 'story_event')
-                ->where('source_id', $chapter->storyEvents()->active()->sole()->getKey())
+                ->where('source_id', $chapter->storyEvents()->active()->where('event_type', $eventType->value)->sole()->getKey())
                 ->where('status', MemoryStatus::Active)
                 ->exists())->toBeTrue();
     }
@@ -410,7 +450,7 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
     )->and($foreshadowing->fresh()->payoff_chapter_id)->toBe(
         $fixture['novel']->chapters()->where('sequence', 3)->value('id'),
     )->and(app(ProjectionRebuilder::class)->inspect($fixture['novel']->fresh())->isHealthy())->toBeTrue()
-        ->and(Memory::query()->where('novel_id', $fixture['novel']->getKey())->where('status', MemoryStatus::Active)->count())->toBe(3);
+        ->and(Memory::query()->where('novel_id', $fixture['novel']->getKey())->where('status', MemoryStatus::Active)->count())->toBe(6);
 });
 
 final class ChapterPipelineFixtureProvider implements AiProvider
@@ -472,13 +512,22 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     /** @return array<string, mixed> */
     private function plan(int $chapterId): array
     {
-        $chapterSequence = Chapter::query()->findOrFail($chapterId)->sequence;
+        $chapter = Chapter::query()->with('novel')->findOrFail($chapterId);
+        $chapterSequence = $chapter->sequence;
+        $target = app(OutlineProgressResolver::class)->resolve($chapter->novel);
 
         return [
-            'novel_outline_id' => null,
+            'novel_outline_id' => $target->outlineId,
             'chapter_function' => '迫使主角离开安全区',
             'arc_contribution' => '推进灯塔主线',
-            'arc_contributions' => [],
+            'arc_contributions' => [[
+                'role' => 'primary',
+                'arc_id' => $target->arcId,
+                'beat_key' => $target->beat['key'],
+                'beat_index' => $target->beat['sequence'],
+                'target_scene_sequence' => 1,
+                'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+            ]],
             'character_candidates' => [],
             'reader_promise' => '主角抵达灯塔水域',
             'target_words' => $this->baseline['chapter_target_words'],
@@ -553,6 +602,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     /** @return array<string, mixed> */
     private function events(int $chapterId): array
     {
+        $chapter = Chapter::query()->with('latestPlan')->findOrFail($chapterId);
         $draft = GenerationArtifact::query()
             ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
             ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapterId)->whereNull('scene_id'))
@@ -564,9 +614,24 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             ->orderBy('sequence')
             ->firstOrFail()
             ->currentArtifact?->content;
+        $primary = collect($chapter->latestPlan?->arc_contributions ?? [])->firstWhere('role', 'primary');
+        $arcEvent = [
+            'event_type' => EventType::StoryArcBeatCompleted->value,
+            'subject_type' => 'story_arc',
+            'subject_id' => (string) $primary['arc_id'],
+            'payload' => ['beat_key' => $primary['beat_key']],
+            'evidence' => [[
+                'artifact_id' => $draft->getKey(),
+                'scene_id' => null,
+                'quote' => $quote,
+                'start_offset' => null,
+                'end_offset' => null,
+            ]],
+            'story_time' => "第{$chapter->sequence}日夜晚",
+            'confidence' => 0.98,
+        ];
 
         if ($this->foreshadowingId !== null) {
-            $chapter = Chapter::query()->findOrFail($chapterId);
             $scene = $chapter->scenes()->orderBy('sequence')->firstOrFail();
 
             return ['events' => [[
@@ -583,7 +648,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 ]],
                 'story_time' => "第{$chapter->sequence}日夜晚",
                 'confidence' => 0.98,
-            ]]];
+            ], $arcEvent]];
         }
 
         return ['events' => [[
@@ -600,12 +665,15 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             ]],
             'story_time' => '第一日夜晚',
             'confidence' => 0.98,
-        ]]];
+        ], $arcEvent]];
     }
 
     /** @return array<string, mixed> */
     private function review(int $chapterId): array
     {
+        $chapter = Chapter::query()->with(['latestPlan', 'scenes.currentArtifact'])->findOrFail($chapterId);
+        $primary = collect($chapter->latestPlan?->arc_contributions ?? [])->firstWhere('role', 'primary');
+        $targetScene = $chapter->scenes->firstWhere('sequence', (int) $primary['target_scene_sequence']);
         $decision = $this->reviewDecisions[$this->reviewIndex] ?? ReviewDecision::Pass;
         $this->reviewIndex++;
         $findings = [];
@@ -654,8 +722,18 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'summary' => '正文、Coverage 和 Event Candidate 已共同完成本章冻结动作。',
                 'evidence' => $this->foreshadowingEvidence(Chapter::query()->findOrFail($chapterId)->sequence),
             ]],
-            'arc_beat_audits' => [],
-            'arc_completion_audits' => [],
+            'arc_beat_audits' => [[
+                'arc_id' => $primary['arc_id'],
+                'beat_key' => $primary['beat_key'],
+                'status' => 'fulfilled',
+                'evidence' => $targetScene->currentArtifact->content,
+                'scene_id' => $targetScene->getKey(),
+            ]],
+            'arc_completion_audits' => [[
+                'arc_id' => $primary['arc_id'],
+                'status' => 'not_met',
+                'evidence' => null,
+            ]],
             'character_candidate_audits' => [],
             'world_entity_candidate_audits' => [],
             'unapproved_characters' => [],

@@ -109,18 +109,20 @@ class PlanValidator
 
         $primaryContribution = $primary->first();
         $primaryBeatKey = (string) ($primaryContribution['beat_key'] ?? '');
-        $completed = [...$target->canonicalCompletedBeatKeys, ...$target->baselineCompletedBeatKeys];
-        if (in_array($primaryBeatKey, $completed, true)) {
+        if (in_array($primaryBeatKey, $target->canonicalCompletedBeatKeys, true)) {
             $findings[] = $this->blocked('OUTLINE_BEAT_ALREADY_COMPLETED', '已完成的 Outline Beat 不能再次作为 Primary。');
-        } elseif ((int) ($primaryContribution['arc_id'] ?? 0) !== $target->arcId
+        } elseif ($plan->primary_outline_arc_id !== $target->outlineArcId
+            || $plan->primary_outline_beat_id !== $target->outlineBeatId
+            || $plan->primary_outline_milestone_id !== $target->outlineMilestoneId
+            || (int) ($primaryContribution['arc_id'] ?? 0) !== $target->arcId
             || $primaryBeatKey !== ($target->beat['key'] ?? null)
             || (int) ($primaryContribution['beat_index'] ?? 0) !== (int) ($target->beat['sequence'] ?? 0)) {
-            $findings[] = $this->blocked('OUTLINE_BEAT_OUT_OF_ORDER', 'Primary Contribution 必须引用顺序最早的未完成 Main Beat。');
+            $findings[] = $this->blocked('OUTLINE_BEAT_OUT_OF_ORDER', 'Primary Plan 外键和 Contribution 必须引用顺序最早的未完成 Main Beat/Milestone。');
         }
 
         $criteria = (string) ($primaryContribution['acceptance_criteria'] ?? '');
-        if (! in_array($criteria, $target->beat['acceptance_criteria'] ?? [], true)) {
-            $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', 'Primary Contribution 必须选择当前 Beat 的明确验收条件。');
+        if (! in_array($criteria, $target->milestone['acceptance_criteria'] ?? [], true)) {
+            $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', 'Primary Contribution 必须选择当前 Milestone 的明确验收条件。');
         }
 
         $maximum = data_get($target->beat, 'chapter_budget.max');
@@ -136,13 +138,13 @@ class PlanValidator
             }
         }
 
-        foreach ($target->beat['must_include'] ?? [] as $required) {
+        foreach (array_unique([...($target->beat['must_include'] ?? []), ...($target->milestone['must_include'] ?? [])]) as $required) {
             if (! in_array($required, $plan->must_reveal ?? [], true)) {
                 $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', "当前 Beat 的必须内容「{$required}」未合并到 must_reveal。");
             }
         }
         $forbiddenConstraints = [...($plan->must_not_reveal ?? []), ...($plan->forbidden_conflicts ?? [])];
-        foreach ($target->beat['must_not_include'] ?? [] as $forbidden) {
+        foreach (array_unique([...($target->beat['must_not_include'] ?? []), ...($target->milestone['must_not_include'] ?? [])]) as $forbidden) {
             if (! in_array($forbidden, $forbiddenConstraints, true)) {
                 $findings[] = $this->blocked('OUTLINE_FORBIDDEN_CONTENT_PLANNED', "当前 Beat 的禁止内容「{$forbidden}」未冻结到禁止约束。");
             }

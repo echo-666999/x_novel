@@ -2,7 +2,7 @@
 
 # AI Long-Form Fiction Platform
 
-> NGC-001 目标数据基线。关系化 Outline 与新外键尚待 NGC-002A 实现；当前代码和现有数据库仍是旧结构，实施时从 `migrate:fresh` 后的空数据库开始，不迁移、不 Backfill 旧数据。
+> NGC-002A 实施基线。关系化 Outline、运行态来源外键、Chapter Plan 完整父链和 Completion Event 来源外键已经实现，并已从 `migrate:fresh` 后的空数据库验证；不迁移、不 Backfill 旧数据。后续进度语义仍按 NGC-002B～NGC-005 继续实施。
 
 本项目是一个由单人开发、单人使用、单人维护的 AI 长篇网络小说自动生成系统。
 

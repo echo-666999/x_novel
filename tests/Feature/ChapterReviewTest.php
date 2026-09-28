@@ -18,7 +18,6 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\StateFindingSeverity;
-use App\Enums\StoryArcStatus;
 use App\Jobs\CommitChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
@@ -37,7 +36,6 @@ use App\Services\ArcCompletionAuditRepairer;
 use App\Services\ChapterReviewer;
 use App\Services\PlanningReviewAudit;
 use App\Services\StateValidator;
-use App\Services\StoryArcBeatContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
@@ -176,11 +174,9 @@ test('review stops before another provider request after the highest output budg
 test('planning review audits require verbatim evidence and surface missing or unapproved world data', function () {
     $fixture = reviewFixture();
     $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
-    $arc = StoryArc::factory()->for($fixture['novel'])->create([
-        'status' => StoryArcStatus::Active,
-        'beats' => ['守住城门'],
-    ]);
-    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $beatKey = $plan->primaryOutlineBeat->beat_key;
     $fixture['chapter']->latestPlan->update([
         'arc_contributions' => [[
             'arc_id' => $arc->getKey(), 'beat_key' => $beatKey, 'beat_index' => 1,
@@ -244,11 +240,9 @@ test('planning review binds a missing arc audit to its frozen target scene witho
     $fixture = reviewFixture();
     $targetScene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
     $otherScene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 2]);
-    $arc = StoryArc::factory()->for($fixture['novel'])->create([
-        'status' => StoryArcStatus::Active,
-        'beats' => ['守住城门'],
-    ]);
-    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $beatKey = $plan->primaryOutlineBeat->beat_key;
     $fixture['chapter']->latestPlan->update(['arc_contributions' => [[
         'arc_id' => $arc->getKey(),
         'beat_key' => $beatKey,
@@ -294,11 +288,9 @@ test('planning review binds a missing arc audit to its frozen target scene witho
 test('planning review audits normalize quoted evidence with an omission marker to a verbatim excerpt', function () {
     $fixture = reviewFixture();
     $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
-    $arc = StoryArc::factory()->for($fixture['novel'])->create([
-        'status' => StoryArcStatus::Active,
-        'beats' => ['守住城门'],
-    ]);
-    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $beatKey = $plan->primaryOutlineBeat->beat_key;
     $fixture['chapter']->latestPlan->update(['arc_contributions' => [[
         'arc_id' => $arc->getKey(),
         'beat_key' => $beatKey,
@@ -540,12 +532,10 @@ test('narrative review persists seven weighted scores and an immutable result ar
 test('review provides the ordered arc completion contract and requires one audit per arc', function () {
     $fixture = reviewFixture();
     $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
-    $arc = StoryArc::factory()->for($fixture['novel'])->create([
-        'status' => StoryArcStatus::Active,
-        'beats' => ['守住城门'],
-        'completion_conditions' => ['主角守住城门并解除围城危机。'],
-    ]);
-    $beatKey = app(StoryArcBeatContract::class)->key('守住城门');
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $arc->update(['completion_conditions' => ['主角守住城门并解除围城危机。']]);
+    $beatKey = $plan->primaryOutlineBeat->beat_key;
     $fixture['chapter']->latestPlan->update(['arc_contributions' => [[
         'arc_id' => $arc->getKey(),
         'beat_key' => $beatKey,

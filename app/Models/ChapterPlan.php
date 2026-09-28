@@ -9,9 +9,15 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * 冻结章节生成目标及其 Outline Version、Arc、Beat、Milestone 完整父链。
+ */
 #[Fillable([
     'chapter_id',
     'novel_outline_id',
+    'primary_outline_arc_id',
+    'primary_outline_beat_id',
+    'primary_outline_milestone_id',
     'version',
     'chapter_function',
     'arc_contribution',
@@ -55,6 +61,24 @@ class ChapterPlan extends Model
     public function novelOutline(): BelongsTo
     {
         return $this->belongsTo(NovelOutline::class);
+    }
+
+    /** @return BelongsTo<NovelOutlineArc, $this> 计划冻结的 Primary Arc 定义。 */
+    public function primaryOutlineArc(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineArc::class, 'primary_outline_arc_id');
+    }
+
+    /** @return BelongsTo<NovelOutlineBeat, $this> 计划冻结的 Primary Beat 定义。 */
+    public function primaryOutlineBeat(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineBeat::class, 'primary_outline_beat_id');
+    }
+
+    /** @return BelongsTo<NovelOutlineMilestone, $this> 计划冻结的 Primary Milestone 定义。 */
+    public function primaryOutlineMilestone(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineMilestone::class, 'primary_outline_milestone_id');
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -103,6 +127,9 @@ class ChapterPlan extends Model
         return [
             'version' => 'integer',
             'novel_outline_id' => 'integer',
+            'primary_outline_arc_id' => 'integer',
+            'primary_outline_beat_id' => 'integer',
+            'primary_outline_milestone_id' => 'integer',
             'target_words' => 'integer',
             'pov_character_id' => 'integer',
             'must_reveal' => 'array',

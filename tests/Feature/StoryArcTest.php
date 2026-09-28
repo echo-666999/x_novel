@@ -16,8 +16,7 @@ test('a story arc belongs to its novel and optional volume and casts domain fiel
     $novel = Novel::factory()->create();
     $volume = Volume::factory()->for($novel)->create();
     $arc = StoryArc::factory()->forVolume($volume)->create([
-        'type' => StoryArcType::Subplot,
-        'beats' => ['相遇', '决裂'],
+        'type' => StoryArcType::Main,
         'completion_conditions' => ['双方重新建立信任'],
         'progress' => 0.35,
         'status' => StoryArcStatus::Active,
@@ -25,8 +24,8 @@ test('a story arc belongs to its novel and optional volume and casts domain fiel
 
     expect($arc->novel->is($novel))->toBeTrue()
         ->and($arc->volume->is($volume))->toBeTrue()
-        ->and($arc->type)->toBe(StoryArcType::Subplot)
-        ->and($arc->beats)->toBe(['相遇', '决裂'])
+        ->and($arc->type)->toBe(StoryArcType::Main)
+        ->and($arc->sourceOutlineArc->beats)->toHaveCount(1)
         ->and($arc->completion_conditions)->toBe(['双方重新建立信任'])
         ->and($arc->progress)->toBe(0.35)
         ->and($arc->status)->toBe(StoryArcStatus::Active);

@@ -12,14 +12,21 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use LogicException;
 
+/**
+ * 保存不可变大纲版本头、来源与关系化子节点入口。
+ */
 #[Fillable([
     'novel_id',
     'version',
     'status',
     'source',
     'schema_version',
-    'content',
+    'title',
+    'summary',
+    'must_include',
+    'must_not_include',
     'checksum',
+    'source_artifact_id',
     'based_on_outline_id',
     'created_by',
     'applied_at',
@@ -71,6 +78,36 @@ class NovelOutline extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    /** @return BelongsTo<GenerationArtifact, $this> AI 版本唯一对应的最终蓝图 Artifact。 */
+    public function sourceArtifact(): BelongsTo
+    {
+        return $this->belongsTo(GenerationArtifact::class, 'source_artifact_id');
+    }
+
+    /** @return HasMany<NovelOutlineVolume, $this> 按顺序读取版本内的 Volume。 */
+    public function volumes(): HasMany
+    {
+        return $this->hasMany(NovelOutlineVolume::class)->orderBy('sequence');
+    }
+
+    /** @return HasMany<NovelOutlineArc, $this> 按顺序读取版本内的 Arc。 */
+    public function arcs(): HasMany
+    {
+        return $this->hasMany(NovelOutlineArc::class)->orderBy('sequence');
+    }
+
+    /** @return HasMany<NovelOutlineBeat, $this> 按顺序读取版本内的 Beat。 */
+    public function beats(): HasMany
+    {
+        return $this->hasMany(NovelOutlineBeat::class)->orderBy('sequence');
+    }
+
+    /** @return HasMany<NovelOutlineMilestone, $this> 按顺序读取版本内的 Milestone。 */
+    public function milestones(): HasMany
+    {
+        return $this->hasMany(NovelOutlineMilestone::class)->orderBy('sequence');
+    }
+
     /** @return HasMany<ChapterPlan, $this> */
     public function chapterPlans(): HasMany
     {
@@ -85,7 +122,9 @@ class NovelOutline extends Model
             'status' => NovelOutlineStatus::class,
             'source' => NovelOutlineSource::class,
             'schema_version' => 'integer',
-            'content' => 'array',
+            'must_include' => 'array',
+            'must_not_include' => 'array',
+            'source_artifact_id' => 'integer',
             'based_on_outline_id' => 'integer',
             'created_by' => 'integer',
             'applied_at' => 'datetime',

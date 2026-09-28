@@ -149,16 +149,16 @@ class ViewNovelPlanningPreview extends ViewRecord
                         }),
                     TextEntry::make('acceptance_criteria')
                         ->label('验收条件')
-                        ->state(fn (): array => data_get($this->outlineTarget(), 'beat.acceptance_criteria', []))
+                        ->state(fn (): array => data_get($this->outlineTarget(), 'milestone.acceptance_criteria', []))
                         ->bulleted()
                         ->columnSpanFull(),
                     TextEntry::make('outline_must_include')
                         ->label('必须包含')
-                        ->state(fn (): array => data_get($this->outlineTarget(), 'beat.must_include', []))
+                        ->state(fn (): array => data_get($this->outlineTarget(), 'milestone.must_include', []))
                         ->bulleted(),
                     TextEntry::make('outline_must_not_include')
                         ->label('禁止包含')
-                        ->state(fn (): array => data_get($this->outlineTarget(), 'beat.must_not_include', []))
+                        ->state(fn (): array => data_get($this->outlineTarget(), 'milestone.must_not_include', []))
                         ->bulleted(),
                 ]),
             Section::make('场景流程')
@@ -260,7 +260,11 @@ class ViewNovelPlanningPreview extends ViewRecord
             ->first();
     }
 
-    /** @return array<string, mixed>|null */
+    /**
+     * 读取章节计划冻结的关系化大纲目标，供人工预览核对。
+     *
+     * @return array<string, mixed>|null
+     */
     private function outlineTarget(): ?array
     {
         if ($this->outlineTargetResolved) {
@@ -276,22 +280,42 @@ class ViewNovelPlanningPreview extends ViewRecord
             return null;
         }
 
-        $outlineKey = $this->getRecord()->storyArcs()->whereKey($primary['arc_id'] ?? null)->value('outline_key');
-
-        foreach ($outline->content['volumes'] ?? [] as $volume) {
-            foreach ($volume['arcs'] ?? [] as $arc) {
-                if (($arc['key'] ?? null) !== $outlineKey) {
-                    continue;
-                }
-                foreach ($arc['beats'] ?? [] as $beat) {
-                    if (($beat['key'] ?? null) === ($primary['beat_key'] ?? null)) {
-                        return $this->cachedOutlineTarget = ['volume' => $volume, 'arc' => $arc, 'beat' => $beat];
-                    }
-                }
-            }
+        $plan->loadMissing('primaryOutlineMilestone.beat.arc.volume');
+        $milestone = $plan->primaryOutlineMilestone;
+        $beat = $milestone?->beat;
+        $arc = $beat?->arc;
+        $volume = $arc?->volume;
+        if ($volume === null || $arc === null || $beat === null || $milestone === null) {
+            return null;
         }
 
-        return null;
+        return $this->cachedOutlineTarget = [
+            'volume' => ['key' => $volume->volume_key, 'title' => $volume->title, 'sequence' => $volume->sequence],
+            'arc' => ['key' => $arc->arc_key, 'title' => $arc->title, 'sequence' => $arc->sequence],
+            'beat' => [
+                'key' => $beat->beat_key,
+                'title' => $beat->title,
+                'sequence' => $beat->sequence,
+                'chapter_budget' => [
+                    'min' => $beat->chapter_budget_min,
+                    'max' => $beat->chapter_budget_max,
+                ],
+            ],
+            'milestone' => [
+                'key' => $milestone->milestone_key,
+                'title' => $milestone->title,
+                'sequence' => $milestone->sequence,
+                'acceptance_criteria' => $milestone->acceptance_criteria ?? [],
+                'must_include' => array_values(array_unique([
+                    ...($beat->must_include ?? []),
+                    ...($milestone->must_include ?? []),
+                ])),
+                'must_not_include' => array_values(array_unique([
+                    ...($beat->must_not_include ?? []),
+                    ...($milestone->must_not_include ?? []),
+                ])),
+            ],
+        ];
     }
 
     private function validationResult(): ?PlanValidationResult

@@ -9,6 +9,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    /**
+     * 创建运行态故事线表；大纲定义由后续关系化来源外键提供。
+     */
     public function up(): void
     {
         Schema::table('volumes', function (Blueprint $table) {
@@ -23,7 +26,6 @@ return new class extends Migration
             $table->string('title');
             $table->text('goal');
             $table->text('stakes');
-            $table->jsonb('beats')->default('[]');
             $table->jsonb('completion_conditions')->default('[]');
             $table->decimal('progress', 5, 4)->default(0);
             $table->string('status')->default(StoryArcStatus::Planned->value);
@@ -51,6 +53,9 @@ return new class extends Migration
         }
     }
 
+    /**
+     * 删除运行态故事线表。
+     */
     public function down(): void
     {
         Schema::dropIfExists('story_arcs');

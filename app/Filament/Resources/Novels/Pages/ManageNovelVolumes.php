@@ -7,9 +7,6 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Volume;
 use App\Services\VolumeCompletionGate;
 use Filament\Actions\Action;
-use Filament\Actions\CreateAction;
-use Filament\Actions\DeleteAction;
-use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -24,7 +21,6 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Validation\Rules\Unique;
-use Illuminate\Validation\ValidationException;
 
 class ManageNovelVolumes extends ManageRelatedRecords
 {
@@ -192,37 +188,12 @@ class ManageNovelVolumes extends ManageRelatedRecords
                         $gate->complete($record);
                         Notification::make()->title('分卷已完成')->success()->send();
                     }),
-                EditAction::make()
-                    ->label('编辑')
-                    ->modalHeading('编辑分卷')
-                    ->modalWidth('3xl')
-                    ->mutateDataUsing(function (array $data, Volume $record): array {
-                        if (($data['status'] ?? null) === VolumeStatus::Completed->value
-                            && $record->status !== VolumeStatus::Completed) {
-                            throw ValidationException::withMessages(['status' => '请通过 Completion Checklist 完成分卷。']);
-                        }
-
-                        return $data;
-                    }),
-                DeleteAction::make()->label('删除'),
             ]);
     }
 
     protected function getHeaderActions(): array
     {
-        return [
-            CreateAction::make()
-                ->label('创建分卷')
-                ->icon('heroicon-o-plus')
-                ->modalHeading('创建分卷')
-                ->modalWidth('3xl')
-                ->mutateDataUsing(function (array $data): array {
-                    if (($data['status'] ?? null) === VolumeStatus::Completed->value) {
-                        throw ValidationException::withMessages(['status' => '新分卷不能直接标记为已完成。']);
-                    }
-
-                    return $data;
-                }),
-        ];
+        // 分卷定义由不可变 Outline Version 管理；这里只保留运行状态和完成检查。
+        return [];
     }
 }

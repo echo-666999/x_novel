@@ -32,7 +32,6 @@ test('the planning overview shows active arcs beneath their volumes', function (
         'title' => '追查雾潮源头',
         'goal' => '找出雾潮反常的原因。',
         'stakes' => '孤城会在下一次潮汐中覆灭。',
-        'beats' => ['发现旧港航海日志', '进入沉没灯塔'],
         'progress' => 0.4,
         'status' => StoryArcStatus::Active,
     ]);
@@ -56,10 +55,9 @@ test('the planning overview shows active arcs beneath their volumes', function (
             '第 1 卷 · 孤城卷',
             '追查雾潮源头',
             '40%',
-            'Canonical 0/2',
+            'Canonical 0/1',
             '关键节拍',
-            '发现旧港航海日志',
-            '进入沉没灯塔',
+            'Factory Beat',
         ])
         ->assertDontSee('已经结束的支线')
         ->assertDontSee('其他小说的主线');

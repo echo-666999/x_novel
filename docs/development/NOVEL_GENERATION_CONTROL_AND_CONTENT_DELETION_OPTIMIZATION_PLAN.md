@@ -1120,8 +1120,8 @@ flowchart TD
 | Task | 名称 | 优先级 | 状态 | 依赖 |
 |---|---|---:|---|---|
 | NGC-001 | Source of Truth 与产品语义对齐 | P0 | DONE | 无 |
-| NGC-002A | 关系化 Outline 数据模型 | P0 | READY | NGC-001 |
-| NGC-002B | 分阶段 Outline 生成与恢复 | P0 | TODO | NGC-002A |
+| NGC-002A | 关系化 Outline 数据模型 | P0 | DONE | NGC-001 |
+| NGC-002B | 分阶段 Outline 生成与恢复 | P0 | READY | NGC-002A |
 | NGC-003 | Canonical Milestone Progress | P0 | TODO | NGC-002B |
 | NGC-004 | Chapter Planner 选择当前 Milestone | P0 | TODO | NGC-003 |
 | NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | TODO | NGC-004 |
@@ -1225,7 +1225,7 @@ Next Task
 ## NGC-002A — 关系化 Outline 数据模型
 
 **优先级：** P0
-**状态：** READY
+**状态：** DONE
 **依赖：** NGC-001
 
 ### 实现
@@ -1273,10 +1273,73 @@ Next Task
 - 当前任务明确放弃现有数据，回滚依赖重新执行 `migrate:fresh` 和回退代码，不提供数据级向后迁移。
 - 一旦在新结构产生需要保留的数据，后续回滚必须另行设计，不能直接恢复 `content` JSONB。
 
+### 完成记录（2026-09-28）
+
+```text
+Summary
+- 已将 novel_outlines 改为不可变版本头，并新增 Volume、Arc、Beat、Milestone 四层关系表。
+- 已把 Handoff、运行态 Volume/Arc 来源、Chapter Plan Primary 父链和 Completion Event 来源改为明确外键。
+- 已将 Outline 创建、修订、采用、Checksum、章节规划上下文和后台预览切换到关系表。
+
+Problems Addressed
+- 删除每次规划都要解析或重写整棵 novel_outlines.content 的路径。
+- 删除 story_arcs.beats 与 Outline 的重复 Beat 定义。
+- 使用稳定 Key、组合外键和不可变版本消除 beat_id 为空、跨版本父链错配和投影漂移。
+- Finalize 重复提交同一 source_artifact_id 时复用既有版本，事务失败不留下部分节点。
+
+Files Changed
+- database/migrations/2026_09_22_100000_create_novel_outlines_table.php
+- database/migrations/2026_09_22_100500_create_normalized_novel_outline_tables.php
+- database/migrations/2026_09_22_101000_add_novel_outline_fields.php
+- app/Models/NovelOutline*.php、Volume.php、StoryArc.php、ChapterPlan.php、StoryEvent.php
+- app/Data/NormalizedNovelOutline.php、CurrentOutlineTarget.php
+- app/Services/NormalizedNovelOutlineValidator.php、NovelOutlineChecksum.php、OutlineProgressResolver.php、OutlineContextBuilder.php
+- app/Actions/Novels/CreateNormalizedNovelOutlineVersionAction.php 及采用、修订入口
+- Outline、Volume、Arc、Planning Preview 的 Filament 页面与对应测试
+
+Chinese Comments Added
+- 新关系模型、DTO、Validator、创建 Action、Migration 及关键来源解析、版本采用和修订方法均已增加中文职责或约束说明。
+
+Database / Canonical State Changes
+- PostgreSQL 开发库已按任务约定执行 migrate:fresh；旧数据已放弃。
+- 新增 4 张关系化 Outline 子表；删除 novel_outlines.content、story_arcs.beats 和旧 outline_key。
+- 新增 Current Outline、运行态来源、Plan Primary 父链及 Completion Event 父链外键、CHECK、唯一和部分索引。
+- 未创建小说、章节或 Canonical Story State 业务数据。
+
+Migration Result
+- PostgreSQL php artisan migrate:fresh --force：通过，全部 Migration 成功。
+- SQLite 测试迁移与表前缀迁移：通过。
+
+Targeted Tests Actually Run
+- PostgreSQL NormalizedNovelOutlineTest：8 passed，18 assertions。
+- Filament Outline/Volume/Arc/Planning/Chapter 页面组：28 passed，195 assertions。
+- ChapterPipelineOrchestrationTest：3 passed，128 assertions。
+
+Full Suite Actually Run
+- php artisan test：1001 tests，979 passed，22 skipped，5807 assertions，0 failures，3 warnings。
+- vendor/bin/pint --dirty：通过并完成格式化。
+- git diff --check：通过。
+
+Browser Verification
+- 未执行真实浏览器操作；Filament 页面行为由上述 Feature Tests 验证。
+
+Known Limitations
+- NovelPlanner 仍是单次全量 Provider 请求；Foundation、Skeleton、单 Beat Detail 和 Finalize 属于 NGC-002B。
+- Milestone/Beat 的最终完成判定、Canonical Commit 与投影重建语义仍属于 NGC-003～NGC-005。
+- 确定性 Assembly、Compact Review 和局部 Rewrite 尚未实施。
+
+Rollback / Recovery
+- 当前阶段只允许回退代码后再次 migrate:fresh，不提供旧 JSONB 数据恢复或双读兼容。
+- Horizon 已确认 running；PostgreSQL 是当前新结构的唯一权威数据源。
+
+Next Task
+- NGC-002B：分阶段 Outline 生成与恢复。
+```
+
 ## NGC-002B — 分阶段 Outline 生成与恢复
 
 **优先级：** P0
-**状态：** TODO
+**状态：** READY
 **依赖：** NGC-002A
 
 ### 实现

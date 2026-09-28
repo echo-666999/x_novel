@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
@@ -34,7 +35,7 @@ use App\Models\StoryStateVersion;
 use App\Models\Volume;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterPlanPayload;
-use App\Services\NovelOutlineChecksum;
+use App\Services\OutlineProgressResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 
@@ -46,6 +47,7 @@ function plannerChapter(): array
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create(['version' => 1]);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
     $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 1]);
     $character = Character::factory()->for($novel)->create();
 
@@ -54,11 +56,21 @@ function plannerChapter(): array
 
 function plannerPayload(int $characterId, array $overrides = []): array
 {
+    $character = Character::query()->findOrFail($characterId);
+    $target = app(OutlineProgressResolver::class)->resolve($character->novel);
+
     return [
-        'novel_outline_id' => null,
+        'novel_outline_id' => $target->outlineId,
         'chapter_function' => '迫使主角离开安全区',
         'arc_contribution' => '推进失踪船队主线',
-        'arc_contributions' => [],
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]],
         'character_candidates' => [],
         'reader_promise' => '揭示灯塔的第一层秘密',
         'target_words' => 3000,
@@ -126,22 +138,38 @@ function plannerOutlineContent(int $maximum = 2): array
         'summary' => '按顺序取得地图并穿过城门。',
         'must_include' => [],
         'must_not_include' => [],
-        'baseline_completions' => [],
         'volumes' => [[
             'key' => 'volume-one', 'sequence' => 1, 'title' => '启程篇', 'goal' => '离开旧城', 'climax' => '穿过城门', 'target_words' => 100000,
             'arcs' => [[
-                'key' => 'arc-departure', 'sequence' => 1, 'type' => 'main', 'title' => '启程主线', 'goal' => '主角离开旧城', 'stakes' => '被困在旧城',
+                'key' => 'arc-departure', 'sequence' => 1, 'mainline_sequence' => 1, 'type' => 'main', 'title' => '启程主线', 'goal' => '主角离开旧城', 'stakes' => '被困在旧城',
                 'completion_conditions' => ['主角穿过城门'],
                 'beats' => [[
-                    'key' => 'beat-map', 'sequence' => 1, 'title' => '取得地图', 'summary' => '主角取得可靠地图。',
+                    'key' => 'beat-map', 'sequence' => 1, 'mainline_sequence' => 1, 'title' => '取得地图', 'summary' => '主角取得可靠地图。',
                     'chapter_budget' => ['min' => 1, 'max' => $maximum], 'acceptance_criteria' => ['主角取得真实地图'],
                     'must_include' => ['地图来源可验证'], 'must_not_include' => ['直接穿过城门'],
                     'character_candidates' => [], 'world_entity_candidates' => [],
+                    'milestones' => [[
+                        'key' => 'beat-map-m01', 'sequence' => 1, 'title' => '取得地图', 'objective' => '确认地图来源。',
+                        'acceptance_criteria' => ['主角取得真实地图'], 'must_include' => ['地图来源可验证'], 'must_not_include' => [],
+                    ]],
+                    'handoff' => [
+                        'next_beat_key' => 'beat-gate', 'transition_mode' => 'causal', 'exit_result' => '地图已经取得。',
+                        'next_trigger' => '地图指向城门。', 'carried_states' => [], 'open_threads' => [],
+                        'required_transition' => [], 'forbidden_jump' => [],
+                    ],
                 ], [
-                    'key' => 'beat-gate', 'sequence' => 2, 'title' => '穿过城门', 'summary' => '主角付出代价穿过城门。',
+                    'key' => 'beat-gate', 'sequence' => 2, 'mainline_sequence' => 2, 'title' => '穿过城门', 'summary' => '主角付出代价穿过城门。',
                     'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['主角穿过城门'],
                     'must_include' => ['通行代价'], 'must_not_include' => ['无代价通行'],
                     'character_candidates' => [], 'world_entity_candidates' => [],
+                    'milestones' => [[
+                        'key' => 'beat-gate-m01', 'sequence' => 1, 'title' => '穿越城门', 'objective' => '付出代价后离城。',
+                        'acceptance_criteria' => ['主角穿过城门'], 'must_include' => ['通行代价'], 'must_not_include' => [],
+                    ]],
+                    'handoff' => [
+                        'next_beat_key' => null, 'transition_mode' => null, 'exit_result' => null, 'next_trigger' => null,
+                        'carried_states' => [], 'open_threads' => [], 'required_transition' => [], 'forbidden_jump' => [],
+                    ],
                 ]],
             ]],
         ]],
@@ -153,21 +181,21 @@ function outlinePlannerChapter(int $maximum = 2): array
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     NovelBible::factory()->for($novel)->create(['version' => 1]);
     $content = plannerOutlineContent($maximum);
-    $outline = NovelOutline::factory()->for($novel)->create([
-        'status' => NovelOutlineStatus::Current,
-        'content' => $content,
-        'checksum' => app(NovelOutlineChecksum::class)->for($content),
-        'applied_at' => now(),
-    ]);
+    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle($novel, $content);
+    $outline->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
     $novel->update(['current_outline_id' => $outline->getKey()]);
-    $volume = Volume::factory()->for($novel)->create([
-        'outline_key' => 'volume-one',
-        'status' => VolumeStatus::Active,
+    $sourceVolume = $outline->volumes()->sole();
+    $volume = Volume::query()->create([
+        'novel_id' => $novel->getKey(), 'source_outline_volume_id' => $sourceVolume->getKey(),
+        'sequence' => 1, 'title' => $sourceVolume->title, 'goal' => $sourceVolume->goal,
+        'climax' => $sourceVolume->climax, 'target_words' => $sourceVolume->target_words, 'status' => VolumeStatus::Active,
     ]);
-    $arc = StoryArc::factory()->forVolume($volume)->create([
-        'outline_key' => 'arc-departure',
-        'status' => 'active',
-        'beats' => data_get($content, 'volumes.0.arcs.0.beats'),
+    $sourceArc = $outline->arcs()->where('type', 'main')->sole();
+    $arc = StoryArc::query()->create([
+        'novel_id' => $novel->getKey(), 'volume_id' => $volume->getKey(), 'source_outline_arc_id' => $sourceArc->getKey(),
+        'sequence' => 1, 'type' => 'main', 'title' => $sourceArc->title, 'goal' => $sourceArc->goal,
+        'stakes' => $sourceArc->stakes, 'completion_conditions' => $sourceArc->completion_conditions,
+        'progress' => 0, 'status' => 'active',
     ]);
     $character = Character::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
@@ -280,6 +308,10 @@ test('the planner advances to the next beat only after an active completion even
         'subject_type' => 'story_arc',
         'subject_id' => (string) $arc->getKey(),
         'payload' => ['beat_key' => 'beat-map'],
+        'novel_outline_id' => $outline->getKey(),
+        'novel_outline_arc_id' => $outline->arcs()->where('arc_key', 'arc-departure')->sole()->getKey(),
+        'novel_outline_beat_id' => $outline->beats()->where('beat_key', 'beat-map')->sole()->getKey(),
+        'novel_outline_milestone_id' => null,
     ]);
     $fake = (new FakeAiProvider)->enqueue(plannerResponse(outlinePlannerPayload($character, $outline, $arc, 'beat-gate', 2)));
     app()->instance(AiProvider::class, $fake);
@@ -413,7 +445,7 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
     $run = $chapter->generationRuns()->sole();
 
     expect($plan->status)->toBe(PlanStatus::Ready)
-        ->and($plan->novel_outline_id)->toBeNull()
+        ->and($plan->novel_outline_id)->toBe($chapter->novel->current_outline_id)
         ->and($plan->scene_plans)->toHaveCount(1)
         ->and(data_get($plan->scene_plans, '0.outcome_allowed'))->toBe(['寻找无人看守的小船'])
         ->and(data_get($plan->scene_plans, '0.outcome_forbidden'))->toBe(['取得港务官正式许可'])
@@ -553,8 +585,8 @@ test('the planner receives closing restrictions and closure debt in completing m
             'hard_world_rule',
             'high_importance_foreshadowing',
         ])
-        ->and(data_get($snapshot, 'closure_debt.total'))->toBe(0)
-        ->and(data_get($snapshot, 'closure_debt.critical'))->toBe(0);
+        ->and(data_get($snapshot, 'closure_debt.total'))->toBe(1)
+        ->and(data_get($snapshot, 'closure_debt.critical'))->toBe(1);
 });
 
 test('the planner receives the previous canonical ending and requires a scene transition', function () {

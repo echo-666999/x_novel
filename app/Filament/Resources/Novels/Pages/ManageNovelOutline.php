@@ -6,6 +6,7 @@ use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\ApplyNovelOutlineRevisionAction;
 use App\Actions\Novels\CreateNovelOutlineVersionAction;
+use App\Data\NormalizedNovelOutline;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
@@ -18,7 +19,7 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\GenerateNovelOutlineJob;
 use App\Models\GenerationArtifact;
 use App\Models\NovelOutline;
-use App\Services\NovelOutlineValidator;
+use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelPlanner;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Hidden;
@@ -62,7 +63,7 @@ class ManageNovelOutline extends ViewRecord
                     'versions' => $this->getRecord()->outlines()->get(),
                     'validation' => ($outline = $this->displayedOutline()) === null
                         ? null
-                        : app(NovelOutlineValidator::class)->validate($outline->content),
+                        : app(NormalizedNovelOutlineValidator::class)->validate(NormalizedNovelOutline::fromModel($outline)),
                 ]),
         ]);
     }
@@ -97,14 +98,16 @@ class ManageNovelOutline extends ViewRecord
                 ->modalHeading(fn (): string => $this->latestDraft() === null ? '手工创建全书大纲' : '创建大纲修订版本')
                 ->modalDescription('保存会创建新的不可变 Draft Version，不覆盖旧版本。')
                 ->modalWidth('7xl')
-                ->fillForm(fn (): array => $this->latestDraft()?->content ?? $this->emptyOutline())
+                ->fillForm(fn (): array => ($draft = $this->latestDraft()) === null
+                    ? $this->emptyOutline()
+                    : NormalizedNovelOutline::fromModel($draft)->toArray())
                 ->schema(self::outlineForm())
                 ->action(function (array $data, CreateNovelOutlineVersionAction $create): void {
                     $base = $this->latestDraft();
                     $data = $this->synchronizeSequences($data);
                     $create->handle(
                         novel: $this->getRecord(),
-                        content: $data,
+                        outline: $data,
                         source: $base === null ? NovelOutlineSource::Manual : NovelOutlineSource::Revision,
                         basedOn: $base,
                         creator: auth()->user(),
@@ -119,7 +122,12 @@ class ManageNovelOutline extends ViewRecord
                 ->schema([
                     Select::make('node_key')
                         ->label('目标节点')
-                        ->options(fn (NovelPlanner $planner): array => collect($planner->nodeKeys($this->latestDraft()?->content ?? []))->mapWithKeys(fn (string $key): array => [$key => $key])->all())
+                        ->options(function (NovelPlanner $planner): array {
+                            $draft = $this->latestDraft();
+                            $data = $draft === null ? [] : NormalizedNovelOutline::fromModel($draft)->toArray();
+
+                            return collect($planner->nodeKeys($data))->mapWithKeys(fn (string $key): array => [$key => $key])->all();
+                        })
                         ->searchable()
                         ->required(),
                     Textarea::make('instruction')->label('修改要求')->rows(5)->required()->maxLength(2000),
@@ -157,7 +165,7 @@ class ManageNovelOutline extends ViewRecord
                         $apply->handle(
                             $this->getRecord(),
                             $outline,
-                            $this->aiRoot($outline) ? $this->latestBlueprintArtifact() : null,
+                            $this->aiRootArtifact($outline),
                         );
                     } catch (ValidationException $exception) {
                         Notification::make()->title('无法采用大纲')->body(collect($exception->errors())->flatten()->first())->danger()->send();
@@ -179,7 +187,7 @@ class ManageNovelOutline extends ViewRecord
                     $current = $this->getRecord()->currentOutline()->firstOrFail();
 
                     return [
-                        ...$current->content,
+                        ...NormalizedNovelOutline::fromModel($current)->toArray(),
                         'expected_current_outline_id' => $current->getKey(),
                         'expected_current_outline_checksum' => $current->checksum,
                     ];
@@ -198,7 +206,7 @@ class ManageNovelOutline extends ViewRecord
                     try {
                         $apply->handle(
                             novel: $this->getRecord(),
-                            content: $this->synchronizeSequences($data),
+                            outline: $this->synchronizeSequences($data),
                             expectedCurrentOutlineId: $expectedId,
                             expectedCurrentChecksum: $expectedChecksum,
                             creator: auth()->user(),
@@ -264,7 +272,6 @@ class ManageNovelOutline extends ViewRecord
                 Textarea::make('summary')->label('全书摘要')->required()->rows(3)->columnSpanFull(),
                 TagsInput::make('must_include')->label('必须包含')->default([]),
                 TagsInput::make('must_not_include')->label('禁止包含')->default([]),
-                Hidden::make('baseline_completions')->default([]),
             ]),
             Repeater::make('volumes')
                 ->label('Volumes')
@@ -284,6 +291,7 @@ class ManageNovelOutline extends ViewRecord
                         ->schema([
                             TextInput::make('key')->label('稳定 Key')->required(),
                             TextInput::make('sequence')->label('顺序')->integer()->minValue(1)->required(),
+                            Hidden::make('mainline_sequence'),
                             Select::make('type')->label('类型')->options(StoryArcType::class)->required(),
                             TextInput::make('title')->label('标题')->required(),
                             Textarea::make('goal')->label('目标')->required()->rows(2),
@@ -294,6 +302,7 @@ class ManageNovelOutline extends ViewRecord
                                 ->schema([
                                     TextInput::make('key')->label('稳定 Key')->required(),
                                     TextInput::make('sequence')->label('顺序')->integer()->minValue(1)->required(),
+                                    Hidden::make('mainline_sequence'),
                                     TextInput::make('title')->label('标题')->required(),
                                     Textarea::make('summary')->label('节点摘要')->required()->rows(2),
                                     TextInput::make('chapter_budget.min')->label('最少章节')->integer()->minValue(1)->required(),
@@ -325,6 +334,27 @@ class ManageNovelOutline extends ViewRecord
                                         Textarea::make('introduction_reason')->label('引入理由')->required(),
                                         TextInput::make('target_scene_sequence')->label('目标 Scene')->integer()->minValue(1)->required(),
                                     ]),
+                                    Repeater::make('milestones')->label('Main Beat Milestones')->default([])->collapsible()->reorderable()
+                                        ->itemLabel(fn (array $state): ?string => $state['title'] ?? null)
+                                        ->schema([
+                                            TextInput::make('key')->label('稳定 Key')->required(),
+                                            TextInput::make('sequence')->label('顺序')->integer()->minValue(1)->required(),
+                                            TextInput::make('title')->label('标题')->required(),
+                                            Textarea::make('objective')->label('阶段目标')->required()->rows(2),
+                                            TagsInput::make('acceptance_criteria')->label('验收条件')->required(),
+                                            TagsInput::make('must_include')->label('必须包含')->default([]),
+                                            TagsInput::make('must_not_include')->label('禁止包含')->default([]),
+                                        ])->columns(2),
+                                    Section::make('相邻 Beat Handoff')->schema([
+                                        Hidden::make('handoff.next_beat_key'),
+                                        TextInput::make('handoff.transition_mode')->label('过渡方式')->nullable(),
+                                        Textarea::make('handoff.exit_result')->label('前一 Beat 已成立结果')->rows(2)->nullable(),
+                                        Textarea::make('handoff.next_trigger')->label('下一 Beat 直接触发')->rows(2)->nullable(),
+                                        TagsInput::make('handoff.carried_states')->label('延续状态')->default([]),
+                                        TagsInput::make('handoff.open_threads')->label('未结事项')->default([]),
+                                        TagsInput::make('handoff.required_transition')->label('必须写出的过渡')->default([]),
+                                        TagsInput::make('handoff.forbidden_jump')->label('禁止跳跃')->default([]),
+                                    ])->columns(2),
                                 ])->columns(2),
                         ])->columns(2),
                 ])->columns(2),
@@ -339,7 +369,6 @@ class ManageNovelOutline extends ViewRecord
             'summary' => (string) $this->getRecord()->premise,
             'must_include' => [],
             'must_not_include' => [],
-            'baseline_completions' => [],
             'volumes' => [],
         ];
     }
@@ -378,19 +407,19 @@ class ManageNovelOutline extends ViewRecord
             && $chapter->latestPlan->novel_outline_id !== $novel->current_outline_id;
     }
 
-    private function aiRoot(?NovelOutline $outline): bool
+    private function aiRootArtifact(?NovelOutline $outline): ?GenerationArtifact
     {
         while ($outline?->based_on_outline_id !== null) {
             $outline = $outline->basedOn;
         }
 
-        return $outline?->source === NovelOutlineSource::Ai;
+        return $outline?->source === NovelOutlineSource::Ai ? $outline->sourceArtifact : null;
     }
 
     private function latestBlueprintArtifact(): ?GenerationArtifact
     {
         return GenerationArtifact::query()
-            ->where('type', ArtifactType::Context)
+            ->where('type', ArtifactType::OutlineBlueprint)
             ->whereHas('generationRun', fn ($query) => $query
                 ->where('novel_id', $this->getRecord()->getKey())
                 ->whereNull('chapter_id')
@@ -405,6 +434,9 @@ class ManageNovelOutline extends ViewRecord
     private function synchronizeSequences(array $content): array
     {
         $volumes = array_values($content['volumes'] ?? []);
+        $mainArcSequence = 0;
+        $mainBeatSequence = 0;
+        $mainBeatKeys = [];
         foreach ($volumes as $volumeIndex => &$volume) {
             $volume['sequence'] = $volumeIndex + 1;
             $arcs = array_values($volume['arcs'] ?? []);
@@ -413,9 +445,25 @@ class ManageNovelOutline extends ViewRecord
                 if (($arc['type'] ?? null) instanceof \BackedEnum) {
                     $arc['type'] = $arc['type']->value;
                 }
+                $isMain = ($arc['type'] ?? null) === StoryArcType::Main->value;
+                $arc['mainline_sequence'] = $isMain ? ++$mainArcSequence : null;
                 $beats = array_values($arc['beats'] ?? []);
                 foreach ($beats as $beatIndex => &$beat) {
                     $beat['sequence'] = $beatIndex + 1;
+                    $beat['mainline_sequence'] = $isMain ? ++$mainBeatSequence : null;
+                    if ($isMain) {
+                        $mainBeatKeys[] = $beat['key'] ?? null;
+                    }
+                    $milestones = array_values($beat['milestones'] ?? []);
+                    foreach ($milestones as $milestoneIndex => &$milestone) {
+                        $milestone['sequence'] = $milestoneIndex + 1;
+                    }
+                    unset($milestone);
+                    $beat['milestones'] = $milestones;
+                    $beat['handoff'] = is_array($beat['handoff'] ?? null) ? $beat['handoff'] : [];
+                    foreach (['carried_states', 'open_threads', 'required_transition', 'forbidden_jump'] as $field) {
+                        $beat['handoff'][$field] = array_values($beat['handoff'][$field] ?? []);
+                    }
                     foreach ($beat['world_entity_candidates'] ?? [] as &$candidate) {
                         if (($candidate['type'] ?? null) instanceof \BackedEnum) {
                             $candidate['type'] = $candidate['type']->value;
@@ -428,6 +476,23 @@ class ManageNovelOutline extends ViewRecord
             }
             unset($arc);
             $volume['arcs'] = $arcs;
+        }
+        unset($volume);
+
+        // Handoff 目标由当前 Mainline 顺序确定，表单不能提交跳跃或跨版本引用。
+        $mainBeatIndex = 0;
+        foreach ($volumes as &$volume) {
+            foreach ($volume['arcs'] as &$arc) {
+                $isMain = ($arc['type'] ?? null) === StoryArcType::Main->value;
+                foreach ($arc['beats'] as &$beat) {
+                    $beat['handoff']['next_beat_key'] = $isMain ? ($mainBeatKeys[$mainBeatIndex + 1] ?? null) : null;
+                    if ($isMain) {
+                        $mainBeatIndex++;
+                    }
+                }
+                unset($beat);
+            }
+            unset($arc);
         }
         unset($volume);
         $content['volumes'] = $volumes;

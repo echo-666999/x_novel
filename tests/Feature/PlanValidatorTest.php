@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Enums\CharacterStatus;
 use App\Enums\FactHardness;
 use App\Enums\ForeshadowingImportance;
@@ -8,21 +9,18 @@ use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanFindingSeverity;
 use App\Enums\StoryArcStatus;
-use App\Enums\StoryArcType;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
-use App\Models\NovelOutline;
 use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
-use App\Models\Volume;
 use App\Models\WorldEntity;
-use App\Services\NovelOutlineChecksum;
+use App\Services\OutlineProgressResolver;
 use App\Services\PlanValidator;
-use App\Services\StoryArcBeatContract;
+use Database\Factories\Support\NormalizedOutlineDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 
@@ -33,127 +31,53 @@ function validPlan(array $attributes = []): ChapterPlan
     $chapter = $attributes['chapter'] ?? Chapter::factory()->create(['sequence' => 10]);
     unset($attributes['chapter']);
     $pov = Character::factory()->for($chapter->novel)->create();
+    $hasExplicitContributions = array_key_exists('arc_contributions', $attributes);
 
-    return ChapterPlan::factory()->for($chapter)->create([
+    $plan = ChapterPlan::factory()->for($chapter)->create([
         'pov_character_id' => $pov->getKey(),
         ...$attributes,
     ]);
+
+    if (! $hasExplicitContributions) {
+        $target = app(OutlineProgressResolver::class)->resolve($chapter->novel->fresh());
+        $plan->update(['arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]]]);
+    }
+
+    return $plan;
 }
 
-/** @return array{ChapterPlan, NovelOutline, StoryArc, Volume} */
-function outlineValidatedPlan(array $planOverrides = [], array $contentOverrides = []): array
-{
-    $novel = Novel::factory()->create();
-    $volume = Volume::factory()->for($novel)->create([
-        'outline_key' => 'volume-one',
-        'status' => 'active',
-    ]);
-    $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 10]);
-    $beats = [[
-        'key' => 'beat-one', 'sequence' => 1, 'title' => '第一节点', 'summary' => '完成第一节点。',
-        'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['第一节点完成'],
-        'must_include' => ['第一节点证据'], 'must_not_include' => ['提前完成第二节点'],
-        'character_candidates' => [], 'world_entity_candidates' => [],
-    ], [
-        'key' => 'beat-two', 'sequence' => 2, 'title' => '第二节点', 'summary' => '完成第二节点。',
-        'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['第二节点完成'],
-        'must_include' => ['第二节点证据'], 'must_not_include' => ['跳过代价'],
-        'character_candidates' => [], 'world_entity_candidates' => [],
-    ]];
-    $content = [
-        'title' => '顺序门禁测试大纲', 'summary' => '按顺序推进。',
-        'must_include' => [], 'must_not_include' => [], 'baseline_completions' => [],
-        'volumes' => [[
-            'key' => 'volume-one', 'sequence' => 1, 'title' => '第一卷', 'goal' => '推进主线',
-            'climax' => '完成第二节点', 'target_words' => 100000,
-            'arcs' => [[
-                'key' => 'main-arc', 'sequence' => 1, 'type' => 'main', 'title' => '主线',
-                'goal' => '完成两个节点', 'stakes' => '主线停滞', 'completion_conditions' => ['两个节点完成'],
-                'beats' => $beats,
-            ]],
-        ]],
-        ...$contentOverrides,
-    ];
-    $outline = NovelOutline::factory()->for($novel)->create([
-        'status' => NovelOutlineStatus::Current,
-        'content' => $content,
-        'checksum' => app(NovelOutlineChecksum::class)->for($content),
-        'applied_at' => now(),
-    ]);
-    $novel->update(['current_outline_id' => $outline->getKey()]);
-    $arc = StoryArc::factory()->for($novel)->forVolume($volume)->create([
-        'outline_key' => 'main-arc',
-        'type' => StoryArcType::Main,
-        'status' => StoryArcStatus::Active,
-        'beats' => $beats,
-    ]);
-    $plan = validPlan([
-        'chapter' => $chapter,
-        'novel_outline_id' => $outline->getKey(),
-        'arc_contributions' => [[
-            'role' => 'primary', 'arc_id' => $arc->getKey(), 'beat_key' => 'beat-one', 'beat_index' => 1,
-            'target_scene_sequence' => 1, 'acceptance_criteria' => '第一节点完成',
-        ]],
-        'must_reveal' => ['第一节点证据'],
-        'must_not_reveal' => ['提前完成第二节点'],
-        ...$planOverrides,
-    ]);
-
-    return [$plan, $outline, $arc, $volume];
-}
-
-test('outline gate rejects skipping and repeating main beats', function (string $mode, string $expectedCode) {
-    $baseline = $mode === 'repeat'
-        ? [['beat_key' => 'beat-one', 'reason' => '导入前已完成', 'evidence' => '既有正文']]
-        : [];
-    [$plan, , $arc] = outlineValidatedPlan(contentOverrides: ['baseline_completions' => $baseline]);
-    $plan->update(['arc_contributions' => [[
-        'role' => 'primary', 'arc_id' => $arc->getKey(),
-        'beat_key' => $mode === 'skip' ? 'beat-two' : 'beat-one',
-        'beat_index' => $mode === 'skip' ? 2 : 1,
-        'target_scene_sequence' => 1,
-        'acceptance_criteria' => $mode === 'skip' ? '第二节点完成' : '第一节点完成',
-    ]]]);
+test('outline gate rejects a contribution that differs from the frozen primary target', function () {
+    $plan = validPlan();
+    $contribution = $plan->arc_contributions[0];
+    $contribution['beat_key'] = 'unknown-beat';
+    $plan->update(['arc_contributions' => [$contribution]]);
 
     $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
 
-    expect($codes)->toContain($expectedCode);
-})->with([
-    'skip the earliest unfinished beat' => ['skip', 'OUTLINE_BEAT_OUT_OF_ORDER'],
-    'repeat a completed beat' => ['repeat', 'OUTLINE_BEAT_ALREADY_COMPLETED'],
-]);
+    expect($codes)->toContain('OUTLINE_BEAT_OUT_OF_ORDER', 'INVALID_ARC_BEAT_REFERENCE');
+});
 
 test('outline gate rejects another outline version', function () {
-    [$plan, $current] = outlineValidatedPlan();
-    $other = NovelOutline::factory()->for($plan->chapter->novel)->create([
-        'version' => 2,
-        'status' => NovelOutlineStatus::Superseded,
-        'content' => $current->content,
-        'checksum' => $current->checksum,
-    ]);
-    $plan->update(['novel_outline_id' => $other->getKey()]);
+    $plan = validPlan();
+    $novel = $plan->chapter->novel;
+    $other = app(CreateNormalizedNovelOutlineVersionAction::class)->handle(
+        $novel,
+        [...NormalizedOutlineDefinition::make(), 'title' => '第二版 Outline'],
+    );
+    $novel->outlines()->whereKeyNot($other->getKey())->update(['status' => NovelOutlineStatus::Superseded]);
+    $other->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
+    $novel->update(['current_outline_id' => $other->getKey()]);
 
     $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
 
     expect($codes)->toContain('OUTLINE_VERSION_MISMATCH');
-});
-
-test('a subplot cannot replace the main primary outline beat', function () {
-    [$plan, , , $volume] = outlineValidatedPlan();
-    $subplot = StoryArc::factory()->for($plan->chapter->novel)->forVolume($volume)->create([
-        'sequence' => 2,
-        'type' => StoryArcType::Subplot,
-        'status' => StoryArcStatus::Active,
-        'beats' => ['处理支线'],
-    ]);
-    $plan->update(['arc_contributions' => [[
-        'role' => 'secondary', 'arc_id' => $subplot->getKey(), 'beat_key' => app(StoryArcBeatContract::class)->key('处理支线'),
-        'beat_index' => 1, 'target_scene_sequence' => 1, 'acceptance_criteria' => '支线推进',
-    ]]]);
-
-    $codes = collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code');
-
-    expect($codes)->toContain('MISSING_PRIMARY_OUTLINE_BEAT');
 });
 
 test('a structurally valid plan returns valid and can enter generation', function () {
@@ -193,30 +117,10 @@ test('character candidates reject duplicate names and foreign duplicate referenc
 })->with(['duplicate_name', 'foreign_reference']);
 
 test('structured arc beats and world candidates are scoped to the current novel and volume', function () {
-    $novel = Novel::factory()->create();
-    $volume = Volume::factory()->for($novel)->create();
-    $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 10]);
-    $arc = StoryArc::factory()->for($novel)->forVolume($volume)->create([
-        'status' => StoryArcStatus::Active,
-        'beats' => ['取得通行证'],
-    ]);
-    $beatKey = app(StoryArcBeatContract::class)->key('取得通行证');
-    $plan = validPlan([
-        'chapter' => $chapter,
-        'arc_contributions' => [[
-            'arc_id' => $arc->getKey(), 'beat_key' => $beatKey, 'beat_index' => 1,
-            'target_scene_sequence' => 1, 'acceptance_criteria' => '正文明确取得通行证。',
-        ]],
-        'world_entity_candidates' => [[
-            'candidate_key' => 'wec-north-pass', 'type' => 'item', 'name' => '北门通行证',
-            'description' => '进入北门的凭证。', 'deduplication_basis' => '现有实体没有同名凭证。',
-            'possible_duplicate_entity_ids' => [], 'introduction_reason' => '进入下一地点。', 'target_scene_sequence' => 1,
-        ]],
-    ]);
+    $plan = validPlan();
+    $novel = $plan->chapter->novel;
 
-    expect(app(PlanValidator::class)->validate($plan)->canGenerate())->toBeTrue();
-
-    $foreignArc = StoryArc::factory()->create(['status' => StoryArcStatus::Active, 'beats' => ['错误 Beat']]);
+    $foreignArc = StoryArc::factory()->create(['status' => StoryArcStatus::Active]);
     $existing = WorldEntity::factory()->for($novel)->create(['name' => '北门通行证']);
     $plan->update([
         'arc_contributions' => [[

@@ -10,9 +10,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+/**
+ * 表示小说当前运行态 Volume，并追踪其权威 Outline 来源。
+ */
 #[Fillable([
     'novel_id',
-    'outline_key',
+    'source_outline_volume_id',
     'sequence',
     'title',
     'goal',
@@ -32,6 +35,12 @@ class Volume extends Model
         return $this->belongsTo(Novel::class);
     }
 
+    /** @return BelongsTo<NovelOutlineVolume, $this> 运行态 Volume 采用的权威大纲来源。 */
+    public function sourceOutlineVolume(): BelongsTo
+    {
+        return $this->belongsTo(NovelOutlineVolume::class, 'source_outline_volume_id');
+    }
+
     /** @return HasMany<StoryArc, $this> */
     public function storyArcs(): HasMany
     {
@@ -49,6 +58,7 @@ class Volume extends Model
     {
         return [
             'sequence' => 'integer',
+            'source_outline_volume_id' => 'integer',
             'target_words' => 'integer',
             'status' => VolumeStatus::class,
         ];
