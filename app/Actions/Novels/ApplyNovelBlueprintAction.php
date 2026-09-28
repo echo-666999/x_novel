@@ -4,11 +4,13 @@ namespace App\Actions\Novels;
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\NormalizedNovelOutline;
+use App\Enums\ArtifactType;
 use App\Enums\CharacterStatus;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
+use App\Enums\RunStatus;
 use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Enums\WorldEntityStatus;
@@ -17,6 +19,7 @@ use App\Models\Novel;
 use App\Models\NovelOutline;
 use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlineChecksum;
+use App\Services\NovelOutlinePipeline;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -167,11 +170,16 @@ class ApplyNovelBlueprintAction
         $sourceArtifact = $root->sourceArtifact;
         if ($sourceArtifact === null
             || ($artifact !== null && $artifact->getKey() !== $sourceArtifact->getKey())
+            || $sourceArtifact->type !== ArtifactType::OutlineBlueprint
             || $sourceArtifact->generationRun()
                 ->where('novel_id', $novel->getKey())
+                ->where('scope_type', NovelOutlinePipeline::FINALIZE_SCOPE)
+                ->where('scope_id', data_get($sourceArtifact->data, 'lineage.batch_run_id'))
                 ->doesntExist()) {
             throw ValidationException::withMessages(['blueprint' => 'AI Outline 缺少属于当前小说的来源 Artifact。']);
         }
+
+        $this->assertCompleteLineage($novel, $sourceArtifact);
 
         // checksum 绑定 Outline 与来源 Artifact，防止把其他小说或其他候选的初始化资料混入。
         $artifactOutline = data_get($sourceArtifact->data, 'outline');
@@ -185,6 +193,56 @@ class ApplyNovelBlueprintAction
         $data = $sourceArtifact->data;
 
         return $data;
+    }
+
+    /**
+     * Finalize 来源必须完整绑定同一批次的全部阶段 Artifact，禁止跨小说或跨批次拼接初始化资料。
+     */
+    private function assertCompleteLineage(Novel $novel, GenerationArtifact $blueprint): void
+    {
+        $lineage = data_get($blueprint->data, 'lineage');
+        $batchRunId = is_array($lineage) ? ($lineage['batch_run_id'] ?? null) : null;
+        $beatReferences = is_array($lineage['beat_details'] ?? null) ? array_values($lineage['beat_details']) : [];
+        $references = is_array($lineage)
+            ? [$lineage['foundation'] ?? null, $lineage['skeleton'] ?? null, ...$beatReferences]
+            : [];
+
+        if (! is_int($batchRunId) || count($references) < 3) {
+            throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 缺少完整阶段来源。']);
+        }
+
+        $expectedBeatKeys = collect(data_get($blueprint->data, 'outline.volumes', []))
+            ->flatMap(fn (array $volume) => collect($volume['arcs'] ?? [])->where('type', 'main')->flatMap(fn (array $arc): array => $arc['beats'] ?? []))
+            ->sortBy('mainline_sequence')
+            ->pluck('key')
+            ->values()
+            ->all();
+        if (array_keys($lineage['beat_details']) !== $expectedBeatKeys
+            || ! hash_equals($blueprint->checksum, hash('sha256', json_encode($blueprint->data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)))) {
+            throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 的 Beat 来源集合或 Checksum 不完整。']);
+        }
+
+        $expectedTypes = [ArtifactType::OutlineFoundation, ArtifactType::OutlineSkeleton];
+        $expectedScopes = [NovelOutlinePipeline::FOUNDATION_SCOPE, NovelOutlinePipeline::SKELETON_SCOPE];
+        foreach ($references as $index => $reference) {
+            if (! is_array($reference) || ! is_int($reference['id'] ?? null) || ! is_string($reference['checksum'] ?? null)) {
+                throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 缺少上游 Artifact ID 或 Checksum。']);
+            }
+            $upstream = GenerationArtifact::query()->with('generationRun')->find($reference['id']);
+            $expected = $expectedTypes[$index] ?? ArtifactType::OutlineBeatDetail;
+            $expectedScope = $expectedScopes[$index] ?? NovelOutlinePipeline::BEAT_DETAIL_SCOPE;
+            if ($upstream === null
+                || $upstream->type !== $expected
+                || ! hash_equals($upstream->checksum, $reference['checksum'])
+                || ! hash_equals($upstream->checksum, hash('sha256', json_encode($upstream->data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)))
+                || $upstream->generationRun->novel_id !== $novel->getKey()
+                || $upstream->generationRun->scope_type !== $expectedScope
+                || $upstream->generationRun->scope_id !== $batchRunId
+                || $upstream->generationRun->status !== RunStatus::Succeeded
+                || data_get($upstream->data, 'batch_run_id') !== $batchRunId) {
+                throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 引用了其他小说、其他批次或不匹配的阶段 Artifact。']);
+            }
+        }
     }
 
     /**

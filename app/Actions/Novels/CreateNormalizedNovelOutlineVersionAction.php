@@ -6,6 +6,7 @@ use App\Data\NormalizedNovelOutline;
 use App\Enums\ArtifactType;
 use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
+use App\Enums\RunStatus;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
 use App\Models\NovelOutline;
@@ -13,6 +14,7 @@ use App\Models\NovelOutlineBeat;
 use App\Models\User;
 use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlineChecksum;
+use App\Services\NovelOutlinePipeline;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -190,8 +192,16 @@ class CreateNormalizedNovelOutlineVersionAction
         if ($artifact === null) {
             return;
         }
-        if ($artifact->type !== ArtifactType::OutlineBlueprint
-            || $artifact->generationRun()->where('novel_id', $novel->getKey())->doesntExist()) {
+        $run = $artifact->generationRun()->where('novel_id', $novel->getKey());
+        $validAiFinalize = $source === NovelOutlineSource::Ai
+            && $run->clone()
+                ->where('scope_type', NovelOutlinePipeline::FINALIZE_SCOPE)
+                ->where('scope_id', data_get($artifact->data, 'lineage.batch_run_id'))
+                ->where('status', RunStatus::Succeeded)
+                ->exists();
+        $validRevision = $source === NovelOutlineSource::Revision && $run->clone()->exists();
+
+        if ($artifact->type !== ArtifactType::OutlineBlueprint || (! $validAiFinalize && ! $validRevision)) {
             throw ValidationException::withMessages(['source_artifact_id' => '来源必须是当前小说的最终 outline_blueprint Artifact。']);
         }
     }

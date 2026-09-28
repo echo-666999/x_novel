@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：关系化 Outline 已由 NGC-002A 实现，章节规划读取关系表并冻结完整父链；分阶段 Outline、完整 Plan Admission、确定性 Assembly、Compact Review 和 Paragraph/Scene Rewrite 尚待 NGC-002B～NGC-006B 实现。当前代码仍保留单次全量 Outline Provider 请求、AI Assembly 和 Whole Chapter Rewrite，不得据本文误报后续批次已经完成。
+> 实施状态：关系化 Outline 与 Foundation → Skeleton → 单 Beat Detail → Finalize 分阶段生成已由 NGC-002A～NGC-002B 实现，章节规划读取关系表并冻结完整父链；完整 Plan Admission、确定性 Assembly、Compact Review 和 Paragraph/Scene Rewrite 尚待 NGC-004A～NGC-006B 实现。当前代码仍保留 AI Assembly 和 Whole Chapter Rewrite，不得据本文误报后续批次已经完成。
 
 ## 1. 目标
 

@@ -16,7 +16,7 @@
 | 技术栈 | Laravel + Filament + PostgreSQL/pgvector + Redis + Laravel Queue |
 | 核心目标 | 小而精、低运维成本、长期可维护 |
 | 非目标 | SaaS、多租户、多人协作、复杂审批、微服务化 |
-| 状态 | 目标产品基线；关系化 Outline 已由 NGC-002A 实现，分阶段 Outline、确定性 Assembly 与局部 Rewrite 尚待 NGC-002B～NGC-006B 实现 |
+| 状态 | 目标产品基线；关系化 Outline 与分阶段 Outline 已由 NGC-002A～NGC-002B 实现，确定性 Assembly 与局部 Rewrite 尚待 NGC-006A～NGC-006B 实现 |
 
 ---
 

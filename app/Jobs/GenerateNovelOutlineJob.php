@@ -5,7 +5,7 @@ namespace App\Jobs;
 use App\AI\Exceptions\AiProviderException;
 use App\Models\Novel;
 use App\Services\GenerationFailurePolicy;
-use App\Services\NovelPlanner;
+use App\Services\NovelOutlinePipeline;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -38,14 +38,15 @@ class GenerateNovelOutlineJob implements ShouldBeUnique, ShouldQueue
         return 'novel-outline:'.$this->novelId;
     }
 
-    public function handle(NovelPlanner $planner): void
+    public function handle(NovelOutlinePipeline $pipeline): void
     {
         try {
-            // 全书规划通常超过 Web 请求时限，必须在 generation Worker 中执行。
-            $planner->generate(Novel::query()->findOrFail($this->novelId), $this->volumeCount);
+            // 主 Job 只创建或恢复批次并派发下一缺失阶段，不在一次 Worker 生命周期中执行整棵 Outline。
+            $batch = $pipeline->startOrResume(Novel::query()->findOrFail($this->novelId), $this->volumeCount);
+            $pipeline->dispatchNext($batch);
         } catch (AiProviderException $exception) {
             // 相同 Token 上限下重试截断响应只会重复产生费用，必须先调整请求预算。
-            if (! $exception->retryable || $exception->errorCode === 'novel_plan_output_truncated') {
+            if (! $exception->retryable || str_contains($exception->errorCode, 'truncated')) {
                 $this->fail($exception);
 
                 return;

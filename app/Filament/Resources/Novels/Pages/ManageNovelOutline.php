@@ -20,6 +20,7 @@ use App\Jobs\GenerateNovelOutlineJob;
 use App\Models\GenerationArtifact;
 use App\Models\NovelOutline;
 use App\Services\NormalizedNovelOutlineValidator;
+use App\Services\NovelOutlinePipeline;
 use App\Services\NovelPlanner;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Hidden;
@@ -423,7 +424,7 @@ class ManageNovelOutline extends ViewRecord
             ->whereHas('generationRun', fn ($query) => $query
                 ->where('novel_id', $this->getRecord()->getKey())
                 ->whereNull('chapter_id')
-                ->where('scope_type', 'novel')
+                ->where('scope_type', NovelOutlinePipeline::FINALIZE_SCOPE)
                 ->where('stage', GenerationStage::ChapterPlanning)
                 ->where('status', RunStatus::Succeeded))
             ->latest('id')

@@ -1121,7 +1121,7 @@ flowchart TD
 |---|---|---:|---|---|
 | NGC-001 | Source of Truth 与产品语义对齐 | P0 | DONE | 无 |
 | NGC-002A | 关系化 Outline 数据模型 | P0 | DONE | NGC-001 |
-| NGC-002B | 分阶段 Outline 生成与恢复 | P0 | READY | NGC-002A |
+| NGC-002B | 分阶段 Outline 生成与恢复 | P0 | DONE | NGC-002A |
 | NGC-003 | Canonical Milestone Progress | P0 | TODO | NGC-002B |
 | NGC-004 | Chapter Planner 选择当前 Milestone | P0 | TODO | NGC-003 |
 | NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | TODO | NGC-004 |
@@ -1324,7 +1324,7 @@ Browser Verification
 - 未执行真实浏览器操作；Filament 页面行为由上述 Feature Tests 验证。
 
 Known Limitations
-- NovelPlanner 仍是单次全量 Provider 请求；Foundation、Skeleton、单 Beat Detail 和 Finalize 属于 NGC-002B。
+- 截至 NGC-002A，NovelPlanner 仍是单次全量 Provider 请求；该路径已由 NGC-002B 的 Foundation、Skeleton、单 Beat Detail 和 Finalize 替换。
 - Milestone/Beat 的最终完成判定、Canonical Commit 与投影重建语义仍属于 NGC-003～NGC-005。
 - 确定性 Assembly、Compact Review 和局部 Rewrite 尚未实施。
 
@@ -1332,14 +1332,14 @@ Rollback / Recovery
 - 当前阶段只允许回退代码后再次 migrate:fresh，不提供旧 JSONB 数据恢复或双读兼容。
 - Horizon 已确认 running；PostgreSQL 是当前新结构的唯一权威数据源。
 
-Next Task
+当时的 Next Task
 - NGC-002B：分阶段 Outline 生成与恢复。
 ```
 
 ## NGC-002B — 分阶段 Outline 生成与恢复
 
 **优先级：** P0
-**状态：** READY
+**状态：** DONE
 **依赖：** NGC-002A
 
 ### 实现
@@ -1382,6 +1382,33 @@ Next Task
 
 - 分阶段 Artifact 保持不可变，可用于诊断或恢复。
 - 回退前停止新的规划批次；不得把未 Finalize 的部分结果拼成可采用 Outline。
+
+### 实施记录（2026-09-28）
+
+- 新增 `NovelOutlinePipeline`，主 Run 冻结 Provider、Model、Reasoning Effort 与四个阶段 Prompt Version；Foundation、Skeleton、每个 Main Beat Detail 和 Finalize 子 Run 统一使用主 Run ID 作为 `scope_id`。
+- `GenerateNovelOutlineJob` 只创建或恢复主批次并派发最早缺失阶段；新增 Foundation、Skeleton、单 Beat Detail 与 Finalize Job，全部沿用 `generation` 队列。
+- Foundation、Skeleton、Beat Detail 分别保存 `outline_foundation`、`outline_skeleton`、`outline_beat_detail` 不可变 Artifact。Finalize 不调用 Provider，只校验同小说同批次 Artifact ID/Checksum、合并稳定 Key、执行完整 Outline 校验，并在事务内创建最终 `outline_blueprint` 与 Draft 关系化版本。
+- Provider Schema 不接受数据库 ID；Candidate 的数据库重复项数组由 Laravel 在 Finalize 时初始化为空。Apply 会在任何 Bible、人物、世界、伏笔、运行态 Volume/Arc 写入前重新验证完整上游来源链。
+- Outline 局部重新生成改为只向 Provider 发送目标节点、父级与相邻节点上下文，并只接收目标 `node` 片段；Laravel 固定根 Key/Sequence、替换 DTO 片段、执行完整全树校验后再创建 Revision Version。
+- 暂停状态拒绝创建新阶段；恢复时从最早缺失 Artifact 继续。Provider 返回后但 Artifact 持久化失败会把当前子 Run 标记为 `outline_stage_result_uncertain`，已成功阶段保持可复用。
+- 新增 PostgreSQL Artifact Type CHECK Migration；Stalled Run 扫描排除只负责协调的主批次 Run。
+
+Validation
+
+- `php artisan test tests/Feature/NovelPlanningBootstrapTest.php tests/Feature/OpenAiStructuredOutputSchemaTest.php`：21 tests，21 passed，192 assertions。
+- 受影响 Outline、恢复和 Filament 回归：53 tests，52 passed，1 skipped，248 assertions，0 failures，2 warnings。
+- `php artisan test`：1007 tests，985 passed，22 skipped，5866 assertions，0 failures，3 warnings。
+- `vendor/bin/pint --dirty`：通过并完成格式化。
+- `git diff --check`：通过。
+
+Known Limitations
+
+- 未执行真实 Provider 调用；Provider 请求次数、路由冻结、失败分流和严格 Schema 由 Fake Provider Feature Tests 验证。
+- Milestone/Beat 的 Canonical Completion Event 与进度投影仍属于 NGC-003～NGC-005。
+
+Next Task
+
+- NGC-003：Canonical Milestone Progress。
 
 ## NGC-003 — Canonical Milestone Progress
 

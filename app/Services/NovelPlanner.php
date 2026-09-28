@@ -15,10 +15,8 @@ use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
-use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Models\GenerationArtifact;
-use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelOutline;
 use Illuminate\Support\Facades\Validator;
@@ -30,9 +28,11 @@ class NovelPlanner
     // Prompt 版本参与 input_hash；修改提示词时必须升级版本，避免复用旧语义产物。
     public const PROMPT_VERSION = 'novel-planner-v7';
 
-    public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v2';
+    public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v3';
 
     public const MAX_COMPLETION_TOKENS = 24_000;
+
+    public const REGENERATION_MAX_TOKENS = 8_000;
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -41,129 +41,13 @@ class NovelPlanner
         private readonly NovelOutlineChecksum $outlineChecksum,
         private readonly CreateNovelOutlineVersionAction $createOutlineVersion,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly NovelOutlinePipeline $outlinePipeline,
     ) {}
 
     public function generate(Novel $novel, int $volumeCount = 5): GenerationArtifact
     {
-        $novel->refresh();
-
-        // 初始蓝图只能在正文生成前创建，防止覆盖已经进入正式生命周期的规划。
-        if (! in_array($novel->status, [NovelStatus::Draft, NovelStatus::Planning], true)) {
-            throw new AiProviderException('novel_planning_unavailable', '只有草稿或规划中的小说可以生成初始规划。', false);
-        }
-
-        // 此处解析并冻结实际供应商与模型，后续后台配置变化不会污染历史 Run 的可追溯性。
-        $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
-        $context = [
-            'novel' => $novel->only(['id', 'title', 'genre', 'premise', 'target_words']),
-            'generation_preferences' => [
-                'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
-                'max_completion_tokens' => self::MAX_COMPLETION_TOKENS,
-                'reasoning_effort' => $settings->reasoningEffort,
-            ],
-            'requested_volume_count' => $volumeCount,
-            'outline_contract' => [
-                'volume_keys' => collect(range(1, $volumeCount))->map(fn (int $sequence): string => sprintf('vol-%02d', $sequence))->all(),
-                'all_volumes_are_narrative' => true,
-                'forbid_meta_or_placeholder_volumes' => true,
-            ],
-        ];
-        // 相同输入、模型和 Prompt 版本产生相同哈希，用于复用已经成功的昂贵调用。
-        $inputHash = hash('sha256', json_encode([
-            'context' => $context,
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'prompt_version' => self::PROMPT_VERSION,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-
-        // 全书规划沿用 ChapterPlanning 阶段枚举，通过 novel scope 与空 chapter_id 区分单章规划。
-        $reusable = GenerationRun::query()
-            ->where('novel_id', $novel->getKey())
-            ->whereNull('chapter_id')
-            ->where('scope_type', 'novel')
-            ->where('stage', GenerationStage::ChapterPlanning)
-            ->where('input_hash', $inputHash)
-            ->where('status', RunStatus::Succeeded)
-            ->latest('id')
-            ->first();
-
-        $artifact = $reusable?->artifacts()->where('type', ArtifactType::OutlineBlueprint)->first();
-
-        if ($artifact instanceof GenerationArtifact) {
-            // Artifact 是可重放的完整蓝图；即使 Draft 被清理，也可据此恢复而不重复付费。
-            $this->ensureDraftOutline($novel, $artifact);
-
-            return $artifact;
-        }
-
-        $attempt = ((int) GenerationRun::query()
-            ->where('novel_id', $novel->getKey())
-            ->whereNull('chapter_id')
-            ->where('scope_type', 'novel')
-            ->where('stage', GenerationStage::ChapterPlanning)
-            ->max('attempt')) + 1;
-
-        // 先持久化 Running 状态，再调用外部 Provider，确保超时和异常都有业务追踪记录。
-        $run = GenerationRun::query()->create([
-            'novel_id' => $novel->getKey(),
-            'scope_type' => 'novel',
-            'scope_id' => $novel->getKey(),
-            'stage' => GenerationStage::ChapterPlanning,
-            'status' => RunStatus::Running,
-            'attempt' => $attempt,
-            'idempotency_key' => "novel-plan:{$novel->getKey()}:{$inputHash}:{$attempt}",
-            'input_hash' => $inputHash,
-            'prompt_version' => self::PROMPT_VERSION,
-            'provider' => $settings->provider,
-            'model_policy' => $settings->model,
-            'context_snapshot' => $context,
-            'started_at' => now(),
-        ]);
-
-        try {
-            // Provider 只负责完成认知任务；结构、流程和是否采用仍由 Laravel 决定。
-            $response = $this->provider->generate(new AiRequest(
-                model: $settings->model,
-                provider: $settings->provider,
-                reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 小说规划器。只返回符合 Schema 的 JSON。生成连贯的中文长篇小说蓝图；除固定 JSON 字段、枚举值和稳定 key 外，所有自然语言内容必须使用简体中文。bible.style_profile 必须使用 Schema 规定的稳定 code 和完整六项参数。Outline 必须按 Volume → Arc → Beat → Milestone 嵌套：Volume key 只能是 vol-01、vol-02 这类两位顺序键，Arc key 只能是 arc-01 这类键，Beat key 只能是 beat-01 这类键。所有节点 key 在同类节点内唯一，sequence 在同级数组内从 1 连续。每一个 Volume 都必须是实际叙事分卷，禁止用元数据节点凑数。Main Arc/Beat 必须给出连续的 mainline_sequence；每个 Main Beat 至少一个 Milestone，并通过 Handoff 精确指向下一个 Main Beat，最后一个 Main Beat 的 next_beat_key 必须为 null。Subplot 的 mainline_sequence 必须为 null，Milestone 必须为空且不能设置 Handoff 目标。未来才登场的人物或世界实体只放入对应 Beat Candidate，不能混入初始人物或世界资料。'.NarrativeProsePolicy::planning(),
-                prompt: '请根据以下小说信息生成初始小说圣经、初始角色、初始世界实体、全书 Outline 和伏笔候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: 0.5,
-                maxTokens: self::MAX_COMPLETION_TOKENS,
-                responseSchema: $this->schema($volumeCount),
-                promptVersion: self::PROMPT_VERSION,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $novel->getKey(),
-                    'stage' => AiStage::Planner->value,
-                ],
-            ));
-
-            // Provider 输出属于不可信输入：先解析严格 JSON，再执行 Laravel 业务校验。
-            $blueprint = $this->validate(
-                StructuredOutput::require($response, 'novel_plan', '小说规划'),
-                $volumeCount,
-            );
-            // 先冻结完整 Blueprint Artifact，再从其中派生可供用户确认的 Draft Outline。
-            $artifact = $run->artifacts()->create([
-                'type' => ArtifactType::OutlineBlueprint,
-                'version' => 1,
-                'content' => $response->content,
-                'data' => $blueprint,
-                'checksum' => hash('sha256', json_encode($blueprint, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
-            ]);
-            $this->ensureDraftOutline($novel, $artifact);
-            $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
-            $novel->update(['status' => NovelStatus::Planning]);
-
-            return $artifact;
-        } catch (Throwable $exception) {
-            // 失败 Run 也必须落库；它不会被成功结果复用查询命中。
-            $this->failurePolicy->record($run, $exception, 'novel_planning_failed');
-
-            throw $exception;
-        }
+        // 保留同步入口供测试和命令调用；内部仍严格按 Foundation、Skeleton、单 Beat Detail、Finalize 分段。
+        return $this->outlinePipeline->runSynchronously($novel, $volumeCount);
     }
 
     public function regenerateNode(
@@ -187,11 +71,12 @@ class NovelPlanner
             throw new AiProviderException('outline_regeneration_target_invalid', '必须选择有效节点并填写局部修改要求。', false);
         }
         // 修订必须继承同一小说的完整 Blueprint，避免丢失 Bible、人物、世界资料和伏笔来源。
-        if ($sourceArtifact->generationRun()->where('novel_id', $novel->getKey())->where('scope_type', 'novel')->doesntExist()
+        if ($sourceArtifact->generationRun()->where('novel_id', $novel->getKey())->where('scope_type', NovelOutlinePipeline::FINALIZE_SCOPE)->doesntExist()
             || ! is_array(data_get($sourceArtifact->data, 'bible'))) {
             throw new AiProviderException('outline_regeneration_source_invalid', '局部重新生成缺少可追踪的初始 Blueprint Artifact。', false);
         }
 
+        $target = $this->regenerationTarget($outlineData, $nodeKey);
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         $context = [
             'novel_id' => $novel->getKey(),
@@ -199,8 +84,13 @@ class NovelPlanner
             'base_outline_id' => $outline->getKey(),
             'base_outline_checksum' => $outline->checksum,
             'target_node_key' => $nodeKey,
+            'target_node_type' => $target['type'],
             'instruction' => $instruction,
-            'outline' => $outlineData,
+            'outline_contract' => collect($outlineData)->only(['title', 'summary', 'must_include', 'must_not_include'])->all(),
+            'target_node' => $target['node'],
+            'parent_context' => $target['parent'],
+            'previous_sibling' => $target['previous'],
+            'next_sibling' => $target['next'],
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
@@ -223,21 +113,21 @@ class NovelPlanner
             'prompt_version' => self::REGENERATION_PROMPT_VERSION,
             'provider' => $settings->provider,
             'model_policy' => $settings->model,
-            'context_snapshot' => collect($context)->except('outline')->all(),
+            'context_snapshot' => $context,
             'started_at' => now(),
         ]);
 
         try {
-            // 为便于结构校验和差异检查，局部修订仍要求模型返回完整 Outline。
+            // Provider 只返回目标片段；Laravel 负责替换、全树校验和新版本持久化。
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的完整 Outline JSON。仅允许修改 target_node_key 对应节点及其后代；节点外的字段、顺序、key 和语义必须保持不变。不得把 Candidate 写入正式人物或世界资料。'.NarrativeProsePolicy::planning(),
+                systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的目标 node 片段，不得返回完整 Outline。目标根节点的稳定 key 和顺序字段必须保持不变；可以按用户要求修改该节点内容及其后代。不得返回任何数据库 ID。'.NarrativeProsePolicy::planning(),
                 prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
-                maxTokens: self::MAX_COMPLETION_TOKENS,
-                responseSchema: $this->outlineSchema(),
+                maxTokens: self::REGENERATION_MAX_TOKENS,
+                responseSchema: $this->regenerationSchema($target['type']),
                 promptVersion: self::REGENERATION_PROMPT_VERSION,
                 metadata: [
                     'generation_run_id' => $run->getKey(),
@@ -246,7 +136,21 @@ class NovelPlanner
                     'stage' => AiStage::Planner->value,
                 ],
             ));
-            $revised = StructuredOutput::require($response, 'outline_node_regeneration', '大纲局部修订');
+            $structured = StructuredOutput::require($response, 'outline_node_regeneration', '大纲局部修订');
+            $this->assertStrictFragmentShape($structured, $this->regenerationSchema($target['type']));
+            $fragment = $structured['node'] ?? null;
+            if (! is_array($fragment) || ($fragment['key'] ?? null) !== $nodeKey) {
+                throw new AiProviderException('outline_regeneration_target_mismatch', '局部重新生成返回了非目标节点。', false);
+            }
+            $this->assertProviderReturnedNoDatabaseIds($fragment);
+            $fragment['sequence'] = $target['node']['sequence'];
+            if (array_key_exists('mainline_sequence', $target['node'])) {
+                $fragment['mainline_sequence'] = $target['node']['mainline_sequence'];
+            }
+            $fragment = $this->initializeCandidateDuplicateIds($fragment);
+            $revised = $outlineData;
+            $this->replaceNode($revised, $nodeKey, $fragment);
+            $revised = $this->normalizeOutlineSequences($revised);
             $this->outlineValidator->assertValid($revised);
             // Prompt 约束不能作为安全边界，服务端再次确认模型没有修改目标节点之外的内容。
             $this->assertOnlyTargetChanged($outlineData, $revised, $nodeKey);
@@ -282,6 +186,190 @@ class NovelPlanner
 
             throw $exception;
         }
+    }
+
+    /** 返回只允许目标节点片段的严格 Schema，并移除所有数据库 ID 字段。 */
+    public function regenerationSchema(string $type): array
+    {
+        $outline = $this->outlineSchema();
+        $volume = data_get($outline, 'properties.volumes.items');
+        $arc = data_get($volume, 'properties.arcs.items');
+        $beat = data_get($arc, 'properties.beats.items');
+        $milestone = data_get($beat, 'properties.milestones.items');
+        $node = match ($type) {
+            'volume' => $volume,
+            'arc' => $arc,
+            'beat' => $beat,
+            'milestone' => $milestone,
+            default => throw new \InvalidArgumentException("Unknown Outline node type [{$type}]."),
+        };
+
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['node'],
+            'properties' => ['node' => $this->withoutDatabaseIds($node)],
+        ];
+    }
+
+    /** 定位目标节点，并提取足够但有界的父级与相邻节点上下文。 */
+    private function regenerationTarget(array $outline, string $targetKey): array
+    {
+        foreach ($outline['volumes'] ?? [] as $volumeIndex => $volume) {
+            if (($volume['key'] ?? null) === $targetKey) {
+                return $this->targetContext('volume', $volume, $outline, $outline['volumes'], $volumeIndex, 'volumes');
+            }
+            foreach ($volume['arcs'] ?? [] as $arcIndex => $arc) {
+                if (($arc['key'] ?? null) === $targetKey) {
+                    return $this->targetContext('arc', $arc, $volume, $volume['arcs'], $arcIndex, 'arcs');
+                }
+                foreach ($arc['beats'] ?? [] as $beatIndex => $beat) {
+                    if (($beat['key'] ?? null) === $targetKey) {
+                        return $this->targetContext('beat', $beat, $arc, $arc['beats'], $beatIndex, 'beats');
+                    }
+                    foreach ($beat['milestones'] ?? [] as $milestoneIndex => $milestone) {
+                        if (($milestone['key'] ?? null) === $targetKey) {
+                            return $this->targetContext('milestone', $milestone, $beat, $beat['milestones'], $milestoneIndex, 'milestones');
+                        }
+                    }
+                }
+            }
+        }
+
+        throw new AiProviderException('outline_regeneration_target_invalid', '找不到局部重新生成目标。', false);
+    }
+
+    /** 构造一个目标节点的局部上下文，避免把整棵 Outline 往返 Provider。 */
+    private function targetContext(string $type, array $node, array $parent, array $siblings, int $index, string $childrenKey): array
+    {
+        $summary = fn (?array $item): ?array => $item === null ? null : collect($item)
+            ->only(['key', 'title', 'summary', 'goal', 'objective', 'type', 'sequence', 'mainline_sequence'])
+            ->all();
+
+        return [
+            'type' => $type,
+            'node' => $node,
+            'parent' => collect($parent)->except($childrenKey)->all(),
+            'previous' => $summary($siblings[$index - 1] ?? null),
+            'next' => $summary($siblings[$index + 1] ?? null),
+        ];
+    }
+
+    /** 按稳定 Key 只替换目标片段，节点外内容保持原样。 */
+    private function replaceNode(array &$outline, string $targetKey, array $replacement): void
+    {
+        foreach ($outline['volumes'] as &$volume) {
+            if (($volume['key'] ?? null) === $targetKey) {
+                $volume = $replacement;
+
+                return;
+            }
+            foreach ($volume['arcs'] as &$arc) {
+                if (($arc['key'] ?? null) === $targetKey) {
+                    $arc = $replacement;
+
+                    return;
+                }
+                foreach ($arc['beats'] as &$beat) {
+                    if (($beat['key'] ?? null) === $targetKey) {
+                        $beat = $replacement;
+
+                        return;
+                    }
+                    foreach ($beat['milestones'] as &$milestone) {
+                        if (($milestone['key'] ?? null) === $targetKey) {
+                            $milestone = $replacement;
+
+                            return;
+                        }
+                    }
+                    unset($milestone);
+                }
+                unset($beat);
+            }
+            unset($arc);
+        }
+        unset($volume);
+
+        throw new AiProviderException('outline_regeneration_target_invalid', '局部重新生成目标在替换前已失效。', false);
+    }
+
+    /** 递归删除 Provider 不应生成的数据库 ID Schema 字段。 */
+    private function withoutDatabaseIds(array $schema): array
+    {
+        if (($schema['type'] ?? null) === 'object') {
+            foreach (array_keys($schema['properties'] ?? []) as $key) {
+                if ($key === 'id' || str_ends_with($key, '_id') || str_ends_with($key, '_ids')) {
+                    unset($schema['properties'][$key]);
+                    $schema['required'] = array_values(array_filter($schema['required'], fn (string $required): bool => $required !== $key));
+                }
+            }
+        }
+        foreach ($schema as $key => $value) {
+            if (is_array($value)) {
+                $schema[$key] = $this->withoutDatabaseIds($value);
+            }
+        }
+
+        return $schema;
+    }
+
+    /** 拒绝 Fake、兼容 Provider 或恶意输出绕过 Schema 返回数据库 ID。 */
+    private function assertProviderReturnedNoDatabaseIds(array $node): void
+    {
+        foreach ($node as $key => $value) {
+            if (is_string($key) && ($key === 'id' || str_ends_with($key, '_id') || str_ends_with($key, '_ids'))) {
+                throw new AiProviderException('outline_regeneration_database_id_forbidden', '局部重新生成不得返回数据库 ID。', false);
+            }
+            if (is_array($value)) {
+                $this->assertProviderReturnedNoDatabaseIds($value);
+            }
+        }
+    }
+
+    /** 本地复核 required/property 对齐，不能只信任 Provider 的 strict mode。 */
+    private function assertStrictFragmentShape(mixed $value, array $schema, string $path = '$'): void
+    {
+        if (($schema['type'] ?? null) === 'object' && is_array($value)) {
+            $properties = $schema['properties'] ?? [];
+            if (array_diff(array_keys($value), array_keys($properties)) !== []
+                || array_diff($schema['required'] ?? [], array_keys($value)) !== []) {
+                throw new AiProviderException('outline_regeneration_schema_invalid', "局部重新生成 {$path} 字段与 Schema 不一致。", false);
+            }
+            foreach ($properties as $key => $child) {
+                $this->assertStrictFragmentShape($value[$key], $child, $path.'.'.$key);
+            }
+
+            return;
+        }
+        if (($schema['type'] ?? null) === 'array' && is_array($value) && is_array($schema['items'] ?? null)) {
+            foreach ($value as $index => $item) {
+                $this->assertStrictFragmentShape($item, $schema['items'], $path.'.'.$index);
+            }
+        }
+    }
+
+    /** Candidate 的重复对象 ID 由 Laravel 管理，Provider 片段只能初始化为空。 */
+    private function initializeCandidateDuplicateIds(array $node): array
+    {
+        foreach ($node as $key => &$value) {
+            if ($key === 'character_candidates' && is_array($value)) {
+                foreach ($value as &$candidate) {
+                    $candidate['possible_duplicate_character_ids'] = [];
+                }
+                unset($candidate);
+            } elseif ($key === 'world_entity_candidates' && is_array($value)) {
+                foreach ($value as &$candidate) {
+                    $candidate['possible_duplicate_entity_ids'] = [];
+                }
+                unset($candidate);
+            } elseif (is_array($value)) {
+                $value = $this->initializeCandidateDuplicateIds($value);
+            }
+        }
+        unset($value);
+
+        return $node;
     }
 
     /** @param array<string, mixed> $content @return array<int, string> */

@@ -8,6 +8,7 @@ use App\Services\ChapterPlanPayload;
 use App\Services\ChapterReviewer;
 use App\Services\ChapterRewriteLengthRepairer;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
+use App\Services\NovelOutlinePipeline;
 use App\Services\NovelPlanner;
 use App\Services\PlanCoverage;
 use App\Services\ReviewDimensionAuditRepairer;
@@ -33,8 +34,13 @@ test('every ai response schema used by the generation pipeline satisfies openai 
         'plan_coverage_repair' => PlanCoverage::schema(),
         'foreshadowing_coverage_repair' => ForeshadowingCoverageEvidenceRepairer::responseSchema(),
         'story_event_evidence_repair' => StoryEventEvidenceRepairer::responseSchema(2),
-        'novel_plan' => $invoke(NovelPlanner::class, 'schema', [1]),
-        'outline_regeneration' => app(NovelPlanner::class)->outlineSchema(1),
+        'outline_foundation' => app(NovelOutlinePipeline::class)->foundationSchema(),
+        'outline_skeleton' => app(NovelOutlinePipeline::class)->skeletonSchema(1),
+        'outline_beat_detail' => app(NovelOutlinePipeline::class)->beatDetailSchema(),
+        'outline_regeneration_volume' => app(NovelPlanner::class)->regenerationSchema('volume'),
+        'outline_regeneration_arc' => app(NovelPlanner::class)->regenerationSchema('arc'),
+        'outline_regeneration_beat' => app(NovelPlanner::class)->regenerationSchema('beat'),
+        'outline_regeneration_milestone' => app(NovelPlanner::class)->regenerationSchema('milestone'),
         'chapter_review' => $invoke(ChapterReviewer::class, 'schema'),
         'canonical_summary' => $invoke(CanonicalChapterSummaryService::class, 'schema'),
         'scene_structure_repair' => $invoke(SceneDraftStructureRepairer::class, 'schema'),

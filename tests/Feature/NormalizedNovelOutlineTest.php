@@ -3,6 +3,7 @@
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Enums\ArtifactType;
 use App\Enums\NovelOutlineSource;
+use App\Enums\RunStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
@@ -11,6 +12,7 @@ use App\Models\Novel;
 use App\Models\StoryEvent;
 use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlineChecksum;
+use App\Services\NovelOutlinePipeline;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -128,10 +130,19 @@ test('rejects sequence gaps missing milestones and handoff jumps before persiste
 
 test('reuses the outline created by the same final artifact', function () {
     $novel = Novel::factory()->create();
-    $run = GenerationRun::factory()->for($novel)->create();
+    $batch = GenerationRun::factory()->for($novel)->create([
+        'scope_type' => NovelOutlinePipeline::BATCH_SCOPE,
+        'scope_id' => $novel->getKey(),
+        'status' => RunStatus::Running,
+    ]);
+    $run = GenerationRun::factory()->for($novel)->create([
+        'scope_type' => NovelOutlinePipeline::FINALIZE_SCOPE,
+        'scope_id' => $batch->getKey(),
+        'status' => RunStatus::Succeeded,
+    ]);
     $artifact = GenerationArtifact::factory()->for($run)->create([
         'type' => ArtifactType::OutlineBlueprint,
-        'data' => ['outline' => normalizedOutlineFixture()],
+        'data' => ['outline' => normalizedOutlineFixture(), 'lineage' => ['batch_run_id' => $batch->getKey()]],
     ]);
     $action = app(CreateNormalizedNovelOutlineVersionAction::class);
 

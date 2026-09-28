@@ -35,6 +35,8 @@ class StalledRunRecoveryService
     {
         return GenerationRun::query()
             ->where('status', RunStatus::Running)
+            // 主批次是协调记录而非正在占用 Worker 的 Provider Run，不能按 Worker 心跳判停滞。
+            ->where('scope_type', '!=', NovelOutlinePipeline::BATCH_SCOPE)
             ->whereIn('stage', self::RECOVERABLE_STAGES)
             ->where('updated_at', '<=', $this->runLease->cutoff())
             ->update([
