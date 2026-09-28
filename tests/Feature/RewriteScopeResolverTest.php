@@ -80,7 +80,7 @@ test('paragraph evidence is mapped only when exactly one current scene contains 
         ->and($decision->sceneId)->toBe($target->getKey());
 });
 
-test('findings in multiple scenes select chapter rewrite', function () {
+test('findings in multiple scenes select the earliest affected scene', function () {
     $chapter = Chapter::factory()->for(Novel::factory())->create();
     $first = scopeScene($chapter, 1, '第一场景。');
     $second = scopeScene($chapter, 2, '第二场景。');
@@ -90,12 +90,12 @@ test('findings in multiple scenes select chapter rewrite', function () {
         scopeFinding('scene', $second->getKey()),
     ]);
 
-    expect($decision->scope)->toBe('chapter')
-        ->and($decision->sceneId)->toBeNull()
-        ->and($decision->reason)->toBe('multiple_scenes_affected');
+    expect($decision->scope)->toBe('scene')
+        ->and($decision->sceneId)->toBe($first->getKey())
+        ->and($decision->reason)->toBe('earliest_affected_scene');
 });
 
-test('chapter pacing finding selects chapter rewrite', function () {
+test('chapter structural finding requires plan or scene rebuild', function () {
     $chapter = Chapter::factory()->for(Novel::factory())->create();
 
     $decision = app(RewriteScopeResolver::class)->resolve(
@@ -103,9 +103,10 @@ test('chapter pacing finding selects chapter rewrite', function () {
         [scopeFinding('chapter', null, '全章节奏失衡')],
     );
 
-    expect($decision->scope)->toBe('chapter')
+    expect($decision->scope)->toBe('unresolved')
         ->and($decision->sceneId)->toBeNull()
-        ->and($decision->reason)->toBe('chapter_finding_present');
+        ->and($decision->reason)->toBe('plan_or_scene_rebuild_required')
+        ->and($decision->isResolved())->toBeFalse();
 });
 
 test('ambiguous paragraph evidence does not select an arbitrary scene', function () {

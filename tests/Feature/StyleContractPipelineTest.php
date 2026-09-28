@@ -125,8 +125,8 @@ test('deterministic assembly avoids style prompting while review and rewrite kee
             'code' => 'STYLE_MISMATCH',
             'dimension' => 'style',
             'severity' => 'error',
-            'scene_id' => null,
-            'scope' => 'chapter',
+            'scene_id' => $chapter->scenes()->orderBy('sequence')->value('id'),
+            'scope' => 'scene',
             'auto_fixable' => true,
             'requires_human_decision' => false,
             'message' => '动作力度不足，未达到主文风要求。',
@@ -134,19 +134,12 @@ test('deterministic assembly avoids style prompting while review and rewrite kee
         ]],
     ];
     $assembledContent = "甲乙丙丁\n\n戊己庚辛";
-    $rewriteContent = '修订后的章节正文';
-    $rewriteFulfilled = ['status' => 'fulfilled', 'evidence' => $rewriteContent];
+    $rewriteContent = '修订正文';
     $rewritePayload = [
         'content' => $rewriteContent,
-        'scene_coverage' => $chapter->scenes()->orderBy('sequence')->get()->map(fn (Scene $scene): array => [
-            'scene_id' => $scene->getKey(),
-            'goal' => $rewriteFulfilled,
-            'conflict' => $rewriteFulfilled,
-            'turn' => $rewriteFulfilled,
-            'outcome' => $rewriteFulfilled,
-            'foreshadowing_coverage' => [],
-        ])->all(),
-        'introduced_major_facts' => [],
+        'self_check' => collect(['goal', 'conflict', 'turn', 'outcome'])
+            ->mapWithKeys(fn (string $key): array => [$key => ['status' => 'fulfilled', 'evidence' => $rewriteContent]])
+            ->all(),
     ];
     $fake = (new FakeAiProvider)
         ->enqueue(new AiResponse(json_encode($reviewPayload), $reviewPayload, 10, 10, 0, 10, 'review', 'test'))

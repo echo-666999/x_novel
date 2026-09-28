@@ -42,7 +42,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly ReviewDimensionAuditRepairer $dimensionAuditRepairer, private readonly PlanCoverageJudgmentRepairer $coverageJudgmentRepairer, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly ArcCompletionAuditRepairer $arcCompletionAuditRepairer, private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -99,14 +99,30 @@ class ChapterReviewer
         if ($context['chapter_plan'] === null || $context['state_version'] === null) {
             throw new AiProviderException('review_context_incomplete', 'Narrative Review 缺少 Chapter Plan 或 Story State。', false);
         }
+        $this->assertDeterministicDraftContract($chapter, $draft, (int) $context['state_version']);
+
+        $deterministicFindings = [
+            ...array_map(fn (array $finding): array => $this->normalizeStateFinding($finding), $context['state_findings']),
+            ...($lengthCheck['status'] === 'within_range' ? [] : [$this->lengthFinding($lengthCheck)]),
+            ...$planFindings,
+        ];
+        $deterministicErrors = collect($deterministicFindings)->filter(fn (array $finding): bool => in_array($finding['severity'] ?? null, ['error', 'hard', 'ambiguous'], true))->values()->all();
+        if ($deterministicErrors !== []) {
+            $review = $this->completeDeterministicReview($chapter, $draft, $context, $deterministicErrors, $stateValidation->isBlocked());
+            $this->autoStop->stopForReview($chapter, $review->decision, $stateValidation->isBlocked());
+
+            return $review;
+        }
 
         $settings = $this->settingsResolver->resolve(AiStage::Reviewer, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Reviewer);
         $context['prompt_version'] = $promptVersion;
         $context['generation_preferences']['review_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.review_max_output_tokens', 12_000),
-            'retry_max_completion_tokens' => (int) config('generation.review_retry_max_output_tokens', 16_000),
-            'final_retry_max_completion_tokens' => (int) config('generation.review_final_retry_max_output_tokens', 24_000),
+            'max_legal_output_tokens' => min(
+                (int) config('generation.review_max_output_tokens', 12_000),
+                (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.max_output_tokens', config('generation.review_max_output_tokens', 12_000)),
+            ),
+            'context_token_budget' => (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.context_token_budget', config('generation.review_context_token_budget', 32_000)),
         ];
         $reviewOperationId = $regenerate ? $operationId : null;
         $input = [
@@ -127,39 +143,27 @@ class ChapterReviewer
 
         try {
             $maxTokens = $this->resolveRequestBudget($run, $baseKey);
-            [$planFindings, $coverageRepairs] = $this->repairCoverageJudgments(
-                $run,
-                $chapter,
-                $draft,
-                $planFindings,
-                $settings->model,
-                $settings->reasoningEffort,
-            );
-            $context['plan_findings'] = $planFindings;
-            $context['coverage_repairs'] = $coverageRepairs;
-            $run->update(['context_snapshot' => [
-                ...($run->context_snapshot ?? []),
-                'plan_findings' => $planFindings,
-                'coverage_repairs' => $coverageRepairs,
-            ]]);
+            $this->assertReviewCapacity($context, $maxTokens);
 
             $response = $this->provider->generate(new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 叙事审校器。必须先完整阅读全部正文、Chapter Plan、上一章结尾、Style Contract 和 foreshadowing_contract。必须独立返回 chapter_plan_completion、milestone_completion、beat_exit、handoff_readiness：按 outline_completion_contract 中冻结条件的原顺序逐项返回，不得返回或猜测数据库 ID；fulfilled/contradicted 必须引用当前正文逐字证据并绑定所属数据库 Scene ID，not_met 的 evidence 必须为 null。Chapter Plan 完成不等于 Milestone 完成，Milestone 完成也不等于 Beat 完成；流程跃迁由 Laravel 根据历史 Canonical Milestone Event 与本章证据决定。必须按 Chapter Plan 顺序完整返回 arc_beat_audits、arc_completion_audits、character_candidate_audits 和 world_entity_candidate_audits：只有正文逐字证据满足 acceptance_criteria 才能把 Arc Beat Contribution 标记 fulfilled；只有正文真实引入批准候选才标记 introduced。arc_completion_audits 必须严格逐项复制 arc_completion_contract 中的 arc_id，数量和顺序完全一致；即使本章没有完成整个 Arc 也不能省略，而应返回 not_met 且 evidence=null。只有正文已满足对应 completion_conditions 时才标记 fulfilled。所有完成、引入或冲突结果必须引用正文逐字证据，missing/not_met 的 evidence 必须为 null。arc_beat_audits、character_candidate_audits 和 world_entity_candidate_audits 即使 status=missing，scene_id 仍必须复制 Chapter Plan 中 target_scene_sequence 对应的数据库 Scene ID，不得返回 null 或章内 sequence。unapproved_characters 与 unapproved_world_entities 只报告正文新引入、会持续影响后续故事且未获计划批准的人物或重大世界实体。existing_characters、existing_world_entities、previous_chapter_ending 已存在的内容，以及 Chapter Plan 的场景地点、目标、冲突、转折、结果和允许行为均视为已知或已批准；普通窗口、走廊、查阅区、训练位、报告、凭据、记录、清单和练习道具不是重大世界实体，不得报告。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须在 foreshadowing_audits 中按契约顺序逐项审校全部 actions，同时对照 promised_payoff、plan_action、Scene/Assembly Coverage、event_candidate 和正文逐字证据。必须按动作语义区分 plant、reinforce、pay_off：仅提及关键词不能证明完成强化或兑现，pay_off 必须真正满足 promised_payoff 及 acceptance_criteria。正文可在不改变契约时修复，返回 rewrite_required；若只能通过延期、放弃、改变兑现窗口或 promised_payoff 才能解决，返回 needs_attention；不得建议 Rewrite 自行改变这些 Canonical 约束。fulfilled 必须有 Coverage 和匹配 Event Candidate 支持。检查正文是否主动处理未列入 actions 的未来伏笔。promised_payoff 是作者侧验收信息，不表示非 pay_off 动作可以完整揭晓。随后对 continuity、plan、character、progress、repetition、pacing、style 七个维度逐项完成全量检查；不得发现一个问题后提前停止，也不得把同一根因拆成多轮零散报告。dimension_audits 必须逐项声明 pass 或 issues_found，并用简短中文说明检查结论；issues_found 必须一次列出该维度当前所有有明确证据的新 Narrative Finding，pass 表示该维度没有需要新增的 Narrative Finding。dimension_audits 只对应本次模型输出的 findings；伏笔和规划契约问题由 Laravel 生成 Finding，不得在 findings 重复报告；state_findings、plan_findings 和 length_check 已由 Laravel 独立处理，不得重复计入。严格按照七个维度对草稿进行 0 到 100 分评分，并返回符合 Schema 的 JSON。连续性审校必须对照 previous_chapter_ending 检查本章开头，并检查正文内部的时间、地点、人物状态、物品位置和动作因果；发生跳跃、前后矛盾或空间关系无法成立时，必须给出 continuity finding。计划审校必须逐项核对 chapter_function、reader_promise、must_reveal、must_not_reveal 和每个 Scene 的 goal、conflict、turn、outcome，尤其检查正文动作是否真实满足计划边界，而不是只出现相近措辞。repair_verification 非空时，必须逐项确认上一轮全部可修复问题是否已经消除；仍存在的问题必须再次列入对应审计，已解决的问题不得重复报告，同时仍须完成七维及全部伏笔动作的全量检查。每条 finding 必须使用 Schema 中固定的 code，并确保 code 对应正确 dimension。scope=scene 时 scene_id 必须引用 scenes 中属于本章的 ID；scope=chapter 时 scene_id 必须为 null；scope=paragraph 的 evidence 必须逐字引用草稿短句，能确定所属 Scene 时应同时填写 scene_id。仅当问题可在一个 Scene 内独立修复时使用 scope=scene；涉及两个以上 Scene、上一章结尾与本章开头的连续性、章节整体节奏或全章结构时必须使用 scope=chapter 且 scene_id=null。auto_fixable 只表示正文可在不需要用户选择的情况下修复；requires_human_decision 只用于 Canonical 数据无法确定答案、必须由用户选择的重大歧义，两者不得同时为 true。文风审校必须逐项对照 l4 的主文风、辅助文风和全部可执行参数，并在通读全文后一次列出所有实质性偏差；style finding 的 evidence 必须引用草稿中的具体短句，message 必须说明该证据违反了哪项目标文风。所有 dimension_audits.summary、foreshadowing_audits.summary 以及 finding 的 message 与 evidence 必须使用简体中文；规划验收中的 evidence 必须逐字来自正文。只报告有明确文本证据且实际影响连续性、计划遵循、人物一致性、剧情推进、重复度、节奏或文风的问题；需要修复的问题必须通过 auto_fixable 或 requires_human_decision 明确分流。相同根因和相同修复动作应合并为一个 Finding。每个 evidence 只能返回一段连续逐字原文，不得用分号、换行或省略号拼接相隔的句段。不得把同一问题拆成多个近义 Finding。length_check 由 Laravel 确定性计算，不要重复报告其中的字数问题；state_findings 为空表示确定性检查未发现问题，不得因此产生警告；plan_findings 是上游结构化覆盖证据，不要重复生成相同 Finding；may_hint 是可选提示，未采用不得视为问题；不得用“可以更丰富、可以更深入”等泛化建议凑数。recommended_decision 只是审校证据，最终流程决策由 Laravel 根据结构化 finding、确定性规则和分数作出。'.NarrativeProsePolicy::reviewing(),
+                systemPrompt: '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换，章节功能、Milestone、Handoff、剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。'.NarrativeProsePolicy::reviewing(),
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: $maxTokens, responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
             ));
             $payload = StructuredOutput::require($response, 'review', 'Narrative Review');
-            [$payload, $arcCompletionRepair, $arcCompletionRepairFinding] = $this->repairArcCompletionAudits(
-                $payload,
-                $run,
-                $context,
-                $settings->model,
-                $settings->reasoningEffort,
-            );
+            if (! array_key_exists('recommended_decision', $payload)) {
+                $payload = CompactReviewPayload::expand(
+                    $payload,
+                    $chapter,
+                    $draft,
+                    $context['outline_completion_contract'],
+                    $foreshadowingContract,
+                );
+            }
             $payload = $this->validate(
                 $payload,
                 $chapter,
@@ -171,9 +175,7 @@ class ChapterReviewer
                     || collect($stateValidation->findings)->contains(fn ($finding): bool => $finding->severity->value === 'ambiguous')
                     || $planFindings !== [],
             );
-            $payload['arc_completion_repair'] = $arcCompletionRepair;
-            $payload['schema_repair_findings'] = $arcCompletionRepairFinding === null ? [] : [$arcCompletionRepairFinding];
-            $payload = $this->normalizeDimensionAudits($payload, $run, $context, $chapter, $settings->model, $settings->reasoningEffort);
+            $payload['schema_repair_findings'] = [];
 
             $foreshadowingFindings = $this->foreshadowingReviewAudit->findings($payload['foreshadowing_audits'], $chapter, $foreshadowingContract);
             $review = $this->complete($run, $chapter, $draft, $payload, $context['state_findings'], $planFindings, $foreshadowingFindings, $lengthCheck, $stateValidation->isBlocked(), $context['state_version']);
@@ -189,6 +191,97 @@ class ChapterReviewer
     public function markTerminalFailure(int $chapterId): void
     {
         Chapter::query()->whereKey($chapterId)->update(['status' => ChapterStatus::Blocked]);
+    }
+
+    private function assertDeterministicDraftContract(Chapter $chapter, GenerationArtifact $draft, int $stateVersion): void
+    {
+        if (data_get($draft->data, 'assembly_strategy') !== 'deterministic_v1') {
+            return;
+        }
+
+        if ($draft->generationRun?->state_version !== null && $draft->generationRun->state_version !== $stateVersion) {
+            throw new AiProviderException('review_version_mismatch', 'Chapter Draft 的 Story State Version 已过期。', false);
+        }
+
+        $scenes = $chapter->scenes->sortBy('sequence')->values();
+        $expectedIds = $scenes->modelKeys();
+        $expectedArtifactIds = $scenes->map(fn ($scene): ?int => $scene->current_artifact_id)->all();
+        $expectedChecksums = $scenes->map(fn ($scene): ?string => $scene->currentArtifact?->checksum)->all();
+        if (data_get($draft->data, 'ordered_scene_ids') !== $expectedIds
+            || data_get($draft->data, 'source_artifact_ids') !== $expectedArtifactIds
+            || data_get($draft->data, 'source_checksums') !== $expectedChecksums
+            || hash('sha256', (string) $draft->content) !== $draft->checksum) {
+            throw new AiProviderException('review_lineage_invalid', 'Chapter Draft 与当前 Scene Artifact 的确定性来源链不一致。', false);
+        }
+
+        $coverageIds = collect(data_get($draft->data, 'scene_coverage', []))->pluck('scene_id')->all();
+        if ($coverageIds !== $expectedIds) {
+            throw new AiProviderException('review_coverage_invalid', 'Chapter Draft 的 Scene Coverage 身份或顺序无效。', false);
+        }
+        foreach (data_get($draft->data, 'scene_coverage', []) as $index => $coverage) {
+            $content = (string) $scenes[$index]->currentArtifact?->content;
+            foreach (['goal', 'conflict', 'turn', 'outcome'] as $element) {
+                $status = data_get($coverage, "{$element}.status");
+                $evidence = data_get($coverage, "{$element}.evidence");
+                if (in_array($status, ['fulfilled', 'contradicted'], true)
+                    && (! is_string($evidence) || $evidence === '' || ! str_contains($content, $evidence))) {
+                    throw new AiProviderException('review_coverage_invalid', "Scene Coverage {$element} 的证据不属于当前 Scene Artifact。", false);
+                }
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $context @param array<int, array<string, mixed>> $findings */
+    private function completeDeterministicReview(Chapter $chapter, GenerationArtifact $draft, array $context, array $findings, bool $blocked): Review
+    {
+        return DB::transaction(function () use ($chapter, $draft, $context, $findings, $blocked): Review {
+            $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion', 'scenes.currentArtifact')->findOrFail($chapter->getKey());
+            if ($chapter->novel->canonicalStateVersion?->version !== $context['state_version']) {
+                throw new AiProviderException('state_version_conflict', 'Review 期间 Canonical Story State 已变化。', false);
+            }
+            $hash = hash('sha256', json_encode([$draft->checksum, $context['state_version'], $findings], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+            $key = 'review:deterministic:'.$hash;
+            $existing = GenerationRun::query()->where('idempotency_key', $key)->with('review')->first();
+            if ($existing?->review !== null) {
+                return $existing->review;
+            }
+            [$decision, $basis] = $this->decide($findings, 100, $blocked);
+            $scope = null;
+            $repairAdvice = null;
+            if ($decision === ReviewDecision::Rewrite) {
+                $scopeDecision = $this->rewriteScopeResolver->resolve($chapter, $findings);
+                if ($scopeDecision->isResolved()) {
+                    $scope = $scopeDecision->toArray();
+                } else {
+                    $findings[] = $this->unresolvedRewriteScopeFinding($scopeDecision->reason);
+                    [$decision, $basis] = $this->decide($findings, 100, $blocked);
+                    $repairAdvice = $this->repairAdvice($scopeDecision->reason, $findings);
+                }
+            }
+            $run = GenerationRun::query()->create([
+                'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(),
+                'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded, 'attempt' => (int) $chapter->generationRuns()->where('stage', GenerationStage::Review)->max('attempt') + 1,
+                'idempotency_key' => $key, 'input_hash' => $hash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'],
+                'prompt_version' => 'deterministic-review-preflight-v1', 'provider' => 'deterministic', 'model_policy' => 'deterministic',
+                'context_snapshot' => ['source_artifact_id' => $draft->getKey(), 'semantic_review_performed' => false], 'started_at' => now(), 'finished_at' => now(),
+            ]);
+            $scores = array_fill_keys(self::DIMENSIONS, 100);
+            $data = [
+                'decision' => $decision->value, 'decision_basis' => $basis, 'score' => 100,
+                'scores' => $scores, 'scores_status' => 'not_evaluated', 'semantic_review_performed' => false,
+                'findings' => $findings, 'rewrite_scope' => $scope, 'repair_advice' => $repairAdvice,
+                'source_artifact_id' => $draft->getKey(),
+            ];
+            $encoded = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $version = (int) GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->max('version') + 1;
+            $artifact = $run->artifacts()->create(['type' => ArtifactType::ReviewResult, 'version' => $version, 'content' => $encoded, 'data' => $data, 'checksum' => hash('sha256', $encoded)]);
+            $review = $run->review()->create(['artifact_id' => $artifact->getKey(), 'decision' => $decision, 'score' => 100, ...collect($scores)->mapWithKeys(fn ($value, $key) => ["{$key}_score" => $value])->all(), 'findings' => $findings]);
+            $chapter->update(['status' => match ($decision) {
+                ReviewDecision::Rewrite => ChapterStatus::Rewrite, ReviewDecision::Block => ChapterStatus::Blocked, default => ChapterStatus::Review
+            }]);
+
+            return $review;
+        });
     }
 
     private function latestDraft(Chapter $chapter): GenerationArtifact
@@ -245,53 +338,19 @@ class ChapterReviewer
 
     private function schema(): array
     {
-        $scores = [];
-        $dimensionAudits = [];
-        foreach (self::DIMENSIONS as $dimension) {
-            $scores[$dimension] = ['type' => 'number', 'minimum' => 0, 'maximum' => 100];
-            $dimensionAudits[$dimension] = [
-                'type' => 'object',
-                'additionalProperties' => false,
-                'required' => ['status', 'summary'],
-                'properties' => [
-                    'status' => ['type' => 'string', 'enum' => ['pass', 'issues_found']],
-                    'summary' => ['type' => 'string', 'minLength' => 1],
-                ],
-            ];
-        }
-
-        $planningAuditSchema = PlanningReviewAudit::schema();
-
-        return ['type' => 'object', 'additionalProperties' => false, 'required' => ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', ...array_keys($planningAuditSchema), 'findings'], 'properties' => [
-            'recommended_decision' => ['type' => 'string', 'enum' => array_column(ReviewDecision::cases(), 'value')],
-            'scores' => ['type' => 'object', 'additionalProperties' => false, 'required' => self::DIMENSIONS, 'properties' => $scores],
-            'dimension_audits' => ['type' => 'object', 'additionalProperties' => false, 'required' => self::DIMENSIONS, 'properties' => $dimensionAudits],
-            'foreshadowing_audits' => ForeshadowingReviewAudit::schema(),
-            ...$planningAuditSchema,
-            'findings' => ['type' => 'array', 'items' => ['type' => 'object', 'additionalProperties' => false, 'required' => ['code', 'dimension', 'severity', 'scene_id', 'scope', 'auto_fixable', 'requires_human_decision', 'message', 'evidence'], 'properties' => [
-                'code' => ['type' => 'string', 'enum' => array_keys(self::NARRATIVE_FINDING_CODES)],
-                'dimension' => ['type' => 'string', 'enum' => self::DIMENSIONS],
-                'severity' => ['type' => 'string', 'enum' => ['warning', 'error']],
-                'scene_id' => ['type' => ['integer', 'null']],
-                'scope' => ['type' => 'string', 'enum' => self::FINDING_SCOPES],
-                'auto_fixable' => ['type' => 'boolean'],
-                'requires_human_decision' => ['type' => 'boolean'],
-                'message' => ['type' => 'string', 'minLength' => 1],
-                'evidence' => ['type' => 'string', 'minLength' => 1],
-            ]]],
-        ]];
+        return CompactReviewPayload::schema();
     }
 
     private function validate(array $payload, Chapter $chapter, GenerationArtifact $draft, array $foreshadowingContract, ?array $eventCandidate, bool $hasDeterministicRoute): array
     {
-        if (! $this->hasExactKeys($payload, ['recommended_decision', 'scores', 'dimension_audits', 'foreshadowing_audits', 'chapter_plan_completion', 'milestone_completion', 'beat_exit', 'handoff_readiness', 'arc_beat_audits', 'arc_completion_audits', 'character_candidate_audits', 'world_entity_candidate_audits', 'unapproved_characters', 'unapproved_world_entities', 'findings'])
+        $required = ['scores', 'dimension_audits', 'foreshadowing_audits', 'chapter_plan_completion', 'milestone_completion', 'beat_exit', 'handoff_readiness', 'arc_beat_audits', 'arc_completion_audits', 'character_candidate_audits', 'world_entity_candidate_audits', 'unapproved_characters', 'unapproved_world_entities', 'findings'];
+        if (array_diff($required, array_keys($payload)) !== []
             || ! is_array($payload['scores'])
             || ! $this->hasExactKeys($payload['scores'], self::DIMENSIONS)
             || ! is_array($payload['dimension_audits'])
             || ! $this->hasExactKeys($payload['dimension_audits'], self::DIMENSIONS)
             || ! is_array($payload['foreshadowing_audits'])
-            || ! is_array($payload['findings'])
-            || ! ReviewDecision::tryFrom((string) $payload['recommended_decision'])) {
+            || ! is_array($payload['findings'])) {
             throw ValidationException::withMessages(['review' => 'Narrative Review 返回结构无效。']);
         }
         $payload['foreshadowing_audits'] = $this->foreshadowingReviewAudit->validate(
@@ -392,30 +451,42 @@ class ChapterReviewer
             ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
                 || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
             ->values();
-        $retryOrdinal = $priorTruncatedRuns->count() + 1;
         $budget = (array) data_get($run->context_snapshot, 'generation_preferences.review_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
+        $maxTokens = (int) ($budget['max_legal_output_tokens'] ?? config('generation.review_max_output_tokens', 12_000));
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.review_retry_ordinal', $retryOrdinal);
+        data_set($snapshot, 'generation_preferences.review_retry_ordinal', $priorTruncatedRuns->count() + 1);
         data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
+        if ($priorTruncatedRuns->isNotEmpty()) {
             throw new AiProviderException(
-                'review_output_budget_exhausted',
-                "Narrative Review 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Reviewer 模型后再重试。",
+                'review_capacity_mismatch',
+                "Narrative Review 已在当前 Reviewer Route 的最大合法输出预算 {$maxTokens} Token 下截断；请调整模型、Context 或 Route 容量后重试。",
                 false,
             );
         }
 
+        if ($maxTokens < 1) {
+            throw new AiProviderException('review_capacity_mismatch', 'Reviewer Route 没有合法的输出容量。', false);
+        }
+
         return $maxTokens;
+    }
+
+    /** @param array<string, mixed> $context */
+    private function assertReviewCapacity(array $context, int $maxTokens): void
+    {
+        $contextBudget = (int) data_get($context, 'generation_preferences.review_token_budget.context_token_budget', 0);
+        $serialized = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        // 中文正文通常接近一字一 Token；这里再计入结构化 JSON 的保守余量。
+        $estimatedInputTokens = (int) ceil(mb_strlen($serialized) * 1.15);
+        if ($contextBudget < 1 || $estimatedInputTokens + $maxTokens > $contextBudget) {
+            throw new AiProviderException(
+                'review_capacity_mismatch',
+                "Reviewer Route 容量不足：估算输入 {$estimatedInputTokens} Token，加最大输出 {$maxTokens} Token，超过 Context {$contextBudget} Token。",
+                false,
+            );
+        }
     }
 
     private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $payload, array $stateFindings, array $planFindings, array $foreshadowingFindings, array $lengthCheck, bool $blocked, int $expectedVersion): Review
@@ -427,7 +498,6 @@ class ChapterReviewer
             }
             $scores = $payload['scores'];
             $total = $this->weightedScore($scores);
-            $recommended = ReviewDecision::from($payload['recommended_decision']);
             $lengthFinding = $this->lengthFinding($lengthCheck);
             $planFindings = $this->withoutDuplicateForeshadowingFindings($planFindings, $foreshadowingFindings);
             $findings = [
@@ -439,6 +509,13 @@ class ChapterReviewer
                 ...array_map(fn (array $finding): array => [...$finding, 'source' => 'narrative_review'], $payload['findings']),
                 ...($payload['schema_repair_findings'] ?? []),
             ];
+            $findings = collect($findings)->unique(fn (array $finding): string => hash('sha256', json_encode([
+                $finding['code'] ?? null,
+                $finding['dimension'] ?? null,
+                $finding['scope'] ?? null,
+                $finding['scene_id'] ?? null,
+                $finding['evidence'] ?? null,
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)))->values()->all();
             [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
             $rewriteAttempts = $this->rewriteCounter->countFor($chapter);
             $rewriteExhausted = $decision === ReviewDecision::Rewrite
@@ -459,12 +536,14 @@ class ChapterReviewer
                 [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
             }
             $rewriteScope = null;
+            $repairAdvice = null;
             if ($decision === ReviewDecision::Rewrite) {
                 $scopeDecision = $this->rewriteScopeResolver->resolve($chapter, $findings);
 
                 if (! $scopeDecision->isResolved()) {
                     $findings[] = $this->unresolvedRewriteScopeFinding($scopeDecision->reason);
                     [$decision, $decisionBasis] = $this->decide($findings, $total, $blocked);
+                    $repairAdvice = $this->repairAdvice($scopeDecision->reason, $findings);
                 } else {
                     $rewriteScope = $scopeDecision->toArray();
                 }
@@ -472,13 +551,11 @@ class ChapterReviewer
             $data = [
                 'decision' => $decision->value,
                 'decision_basis' => $decisionBasis,
-                'recommended_decision' => $recommended->value,
                 'score' => $total,
                 'scores' => $scores,
                 'dimension_audits' => $payload['dimension_audits'],
                 'dimension_audits_raw' => $payload['dimension_audits_raw'] ?? $payload['dimension_audits'],
                 'schema_repairs' => $payload['schema_repairs'] ?? [],
-                'coverage_repairs' => data_get($run->context_snapshot, 'coverage_repairs', []),
                 'repair_verification' => $this->repairVerificationOutcome($run, $findings),
                 'foreshadowing_audits' => $payload['foreshadowing_audits'],
                 'chapter_plan_completion' => $payload['chapter_plan_completion'],
@@ -495,6 +572,7 @@ class ChapterReviewer
                 'unapproved_world_entities' => $payload['unapproved_world_entities'],
                 'findings' => $findings,
                 'rewrite_scope' => $rewriteScope,
+                'repair_advice' => $repairAdvice,
                 'source_artifact_id' => $draft->getKey(),
             ];
             $version = GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapter->getKey()))->max('version');
@@ -594,221 +672,6 @@ class ChapterReviewer
     }
 
     /** @return array{0: array<string, mixed>, 1: array<string, mixed>|null, 2: array<string, mixed>|null} */
-    private function repairArcCompletionAudits(array $payload, GenerationRun $run, array $context, string $model, ?string $reasoningEffort): array
-    {
-        $contract = is_array($context['arc_completion_contract'] ?? null) ? $context['arc_completion_contract'] : [];
-        $audits = is_array($payload['arc_completion_audits'] ?? null) ? $payload['arc_completion_audits'] : [];
-        $draft = (string) data_get($context, 'draft.content', '');
-
-        if ($this->arcCompletionAuditRepairer->valid($audits, $contract, $draft)) {
-            return [$payload, null, null];
-        }
-
-        $repair = $this->arcCompletionAuditRepairer->repair($run, $contract, $audits, $draft, $model, $reasoningEffort);
-        if (($repair['status'] ?? null) === 'succeeded'
-            && is_array($repair['audits'] ?? null)
-            && $this->arcCompletionAuditRepairer->valid($repair['audits'], $contract, $draft)) {
-            $payload['arc_completion_audits'] = $repair['audits'];
-
-            return [$payload, $repair, null];
-        }
-
-        $payload['arc_completion_audits'] = collect($contract)->map(fn (array $item): array => [
-            'arc_id' => (int) $item['arc_id'],
-            'status' => 'not_met',
-            'evidence' => null,
-        ])->all();
-        $finding = [
-            'code' => 'ARC_COMPLETION_REPAIR_FAILED',
-            'dimension' => 'workflow',
-            'severity' => 'ambiguous',
-            'scene_id' => null,
-            'scope' => 'chapter',
-            'auto_fixable' => false,
-            'requires_human_decision' => true,
-            'message' => 'Arc Completion 审计结构修复失败，已保守按未完成处理，需要人工检查。',
-            'evidence' => 'ai_request_log_id='.(string) ($repair['ai_request_log_id'] ?? 'unknown')
-                .'; '.(string) ($repair['error_message'] ?? '未知错误'),
-            'source' => 'arc_completion_repair',
-            'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
-        ];
-
-        return [$payload, $repair, $finding];
-    }
-
-    /** @return array<string, mixed> */
-    private function normalizeDimensionAudits(array $payload, GenerationRun $run, array $context, Chapter $chapter, string $model, ?string $reasoningEffort): array
-    {
-        $raw = $payload['dimension_audits'];
-        $repairs = $payload['arc_completion_repair'] === null
-            ? []
-            : ['arc_completion' => $payload['arc_completion_repair']];
-        $repairFindings = $payload['schema_repair_findings'] ?? [];
-
-        foreach (self::DIMENSIONS as $dimension) {
-            $hasFinding = collect($payload['findings'])->contains(
-                fn (array $finding): bool => ($finding['dimension'] ?? null) === $dimension,
-            );
-
-            if (($raw[$dimension]['status'] ?? null) === 'issues_found' && ! $hasFinding) {
-                $repair = $this->dimensionAuditRepairer->repair(
-                    $run,
-                    $dimension,
-                    $raw[$dimension],
-                    $context,
-                    self::NARRATIVE_FINDING_CODES,
-                    $model,
-                    $reasoningEffort,
-                );
-
-                if (($repair['status'] ?? null) === 'succeeded') {
-                    $candidateFindings = is_array($repair['findings'] ?? null) ? $repair['findings'] : [];
-                    $invalid = collect($candidateFindings)->contains(
-                        fn (mixed $finding): bool => ! is_array($finding) || ! $this->validNarrativeFinding($finding, $chapter),
-                    );
-
-                    if ($invalid) {
-                        $repair = [
-                            ...$repair,
-                            'status' => 'failed',
-                            'error_code' => 'review_schema_repair_invalid',
-                            'error_message' => 'Review Schema Repair 返回了无效 Finding。',
-                            'findings' => [],
-                        ];
-                    } else {
-                        $payload['findings'] = [...$payload['findings'], ...$candidateFindings];
-                        $raw[$dimension]['summary'] = $repair['summary'];
-                    }
-                }
-
-                if (($repair['status'] ?? null) === 'failed') {
-                    $repairFindings[] = [
-                        'code' => 'REVIEW_SCHEMA_REPAIR_FAILED',
-                        'dimension' => 'workflow',
-                        'severity' => 'ambiguous',
-                        'scene_id' => null,
-                        'scope' => 'chapter',
-                        'auto_fixable' => false,
-                        'requires_human_decision' => true,
-                        'message' => "{$dimension} 维度的审校结构修复失败，需要人工检查。",
-                        'evidence' => 'ai_request_log_id='.(string) ($repair['ai_request_log_id'] ?? 'unknown')
-                            .'; '.(string) ($repair['error_message'] ?? '未知错误'),
-                        'source' => 'review_schema_repair',
-                        'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
-                    ];
-                }
-
-                $repairs[$dimension] = $repair;
-            }
-        }
-
-        $findingDimensions = collect($payload['findings'])->pluck('dimension')->countBy();
-        foreach (self::DIMENSIONS as $dimension) {
-            $raw[$dimension]['status'] = (int) $findingDimensions->get($dimension, 0) > 0
-                ? 'issues_found'
-                : 'pass';
-        }
-
-        return [
-            ...$payload,
-            'dimension_audits_raw' => $payload['dimension_audits'],
-            'dimension_audits' => $raw,
-            'schema_repairs' => $repairs,
-            'schema_repair_findings' => $repairFindings,
-        ];
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $findings
-     * @return array{0: array<int, array<string, mixed>>, 1: array<int, array<string, mixed>>}
-     */
-    private function repairCoverageJudgments(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $findings, string $model, ?string $reasoningEffort): array
-    {
-        $repairs = [];
-        $scenePlans = array_values($chapter->latestPlan?->scene_plans ?? []);
-
-        foreach (data_get($draft->data, 'scene_coverage', []) as $index => $row) {
-            if (! is_array($row)) {
-                continue;
-            }
-
-            $sceneId = filter_var($row['scene_id'] ?? null, FILTER_VALIDATE_INT);
-            $coverage = collect($row)->only(PlanCoverage::ELEMENTS)->all();
-            $hasMissingPlanFinding = collect($findings)->contains(
-                fn (array $finding): bool => ($finding['code'] ?? null) === 'SCENE_PLAN_COVERAGE_MISSING'
-                    && (int) ($finding['scene_id'] ?? 0) === $sceneId,
-            );
-
-            if ($sceneId === false || ! $hasMissingPlanFinding || ! is_array($scenePlans[$index] ?? null)) {
-                continue;
-            }
-
-            $repair = $this->coverageJudgmentRepairer->repair(
-                $run,
-                $sceneId,
-                $coverage,
-                $draft->content,
-                $scenePlans[$index],
-                $model,
-                $reasoningEffort,
-            );
-            $repairs[] = ['scene_id' => $sceneId, ...$repair];
-
-            if (($repair['status'] ?? null) !== 'succeeded' || ! is_array($repair['coverage'] ?? null)) {
-                $findings = collect($findings)->map(function (array $finding) use ($sceneId, $repair): array {
-                    if (($finding['code'] ?? null) !== 'SCENE_PLAN_COVERAGE_MISSING'
-                        || (int) ($finding['scene_id'] ?? 0) !== $sceneId) {
-                        return $finding;
-                    }
-
-                    return [...$finding, 'coverage_adjudication' => [
-                        'status' => 'failed',
-                        'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
-                        'error_code' => $repair['error_code'] ?? 'coverage_judgment_repair_failed',
-                    ]];
-                })->all();
-
-                continue;
-            }
-
-            $repairedCoverage = $repair['coverage'];
-            $findings = collect($findings)->flatMap(function (array $finding) use ($sceneId, $repairedCoverage, $repair): array {
-                if (($finding['code'] ?? null) !== 'SCENE_PLAN_COVERAGE_MISSING'
-                    || (int) ($finding['scene_id'] ?? 0) !== $sceneId) {
-                    return [$finding];
-                }
-
-                $element = (string) ($finding['plan_element'] ?? '');
-                $item = $repairedCoverage[$element] ?? null;
-
-                if (! is_array($item)) {
-                    return [$finding];
-                }
-
-                if (($item['status'] ?? null) === 'fulfilled') {
-                    return [];
-                }
-
-                return [[
-                    ...$finding,
-                    'code' => ($item['status'] ?? null) === 'contradicted'
-                        ? 'SCENE_PLAN_COVERAGE_CONTRADICTED'
-                        : 'SCENE_PLAN_COVERAGE_MISSING',
-                    'coverage_status' => $item['status'] ?? 'missing',
-                    'evidence' => $item['evidence'] ?? null,
-                    'coverage_adjudication' => [
-                        'status' => 'succeeded',
-                        'ai_request_log_id' => $repair['ai_request_log_id'] ?? null,
-                        'prompt_version' => PlanCoverageJudgmentRepairer::PROMPT_VERSION,
-                    ],
-                ]];
-            })->values()->all();
-        }
-
-        return [$findings, $repairs];
-    }
-
-    /** @return array<int, array<string, mixed>> */
     private function repairVerificationOutcome(GenerationRun $run, array $currentFindings): array
     {
         $required = data_get($run->context_snapshot, 'repair_verification.required_findings');
@@ -912,6 +775,7 @@ class ChapterReviewer
             'unsupported_finding_scope' => 'Finding 使用了当前不支持的修复范围。',
             'invalid_persisted_rewrite_scope' => '已保存的 Rewrite 范围无效。',
             'no_auto_fixable_findings' => 'Review 没有可自动修复的 Finding。',
+            'plan_or_scene_rebuild_required' => '问题涉及章节功能、Milestone、Handoff、剧情结果或跨 Scene 结构，必须重建 Plan/Scene。',
             default => '无法从当前 Finding 确定安全的最小修复范围。',
         };
 
@@ -926,6 +790,20 @@ class ChapterReviewer
             'message' => '无法自动选择安全的 Rewrite 范围，需要人工处理。',
             'evidence' => $reasonLabel,
             'source' => 'rewrite_scope_resolver',
+        ];
+    }
+
+    /** @param array<int, array<string, mixed>> $findings @return array<string, mixed> */
+    private function repairAdvice(string $reason, array $findings): array
+    {
+        $sceneIds = collect($findings)->pluck('scene_id')->filter(fn (mixed $id): bool => is_int($id))->unique()->values();
+
+        return [
+            'action' => 'rebuild_plan_or_scenes',
+            'reason' => $reason,
+            'earliest_scene_id' => $sceneIds->isEmpty() ? null : $sceneIds->min(),
+            'finding_codes' => collect($findings)->pluck('code')->filter()->unique()->values()->all(),
+            'next_stage' => GenerationStage::ChapterPlanning->value,
         ];
     }
 

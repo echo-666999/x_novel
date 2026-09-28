@@ -2,7 +2,6 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
-use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
@@ -26,7 +25,6 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
-use App\Models\StoryStateVersion;
 use App\Services\ChapterRewriter;
 use App\Services\OutlineProgressResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -255,186 +253,6 @@ function sceneRewriteFixture(): array
     return [...$fixture, 'target' => $scenes[0], 'untouched' => $scenes[1]];
 }
 
-test('chapter rewrite creates a new immutable artifact with finding hash', function () {
-    $fixture = rewriteFixture();
-    $fake = (new FakeAiProvider)->enqueue(rewriteResponse());
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
-        ->and($artifact->version)->toBe(1)
-        ->and($artifact->content)->toBe('修订后的章节正文')
-        ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
-        ->and($artifact->data['source_review_id'])->toBe($fixture['review']->getKey())
-        ->and($artifact->data['finding_hash'])->toHaveLength(64)
-        ->and($artifact->data['word_count'])->toBe(mb_strlen('修订后的章节正文'))
-        ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.target_words'))->toBe($fixture['chapter']->latestPlan->target_words)
-        ->and(data_get($artifact->generationRun->context_snapshot, 'length_requirement.current_words'))->toBe(mb_strlen('原始章节正文'))
-        ->and($artifact->generationRun->bible_version)->toBe(1)
-        ->and(data_get($artifact->generationRun->context_snapshot, 'style_contract_checksum'))->toBe(data_get($artifact->generationRun->context_snapshot, 'l4.checksum'))
-        ->and(data_get($artifact->generationRun->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($artifact->generationRun->context_snapshot, 'foreshadowing_contract.checksum'))
-        ->and(data_get($artifact->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
-        ->and(data_get($artifact->data, 'plan_acceptance.chapter_function'))->toBe($fixture['chapter']->latestPlan->chapter_function)
-        ->and(data_get($artifact->data, 'repair_findings.0.evidence'))->toBe('末段重复')
-        ->and($fake->requests()[0]->prompt)->toContain('"plan_acceptance"')
-        ->and($fake->requests()[0]->prompt)->toContain('"require_all_in_one_response":true')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('必须一次性解决的完整问题批次')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得只处理第一项')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('七个维度进行一次全量自检')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不要把潜台词全部说透')
-        ->and($artifact->generationRun->idempotency_key)->toStartWith('rewrite:'.$fixture['draft']->getKey().':');
-});
-
-test('chapter rewrite sends every review finding as one required repair batch', function () {
-    $fixture = rewriteFixture();
-    $findings = [
-        ['code' => 'PACING_ISSUE', 'dimension' => 'pacing', 'severity' => 'warning', 'scene_id' => null, 'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '压缩重复的流程说明。', 'evidence' => '重复流程'],
-        ['code' => 'STYLE_MISMATCH', 'dimension' => 'style', 'severity' => 'warning', 'scene_id' => null, 'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '改为直接表达。', 'evidence' => '文学化比喻'],
-        ['code' => 'CONTINUITY_BREAK', 'dimension' => 'continuity', 'severity' => 'error', 'scene_id' => null, 'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '修正物品位置。', 'evidence' => '封套已经入柜'],
-    ];
-    $fixture['review']->update(['findings' => $findings]);
-    $fake = (new FakeAiProvider)->enqueue(rewriteResponse());
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->data['repair_findings'])->toBe($findings)
-        ->and(data_get($artifact->generationRun->context_snapshot, 'batch_repair.required_finding_count'))->toBe(3)
-        ->and(data_get($artifact->generationRun->context_snapshot, 'batch_repair.required_finding_codes'))->toBe(['PACING_ISSUE', 'STYLE_MISMATCH', 'CONTINUITY_BREAK'])
-        ->and($fake->requests()[0]->prompt)->toContain('压缩重复的流程说明。')
-        ->and($fake->requests()[0]->prompt)->toContain('改为直接表达。')
-        ->and($fake->requests()[0]->prompt)->toContain('修正物品位置。');
-});
-
-test('chapter rewrite reruns and persists full scene coverage before event extraction', function () {
-    $fixture = sceneRewriteFixture();
-    $fixture['review']->update(['findings' => [[
-        'code' => 'FORESHADOWING_SEMANTIC_REWRITE_REQUIRED',
-        'dimension' => 'plan',
-        'severity' => 'error',
-        'scene_id' => null,
-        'scope' => 'chapter',
-        'auto_fixable' => true,
-        'requires_human_decision' => false,
-        'foreshadowing_id' => 99,
-        'foreshadowing_action' => 'pay_off',
-        'message' => '一次补全伏笔兑现动作和后果。',
-        'evidence' => null,
-        'source' => 'foreshadowing_review',
-    ]]]);
-    $fake = (new FakeAiProvider)->enqueue(chapterRewriteCoverageResponse($fixture['chapter']));
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->data['scope'])->toBe('chapter')
-        ->and($artifact->data['scene_coverage'])->toHaveCount(2)
-        ->and($artifact->data['plan_findings'])->toBe([])
-        ->and($artifact->data['introduced_major_facts'])->toBe([])
-        ->and($fake->requests()[0]->responseSchema)->not->toBeNull()
-        ->and($fake->requests()[0]->systemPrompt)->toContain('Coverage 必须基于最终重写正文重新判断');
-});
-
-test('chapter rewrite maps ordered scene sequences to frozen database scene ids', function () {
-    $otherNovel = Novel::factory()->create();
-    $otherChapter = Chapter::factory()->for($otherNovel)->create();
-    Scene::factory()->count(3)->for($otherChapter)->sequence(
-        ['sequence' => 1],
-        ['sequence' => 2],
-        ['sequence' => 3],
-    )->create();
-    $fixture = sceneRewriteFixture();
-    $fixture['review']->update(['findings' => [[
-        'code' => 'STYLE_MISMATCH',
-        'dimension' => 'style',
-        'severity' => 'error',
-        'scene_id' => null,
-        'scope' => 'chapter',
-        'auto_fixable' => true,
-        'requires_human_decision' => false,
-        'message' => '全章需要统一调整。',
-        'evidence' => '原始章节正文',
-    ]]]);
-    $expectedIds = $fixture['chapter']->scenes()->orderBy('sequence')->pluck('id')->all();
-    expect($expectedIds)->not->toBe([1, 2]);
-    $fake = (new FakeAiProvider)->enqueue(chapterRewriteCoverageResponse($fixture['chapter'], sceneReferences: [1, 2]));
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect(collect($artifact->data['scene_coverage'])->pluck('scene_id')->all())->toBe($expectedIds)
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得填写章内 sequence');
-});
-
-test('chapter rewrite still rejects reordered scene sequences', function () {
-    $fixture = sceneRewriteFixture();
-    $fixture['review']->update(['findings' => [[
-        'code' => 'STYLE_MISMATCH',
-        'dimension' => 'style',
-        'severity' => 'error',
-        'scene_id' => null,
-        'scope' => 'chapter',
-        'auto_fixable' => true,
-        'requires_human_decision' => false,
-        'message' => '全章需要统一调整。',
-        'evidence' => '原始章节正文',
-    ]]]);
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(
-        chapterRewriteCoverageResponse($fixture['chapter'], sceneReferences: [2, 1]),
-    ));
-
-    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, 'Assembly Coverage 必须按顺序且不重复地引用本章全部 Scene');
-});
-
-test('chapter rewrite receives the previous canonical ending for continuity repair', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->update(['sequence' => 2]);
-    $previous = Chapter::factory()->for($fixture['novel'])->create([
-        'sequence' => 1,
-        'status' => ChapterStatus::Canonical,
-    ]);
-    $previousRun = GenerationRun::factory()->for($fixture['novel'])->for($previous)->create([
-        'stage' => GenerationStage::ChapterAssembly,
-        'status' => RunStatus::Succeeded,
-    ]);
-    $previousDraft = GenerationArtifact::factory()->for($previousRun)->create([
-        'type' => ArtifactType::ChapterDraft,
-        'content' => '两人正向魔法学院走去。',
-    ]);
-    $previous->update(['canonical_artifact_id' => $previousDraft->getKey()]);
-    $fake = (new FakeAiProvider)->enqueue(rewriteResponse());
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect(data_get($artifact->generationRun->context_snapshot, 'previous_chapter_ending.text'))->toBe('两人正向魔法学院走去。')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('时间、地点和行动过渡');
-});
-
-test('duplicate rewrite delivery reuses the artifact for the same review', function () {
-    $fixture = rewriteFixture();
-    $fake = (new FakeAiProvider)->enqueue(rewriteResponse());
-    app()->instance(AiProvider::class, $fake);
-
-    $first = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-    $second = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($second?->is($first))->toBeTrue()->and($fake->requests())->toHaveCount(1);
-});
-
-test('rewrite job continues with fresh event extraction', function () {
-    Queue::fake();
-    $fixture = rewriteFixture();
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(rewriteResponse()));
-
-    (new RewriteChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterRewriter::class));
-
-    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => ! $job->regenerate && ! $job->continueRewrite);
-});
-
 test('scene rewrite replaces only the target pointer and preserves plan and style constraints', function () {
     $fixture = sceneRewriteFixture();
     $fake = (new FakeAiProvider)->enqueue(sceneRewriteResponse());
@@ -500,59 +318,6 @@ test('scene rewrite job returns to assembly before event extraction', function (
     Queue::assertNotPushed(ExtractStoryEventsJob::class);
 });
 
-test('rewrite exhaustion becomes needs attention', function () {
-    $fixture = rewriteFixture();
-    foreach ([1, 2] as $attempt) {
-        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create(['scope_type' => 'chapter', 'scope_id' => $fixture['chapter']->getKey(), 'stage' => GenerationStage::Rewrite, 'status' => RunStatus::Succeeded]);
-        GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::RewriteDraft, 'version' => $attempt, 'data' => ['source_review_id' => 999 + $attempt]]);
-    }
-    app()->instance(AiProvider::class, new FakeAiProvider);
-
-    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, '最大 2 次');
-    expect($fixture['review']->fresh()->decision)->toBe(ReviewDecision::Rewrite)
-        ->and(Review::query()->latest('id')->first()->decision)->toBe(ReviewDecision::NeedsAttention)
-        ->and(Review::query()->latest('id')->first()->findings)->toContainEqual([
-            'code' => 'REWRITE_EXHAUSTED',
-            'dimension' => 'workflow',
-            'severity' => 'ambiguous',
-            'scene_id' => null,
-            'scope' => 'chapter',
-            'auto_fixable' => false,
-            'requires_human_decision' => true,
-            'message' => '自动 Rewrite 已达到最大 2 次，需要人工处理。',
-            'evidence' => '已完成 2 次自动 Rewrite。',
-            'source' => 'rewrite_loop',
-        ])
-        ->and(data_get(Review::query()->latest('id')->first()->artifact->data, 'decision_basis.rule'))->toBe('human_decision_required')
-        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review);
-});
-
-test('manual edits do not consume the automatic rewrite budget', function () {
-    $fixture = rewriteFixture();
-    foreach ([1, 2] as $version) {
-        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
-            'scope_type' => 'chapter',
-            'scope_id' => $fixture['chapter']->getKey(),
-            'stage' => GenerationStage::Rewrite,
-            'status' => RunStatus::Succeeded,
-        ]);
-        GenerationArtifact::factory()->for($run)->create([
-            'type' => ArtifactType::RewriteDraft,
-            'version' => $version,
-            'content' => '人工修改稿',
-            'data' => ['manual_edit' => true, 'source_review_id' => 1000 + $version],
-        ]);
-    }
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(rewriteResponse()));
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->version)->toBe(3)
-        ->and($artifact->data['attempt'])->toBe(1)
-        ->and($artifact->data)->not->toHaveKey('manual_edit');
-});
-
 test('paused novel cannot start rewrite', function () {
     $fixture = rewriteFixture();
     $fixture['novel']->update(['status' => NovelStatus::Paused]);
@@ -562,237 +327,97 @@ test('paused novel cannot start rewrite', function () {
         ->toThrow(AiProviderException::class, '小说已暂停');
 });
 
-test('retryable provider failure records a failed run before retry succeeds', function () {
+test('chapter scoped finding is rejected without a provider call and requires plan or scene rebuild', function () {
     $fixture = rewriteFixture();
-    $fake = (new FakeAiProvider)
-        ->enqueue(new AiProviderException('provider_timeout', 'timeout', true))
-        ->enqueue(rewriteResponse());
+    $fake = new FakeAiProvider;
     app()->instance(AiProvider::class, $fake);
 
     expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, 'timeout');
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
-        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->where('status', RunStatus::Failed)->count())->toBe(1)
-        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->where('status', RunStatus::Succeeded)->count())->toBe(1);
+        ->toThrow(AiProviderException::class, '重建 Plan/Scene');
+    expect($fake->requests())->toHaveCount(0);
 });
 
-test('rewrite defaults reserve enough output budget for full chapter reasoning and content', function () {
-    expect(config('generation.rewrite_max_output_tokens'))->toBe(16_000)
-        ->and(config('generation.rewrite_retry_max_output_tokens'))->toBe(20_000)
-        ->and(config('generation.rewrite_final_retry_max_output_tokens'))->toBe(24_000);
+test('paragraph patch must uniquely match the target scene and never mutates the chapter draft', function () {
+    $fixture = sceneRewriteFixture();
+    $fixture['review']->update(['findings' => [[
+        'code' => 'STYLE_MISMATCH', 'dimension' => 'style', 'severity' => 'error',
+        'scene_id' => $fixture['target']['scene']->getKey(), 'scope' => 'paragraph',
+        'auto_fixable' => true, 'requires_human_decision' => false,
+        'message' => '替换失速表达。', 'evidence' => '旧稿失速',
+    ]]]);
+    $coverage = collect(['goal', 'conflict', 'turn', 'outcome'])->mapWithKeys(fn (string $key): array => [$key => [
+        'status' => 'fulfilled', 'evidence' => '破门逆转',
+    ]])->all();
+    $response = new AiResponse(
+        content: '',
+        structuredData: ['search' => '旧稿失速', 'replacement' => '破门逆转', 'self_check' => $coverage],
+        inputTokens: 100, outputTokens: 50, cachedTokens: 0, latencyMs: 20,
+        providerRequestId: 'paragraph-patch', model: 'rewrite-test',
+    );
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue($response));
+
+    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey(), $fixture['target']['scene']->getKey());
+
+    expect($artifact->data['scope'])->toBe('paragraph')
+        ->and($artifact->content)->toBe('破门逆转')
+        ->and(data_get($artifact->data, 'paragraph_patch.search'))->toBe('旧稿失速')
+        ->and($fixture['target']['scene']->fresh()->current_artifact_id)->toBe($artifact->getKey())
+        ->and($fixture['untouched']['scene']->fresh()->current_artifact_id)->toBe($fixture['untouched']['artifact']->getKey())
+        ->and($fixture['draft']->fresh()->content)->toBe('原始章节正文');
 });
 
-test('rewrite increases frozen output budgets and stops before a fourth provider call', function () {
-    config()->set('generation.rewrite_max_output_tokens', 100);
-    config()->set('generation.rewrite_retry_max_output_tokens', 200);
-    config()->set('generation.rewrite_final_retry_max_output_tokens', 300);
-    $fixture = rewriteFixture();
-    $fake = (new FakeAiProvider)
-        ->enqueue(truncatedRewriteResponse())
-        ->enqueue(truncatedRewriteResponse())
-        ->enqueue(truncatedRewriteResponse());
-    app()->instance(AiProvider::class, $fake);
-    $rewriter = app(ChapterRewriter::class);
-
-    foreach ([100, 200, 300] as $expectedBudget) {
-        expect(fn () => $rewriter->rewrite($fixture['chapter']->getKey()))
-            ->toThrow(AiProviderException::class, '因输出 Token 用尽而被截断');
-        expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
+test('paragraph patch rejects zero or multiple source matches', function (string $source, string $search) {
+    $fixture = sceneRewriteFixture();
+    if ($source !== $fixture['target']['artifact']->content) {
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scene_id' => $fixture['target']['scene']->getKey(), 'scope_type' => 'scene',
+            'scope_id' => $fixture['target']['scene']->getKey(), 'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $sourceArtifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft, 'content' => $source, 'checksum' => hash('sha256', $source),
+        ]);
+        $fixture['target']['scene']->update(['current_artifact_id' => $sourceArtifact->getKey()]);
     }
+    $fixture['review']->update(['findings' => [[
+        'code' => 'STYLE_MISMATCH', 'dimension' => 'style', 'severity' => 'error',
+        'scene_id' => $fixture['target']['scene']->getKey(), 'scope' => 'paragraph',
+        'auto_fixable' => true, 'requires_human_decision' => false,
+        'message' => '替换失速表达。', 'evidence' => '旧稿失速',
+    ]]]);
+    $coverage = collect(['goal', 'conflict', 'turn', 'outcome'])->mapWithKeys(fn (string $key): array => [$key => [
+        'status' => 'missing', 'evidence' => null,
+    ]])->all();
+    $response = new AiResponse(content: '', structuredData: [
+        'search' => $search, 'replacement' => '修复文本', 'self_check' => $coverage,
+    ], inputTokens: 10, outputTokens: 10, cachedTokens: 0, latencyMs: 10, providerRequestId: 'patch-invalid', model: 'rewrite-test');
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue($response));
 
-    expect(fn () => $rewriter->rewrite($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, '已在冻结的最高输出预算 300 Token 下被截断');
-    expect($fake->requests())->toHaveCount(3)
-        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->latest('id')->first()->error_code)
-        ->toBe('rewrite_output_budget_exhausted');
-});
+    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey(), $fixture['target']['scene']->getKey()))
+        ->toThrow(AiProviderException::class, '唯一命中一次');
+})->with([
+    'zero match' => ['旧稿失速', '不存在证据'],
+    'multiple matches' => ['旧稿失速。重复证据，重复证据', '重复证据'],
+]);
 
-test('an overlength rewrite is compressed once before it becomes a rewrite draft', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
-    $overlength = str_repeat('超', 120);
-    $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse($overlength))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $overlength,
-            'replacement' => str_repeat('改', 100),
-        ]]));
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->content)->toBe(str_repeat('改', 100))
-        ->and($artifact->data['word_count'])->toBe(100)
-        ->and($artifact->data['maximum_words'])->toBe(115)
-        ->and($fake->requests())->toHaveCount(2)
-        ->and($fake->requests()[1]->systemPrompt)->toContain('局部字符补丁器')
-        ->and($fake->requests()[1]->systemPrompt)->toContain('不得返回完整重写稿')
-        ->and($fake->requests()[1]->responseSchema)->not->toBeNull()
-        ->and($fake->requests()[1]->promptVersion)->toBe('rewrite-length-patch-v2')
-        ->and($fake->requests()[1]->prompt)->toContain('"l4"')
-        ->and($fake->requests()[1]->prompt)->toContain('"preferred_minimum_words":95')
-        ->and($fake->requests()[1]->prompt)->toContain('"preferred_maximum_words":105')
-        ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
-});
-
-test('a rewrite can use a second length repair before it becomes a rewrite draft', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
-    $first = str_repeat('超', 120);
-    $second = str_repeat('仍', 116);
-    $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse($first))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $first,
-            'replacement' => $second,
-        ]]))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $second,
-            'replacement' => str_repeat('合', 100),
-        ]]));
-    app()->instance(AiProvider::class, $fake);
+test('multiple scene findings resolve to the earliest affected scene', function () {
+    $fixture = sceneRewriteFixture();
+    $fixture['review']->update(['findings' => [
+        [
+            'code' => 'STYLE_MISMATCH', 'dimension' => 'style', 'severity' => 'error',
+            'scene_id' => $fixture['untouched']['scene']->getKey(), 'scope' => 'scene',
+            'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '第二场。', 'evidence' => '守军待命',
+        ],
+        [
+            'code' => 'PACING_ISSUE', 'dimension' => 'pacing', 'severity' => 'error',
+            'scene_id' => $fixture['target']['scene']->getKey(), 'scope' => 'scene',
+            'auto_fixable' => true, 'requires_human_decision' => false, 'message' => '第一场。', 'evidence' => '旧稿失速',
+        ],
+    ]]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneRewriteResponse()));
 
     $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
 
-    expect($artifact->content)->toBe(str_repeat('合', 100))
-        ->and($artifact->data['word_count'])->toBe(100)
-        ->and($fake->requests())->toHaveCount(3)
-        ->and($fake->requests()[1]->metadata['length_repair_attempt'])->toBe(1)
-        ->and($fake->requests()[2]->metadata['length_repair_attempt'])->toBe(2)
-        ->and($fake->requests()[1]->metadata['length_repair_mode'])->toBe('compress_patch')
-        ->and($fake->requests()[2]->metadata['length_repair_mode'])->toBe('compress_patch');
-});
-
-test('a length patch that crosses the opposite hard limit is rejected instead of oscillating', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
-    $overlength = str_repeat('超', 120);
-    $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse($overlength))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $overlength,
-            'replacement' => str_repeat('短', 80),
-        ]]))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $overlength,
-            'replacement' => str_repeat('合', 100),
-        ]]));
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->content)->toBe(str_repeat('合', 100))
-        ->and($fake->requests())->toHaveCount(3)
-        ->and($fake->requests()[2]->prompt)->toContain('压缩结果必须减少字数且不得低于 85 字')
-        ->and($fake->requests()[2]->prompt)->toContain('"current_words":120');
-});
-
-test('a length patch must match one exact passage before Laravel applies it', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
-    $overlength = '重复重复'.str_repeat('长', 116);
-    $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse($overlength))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => '重复',
-            'replacement' => '重',
-        ]]))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $overlength,
-            'replacement' => str_repeat('合', 100),
-        ]]));
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->content)->toBe(str_repeat('合', 100))
-        ->and($fake->requests())->toHaveCount(3)
-        ->and($fake->requests()[2]->prompt)->toContain('search 必须在当前正文中逐字且唯一命中')
-        ->and($fake->requests()[2]->prompt)->toContain('"current_words":120');
-});
-
-test('an underlength chapter rewrite is expanded by a local patch', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
-    $underlength = str_repeat('短', 80);
-    $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse($underlength))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $underlength,
-            'replacement' => str_repeat('合', 100),
-        ]]));
-    app()->instance(AiProvider::class, $fake);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->content)->toBe(str_repeat('合', 100))
-        ->and($fake->requests()[1]->metadata['length_repair_mode'])->toBe('expand_patch');
-});
-
-test('a failed length repair does not consume a rewrite artifact attempt', function () {
-    $fixture = rewriteFixture();
-    $fixture['chapter']->latestPlan->update(['target_words' => 100]);
-    $overlength = str_repeat('超', 120);
-    $fake = (new FakeAiProvider)
-        ->enqueue(rewriteResponse($overlength))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $overlength,
-            'replacement' => str_repeat('短', 80),
-        ]]))
-        ->enqueue(rewriteLengthPatchResponse([[
-            'search' => $overlength,
-            'replacement' => str_repeat('仍短', 40),
-        ]]))
-        ->enqueue(rewriteResponse(str_repeat('合', 100)));
-    app()->instance(AiProvider::class, $fake);
-
-    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, '本次结果不会成为当前版本');
-
-    expect(GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)->count())->toBe(0);
-
-    $artifact = app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($artifact->version)->toBe(1)
-        ->and($artifact->data['attempt'])->toBe(1)
-        ->and($artifact->content)->toBe(str_repeat('合', 100))
-        ->and($fake->requests())->toHaveCount(4);
-});
-
-test('stale rewrite run is marked interrupted before recovery', function () {
-    $fixture = rewriteFixture();
-    $stale = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
-        'scope_type' => 'chapter', 'scope_id' => $fixture['chapter']->getKey(),
-        'stage' => GenerationStage::Rewrite, 'status' => RunStatus::Running,
-        'updated_at' => now()->subSeconds((int) config('generation.stalled_run_after_seconds') + 1),
-    ]);
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(rewriteResponse()));
-
-    app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey());
-
-    expect($stale->fresh()->status)->toBe(RunStatus::Failed)
-        ->and($stale->fresh()->error_code)->toBe('worker_interrupted');
-});
-
-test('state version change during rewrite prevents artifact persistence', function () {
-    $fixture = rewriteFixture();
-    app()->instance(AiProvider::class, new class($fixture['novel']) implements AiProvider
-    {
-        public function __construct(private Novel $novel) {}
-
-        public function generate(AiRequest $request): AiResponse
-        {
-            $nextVersion = (int) $this->novel->storyStateVersions()->max('version') + 1;
-            $version = StoryStateVersion::factory()->for($this->novel)->create(['version' => $nextVersion]);
-            $this->novel->update(['canonical_state_version_id' => $version->getKey()]);
-
-            return rewriteResponse();
-        }
-    });
-
-    expect(fn () => app(ChapterRewriter::class)->rewrite($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, 'Story State 已变化');
-    expect(GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)->count())->toBe(0);
+    expect($artifact->generationRun->scene_id)->toBe($fixture['target']['scene']->getKey())
+        ->and($fixture['untouched']['scene']->fresh()->current_artifact_id)->toBe($fixture['untouched']['artifact']->getKey());
 });

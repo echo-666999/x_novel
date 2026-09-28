@@ -1127,7 +1127,7 @@ flowchart TD
 | NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | DONE | NGC-004 |
 | NGC-005 | Review、Event、Commit 完成语义 | P0 | DONE | NGC-004A |
 | NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | DONE | NGC-005 |
-| NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | TODO | NGC-006A |
+| NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | DONE | NGC-006A |
 | NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | TODO | NGC-006B |
 | NGC-006 | Beat 交接、恢复与重复任务 | P0 | TODO | NGC-006C |
 | NGC-007 | 人工修复建议与结构化重建 | P0 | TODO | NGC-006 |
@@ -1640,7 +1640,7 @@ Next Task
 ## NGC-006B — 精简 Review 与最小范围 Rewrite
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-006A
 
 ### 实现
@@ -1666,6 +1666,16 @@ Next Task
 
 - 自动流程不再返回完整 Chapter Rewrite，`rewrite_output_truncated` 不再由整章输出产生。
 - Review 输出只承载模型真正需要判断的内容，Laravel 掌握身份、顺序和 Decision。
+
+### 实施结果（2026-09-28）
+
+- `CompactReviewPayload` 将 Reviewer 输出收敛为七维分数、按冻结契约位置返回的语义审计和去重 Findings；Schema 不再包含推荐 Decision、维度摘要、数据库 ID、Scene ID、条件文本、目标顺序或长度结论。Laravel 将紧凑结果映射回 Outline、Plan、Scene 与伏笔契约后执行现有严格校验，并独立派生最终 Decision。
+- Review Provider 调用前会校验 Deterministic Assembly 的 Scene IDs、Artifact IDs、Checksums、Coverage 顺序、逐字证据与 State Version。长度、State/Locked Fact 或结构化 Coverage 已经形成确定性错误时，不调用 Reviewer，直接保存 `semantic_review_performed=false` 的确定性 Review；章节级结构问题同时保存 `repair_advice`，指向 Chapter Planning / Scene 重建。
+- Reviewer 使用冻结 Route 的单一最大合法输出预算。第一次 `review_output_truncated` 不保存 Review 或创建 Rewrite；相同输入再次执行会以 `review_capacity_mismatch` 停止并要求调整模型、Context 或 Route，不再把同一 Schema 依次扩大到 16k/24k。
+- `RewriteScopeResolver` 只返回 Scene 或 unresolved：Paragraph 必须以逐字 Evidence 唯一定位，多个 Scene 按 sequence 选择最早受影响 Scene，Chapter function、Milestone、Handoff、关键剧情结果或全章结构问题转为 Plan/Scene 重建建议。
+- `ChapterRewriter` 自动路径只接受 Paragraph Patch 或单 Scene 完整替换。Paragraph Patch 的 `search` 必须在目标 Scene 唯一命中并覆盖当前 Finding Evidence；成功后只创建该 Scene 的新 `rewrite_draft` 并更新 Scene 指针，原 Chapter Draft 保持不可变。Whole Chapter Rewrite、`ChapterAssemblyPayload` 和整章长度补丁实现已删除。
+- 任一局部 Rewrite 成功后，Scene checksum 变化会使当前 Chapter Draft 不再匹配；`AdvanceChapterPipelineAction` 因此先派发 Deterministic Assembly，新 Draft 的 `source_artifact_id` 继续使旧 Event Candidate、State Patch 和 Review 无法被下游复用。
+- 定向测试覆盖固定精简 Schema、契约身份恢复、确定性错误跳过 Provider、重复截断容量处理、Paragraph Patch 零/多/唯一命中、单 Scene 指针替换、跨 Scene 最早优先和结构问题不派发整章 Rewrite。全量回归结果记录在本任务提交说明中。
 
 ## NGC-006C — 阶段指纹、失败分流与下一章门禁
 

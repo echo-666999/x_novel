@@ -237,7 +237,7 @@ class AdvanceChapterPipelineAction
 
         return [GenerationStage::Rewrite, new RewriteChapterJob(
             $chapter->getKey(),
-            $scope->scope === 'scene' ? $scope->sceneId : null,
+            $scope->sceneId,
         )];
     }
 

@@ -322,9 +322,15 @@ function resumeArtifact(Novel $novel, Chapter $chapter, ArtifactType $type, ?Sce
 function resumeReview(Novel $novel, Chapter $chapter, ReviewDecision $decision, array $findings = []): Review
 {
     if ($decision === ReviewDecision::Rewrite && $findings === []) {
+        $scene = $chapter->scenes()->orderBy('sequence')->first()
+            ?? Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+        if ($scene->current_artifact_id === null) {
+            $source = resumeArtifact($novel, $chapter, ArtifactType::SceneDraft, $scene);
+            $scene->update(['current_artifact_id' => $source->getKey()]);
+        }
         $findings = [[
-            'scope' => 'chapter',
-            'scene_id' => null,
+            'scope' => 'scene',
+            'scene_id' => $scene->getKey(),
             'auto_fixable' => true,
             'requires_human_decision' => false,
         ]];

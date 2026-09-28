@@ -37,9 +37,9 @@ final class RewriteScopeResolver
 
         if ($actionable->contains(fn (array $finding): bool => $finding['scope'] === 'chapter')) {
             return new RewriteScopeDecision(
-                'chapter',
+                'unresolved',
                 null,
-                'chapter_finding_present',
+                'plan_or_scene_rebuild_required',
                 $actionable->keys()->map(fn (int|string $index): int => (int) $index)->values()->all(),
             );
         }
@@ -65,11 +65,22 @@ final class RewriteScopeResolver
         $sceneIds = array_values(array_unique($sceneIds));
 
         if (count($sceneIds) > 1) {
+            $earliestSceneId = $chapter->scenes
+                ->whereIn('id', $sceneIds)
+                ->sortBy('sequence')
+                ->first()?->getKey();
+            $earliestFindingIndexes = $actionable
+                ->filter(fn (array $finding): bool => $this->sceneIdForFinding($chapter, $finding) === $earliestSceneId)
+                ->keys()
+                ->map(fn (int|string $index): int => (int) $index)
+                ->values()
+                ->all();
+
             return new RewriteScopeDecision(
-                'chapter',
-                null,
-                'multiple_scenes_affected',
-                $findingIndexes,
+                'scene',
+                $earliestSceneId,
+                'earliest_affected_scene',
+                $earliestFindingIndexes,
             );
         }
 
@@ -98,10 +109,6 @@ final class RewriteScopeResolver
         $findingIndexes = is_array($stored['finding_indexes'] ?? null)
             ? array_values(array_filter($stored['finding_indexes'], 'is_int'))
             : [];
-
-        if ($scope === 'chapter' && $sceneId === null) {
-            return new RewriteScopeDecision('chapter', null, $reason, $findingIndexes);
-        }
 
         if ($scope === 'scene' && is_int($sceneId) && $chapter->scenes()->whereKey($sceneId)->exists()) {
             return new RewriteScopeDecision('scene', $sceneId, $reason, $findingIndexes);
@@ -136,9 +143,18 @@ final class RewriteScopeResolver
         $sceneId = $finding['scene_id'] ?? null;
 
         if (is_int($sceneId)) {
-            return $chapter->scenes->contains(fn (Scene $scene): bool => $scene->getKey() === $sceneId)
-                ? $sceneId
-                : null;
+            $scene = $chapter->scenes->first(fn (Scene $scene): bool => $scene->getKey() === $sceneId);
+            if ($scene === null) {
+                return null;
+            }
+            if (($finding['scope'] ?? null) === 'paragraph') {
+                $evidence = $finding['evidence'] ?? null;
+                if (! is_string($evidence) || trim($evidence) === '' || substr_count((string) $scene->currentArtifact?->content, $evidence) !== 1) {
+                    return null;
+                }
+            }
+
+            return $sceneId;
         }
 
         if (($finding['scope'] ?? null) !== 'paragraph') {

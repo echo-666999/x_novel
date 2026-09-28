@@ -28,7 +28,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer, private readonly ChapterRewriteLengthRepairer $chapterLengthRepairer, private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null): ?GenerationArtifact
     {
@@ -38,6 +38,16 @@ class ChapterRewriter
         }
 
         $review = $this->latestReview($chapter);
+        $resolvedScope = $this->rewriteScopeResolver->resolveReview($chapter, $review);
+        if (! $resolvedScope->isResolved()) {
+            throw new AiProviderException('rewrite_scope_unresolved', '当前问题需要重建 Plan/Scene，不能执行整章自动 Rewrite。', false);
+        }
+        if ($sceneId === null) {
+            $sceneId = $resolvedScope->sceneId;
+        }
+        if ($sceneId !== $resolvedScope->sceneId) {
+            throw new AiProviderException('rewrite_scope_unresolved', '指定 Scene 不是当前 Review 的最早受影响 Scene。', false);
+        }
         $completed = GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)
             ->where('data->source_review_id', $review->getKey())
             ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
@@ -45,15 +55,14 @@ class ChapterRewriter
         if ($completed !== null) {
             return $completed;
         }
-        $findings = $sceneId === null
-            ? $review->findings
-            : $this->rewriteScopeResolver->findingsForScene($chapter, $review->findings, $sceneId);
+        $findings = $this->rewriteScopeResolver->findingsForScene($chapter, $review->findings, $sceneId);
         if ($findings === []) {
             throw new AiProviderException('rewrite_scope_unresolved', '当前 Finding 无法安全定位到指定 Scene，已停止自动重写。', false);
         }
-        $source = $sceneId === null ? $this->latestChapterDraft($chapter) : $this->sceneSource($chapter, $sceneId);
+        $source = $this->sceneSource($chapter, $sceneId);
+        $paragraphPatch = collect($findings)->every(fn (array $finding): bool => ($finding['scope'] ?? null) === 'paragraph');
         $chapterTargetWords = (int) $chapter->latestPlan->target_words;
-        $sceneAllocation = $sceneId === null ? null : $this->sceneAllocation($chapter, $sceneId, $chapterTargetWords);
+        $sceneAllocation = $this->sceneAllocation($chapter, $sceneId, $chapterTargetWords);
         $targetWords = $sceneAllocation['scene_target_words'] ?? $chapterTargetWords;
         $minimumWords = $sceneAllocation['required_scene_words'] ?? $this->lengthPolicy->chapterMinimum($targetWords);
         $maximumWords = $sceneAllocation['maximum_scene_words'] ?? $this->lengthPolicy->chapterMaximum($targetWords);
@@ -75,7 +84,7 @@ class ChapterRewriter
         $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
         $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $brief = [
-            'scope' => $sceneId === null ? 'chapter' : 'scene',
+            'scope' => $paragraphPatch ? 'paragraph' : 'scene',
             'source_artifact_id' => $source->getKey(),
             'bible_version' => $styleContract['bible_version'],
             'style_contract_checksum' => $styleContract['checksum'],
@@ -107,10 +116,8 @@ class ChapterRewriter
                 'preferred_minimum_words' => $preferredMinimumWords,
                 'preferred_maximum_words' => $preferredMaximumWords,
                 'current_words' => $this->lengthPolicy->count($source->content),
-                ...($sceneAllocation === null ? [] : [
-                    'chapter_target_words' => $chapterTargetWords,
-                    'allocated_scene_words' => $sceneAllocation['allocated_scene_words'],
-                ]),
+                'chapter_target_words' => $chapterTargetWords,
+                'allocated_scene_words' => $sceneAllocation['allocated_scene_words'],
             ],
             'content' => $source->content,
         ];
@@ -133,45 +140,51 @@ class ChapterRewriter
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: $this->systemPrompt($sceneId !== null),
+                systemPrompt: $this->systemPrompt($paragraphPatch ? 'paragraph' : 'scene'),
                 prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .3,
                 maxTokens: $maxTokens,
-                responseSchema: $sceneId === null ? ChapterAssemblyPayload::schema() : SceneRewritePayload::schema(),
+                responseSchema: $paragraphPatch ? ParagraphPatchPayload::schema() : SceneRewritePayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: $metadata,
             ));
-            $payload = $this->responsePayload(
-                content: $response->content,
-                structuredData: StructuredOutput::require($response, 'rewrite', $sceneId === null ? 'Chapter Rewrite' : 'Scene Rewrite'),
-                sceneRewrite: $sceneId !== null,
-                provider: $settings->provider,
-                model: $settings->model,
-                metadata: $metadata,
-                task: $brief['plan_acceptance'],
-                chapter: $chapter,
-                foreshadowingContract: $foreshadowingContract,
-                reasoningEffort: $settings->reasoningEffort,
-            );
+            $structured = StructuredOutput::require($response, 'rewrite', $paragraphPatch ? 'Paragraph Patch' : 'Scene Rewrite');
+            if ($paragraphPatch) {
+                try {
+                    $payload = ParagraphPatchPayload::apply($structured, $source->content);
+                    $matchesFinding = collect($findings)->contains(function (array $finding) use ($payload): bool {
+                        $evidence = $finding['evidence'] ?? null;
 
-            $payload = $this->repairLengthIfNeeded(
-                payload: $payload,
-                brief: $brief,
-                model: $settings->model,
-                promptVersion: $promptVersion,
-                metadata: $metadata,
-                sceneRewrite: $sceneId !== null,
-                reasoningEffort: $settings->reasoningEffort,
-            );
-            if ($sceneId === null) {
-                $payload = $this->validateChapterPayloadWithCoverageRepair(
-                    collect($payload)->only(['content', 'scene_coverage', 'introduced_major_facts'])->all(),
-                    $chapter,
-                    $foreshadowingContract,
-                    $settings->provider,
-                    $settings->model,
-                    $metadata,
-                    $settings->reasoningEffort,
+                        return is_string($evidence) && $evidence !== ''
+                            && (str_contains($payload['patch']['search'], $evidence) || str_contains($evidence, $payload['patch']['search']));
+                    });
+                    if (! $matchesFinding) {
+                        throw ValidationException::withMessages(['paragraph_patch.search' => 'Paragraph Patch 必须命中当前 Paragraph Finding 的逐字证据。']);
+                    }
+                } catch (ValidationException $exception) {
+                    throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
+                }
+            } else {
+                $payload = $this->responsePayload(
+                    content: $response->content,
+                    structuredData: $structured,
+                    sceneRewrite: true,
+                    provider: $settings->provider,
+                    model: $settings->model,
+                    metadata: $metadata,
+                    task: $brief['plan_acceptance'],
+                    chapter: $chapter,
+                    foreshadowingContract: $foreshadowingContract,
+                    reasoningEffort: $settings->reasoningEffort,
+                );
+                $payload = $this->repairLengthIfNeeded(
+                    payload: $payload,
+                    brief: $brief,
+                    model: $settings->model,
+                    promptVersion: $promptVersion,
+                    metadata: $metadata,
+                    sceneRewrite: true,
+                    reasoningEffort: $settings->reasoningEffort,
                 );
             }
             $this->validateLength($payload['content'], $brief['length_requirement']);
@@ -201,17 +214,6 @@ class ChapterRewriter
         return $review;
     }
 
-    private function latestChapterDraft(Chapter $chapter): GenerationArtifact
-    {
-        $artifact = GenerationArtifact::query()->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey())->whereNull('scene_id'))->latest('id')->first();
-        if ($artifact === null) {
-            throw new AiProviderException('rewrite_input_incomplete', 'Rewrite 缺少 Chapter Draft。', false);
-        }
-
-        return $artifact;
-    }
-
     private function sceneSource(Chapter $chapter, int $sceneId): GenerationArtifact
     {
         $scene = Scene::query()->where('chapter_id', $chapter->getKey())->findOrFail($sceneId);
@@ -236,13 +238,13 @@ class ChapterRewriter
         return $this->rewriteCounter->countFor($chapter);
     }
 
-    private function systemPrompt(bool $sceneRewrite): string
+    private function systemPrompt(string $scope): string
     {
         $base = '你是 XNovel 批量定向重写器。findings 是本轮必须一次性解决的完整问题批次；必须逐项修复 batch_repair.required_finding_indexes 指定的全部问题，不得只处理第一项、最严重项或最容易处理的项，也不得把剩余问题留给下一轮。严格保留 plan_acceptance 要求的剧情结果和既定事实。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须保留并修复 actions 中的既定动作，不得主动处理未列入 actions 的未来伏笔，不得把 promised_payoff 当作允许直接揭晓的正文信息，并继续遵守 must_not_change.must_not_reveal。完成全部指定修复后，必须重新通读最终正文，对 continuity、plan、character、progress、repetition、pacing、style 七个维度进行一次全量自检，并立即修复重写过程中产生或原稿中仍然明显存在的同类问题；尤其检查时间地点、人物身体状态、物品位置、动作因果、重复表达和文风参数，避免修好旧问题又保留或引入低级矛盾。l4 是唯一的 Style Contract；重写必须保持其中的 POV、时态和主文风，只按指定方式使用辅助文风，不得在修复过程中改换叙述声音。处理连续性问题时必须对照 previous_chapter_ending，让正文交代必要的时间、地点和行动过渡。正文必须达到 length_requirement.minimum_words 且不得超过 length_requirement.maximum_words，并优先进入 preferred_minimum_words～preferred_maximum_words 的窄目标区间；字数统计排除空白和换行。原稿已处于硬范围时，应保持原有段落结构和整体篇幅；修复重复或节奏问题必须净缩减。当前稿超限时，修复其他问题的同时必须通过删除重复解释、重复感受、重复争论和不推动情节的细节实现净缩减。字数不足时，通过展开原有动作、对话、环境、感官、心理和过渡补足，不得用无意义重复凑字，不得编造重大事实、能力、世界规则或角色知识。';
 
-        $scope = $sceneRewrite
-            ? '当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。'
-            : '当前 scope=chapter，按 Schema 返回完整的简体中文章节替换稿、全部 Scene 的 scene_coverage 和 introduced_major_facts=[]。scene_coverage 必须严格按 plan_acceptance.scenes 顺序返回；scene_id 必须复制其中的数据库 Scene ID，不得填写章内 sequence。Coverage 必须基于最终重写正文重新判断，允许把已修复的问题从 missing/contradicted 更新为 fulfilled；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。';
+        $scope = $scope === 'paragraph'
+            ? '当前 scope=paragraph，只返回一个 search/replacement 补丁。search 必须逐字复制目标 Scene 中唯一出现的一段连续原文；replacement 只修复该处，不得返回整章或整 Scene。self_check 必须基于应用补丁后的 Scene。'
+            : '当前 scope=scene，只返回该 Scene 的完整替换稿，不得改写其他 Scene。按 Schema 同时返回 goal、conflict、turn、outcome 的 self_check；fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。';
 
         return $base.$scope.NarrativeProsePolicy::writing();
     }
@@ -253,50 +255,34 @@ class ChapterRewriter
      */
     private function responsePayload(string $content, ?array $structuredData, bool $sceneRewrite, ?string $provider = null, ?string $model = null, array $metadata = [], mixed $task = null, ?Chapter $chapter = null, array $foreshadowingContract = [], ?string $reasoningEffort = null): array
     {
-        if ($sceneRewrite) {
-            if ($structuredData === null) {
-                throw new AiProviderException('rewrite_schema_invalid', 'Scene Rewrite 未返回合法的结构化结果。', false);
-            }
+        if ($structuredData === null) {
+            throw new AiProviderException('rewrite_schema_invalid', 'Scene Rewrite 未返回合法的结构化结果。', false);
+        }
 
-            try {
-                return SceneRewritePayload::validate($structuredData);
-            } catch (ValidationException $exception) {
-                if ($model === null || ! $this->containsOnlyCoverageEvidenceErrors($exception)) {
-                    throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
-                }
-            }
-
-            $structuredData['self_check'] = $this->coverageEvidenceRepairer->repair(
-                coverage: is_array($structuredData['self_check'] ?? null) ? $structuredData['self_check'] : [],
-                content: is_string($structuredData['content'] ?? null) ? $structuredData['content'] : '',
-                provider: (string) $provider,
-                model: $model,
-                metadata: $metadata,
-                task: $task,
-                path: 'self_check',
-                reasoningEffort: $reasoningEffort,
-            );
-
-            try {
-                return SceneRewritePayload::validate($structuredData);
-            } catch (ValidationException $exception) {
+        try {
+            return SceneRewritePayload::validate($structuredData);
+        } catch (ValidationException $exception) {
+            if ($model === null || ! $this->containsOnlyCoverageEvidenceErrors($exception)) {
                 throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
             }
         }
 
-        if ($structuredData === null || $chapter === null || $model === null) {
-            throw new AiProviderException('rewrite_schema_invalid', 'Chapter Rewrite 未返回合法的结构化结果。', false);
-        }
-
-        return $this->validateChapterPayloadWithCoverageRepair(
-            $structuredData,
-            $chapter,
-            $foreshadowingContract,
-            (string) $provider,
-            $model,
-            $metadata,
-            $reasoningEffort,
+        $structuredData['self_check'] = $this->coverageEvidenceRepairer->repair(
+            coverage: is_array($structuredData['self_check'] ?? null) ? $structuredData['self_check'] : [],
+            content: is_string($structuredData['content'] ?? null) ? $structuredData['content'] : '',
+            provider: (string) $provider,
+            model: $model,
+            metadata: $metadata,
+            task: $task,
+            path: 'self_check',
+            reasoningEffort: $reasoningEffort,
         );
+
+        try {
+            return SceneRewritePayload::validate($structuredData);
+        } catch (ValidationException $exception) {
+            throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
+        }
     }
 
     private function containsOnlyCoverageEvidenceErrors(ValidationException $exception): bool
@@ -309,83 +295,9 @@ class ChapterRewriter
     }
 
     /** @param array<string, mixed> $payload @param array<string, mixed> $contract @param array<string, mixed> $metadata */
-    private function validateChapterPayloadWithCoverageRepair(array $payload, Chapter $chapter, array $contract, string $provider, string $model, array $metadata, ?string $reasoningEffort = null): array
-    {
-        $sourceArtifacts = $chapter->scenes->sortBy('sequence')->pluck('currentArtifact')->filter()->values();
-        $repaired = [];
-
-        while (true) {
-            try {
-                return ChapterAssemblyPayload::validate($payload, $chapter, $sourceArtifacts, $contract, allowCoverageUpgrade: true);
-            } catch (ValidationException $exception) {
-                $fields = array_keys($exception->errors());
-                $planEvidence = $fields !== [] && collect($fields)->every(
-                    fn (string $field): bool => preg_match('/^scene_coverage\.\d+\.(goal|conflict|turn|outcome)\.evidence$/', $field) === 1,
-                );
-                $foreshadowingEvidence = $fields !== [] && collect($fields)->every(
-                    fn (string $field): bool => preg_match('/^scene_coverage\.\d+\.foreshadowing_coverage\.\d+\.evidence$/', $field) === 1,
-                );
-                if (! $planEvidence && ! $foreshadowingEvidence) {
-                    throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
-                }
-            }
-
-            $index = (int) explode('.', $fields[0])[1];
-            $key = ($foreshadowingEvidence ? 'foreshadowing:' : 'plan:').$index;
-            if (isset($repaired[$key]) || ! is_array($row = data_get($payload, "scene_coverage.{$index}"))) {
-                throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
-            }
-
-            if ($foreshadowingEvidence) {
-                $sceneSequence = (int) ($chapter->scenes->sortBy('sequence')->values()->get($index)?->sequence ?? 0);
-                $payload['scene_coverage'][$index]['foreshadowing_coverage'] = $this->foreshadowingCoverageEvidenceRepairer->repair(
-                    coverage: is_array($row['foreshadowing_coverage'] ?? null) ? $row['foreshadowing_coverage'] : [],
-                    content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
-                    expectations: ForeshadowingCoverage::expectationsForScene($contract, $sceneSequence),
-                    provider: $provider,
-                    model: $model,
-                    metadata: $metadata,
-                    path: "scene_coverage.{$index}.foreshadowing_coverage",
-                    reasoningEffort: $reasoningEffort,
-                );
-            } else {
-                $coverage = $this->coverageEvidenceRepairer->repair(
-                    coverage: collect($row)->except(['scene_id', 'foreshadowing_coverage'])->all(),
-                    content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
-                    provider: $provider,
-                    model: $model,
-                    metadata: $metadata,
-                    task: data_get($chapter->latestPlan?->scene_plans, $index),
-                    path: "scene_coverage.{$index}",
-                    reasoningEffort: $reasoningEffort,
-                );
-                $payload['scene_coverage'][$index] = [
-                    'scene_id' => $row['scene_id'] ?? null,
-                    ...$coverage,
-                    'foreshadowing_coverage' => $row['foreshadowing_coverage'] ?? [],
-                ];
-            }
-            $repaired[$key] = true;
-        }
-    }
-
     /** @return array<string, mixed> */
-    private function planAcceptance(Chapter $chapter, ?int $sceneId): array
+    private function planAcceptance(Chapter $chapter, int $sceneId): array
     {
-        if ($sceneId === null) {
-            return $chapter->latestPlan->only([
-                'chapter_function',
-                'arc_contribution',
-                'arc_contributions',
-                'world_entity_candidates',
-                'reader_promise',
-                'must_reveal',
-                'must_not_reveal',
-                'forbidden_conflicts',
-                'scene_plans',
-            ]);
-        }
-
         $scene = $chapter->scenes->firstWhere('id', $sceneId);
         if ($scene === null) {
             throw new AiProviderException('rewrite_scope_unresolved', '指定 Scene 不属于当前 Chapter。', false);
@@ -409,10 +321,6 @@ class ChapterRewriter
      */
     private function repairLengthIfNeeded(array $payload, array $brief, string $model, string $promptVersion, array $metadata, bool $sceneRewrite, ?string $reasoningEffort = null): array
     {
-        if (! $sceneRewrite) {
-            return $this->chapterLengthRepairer->repair($payload, $brief, $model, $metadata, $reasoningEffort);
-        }
-
         $requirement = $brief['length_requirement'];
 
         for ($attempt = 1; $attempt <= (int) config('generation.max_rewrite_length_repair_attempts', 2); $attempt++) {
@@ -447,17 +355,13 @@ class ChapterRewriter
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
-                responseSchema: $sceneRewrite ? SceneRewritePayload::schema() : null,
+                responseSchema: SceneRewritePayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
             $payload = $this->responsePayload(
-                content: $sceneRewrite
-                    ? $response->content
-                    : StructuredOutput::requireContent($response, 'rewrite', 'Chapter Rewrite'),
-                structuredData: $sceneRewrite
-                    ? StructuredOutput::require($response, 'rewrite', 'Scene Rewrite')
-                    : $response->structuredData,
+                content: $response->content,
+                structuredData: StructuredOutput::require($response, 'rewrite', 'Scene Rewrite'),
                 sceneRewrite: $sceneRewrite,
                 model: $model,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt],
@@ -485,7 +389,7 @@ class ChapterRewriter
         }
     }
 
-    private function startRun(Chapter $chapter, ?int $sceneId, GenerationArtifact $source, string $findingHash, int $attempt, string $inputHash, array $brief, string $provider, string $model, string $promptVersion): array
+    private function startRun(Chapter $chapter, int $sceneId, GenerationArtifact $source, string $findingHash, int $attempt, string $inputHash, array $brief, string $provider, string $model, string $promptVersion): array
     {
         return DB::transaction(function () use ($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $provider, $model, $promptVersion) {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
@@ -508,7 +412,7 @@ class ChapterRewriter
 
             return [GenerationRun::query()->create([
                 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId,
-                'scope_type' => $sceneId === null ? 'chapter' : 'scene', 'scope_id' => $sceneId ?? $chapter->getKey(),
+                'scope_type' => 'scene', 'scope_id' => $sceneId,
                 'stage' => GenerationStage::Rewrite, 'status' => RunStatus::Running, 'attempt' => $attempt,
                 'idempotency_key' => $key, 'input_hash' => $inputHash,
                 'state_version' => $chapter->novel->canonicalStateVersion()->value('version'),
@@ -558,7 +462,7 @@ class ChapterRewriter
         return $maxTokens;
     }
 
-    private function complete(GenerationRun $run, Chapter $chapter, ?int $sceneId, GenerationArtifact $source, Review $review, array $payload, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, int $sceneId, GenerationArtifact $source, Review $review, array $payload, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact
     {
         return DB::transaction(function () use ($run, $chapter, $sceneId, $source, $review, $payload, $findingHash, $attempt, $expectedStateVersion) {
             $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
@@ -572,29 +476,24 @@ class ChapterRewriter
             $artifact = $run->artifacts()->create([
                 'type' => ArtifactType::RewriteDraft, 'version' => $version, 'content' => $payload['content'],
                 'data' => [
-                    'scope' => $sceneId === null ? 'chapter' : 'scene',
+                    'scope' => (string) data_get($run->context_snapshot, 'scope', 'scene'),
                     'source_artifact_id' => $source->getKey(),
                     'source_review_id' => $review->getKey(),
                     'finding_hash' => $findingHash,
                     'attempt' => $attempt,
                     'repair_findings' => data_get($run->context_snapshot, 'findings', []),
                     'plan_acceptance' => data_get($run->context_snapshot, 'plan_acceptance'),
-                    ...($sceneId === null ? [
-                        'scene_coverage' => $payload['scene_coverage'],
-                        'plan_findings' => $payload['plan_findings'],
-                        'introduced_major_facts' => $payload['introduced_major_facts'],
-                    ] : [
-                        'self_check' => $payload['self_check'],
-                        // 确定性 Assembly 只读取当前 Scene Artifact；局部 Rewrite 必须继续携带
-                        // 冻结的伏笔 Coverage 身份，不能让章节拼装回退到模型重建该数组。
-                        'foreshadowing_coverage' => data_get($source->data, 'foreshadowing_coverage', []),
-                        'plan_findings' => PlanCoverage::findings(
-                            $sceneId,
-                            $payload['self_check'],
-                            data_get($run->context_snapshot, 'plan_acceptance.coverage_expectations', []),
-                            'scene_rewrite_self_check',
-                        ),
-                    ]),
+                    ...(isset($payload['patch']) ? ['paragraph_patch' => $payload['patch']] : []),
+                    'self_check' => $payload['self_check'],
+                    // 确定性 Assembly 只读取当前 Scene Artifact；局部 Rewrite 必须继续携带
+                    // 冻结的伏笔 Coverage 身份，不能让章节拼装回退到模型重建该数组。
+                    'foreshadowing_coverage' => data_get($source->data, 'foreshadowing_coverage', []),
+                    'plan_findings' => PlanCoverage::findings(
+                        $sceneId,
+                        $payload['self_check'],
+                        data_get($run->context_snapshot, 'plan_acceptance.coverage_expectations', []),
+                        'scene_rewrite_self_check',
+                    ),
                     'word_count' => $this->lengthPolicy->count($payload['content']),
                     'target_words' => (int) data_get($run->context_snapshot, 'length_requirement.target_words'),
                     'minimum_words' => (int) data_get($run->context_snapshot, 'length_requirement.minimum_words'),
@@ -602,9 +501,7 @@ class ChapterRewriter
                 ],
                 'checksum' => hash('sha256', $payload['content']),
             ]);
-            if ($sceneId !== null) {
-                Scene::query()->whereKey($sceneId)->update(['status' => SceneStatus::Draft, 'current_artifact_id' => $artifact->getKey()]);
-            }
+            Scene::query()->whereKey($sceneId)->update(['status' => SceneStatus::Draft, 'current_artifact_id' => $artifact->getKey()]);
             $chapter->update(['status' => ChapterStatus::Rewrite]);
             $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
 

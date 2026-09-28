@@ -240,7 +240,7 @@ test('a fresh running stage is not dispatched a second time', function () {
     Queue::assertNothingPushed();
 });
 
-test('a rewrite review dispatches its frozen scope while legacy auto commit remains disabled', function () {
+test('a chapter structural review waits for plan or scene rebuild while legacy auto commit remains disabled', function () {
     $fixture = pipelineChapter();
     $draft = pipelineArtifact($fixture['novel'], $fixture['chapter'], ArtifactType::ChapterDraft, GenerationStage::ChapterAssembly);
     pipelineReview($fixture['novel'], $fixture['chapter'], $draft, ReviewDecision::Rewrite, [[
@@ -251,8 +251,8 @@ test('a rewrite review dispatches its frozen scope while legacy auto commit rema
     ]]);
     $fixture['chapter']->update(['status' => ChapterStatus::Rewrite]);
 
-    expect(app(AdvanceChapterPipelineAction::class)->handle($fixture['chapter']->getKey()))->toBe(GenerationStage::Rewrite);
-    Queue::assertPushed(RewriteChapterJob::class, fn (RewriteChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && $job->sceneId === null);
+    expect(app(AdvanceChapterPipelineAction::class)->handle($fixture['chapter']->getKey()))->toBeNull();
+    Queue::assertNotPushed(RewriteChapterJob::class);
 
     Cache::flush();
     $review = Review::query()->latest('id')->firstOrFail();

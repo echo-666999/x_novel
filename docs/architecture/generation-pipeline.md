@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：关系化 Outline、分阶段 Outline、关系化 Chapter Planning、Plan Admission、完成语义与确定性 Assembly 已由 NGC-002A～NGC-006A 实现。Assembly 当前按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；Compact Review 与 Paragraph/Scene Rewrite 收敛尚待 NGC-006B 实现，当前 Whole Chapter Rewrite 兼容路径仍未删除。
+> 实施状态：关系化 Outline、分阶段 Outline、关系化 Chapter Planning、Plan Admission、完成语义、确定性 Assembly、Compact Review 与 Paragraph/Scene Rewrite 已由 NGC-002A～NGC-006B 实现。Assembly 当前按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；自动 Whole Chapter Rewrite 兼容路径已删除。
 
 ## 1. 目标
 
@@ -478,7 +478,7 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 普通 warning 按分数和可执行性分流：评分达标且没有其他门禁时允许 PASS，并作为非阻塞建议保留；评分未达标且 warning 可执行时进入 REWRITE。auto-fixable error 进入 REWRITE；真正需要用户选择、没有安全修复路径或 Rewrite 耗尽时进入 NEEDS_ATTENTION。Hard Conflict 必须 BLOCK，模型顶层建议不能覆盖 Laravel 的确定性决策。
 
-Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
+Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。模型不返回数据库 `scene_id`；Laravel 用逐字 Evidence 唯一映射所属 Scene，章节级问题保持空 Scene。模型不能创建 hard finding，也不能返回推荐 Decision。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存恢复后的权威身份、命中的决策规则和 Finding code。
 
 Review 调用前，Laravel 先确定性检查字数、Scene 顺序、Artifact Lineage、State Version、Locked Facts、Plan/Milestone/Handoff 身份、Coverage 完整性、Candidate 引用和 Evidence 逐字命中。模型只返回需要语义判断的七维分数、紧凑审计和可执行 Findings，不重复输出权威 ID/顺序/Coverage 全量镜像。`findings` 是问题集合的权威来源，Laravel 结合确定性 Findings、分数和 Rewrite 预算派生最终 Decision；模型建议不能覆盖 Hard Conflict 或顺序门禁。
 

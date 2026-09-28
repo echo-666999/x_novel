@@ -3,10 +3,8 @@
 use App\AI\OpenAiStructuredOutputSchema;
 use App\Services\ArcCompletionAuditRepairer;
 use App\Services\CanonicalChapterSummaryService;
-use App\Services\ChapterAssemblyPayload;
 use App\Services\ChapterPlanPayload;
 use App\Services\ChapterReviewer;
-use App\Services\ChapterRewriteLengthRepairer;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelPlanner;
@@ -29,7 +27,6 @@ test('every ai response schema used by the generation pipeline satisfies openai 
     $schemas = [
         'chapter_plan' => ChapterPlanPayload::schema(),
         'scene_draft' => SceneDraftPayload::schema(),
-        'chapter_assembly' => ChapterAssemblyPayload::schema(),
         'scene_rewrite' => SceneRewritePayload::schema(),
         'plan_coverage_repair' => PlanCoverage::schema(),
         'foreshadowing_coverage_repair' => ForeshadowingCoverageEvidenceRepairer::responseSchema(),
@@ -46,7 +43,6 @@ test('every ai response schema used by the generation pipeline satisfies openai 
         'scene_structure_repair' => $invoke(SceneDraftStructureRepairer::class, 'schema'),
         'arc_completion_repair' => $invoke(ArcCompletionAuditRepairer::class, 'schema'),
         'review_dimension_repair' => $invoke(ReviewDimensionAuditRepairer::class, 'schema', ['facts', ['FACT_CONFLICT' => 'facts']]),
-        'rewrite_length_repair' => $invoke(ChapterRewriteLengthRepairer::class, 'schema'),
         'story_event_extraction' => $invoke(StoryEventExtractor::class, 'responseSchema'),
     ];
 

@@ -14,7 +14,7 @@ final readonly class RewriteScopeDecision
 
     public function isResolved(): bool
     {
-        return in_array($this->scope, ['scene', 'chapter'], true);
+        return $this->scope === 'scene' && $this->sceneId !== null;
     }
 
     /** @return array{scope: string, scene_id: int|null, reason: string, finding_indexes: array<int, int>} */
