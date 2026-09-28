@@ -22,6 +22,7 @@ use App\Models\Fact;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 
 class PlanValidator
 {
@@ -415,6 +416,48 @@ class PlanValidator
                 '第一场景必须说明如何承接上一章正式结尾；如有时间、地点或行动跳跃，需要写明正文中的过渡过程。',
             );
         }
+
+        try {
+            $target = $this->outlineProgressResolver->resolve($plan->chapter->novel);
+        } catch (ValidationException) {
+            // Outline 来源链错误由 validateOutlineContract 形成可操作 Finding；这里不提前中断聚合。
+            $target = null;
+        }
+        $inbound = $target?->inboundHandoff;
+        if (is_array($inbound) && data_get($inbound, 'entry_pending') === true) {
+            $transition = trim((string) data_get($plan->scene_plans, '0.transition_from_previous', ''));
+            foreach ((array) data_get($inbound, 'contract.required_transition', []) as $requirement) {
+                if (! is_string($requirement) || $requirement === '') {
+                    continue;
+                }
+                if (! str_contains($transition, $requirement)) {
+                    $findings[] = $this->blocked(
+                        'MISSING_HANDOFF_TRANSITION',
+                        "第一场景的跨章衔接缺少已提交 Handoff 要求：{$requirement}",
+                        'scene_plans.0.transition_from_previous',
+                        "chapter_plan:{$plan->getKey()}",
+                        '重新规划第一场景，并明确写出时间、地点、行动或人物状态的必要过渡。',
+                    );
+                }
+            }
+
+            $continuity = collect(data_get($plan->scene_plans, '0.continuity_requirements', []));
+            foreach (['carried_states', 'open_threads'] as $field) {
+                foreach ((array) data_get($inbound, "contract.{$field}", []) as $description) {
+                    if (! $continuity->contains(fn (mixed $item): bool => is_array($item)
+                        && ($item['mode'] ?? null) === 'establish'
+                        && ($item['description'] ?? null) === $description)) {
+                        $findings[] = $this->blocked(
+                            'MISSING_HANDOFF_STATE',
+                            "第一场景没有建立已提交 Handoff 状态：{$description}",
+                            'scene_plans.0.continuity_requirements',
+                            "chapter_plan:{$plan->getKey()}",
+                            '恢复 Handoff 的 Carried State/Open Thread 后重新执行 Plan Admission。',
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -459,6 +502,17 @@ class PlanValidator
                 $record,
                 '重新执行 Chapter Planning 或 Plan Admission 生成完整冻结快照。',
             );
+        }
+        foreach (['inbound_handoff', 'inbound_handoff_checksum', 'previous_chapter_ending'] as $field) {
+            if (! array_key_exists($field, $snapshot)) {
+                $findings[] = $this->blocked(
+                    'ADMISSION_SOURCE_NOT_FROZEN',
+                    "Plan Admission 缺少冻结字段 {$field}。",
+                    "admission_snapshot.{$field}",
+                    $record,
+                    '重新执行 Chapter Planning 或 Plan Admission 生成完整冻结快照。',
+                );
+            }
         }
 
         if (is_array($plan->admission_snapshot)
@@ -541,6 +595,20 @@ class PlanValidator
                     '重新执行 Chapter Planning，冻结当前 Beat 的 Handoff。',
                 );
             }
+
+            $inboundChecksum = $target->inboundHandoff === null
+                ? null
+                : hash('sha256', json_encode($target->inboundHandoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+            if (($snapshot['inbound_handoff'] ?? null) !== $target->inboundHandoff
+                || ($snapshot['inbound_handoff_checksum'] ?? null) !== $inboundChecksum) {
+                $findings[] = $this->blocked(
+                    'ADMISSION_HANDOFF_MISMATCH',
+                    'Admission 冻结的上一 Beat Handoff 与正式 Completion Event 不一致。',
+                    'admission_snapshot.inbound_handoff',
+                    "outline_beat:{$target->outlineBeatId}",
+                    '基于已正式提交的 Handoff 重新规划 Entry Milestone。',
+                );
+            }
         }
 
         foreach (['writer', 'extractor', 'reviewer', 'rewrite', 'summary'] as $stage) {
@@ -599,6 +667,20 @@ class PlanValidator
                 $record,
                 '降低章节规模或提高 Reviewer Context/输出预算后重新执行 Plan Admission。',
             );
+        }
+
+        foreach (['event_extraction', 'rewrite'] as $stage) {
+            $capacity = (int) data_get($snapshot, "capacity.{$stage}.max_output_tokens", 0);
+            $route = $stage === 'event_extraction' ? 'extractor' : 'rewrite';
+            if ($capacity < 1 || $capacity !== (int) data_get($snapshot, "routes.{$route}.max_output_tokens", 0)) {
+                $findings[] = $this->blocked(
+                    'OUTPUT_CAPACITY_NOT_FROZEN',
+                    "{$stage} 的输出容量未与冻结 Route 对齐。",
+                    "admission_snapshot.capacity.{$stage}",
+                    $record,
+                    '重新执行 Plan Admission 冻结合法输出容量。',
+                );
+            }
         }
     }
 

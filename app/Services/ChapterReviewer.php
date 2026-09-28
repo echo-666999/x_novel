@@ -42,7 +42,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -114,8 +114,12 @@ class ChapterReviewer
             return $review;
         }
 
-        $settings = $this->settingsResolver->resolve(AiStage::Reviewer, $chapter->novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Reviewer);
+        $settings = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->routeFor($chapter->latestPlan, AiStage::Reviewer)
+            : $this->settingsResolver->resolve(AiStage::Reviewer, $chapter->novel);
+        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->promptVersionFor($chapter->latestPlan, AiStage::Reviewer)
+            : $this->promptVersionResolver->resolve(AiStage::Reviewer);
         $context['prompt_version'] = $promptVersion;
         $context['generation_preferences']['review_token_budget'] = [
             'max_legal_output_tokens' => min(
@@ -467,6 +471,9 @@ class ChapterReviewer
         if ($maxTokens < 1) {
             throw new AiProviderException('review_capacity_mismatch', 'Reviewer Route 没有合法的输出容量。', false);
         }
+
+        $chapter = Chapter::query()->with('latestPlan')->findOrFail($run->chapter_id);
+        $this->outputCapacity->assertWithinFrozenRoute($chapter, AiStage::Reviewer, $maxTokens);
 
         return $maxTokens;
     }

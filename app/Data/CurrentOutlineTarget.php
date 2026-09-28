@@ -16,6 +16,7 @@ readonly class CurrentOutlineTarget
      * @param  array<int, string>  $canonicalCompletedMilestoneKeys
      * @param  array<int, int>  $canonicalCompletedBeatIds
      * @param  array<int, int>  $canonicalCompletedMilestoneIds
+     * @param  array<string, mixed>|null  $inboundHandoff
      */
     public function __construct(
         public int $outlineId,
@@ -35,6 +36,7 @@ readonly class CurrentOutlineTarget
         public array $canonicalCompletedBeatIds,
         public array $canonicalCompletedMilestoneIds,
         public int $chaptersUsedForCurrentBeat,
+        public ?array $inboundHandoff,
     ) {}
 
     /** @return array<string, mixed> 返回可安全写入 Context Snapshot 的目标快照。 */
@@ -60,6 +62,7 @@ readonly class CurrentOutlineTarget
             'canonical_completed_beat_ids' => $this->canonicalCompletedBeatIds,
             'canonical_completed_milestone_ids' => $this->canonicalCompletedMilestoneIds,
             'chapters_used_for_current_beat' => $this->chaptersUsedForCurrentBeat,
+            'inbound_handoff' => $this->inboundHandoff,
         ];
     }
 }

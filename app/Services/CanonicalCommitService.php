@@ -16,10 +16,6 @@ use App\Enums\FactStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\WorldEntityStatus;
-use App\Jobs\ContinueAutoGenerationJob;
-use App\Jobs\GenerateCanonicalChapterSummaryJob;
-use App\Jobs\RefreshNovelProjectionJob;
-use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Character;
 use App\Models\Fact;
@@ -28,7 +24,6 @@ use App\Models\Novel;
 use App\Models\Review;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
@@ -45,6 +40,7 @@ class CanonicalCommitService
         private readonly StoryEventApplier $storyEventApplier,
         private readonly StoryArcProgressProjector $storyArcProgressProjector,
         private readonly OutlineCompletionService $outlineCompletion,
+        private readonly CanonicalPostCommitDispatcher $postCommitDispatcher,
     ) {}
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
@@ -137,12 +133,10 @@ class CanonicalCommitService
 
         // Duplicate commits also repair a dispatch gap after a process crash. Every job in
         // this chain revalidates its canonical source and is independently idempotent.
-        Bus::chain([
-            new UpdateMemoryJob($data->chapterId),
-            new GenerateCanonicalChapterSummaryJob($data->chapterId, $data->artifactId),
-            new RefreshNovelProjectionJob($stateVersion->novel_id, $stateVersion->getKey()),
-            new ContinueAutoGenerationJob($data->chapterId, $data->artifactId, $stateVersion->getKey()),
-        ])->onQueue('default')->dispatch();
+        $this->postCommitDispatcher->dispatch(
+            Chapter::query()->findOrFail($data->chapterId),
+            $stateVersion,
+        );
 
         return $stateVersion;
     }

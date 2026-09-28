@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
-use App\Actions\Generation\CheckNextAction;
 use App\Actions\Generation\GenerateNextChapterAction;
 use App\Data\ResumePoint;
 use App\Enums\ArtifactType;
@@ -25,8 +24,8 @@ class ResumeResolver
     public function __construct(
         private readonly GenerateNextChapterAction $generateNextChapter,
         private readonly AdvanceChapterPipelineAction $advanceChapterPipeline,
-        private readonly CheckNextAction $checkNextAction,
         private readonly RewriteScopeResolver $rewriteScopeResolver,
+        private readonly CanonicalPostCommitDispatcher $postCommitDispatcher,
     ) {}
 
     public function detect(Novel $novel): ResumePoint
@@ -207,7 +206,12 @@ class ResumeResolver
     private function advance(Novel $novel, ResumePoint $point): void
     {
         if ($point->key === 'post_commit') {
-            $this->checkNextAction->handle($novel, (int) $point->chapterId);
+            $chapter = Chapter::query()->with('novel')->findOrFail((int) $point->chapterId);
+            $stateVersion = $chapter->novel->storyStateVersions()
+                ->whereKey($chapter->novel->canonical_state_version_id)
+                ->where('chapter_id', $chapter->getKey())
+                ->firstOrFail();
+            $this->postCommitDispatcher->dispatch($chapter, $stateVersion);
 
             return;
         }

@@ -2,15 +2,25 @@
 
 use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
+use App\Enums\ArtifactType;
+use App\Enums\ChapterStatus;
 use App\Enums\EventType;
+use App\Enums\GenerationStage;
+use App\Enums\RunStatus;
 use App\Enums\StoryEventStatus;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
+use App\Models\Character;
+use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\NovelOutlineBeat;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
+use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
+use App\Services\PlanValidator;
 use Database\Factories\Support\NormalizedOutlineDefinition;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -88,14 +98,21 @@ function ngc003CompletionEvent(
         'sequence' => ((int) $novel->chapters()->max('sequence')) + 1,
     ]);
 
+    $payload = array_filter([
+        'beat_key' => $beat->beat_key,
+        'milestone_key' => $milestone?->milestone_key,
+    ]);
+    if ($type === EventType::StoryArcBeatCompleted && $beat->handoff_next_beat_id !== null) {
+        $payload['handoff_contract'] = app(OutlineHandoffContract::class)->forBeat($beat);
+        $payload['handoff_readiness'] = ['status' => 'ready', 'checks' => []];
+    }
+
     return StoryEvent::factory()->for($novel)->for($chapter)->create([
         'event_type' => $type,
         'subject_type' => 'story_arc',
         'subject_id' => (string) $fixture['arc']->getKey(),
-        'payload' => array_filter([
-            'beat_key' => $beat->beat_key,
-            'milestone_key' => $milestone?->milestone_key,
-        ]),
+        'payload' => $payload,
+        'evidence' => [['artifact_id' => 1, 'scene_id' => null, 'quote' => '正式交接证据', 'start_offset' => null, 'end_offset' => null]],
         'status' => $status,
         'invalidated_at' => $status === StoryEventStatus::Invalidated ? now() : null,
         'novel_outline_id' => $beat->novel_outline_id,
@@ -169,7 +186,91 @@ test('a fully completed beat advances to the next beat entry milestone', functio
         ->beat->key->toBe('factory-beat-2')
         ->milestone->key->toBe('factory-beat-2-milestone-1')
         ->canonicalCompletedBeatKeys->toBe(['factory-beat'])
-        ->canonicalCompletedMilestoneKeys->toBe(['factory-milestone', 'factory-milestone-2']);
+        ->canonicalCompletedMilestoneKeys->toBe(['factory-milestone', 'factory-milestone-2'])
+        ->and(data_get($target->inboundHandoff, 'source_beat_key'))->toBe('factory-beat')
+        ->and(data_get($target->inboundHandoff, 'contract.next_beat_id'))->toBe($fixture['beats'][1]->getKey())
+        ->and(data_get($target->inboundHandoff, 'evidence.0.quote'))->toBe('正式交接证据');
+});
+
+test('the next beat is blocked when its canonical completion event lacks the frozen handoff', function () {
+    $fixture = ngc003ProgressFixture();
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 0);
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 1);
+    $event = ngc003CompletionEvent($fixture, EventType::StoryArcBeatCompleted, 0);
+    DB::table('story_events')->where('id', $event->getKey())->update([
+        'payload' => json_encode(['beat_key' => 'factory-beat'], JSON_THROW_ON_ERROR),
+    ]);
+
+    expect(fn () => app(OutlineProgressResolver::class)->resolve($fixture['novel']->fresh()))
+        ->toThrow(ValidationException::class, '缺少上一 Beat');
+});
+
+test('the next beat entry plan must explain required transitions and establish carried state', function () {
+    $fixture = ngc003ProgressFixture();
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 0);
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 1);
+    $completion = ngc003CompletionEvent($fixture, EventType::StoryArcBeatCompleted, 0);
+    $previous = $completion->chapter;
+    $run = GenerationRun::factory()->for($fixture['novel'])->for($previous)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => '上一阶段完成，新的线索已经出现。',
+    ]);
+    $previous->update([
+        'status' => ChapterStatus::Canonical,
+        'canonical_artifact_id' => $artifact->getKey(),
+    ]);
+    $fixture['novel']->update(['current_chapter_sequence' => $previous->sequence]);
+
+    $target = app(OutlineProgressResolver::class)->resolve($fixture['novel']->fresh());
+    $chapter = Chapter::factory()->for($fixture['novel'])->create([
+        'volume_id' => $fixture['novel']->volumes()->where('status', 'active')->value('id'),
+        'sequence' => $previous->sequence + 1,
+    ]);
+    $character = Character::factory()->for($fixture['novel'])->create();
+    $plan = ChapterPlan::factory()->for($chapter)->create([
+        'novel_outline_id' => $target->outlineId,
+        'primary_outline_arc_id' => $target->outlineArcId,
+        'primary_outline_beat_id' => $target->outlineBeatId,
+        'primary_outline_milestone_id' => $target->outlineMilestoneId,
+        'pov_character_id' => $character->getKey(),
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
+        ]],
+        'must_reveal' => $target->milestone['must_include'],
+        'must_not_reveal' => [...$target->beat['must_not_include'], ...$target->milestone['must_not_include']],
+        'scene_plans' => [[
+            'goal' => '进入下一阶段', 'conflict' => '线索尚不清晰', 'turn' => '确认方向', 'outcome' => '开始追查',
+            'outcome_allowed' => [], 'outcome_forbidden' => [], 'continuity_requirements' => [],
+            'pov_character_id' => $character->getKey(), 'location' => '旧地点', 'time_anchor' => '当日',
+            'transition_from_previous' => '直接开始新的调查。',
+        ]],
+    ]);
+
+    $blocked = collect(app(PlanValidator::class)->validate($plan)->findings)->pluck('code');
+    expect(data_get($target->inboundHandoff, 'entry_pending'))->toBeTrue()
+        ->and($blocked)->toContain('MISSING_HANDOFF_TRANSITION', 'MISSING_HANDOFF_STATE');
+
+    $scenePlans = $plan->scene_plans;
+    $scenePlans[0]['transition_from_previous'] = '明确进入下一阶段。';
+    $scenePlans[0]['continuity_requirements'] = [
+        ['key' => 'result', 'mode' => 'establish', 'description' => '保留调查结果。'],
+        ['key' => 'thread', 'mode' => 'establish', 'description' => '继续追查来源。'],
+    ];
+    $plan->update(['scene_plans' => $scenePlans]);
+
+    expect(collect(app(PlanValidator::class)->validate($plan->fresh())->findings)->pluck('code'))
+        ->not->toContain('MISSING_HANDOFF_TRANSITION', 'MISSING_HANDOFF_STATE');
 });
 
 test('postgres migration accepts milestone completion and installs logical active indexes', function () {

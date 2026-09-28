@@ -30,6 +30,7 @@ class CanonicalChapterSummaryService
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly PlanAdmissionService $planAdmission,
     ) {}
 
     /** @return array{novel_id: int, novel_title: string, chapters: array<int, array<string, mixed>>, plan_hash: string} */
@@ -96,8 +97,12 @@ class CanonicalChapterSummaryService
     {
         $chapter = Chapter::query()->with(['novel', 'canonicalArtifact.generationRun'])->findOrFail($chapterId);
         $source = $this->canonicalArtifact($chapter);
-        $settings = $this->settingsResolver->resolve(AiStage::Summary, $chapter->novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Summary);
+        $settings = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Summary)
+            : $this->settingsResolver->resolve(AiStage::Summary, $chapter->novel);
+        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Summary)
+            : $this->promptVersionResolver->resolve(AiStage::Summary);
         $tokenBudget = [
             'initial_max_completion_tokens' => (int) config('generation.summary_max_output_tokens', 1_200),
             'retry_max_completion_tokens' => (int) config('generation.summary_retry_max_output_tokens', 2_400),

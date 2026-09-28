@@ -1129,7 +1129,7 @@ flowchart TD
 | NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | DONE | NGC-005 |
 | NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | DONE | NGC-006A |
 | NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | DONE | NGC-006B |
-| NGC-006 | Beat 交接、恢复与重复任务 | P0 | TODO | NGC-006C |
+| NGC-006 | Beat 交接、恢复与重复任务 | P0 | DONE | NGC-006C |
 | NGC-007 | 人工修复建议与结构化重建 | P0 | TODO | NGC-006 |
 | NGC-008 | 从指定章节起安全删除 | P1 | TODO | NGC-002A |
 | NGC-009 | 小说及全部关联数据删除 | P1 | TODO | NGC-008 |
@@ -1720,7 +1720,7 @@ Next Task
 ## NGC-006 — Beat 交接、恢复与重复任务
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-006C
 
 ### 实现
@@ -1748,6 +1748,17 @@ Next Task
 - Beat 切换不产生无因果硬切。
 - 不需要无归属的纯过渡章。
 - 失败恢复不会重复支付已经成功阶段的费用。
+
+### 实施结果（2026-09-29）
+
+- `story_arc_beat_completed` Candidate 由 Laravel 附加完整 `handoff_contract`，并继续保存当前 Draft/Scene 的逐字 Evidence。`OutlineProgressResolver` 进入相邻下一 Main Beat 前，必须从 Active Canonical Completion Event 读取并核对该冻结契约、Readiness、Evidence 与 `handoff_next_beat_id`；缺失或与不可变 Current Outline 不一致会在 Provider 调用前阻断。
+- `CurrentOutlineTarget`、Planner Context 与 Plan Admission Snapshot 新增 `inbound_handoff`、Checksum、Completion Event/Chapter 来源和 `entry_pending`。Entry Chapter 同时冻结 `previous_chapter_ending` 来源与正文 checksum；Planner 将 Carried States/Open Threads 恢复为第一 Scene 的稳定 `establish` Continuity Contract，Plan Validator 要求逐项写明 `required_transition`，因此时间、地点、行动或人物状态不能静默跳跃。后续仍处于同一 Entry Milestone 的章节保留 Handoff 来源，但不重复执行首次跨 Beat 过渡。
+- 第一版仍只允许 Chapter Plan 的唯一 Primary 指向当前最早未完成 Main Beat/Milestone；Completion Candidate 只能由 Laravel 针对该 Primary 生成，因此前一 Beat 最后一章可以建立 Next Trigger，但不能在同章正式完成下一 Beat Milestone。
+- 新增 `CanonicalPostCommitDispatcher`。Canonical Commit 与暂停后的 `post_commit` 恢复都从 PostgreSQL 的 Canonical Chapter、Artifact 和当前 State Version 重建同一幂等派生链；Summary、Projection 或 Worker 中断后可以重新派发，不再次执行 Canonical Commit。
+- Reviewer、Event Extractor、Scene Rewrite 与 Canonical Summary 在存在 Admission Snapshot 时使用已冻结的 Provider、Model、Reasoning Effort、Prompt Version 和输出容量。`RoutingAiProvider` 对缺失 Run、Provider/Model 漂移或缺失 Substage Route 在 HTTP 请求前失败；历史 Plan 的 Summary 读取原冻结 Route，不用已前进的 Outline Target 重验旧 Plan。
+- Plan Admission 新增 Event Extraction 与 Rewrite 输出容量边界；`GenerationOutputCapacityGuard` 在 Provider 调用前阻止请求预算超过冻结上限。已有单 Provider 调用 Checkpoint、截断失败、不保存半截 Artifact、Coverage/Schema 权威字段恢复和业务失败不技术重试语义保持不变。
+- 新增/扩展测试覆盖 Handoff 契约和证据冻结、下一 Beat 消费、缺失交接阻断、Entry Transition/Carried State、提交后幂等恢复、Run 缺失与 Model 漂移、冻结输出容量，以及现有 Duplicate Job、Timeout、Pause/Resume、Worker Crash、截断和业务失败分流回归。
+- `vendor/bin/pint --dirty` 与 `git diff --check` 通过；全量 `php artisan test` 为 971 个测试、948 通过、23 跳过、5745 个断言、0 失败（测试工具报告 3 个 warning）。
 
 ## NGC-007 — 人工修复建议与结构化重建
 

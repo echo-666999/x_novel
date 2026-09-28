@@ -5,7 +5,9 @@ use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
+use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
@@ -23,6 +25,7 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
+use App\Services\GenerationOutputCapacityGuard;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanAdmissionService;
 use App\Services\PlanValidator;
@@ -98,8 +101,21 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
         ->and(data_get($admitted->admission_snapshot, 'routes.writer.provider'))->not->toBeEmpty()
         ->and(data_get($admitted->admission_snapshot, 'routes.reviewer.prompt_version'))->not->toBeEmpty()
         ->and(data_get($admitted->admission_snapshot, 'capacity.scene_allocations'))->toHaveCount(2)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.event_extraction.max_output_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.rewrite.max_output_tokens'))->toBeGreaterThan(0)
         ->and($plan->chapter->generationRuns()->count())->toBe(0)
         ->and($provider->requests())->toBe([]);
+});
+
+test('provider stages reject a request budget above the plan admission frozen route before calling a provider', function () {
+    $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
+    $maximum = (int) data_get($plan->admission_snapshot, 'capacity.event_extraction.max_output_tokens');
+
+    expect(fn () => app(GenerationOutputCapacityGuard::class)->assertWithinFrozenRoute(
+        $plan->chapter,
+        AiStage::Extractor,
+        $maximum + 1,
+    ))->toThrow(AiProviderException::class, '超过 Plan Admission 冻结容量');
 });
 
 test('a newly generated plan freezes the bible version of its planning run instead of an older ready plan anchor', function () {

@@ -29,7 +29,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null, bool $singleProviderCall = false): ?GenerationArtifact
     {
@@ -81,8 +81,12 @@ class ChapterRewriter
         }
 
         $findingHash = hash('sha256', json_encode($findings, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        $settings = $this->settingsResolver->resolve(AiStage::Rewrite, $chapter->novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Rewrite);
+        $settings = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->routeFor($chapter->latestPlan, AiStage::Rewrite)
+            : $this->settingsResolver->resolve(AiStage::Rewrite, $chapter->novel);
+        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->promptVersionFor($chapter->latestPlan, AiStage::Rewrite)
+            : $this->promptVersionResolver->resolve(AiStage::Rewrite);
         $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
         $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $brief = [
@@ -143,6 +147,7 @@ class ChapterRewriter
 
         try {
             $maxTokens = $this->resolveRequestBudget($run, $baseKey);
+            $this->outputCapacity->assertWithinFrozenRoute($chapter, AiStage::Rewrite, $maxTokens);
             $metadata = ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value];
             $beforeRequest = function (string $substage) use ($singleProviderCall, &$providerCalls): void {
                 if ($singleProviderCall && $providerCalls >= 1) {

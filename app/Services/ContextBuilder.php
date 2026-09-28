@@ -102,6 +102,7 @@ class ContextBuilder
                 'forbidden_conflicts' => $plan->forbidden_conflicts ?? [],
                 'arc_contributions' => $plan->arc_contributions ?? [],
                 'world_entity_candidates' => $plan->world_entity_candidates ?? [],
+                'inbound_handoff' => data_get($plan->admission_snapshot, 'inbound_handoff'),
             ],
             'foreshadowing_contract' => $foreshadowingContract,
         ];

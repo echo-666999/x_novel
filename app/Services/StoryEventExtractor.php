@@ -37,6 +37,8 @@ class StoryEventExtractor
         private readonly ForeshadowingEventValidator $foreshadowingEventValidator,
         private readonly OutlineCompletionService $outlineCompletion,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly PlanAdmissionService $planAdmission,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false): ?GenerationArtifact
@@ -62,8 +64,12 @@ class StoryEventExtractor
             'retry_max_completion_tokens' => (int) config('generation.event_extraction_retry_max_output_tokens', 8_000),
             'final_retry_max_completion_tokens' => (int) config('generation.event_extraction_final_retry_max_output_tokens', 12_000),
         ];
-        $settings = $this->settingsResolver->resolve(AiStage::Extractor, $chapter->novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Extractor);
+        $settings = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->routeFor($chapter->latestPlan, AiStage::Extractor)
+            : $this->settingsResolver->resolve(AiStage::Extractor, $chapter->novel);
+        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
+            ? $this->planAdmission->promptVersionFor($chapter->latestPlan, AiStage::Extractor)
+            : $this->promptVersionResolver->resolve(AiStage::Extractor);
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::EventExtraction,
             $context,
@@ -80,6 +86,7 @@ class StoryEventExtractor
 
         try {
             $maxTokens = $this->resolveRequestBudget($run, $baseKey);
+            $this->outputCapacity->assertWithinFrozenRoute($chapter, AiStage::Extractor, $maxTokens);
             $metadata = [
                 'generation_run_id' => $run->getKey(),
                 'novel_id' => $chapter->novel_id,

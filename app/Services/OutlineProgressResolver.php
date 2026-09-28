@@ -11,6 +11,8 @@ use App\Enums\StoryEventStatus;
 use App\Enums\VolumeStatus;
 use App\Models\Novel;
 use App\Models\NovelOutlineBeat;
+use App\Models\StoryEvent;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -18,7 +20,10 @@ use Illuminate\Validation\ValidationException;
  */
 class OutlineProgressResolver
 {
-    public function __construct(private readonly NovelOutlineChecksum $checksum) {}
+    public function __construct(
+        private readonly NovelOutlineChecksum $checksum,
+        private readonly OutlineHandoffContract $handoffContract,
+    ) {}
 
     /**
      * 校验运行态来源父链后，返回当前 Arc、Beat、Milestone 和 Handoff。
@@ -55,7 +60,7 @@ class OutlineProgressResolver
             throw ValidationException::withMessages(['outline' => 'Active Main Arc 缺少与 Current Outline Volume 一致的权威来源外键。']);
         }
 
-        $completedBeatIds = $novel->storyEvents()
+        $completedBeatEvents = $novel->storyEvents()
             ->where('event_type', EventType::StoryArcBeatCompleted->value)
             ->where('status', StoryEventStatus::Active->value)
             ->where('subject_type', 'story_arc')
@@ -63,9 +68,10 @@ class OutlineProgressResolver
             ->where('novel_outline_id', $outline->getKey())
             ->where('novel_outline_arc_id', $runtimeArc->source_outline_arc_id)
             ->whereNotNull('novel_outline_beat_id')
-            ->pluck('novel_outline_beat_id')
+            ->get(['id', 'chapter_id', 'novel_outline_beat_id', 'payload', 'evidence'])
+            ->keyBy(fn (StoryEvent $event): int => (int) $event->novel_outline_beat_id);
+        $completedBeatIds = $completedBeatEvents->keys()
             ->map(fn ($id): int => (int) $id)
-            ->unique()
             ->all();
         $completedMilestoneIds = $novel->storyEvents()
             ->where('event_type', EventType::StoryArcBeatMilestoneCompleted->value)
@@ -167,17 +173,7 @@ class OutlineProgressResolver
                 'must_not_include' => $beat->must_not_include,
                 'character_candidates' => $beat->character_candidates,
                 'world_entity_candidates' => $beat->world_entity_candidates,
-                'handoff' => [
-                    'next_beat_id' => $beat->handoff_next_beat_id,
-                    'next_beat_key' => $beat->handoffNextBeat?->beat_key,
-                    'transition_mode' => $beat->handoff_transition_mode,
-                    'exit_result' => $beat->handoff_exit_result,
-                    'next_trigger' => $beat->handoff_next_trigger,
-                    'carried_states' => $beat->handoff_carried_states,
-                    'open_threads' => $beat->handoff_open_threads,
-                    'required_transition' => $beat->handoff_required_transition,
-                    'forbidden_jump' => $beat->handoff_forbidden_jump,
-                ],
+                'handoff' => $this->handoffContract->forBeat($beat),
             ],
             milestone: [
                 'key' => $milestone->milestone_key,
@@ -193,7 +189,56 @@ class OutlineProgressResolver
             canonicalCompletedBeatIds: $completedBeatIds,
             canonicalCompletedMilestoneIds: $completedMilestoneIds,
             chaptersUsedForCurrentBeat: $this->chaptersUsed($novel, $outline->getKey(), $beat->getKey()),
+            inboundHandoff: $this->inboundHandoff($novel, $beats, $beat, $completedBeatEvents),
         );
+    }
+
+    /**
+     * 下一 Beat 只能消费上一 Beat Completion Event 中已冻结的 Handoff，不能重新解释可变关系行。
+     *
+     * @param  Collection<int, NovelOutlineBeat>  $beats
+     * @param  Collection<int, StoryEvent>  $completedBeatEvents
+     * @return array<string, mixed>|null
+     */
+    private function inboundHandoff(Novel $novel, $beats, NovelOutlineBeat $beat, $completedBeatEvents): ?array
+    {
+        $previous = $beats->first(
+            fn (NovelOutlineBeat $candidate): bool => $candidate->mainline_sequence === $beat->mainline_sequence - 1,
+        );
+        if ($previous === null) {
+            return null;
+        }
+
+        $event = $completedBeatEvents->get($previous->getKey());
+        $expected = $this->handoffContract->forBeat($previous);
+        $stored = data_get($event?->payload, 'handoff_contract');
+        $readiness = data_get($event?->payload, 'handoff_readiness.status');
+
+        if ($event === null
+            || ! is_array($stored)
+            || $stored !== $expected
+            || $readiness !== 'ready'
+            || $expected['next_beat_id'] !== $beat->getKey()
+            || ! is_array($event->evidence)
+            || $event->evidence === []) {
+            throw ValidationException::withMessages([
+                'handoff' => "Main Beat {$beat->beat_key} 缺少上一 Beat {$previous->beat_key} 已正式提交且与当前 Outline 一致的 Handoff 契约或证据。",
+            ]);
+        }
+
+        return [
+            'source_beat_id' => $previous->getKey(),
+            'source_beat_key' => $previous->beat_key,
+            'completion_event_id' => $event->getKey(),
+            'completion_chapter_id' => $event->chapter_id,
+            'contract' => $stored,
+            'contract_checksum' => $this->handoffContract->checksum($stored),
+            'evidence' => array_values($event->evidence),
+            'entry_pending' => (int) $novel->chapters()
+                ->where('status', ChapterStatus::Canonical->value)
+                ->reorder('sequence', 'desc')
+                ->value('id') === (int) $event->chapter_id,
+        ];
     }
 
     /**

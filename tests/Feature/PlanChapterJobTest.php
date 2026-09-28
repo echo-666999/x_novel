@@ -36,6 +36,7 @@ use App\Models\Volume;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterPlanPayload;
 use App\Services\GenerationStageFingerprint;
+use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -334,7 +335,12 @@ test('the planner advances to the next beat only after an active completion even
         'event_type' => EventType::StoryArcBeatCompleted,
         'subject_type' => 'story_arc',
         'subject_id' => (string) $arc->getKey(),
-        'payload' => ['beat_key' => 'beat-map'],
+        'payload' => [
+            'beat_key' => 'beat-map',
+            'handoff_contract' => app(OutlineHandoffContract::class)->forBeat($sourceBeat),
+            'handoff_readiness' => ['status' => 'ready', 'checks' => []],
+        ],
+        'evidence' => [['artifact_id' => 1, 'scene_id' => null, 'quote' => '地图线索已交给城门阶段', 'start_offset' => null, 'end_offset' => null]],
         'novel_outline_id' => $outline->getKey(),
         'novel_outline_arc_id' => $sourceArc->getKey(),
         'novel_outline_beat_id' => $sourceBeat->getKey(),

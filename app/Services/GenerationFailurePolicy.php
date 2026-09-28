@@ -160,7 +160,7 @@ final class GenerationFailurePolicy
             && str_contains($code, 'truncated')) {
             return 'external_temporary';
         }
-        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
+        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
             return 'provider_configuration';
         }
         if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException) {
@@ -190,7 +190,7 @@ final class GenerationFailurePolicy
         if ($retryable) {
             return '重试';
         }
-        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
+        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
             return '修复 AI 配置';
         }
         if (str_contains($code, 'output_budget_exhausted')) {

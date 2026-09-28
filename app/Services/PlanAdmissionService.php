@@ -35,6 +35,7 @@ class PlanAdmissionService
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly PreviousChapterEnding $previousChapterEnding,
     ) {}
 
     /**
@@ -90,6 +91,7 @@ class PlanAdmissionService
         )->all();
         $planChecksum = $plan->semanticChecksum();
         $handoff = $target->beat['handoff'];
+        $previousEnding = $this->previousChapterEnding->for($chapter);
         $snapshot = [
             'schema_version' => 1,
             'plan_checksum' => $planChecksum,
@@ -103,6 +105,15 @@ class PlanAdmissionService
             'primary_outline_milestone_id' => $target->outlineMilestoneId,
             'handoff_next_beat_id' => $handoff['next_beat_id'],
             'handoff_checksum' => hash('sha256', json_encode($handoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+            'inbound_handoff' => $target->inboundHandoff,
+            'inbound_handoff_checksum' => $target->inboundHandoff === null
+                ? null
+                : hash('sha256', json_encode($target->inboundHandoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+            'previous_chapter_ending' => $previousEnding === null ? null : [
+                'chapter_id' => $previousEnding['chapter_id'],
+                'source' => $previousEnding['source'],
+                'checksum' => hash('sha256', (string) $previousEnding['text']),
+            ],
             'routes' => $routes,
             'capacity' => [
                 'chapter_target_words' => $plan->target_words,
@@ -113,6 +124,12 @@ class PlanAdmissionService
                     'estimated_input_words' => $this->lengthPolicy->chapterMaximum($plan->target_words),
                     'context_token_budget' => (int) config('generation.review_context_token_budget', 32_000),
                     'max_output_tokens' => data_get($routes, 'reviewer.max_output_tokens'),
+                ],
+                'event_extraction' => [
+                    'max_output_tokens' => data_get($routes, 'extractor.max_output_tokens'),
+                ],
+                'rewrite' => [
+                    'max_output_tokens' => data_get($routes, 'rewrite.max_output_tokens'),
                 ],
             ],
         ];
@@ -157,6 +174,26 @@ class PlanAdmissionService
     public function routeFor(ChapterPlan $plan, AiStage $stage): ResolvedAiSettings
     {
         $plan = $this->admit($plan);
+
+        return $this->resolvedRoute($plan, $stage);
+    }
+
+    /**
+     * Canonical Commit 后的派生任务读取历史 Plan 已冻结 Route，不再用已前进的 Outline Target 重验旧 Plan。
+     */
+    public function historicalRouteFor(ChapterPlan $plan, AiStage $stage): ResolvedAiSettings
+    {
+        if (! is_array($plan->admission_snapshot)) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[PROVIDER_ROUTE_NOT_FROZEN] {$stage->getLabel()} Route 未冻结。",
+            ]);
+        }
+
+        return $this->resolvedRoute($plan, $stage);
+    }
+
+    private function resolvedRoute(ChapterPlan $plan, AiStage $stage): ResolvedAiSettings
+    {
         $route = data_get($plan->admission_snapshot, "routes.{$stage->value}");
         if (! is_array($route)) {
             throw ValidationException::withMessages([
@@ -176,6 +213,23 @@ class PlanAdmissionService
     public function promptVersionFor(ChapterPlan $plan, AiStage $stage): string
     {
         $plan = $this->admit($plan);
+
+        return $this->resolvedPromptVersion($plan, $stage);
+    }
+
+    public function historicalPromptVersionFor(ChapterPlan $plan, AiStage $stage): string
+    {
+        if (! is_array($plan->admission_snapshot)) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}.prompt_version" => "[PROMPT_VERSION_NOT_FROZEN] {$stage->getLabel()} Prompt Version 未冻结。",
+            ]);
+        }
+
+        return $this->resolvedPromptVersion($plan, $stage);
+    }
+
+    private function resolvedPromptVersion(ChapterPlan $plan, AiStage $stage): string
+    {
         $version = data_get($plan->admission_snapshot, "routes.{$stage->value}.prompt_version");
         if (! is_string($version) || blank($version)) {
             throw ValidationException::withMessages([

@@ -40,6 +40,10 @@ class OutlineContextBuilder
             'handoff' => $handoff,
             'handoff_next_beat_id' => $handoff['next_beat_id'],
             'handoff_checksum' => hash('sha256', json_encode($handoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+            'inbound_handoff' => $target->inboundHandoff,
+            'inbound_handoff_checksum' => $target->inboundHandoff === null
+                ? null
+                : hash('sha256', json_encode($target->inboundHandoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
             // Milestone Completion 是首版最小正式进度单位。当前 Milestone 未完成时，
             // 仅把它自己的 must_include 交给本章，不能把整个 Beat 的列表逐章重放。
             'must_include' => array_values(array_unique($target->milestone['must_include'])),

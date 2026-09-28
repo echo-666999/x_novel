@@ -104,7 +104,7 @@ class ChapterPlanner
                     .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
                     .'跨 Scene 持续信息必须使用 continuity_requirements 和稳定 key 明确分为 establish（本章首次出现）、persist（本章内持续但只写增量）、change（本章内后续场景必须变化）或 callback（章末允许回扣）。每个 key 按本章 Scene 顺序首次出现时必须使用 establish，即使该状态继承自 previous_chapter_ending 或 Canonical Story State，也要在首个 Scene 用 establish 说明本章起始基线；只有较早 Scene 已 establish 后才能使用 persist、change 或 callback，callback 只能位于章末 Scene。不得把同一持续状态重复写进多个 Scene 的 goal/conflict/turn/outcome。'
-                    .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。上下文：'
+                    .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。进入新 Main Beat 时，第一场景必须逐项原样包含 inbound_handoff.contract.required_transition 的要求，并把 carried_states/open_threads 建立为 continuity_requirements；不得省略时间、地点、行动或人物状态变化。上下文：'
                     .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
                 maxTokens: $maxTokens,
@@ -220,6 +220,28 @@ class ChapterPlanner
                     ? $contracts->get($candidate['candidate_key'])
                     : $candidate,
             )->values()->all();
+        }
+
+        $inbound = $outlineTarget['inbound_handoff'] ?? null;
+        if (is_array($inbound)
+            && data_get($inbound, 'entry_pending') === true
+            && isset($payload['scene_plans'][0])
+            && is_array($payload['scene_plans'][0])) {
+            $contract = is_array($inbound['contract'] ?? null) ? $inbound['contract'] : [];
+            $requirements = collect($payload['scene_plans'][0]['continuity_requirements'] ?? []);
+            foreach (['carried_states' => 'carried-state', 'open_threads' => 'open-thread'] as $field => $keyPrefix) {
+                foreach (array_values($contract[$field] ?? []) as $index => $description) {
+                    $key = "inbound-handoff-{$keyPrefix}-".($index + 1);
+                    if (! $requirements->contains(fn (mixed $item): bool => is_array($item) && ($item['key'] ?? null) === $key)) {
+                        $requirements->push([
+                            'key' => $key,
+                            'mode' => 'establish',
+                            'description' => $description,
+                        ]);
+                    }
+                }
+            }
+            $payload['scene_plans'][0]['continuity_requirements'] = $requirements->values()->all();
         }
 
         return $payload;

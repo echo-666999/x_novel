@@ -17,6 +17,7 @@ use App\Models\Novel;
 use App\Models\Scene;
 use App\Models\StoryEvent;
 use App\Services\OutlineCompletionService;
+use App\Services\OutlineHandoffContract;
 use Database\Factories\Support\NormalizedOutlineDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
@@ -208,7 +209,11 @@ test('all milestone beat and handoff conditions create authoritative completion 
         EventType::StoryArcBeatCompleted,
     ])->and($events[1]->subjectId)->toBe((string) data_get($contract, 'identity.story_arc_id'))
         ->and(data_get($events[1]->payload, 'novel_outline_beat_id'))->toBe(data_get($contract, 'identity.novel_outline_beat_id'))
-        ->and(data_get($events[1]->payload, 'completion_contract_checksum'))->toBe($contract['checksum']);
+        ->and(data_get($events[1]->payload, 'completion_contract_checksum'))->toBe($contract['checksum'])
+        ->and(data_get($events[1]->payload, 'handoff_contract'))->toBe(
+            app(OutlineHandoffContract::class)->forBeat($fixture['plan']->primaryOutlineBeat),
+        )
+        ->and($events[1]->evidence)->not->toBeEmpty();
 });
 
 test('beat completion combines historical canonical milestones with the current final milestone', function () {

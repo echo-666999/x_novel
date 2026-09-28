@@ -12,11 +12,15 @@ use App\Enums\SceneStatus;
 use App\Enums\VolumeStatus;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\CommitChapterJob;
+use App\Jobs\ContinueAutoGenerationJob;
 use App\Jobs\ExtractStoryEventsJob;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
+use App\Jobs\RefreshNovelProjectionJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
+use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -27,6 +31,7 @@ use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
 use App\Models\StoryArc;
+use App\Models\StoryStateVersion;
 use App\Models\Volume;
 use App\Services\OutlineProgressResolver;
 use App\Services\ResumeResolver;
@@ -221,6 +226,34 @@ test('a review for an older draft does not decide the resume point for a newer d
 
     expect($point->key)->toBe('event_extraction')
         ->and($latestDraft->type)->toBe(ArtifactType::RewriteDraft);
+});
+
+test('post commit resume redispatches the idempotent derivative chain without repeating canonical commit', function () {
+    Queue::fake();
+    $novel = pausedResumeNovel(['auto_generate' => true], 1);
+    $chapter = resumeChapter($novel, ChapterStatus::Canonical, 1);
+    $artifact = resumeArtifact($novel, $chapter, ArtifactType::ChapterDraft);
+    $chapter->update(['canonical_artifact_id' => $artifact->getKey(), 'summary' => null]);
+    $state = StoryStateVersion::query()->create([
+        'novel_id' => $novel->getKey(),
+        'chapter_id' => $chapter->getKey(),
+        'version' => 1,
+        'state' => [],
+        'checksum' => hash('sha256', json_encode([], JSON_THROW_ON_ERROR)),
+    ]);
+    $novel->update(['canonical_state_version_id' => $state->getKey()]);
+
+    $point = app(ResumeResolver::class)->resume($novel->fresh());
+
+    expect($point->key)->toBe('post_commit')
+        ->and($chapter->fresh()->canonical_artifact_id)->toBe($artifact->getKey())
+        ->and(StoryStateVersion::query()->where('novel_id', $novel->getKey())->count())->toBe(2);
+    Queue::assertPushedWithChain(UpdateMemoryJob::class, [
+        GenerateCanonicalChapterSummaryJob::class,
+        RefreshNovelProjectionJob::class,
+        ContinueAutoGenerationJob::class,
+    ]);
+    Queue::assertNotPushed(CommitChapterJob::class);
 });
 
 /** @param array<string, mixed> $settings */

@@ -15,6 +15,8 @@ use Illuminate\Validation\ValidationException;
  */
 class OutlineCompletionService
 {
+    public function __construct(private readonly OutlineHandoffContract $handoffContract) {}
+
     /** @return array<string, mixed> */
     public static function reviewSchema(): array
     {
@@ -246,6 +248,9 @@ class OutlineCompletionService
                 [
                     'beat_exit' => $completion['beat_exit'],
                     'handoff_readiness' => $completion['handoff_readiness'],
+                    'handoff_contract' => $this->handoffContract->forBeat(
+                        $chapter->latestPlan->primaryOutlineBeat,
+                    ),
                 ],
             );
         }

@@ -38,10 +38,17 @@ class RoutingAiProvider implements AiProvider
         $runId = $request->metadata['generation_run_id'] ?? null;
 
         if (is_numeric($runId)) {
-            $run = GenerationRun::query()->find((int) $runId, ['id', 'provider', 'context_snapshot']);
+            $run = GenerationRun::query()->find((int) $runId, ['id', 'provider', 'model_policy', 'context_snapshot']);
+            if ($run === null) {
+                throw new AiProviderException(
+                    'provider_run_missing',
+                    "AI request references missing Generation Run [{$runId}].",
+                    false,
+                );
+            }
             $routeKey = trim((string) ($request->metadata['route_key'] ?? ''));
 
-            if ($run !== null && $routeKey !== '') {
+            if ($routeKey !== '') {
                 $route = data_get($run->context_snapshot, "generation_preferences.substage_routes.{$routeKey}");
 
                 if (! is_array($route) || blank($route['provider'] ?? null)) {
@@ -75,6 +82,7 @@ class RoutingAiProvider implements AiProvider
             }
 
             $runProvider = strtolower(trim((string) $run?->provider));
+            $runModel = trim((string) $run?->model_policy);
 
             if ($runProvider !== '') {
                 if ($provider !== '' && $provider !== $runProvider) {
@@ -85,8 +93,29 @@ class RoutingAiProvider implements AiProvider
                     );
                 }
 
+                if ($runModel === '') {
+                    throw new AiProviderException(
+                        'provider_run_route_missing',
+                        "Generation Run [{$run->getKey()}] has no frozen model.",
+                        false,
+                    );
+                }
+                if ($request->model !== $runModel) {
+                    throw new AiProviderException(
+                        'model_run_mismatch',
+                        "AI request model [{$request->model}] does not match frozen model [{$runModel}] on Generation Run [{$run->getKey()}].",
+                        false,
+                    );
+                }
+
                 return [$runProvider, true];
             }
+
+            throw new AiProviderException(
+                'provider_run_route_missing',
+                "Generation Run [{$run->getKey()}] has no frozen provider.",
+                false,
+            );
         }
 
         if ($provider !== '') {

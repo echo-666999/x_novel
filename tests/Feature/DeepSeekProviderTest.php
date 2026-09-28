@@ -142,6 +142,7 @@ test('router records the frozen provider on usage and does not change an existin
     $novel = Novel::factory()->create();
     $run = GenerationRun::factory()->for($novel)->create([
         'provider' => 'deepseek',
+        'model_policy' => 'deepseek-chat',
         'stage' => GenerationStage::ChapterPlanning,
         'status' => RunStatus::Running,
     ]);
@@ -215,6 +216,30 @@ test('router uses the frozen scene substage route instead of the owning run prov
         ->and(data_get($usage->request_metadata, 'route_key'))->toBe('structure_and_coverage');
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://openai.example/v1/chat/completions');
 });
+
+test('router rejects a missing run and owning run model drift before sending a request', function (string $case) {
+    config()->set('ai.providers.openai.api_key', 'openai-test-key');
+    $novel = Novel::factory()->create();
+    $run = GenerationRun::factory()->for($novel)->create([
+        'provider' => 'openai',
+        'model_policy' => 'gpt-5.6-luna',
+    ]);
+    Http::fake();
+
+    $runId = $case === 'missing' ? $run->getKey() + 10_000 : $run->getKey();
+    try {
+        app(AiProvider::class)->generate(new AiRequest(
+            model: $case === 'model' ? 'gpt-5.6-sol' : 'gpt-5.6-luna',
+            provider: 'openai',
+            metadata: ['generation_run_id' => $runId],
+        ));
+        $this->fail('Expected frozen route validation failure.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe($case === 'missing' ? 'provider_run_missing' : 'model_run_mismatch');
+    }
+
+    Http::assertNothingSent();
+})->with(['missing', 'model']);
 
 test('router rejects provider or model drift from a frozen substage route', function (string $provider, string $model, string $routeKey, string $code) {
     config()->set('ai.providers.openai.api_key', 'openai-test-key');
