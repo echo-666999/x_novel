@@ -1,5 +1,7 @@
 # Story Engine Design — 单人精简版
 
+> NGC-001 目标语义基线。Milestone/Handoff 外键、Completion Event 和对应 Commit/重建逻辑尚待 NGC-002A～NGC-005 实现；当前代码仍使用旧 Beat Key 路径。本任务只对齐文档，不迁移现有数据。
+
 > 建议路径：`docs/architecture/story-engine.md`
 >
 > 基线：`docs/PRD.md`、`docs/architecture/data-model.md`
@@ -249,14 +251,17 @@ world_state_changed
 ## Planning
 
 ```text
+story_arc_beat_milestone_completed
 story_arc_beat_completed
 ```
 
 `character_introduced` 与 `world_entity_introduced` 的候选 `subject_id` 可以是 Chapter Plan 冻结的 Candidate 临时键。只有 Canonical Commit 验证 Candidate 来自冻结 Plan、Review 状态为 `introduced`、逐字证据命中当前正文、Introduced Event 匹配、无重复对象且 Expected State Version 一致后，才幂等创建正式 Character / World Entity 并把临时键解析为正式 ID。保存或采用 Outline、Plan、Draft、Review 与 Rewrite 都不得提前创建正式对象。
 
-`story_arc_beat_completed` 必须引用 Chapter Plan 冻结 Outline Version 中的 Primary `arc_id + beat_key`。Reviewer 必须对该 Beat 的每条 `acceptance_criteria` 返回 `fulfilled | not_met | contradicted`；只有全部 `fulfilled` 且证据逐字命中 Canonical 候选正文时，Extractor 才能生成 Completion Candidate。Canonical Commit 再校验 Plan、Review 与 Event 的 Arc / Beat 一致性及 Active Event 幂等性。Arc Progress 只从正式 Active Completion Event 投影，Draft、Review、Rewrite 和 Baseline Completion 都不能推进进度。
+`story_arc_beat_milestone_completed` 必须引用 Chapter Plan 冻结的完整 `novel_outline_id + arc_id + beat_id + milestone_id` 父链。Reviewer 对当前 Milestone 的每条验收条件返回 `fulfilled | not_met | contradicted`；只有全部 `fulfilled` 且证据逐字命中当前 Canonical 候选正文时，Extractor 才能生成 Completion Candidate。Milestone 按 Sequence 推进，同一 Milestone 的 Active Completion Event 保持幂等；章节可以推进但不完成 Milestone。
 
-旧小说可以在 Outline Version 保存人工确认的 `baseline_completions`，用于选择迁移后顺序最早的未完成 Beat。Baseline 必须引用 Canonical Chapter IDs 和逐字证据，并保留确认人、确认时间与原因；它不是正文发生的新事件，因此不得创建 `story_arc_beat_completed`、不得改写历史 Story State 或伪装成 Canonical Event。
+`story_arc_beat_completed` 必须引用同一冻结 Primary Beat。它只在该 Beat 全部 Milestone 已有 Active Canonical Completion Event、Beat 验收条件全部具有正文证据，并且最终 Milestone 满足 Handoff 的 `exit_result / next_trigger / required_transition / forbidden_jump` 后产生。前一 Beat 最后一章可以建立下一 Beat Trigger，但同章不能完成下一 Beat Milestone。Canonical Commit 必须重新验证 Plan、Review、Milestone/Beat Candidate、Expected State Version 和完整 Outline 外键链。
+
+Milestone、Beat 与 Arc Progress 只从正式 Active Completion Event 投影。Draft、Plan、Review、Rewrite、Outline 定义和章节预算都不能推进进度。本轮放弃旧数据，不保留 `baseline_completions`、旧 Key 回退或迁移完成映射。
 
 ## Correction
 
@@ -946,6 +951,8 @@ Artifact checksum unchanged
 Review PASS
 No hard state finding
 Expected State Version matches
+Primary Outline / Arc / Beat / Milestone full chain matches
+Milestone and Beat Completion evidence matches current Draft and Handoff
 Idempotency valid
 ```
 
@@ -972,13 +979,15 @@ Validate Review PASS
 
 Validate Artifact
 
-Validate Arc / World planning audits and verbatim evidence
+Validate Arc / Beat / Milestone / Handoff / World planning audits and verbatim evidence
 
 Create approved World Entities idempotently
 
 Resolve Candidate keys to formal Entity IDs
 
 Persist Story Events
+
+Persist eligible Milestone / Beat Completion Events idempotently
 
 Apply Fact Changes
 
@@ -988,14 +997,14 @@ Update Chapter canonical pointer
 
 Update Novel current pointers
 
-Recalculate Story Arc progress from Active Canonical Events
+Recalculate Milestone / Beat / Story Arc progress from Active Canonical Events
 
 COMMIT
 ```
 
 这个事务中不调用 LLM。
 
-World Entity 使用 `(novel_id, source_chapter_id, source_candidate_key)` 唯一约束保证重复提交不重复创建。Entity、解析后的 Event、补充 State Operations、下一 State Version、Chapter 指针和 Arc Progress 属于同一个事务；任何一步失败都必须完整回滚。
+World Entity 使用 `(novel_id, source_chapter_id, source_candidate_key)` 唯一约束保证重复提交不重复创建。Entity、解析后的 Event、Milestone/Beat Completion、补充 State Operations、下一 State Version、Chapter 指针和 Arc Progress 属于同一个事务；任何一步失败都必须完整回滚。
 
 ---
 
@@ -1269,11 +1278,13 @@ Delete characters and world entities first introduced by Chapter 51 when no late
 
 Commit、Latest Chapter Rollback 和 Manual Canonical Correction 在各自 Canonical 事务成功后，统一派发当前 State Version 对应的投影刷新任务。Rollback 先在事务内恢复 Canonical 指针并失效最新章事件，投影任务随后只重放仍为 Active 且不晚于恢复版本的事件，因此 `status`、`reinforce_count`、`setup_chapter_id` 和 `payoff_chapter_id` 会一起回到上一正式版本。重复刷新从相同基线与事件集合重新计算，不会重复累计强化次数。
 
-Arc Progress 同样从剩余 Active `story_arc_beat_completed` 事件中的唯一 Beat 重算，并且只有全部 Beat 与 Completion Conditions 都有正式验收记录时才进入 completed。回滚使某个 Beat 失去最后一个 Active Completion Event 时，该 Beat 恢复为未完成；Baseline Completion 仍只保留其迁移语义，不会在重建时变成 Event 或 Arc Progress。
+Milestone、Beat 与 Arc Progress 同样从剩余 Active `story_arc_beat_milestone_completed` 和 `story_arc_beat_completed` 事件重算。回滚使某个 Milestone/Beat 失去最后一个 Active Completion Event 时，它恢复为未完成，后续同一主线的完成投影同时失效并按顺序重建。不存在 Baseline Completion 或从章节数量猜测进度的回退路径。
 
 若后续 Canonical Chapter 已引用本章首次引入的 Character 或 World Entity，Latest Chapter Rollback 必须阻止简单删除并要求先处理后续正式引用。没有后续引用时，只删除带当前 `source_chapter_id + source_candidate_key` 的本章 Candidate 转正对象；人工初始规划中已存在的人物和实体不属于该删除范围。历史 Plan 缺少结构化 Beat 时不得根据章节数或自然语言猜测进度；`story:rebuild-arc-progress` 默认仅 dry-run，显式 `--execute` 才更新投影。
 
 投影刷新失败只留下可重试的 Queue 失败记录，不删除 Story Events、State Version 或 Canonical Chapter。Canonical State 与 Active Story Events 仍是权威来源；管理表在任务完成前可能短暂陈旧，不能反向覆盖 Canonical 数据。这一投影只覆盖已有领域表，不等于引入通用 Event Projection 框架。
+
+Latest Chapter Rollback 与内容删除是两个不同操作。Rollback 保留并失效历史记录；NGC-008 的章节 Tail Truncation 会在暂停、无活动 Run 和影响预览通过后，物理删除目标章节及其后缀的派生数据，并把 Canonical 指针恢复到前一版本。NGC-009 的小说删除会在单一事务中物理删除该小说全部业务数据。两项删除能力尚未实现，不能用现有 Rollback 代替。
 
 ---
 
@@ -1863,6 +1874,8 @@ Validate
 New State Version
 ```
 
+人工处理前必须先判定问题层级。Beat/Milestone 目标错误修订未来 Outline Version；Chapter/Scene Plan 错误创建新 Plan Version并失效下游；Canonical Fact/State 错误使用 Manual Correction 或 Latest Chapter Rollback；只有不改变计划结果与正式事实的文字问题才允许修改 Draft。不得只改正文却继续复用旧 Event Candidate、State Patch、Review 或 Completion Candidate。
+
 Story State 重建校验始终是 dry-run。它从不晚于目标版本的无章节 State Version 中，选择最新且同时满足以下条件的基线：必要 Domain 均为数组、`schema_version` 有效、checksum 与快照内容一致。报告必须包含基线版本/checksum、实际重放的 Event ID 与 State Version 范围，以及失效或不产生状态操作的 Event 跳过原因；没有完整基线时直接失败，不生成误导性 diff。
 
 需要用重建结果替换当前 Canonical Story State 时，只能调用独立的 `RecoverCanonicalStoryStateAction`。该 Action 在事务内锁定 Novel，复核 Expected State Version、当前 checksum 与重建 checksum，然后创建新的无章节恢复基线并更新 Canonical Pointer；不得覆盖历史 State Version。成功后复用统一 Projection 刷新任务。
@@ -1935,6 +1948,15 @@ manual
 story_event
 bible
 ```
+
+## Revision 5 — NGC-001 Target
+
+```text
+story_arc_beat_milestone_completed
+story_arc_beat_completed
+```
+
+两个 Completion Event 必须引用关系化 Outline 的完整父链；Beat Completion 还必须验证全部 Milestone 和最终 Handoff。本 Revision 尚待 NGC-002A～NGC-005 实现，旧数据不迁移。
 
 这些修改属于初始架构完善，不需要单独 ADR。
 

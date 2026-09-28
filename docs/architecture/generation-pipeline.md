@@ -3,6 +3,8 @@
 > 路径：`docs/architecture/generation-pipeline.md`
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
+>
+> 实施状态：本文自 NGC-001 起描述目标架构。关系化 Outline、Plan Admission、确定性 Assembly、Compact Review 和 Paragraph/Scene Rewrite 尚待 NGC-002A～NGC-006B 实现；当前代码仍包含旧 JSONB Outline、AI Assembly 和 Whole Chapter Rewrite，不得据本文误报为已经完成。
 
 ## 1. 目标
 
@@ -10,15 +12,20 @@
 
 Laravel 控制 Workflow；LLM 只负责 Planning、Writing、Semantic Review、Event Extraction、Summary。不同 Novel 可并行；同一 Novel 的章节 MVP 串行。
 
+EasyPay 只作为阶段指纹、成功 Artifact 复用、局部恢复和确定性拼章的代码机制参考。XNovel 不引入其多租户、团队权限、多队列、A/B Scene 实验、发布流程或独立 Pipeline Run/Step 表，继续使用现有 `GenerationRun + GenerationArtifact + input_hash + source_artifact_id/checksum`。
+
 ## 2. 权威流水线
 
 新建小说先完成一次可人工确认的全书大纲与初始化规划：
 
 ```text
 Novel.status = draft
-→ 用户手工创建，或 GenerateNovelOutlineJob 在 generation 队列调用 NovelPlanner
-→ 生成结构化 Blueprint / Outline Artifact
-→ Outline Draft Version
+→ GenerateNovelOutlineJob 创建或恢复规划批次
+→ GenerateNovelFoundationJob：Bible / 初始人物 / 世界 / 伏笔 Artifact
+→ GenerateNovelOutlineSkeletonJob：Volume / Arc / Beat 骨架 Artifact
+→ GenerateNovelBeatDetailJob × Main Beat：Milestones / Handoff Artifact
+→ FinalizeNovelOutlineJob：Laravel 确定性合并、解析 Key、完整校验
+→ 事务写入 Outline Version 头及 Volume / Arc / Beat / Milestone 关系表
 → 用户逐项编辑、校验并采用
 → Current Novel Outline
 → 写入包含完整叙事与文风设置的 Bible / 初始 Character / World / Volume / Arc / Foreshadowing
@@ -27,42 +34,37 @@ Novel.status = draft
 → Novel.status = generating
 ```
 
-Blueprint / AI Outline Candidate 在采用前不得修改规划表；初始规划只能应用到尚无规划、章节和正式事件的小说，避免覆盖人工内容。首次 Blueprint 生成发生在 Current Bible 创建前，是唯一不能读取 Current Bible 的生成入口；采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，Current Novel Outline 是后续 Chapter Planning 的顺序和主线权威。Laravel 选择当前节点；LLM 不拥有 Beat 排序、主线切换、跳过或删除节点的权限。
+Foundation、Skeleton 和 Beat Detail 在 Finalize 前都只能保存不可变 Artifact，不得修改正式规划或领域表；初始规划只能应用到尚无规划、章节和正式事件的小说。采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，关系化 Current Novel Outline 是顺序和主线权威。Laravel 选择 Current Beat/Milestone 并解析 Handoff；LLM 不拥有排序、主线切换、跳过、删除或宣告节点完成的权限。
 
-AI 全书大纲必须异步执行。Filament Action 只向 `generation` 队列投递 `GenerateNovelOutlineJob` 并立即返回；Job 调用 `NovelPlanner` 创建 Generation Run、Artifact 和 Draft Outline。这样长耗时模型调用不会受 PHP-FPM Web 请求时限影响，同一 Novel 的重复投递由唯一 Job 合并，可恢复的 Provider 错误按 Job 策略重试。规划请求使用 24,000 completion token；推理程度读取 `planner` 模型路由。新增该字段的迁移会把已有 `planner` 路由回填为 `low`，延续原有全书大纲行为，并避免推理 token 耗尽预算后没有结构化正文。
+全书规划必须异步、有界、可恢复。每个调用 Provider 的 Job 最多发出一次模型请求，每阶段保存独立 Run、Artifact、`input_hash` 和幂等键；单个 Beat Detail 失败只恢复该 Beat。禁止一次请求生成 Bible、完整 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Finalize 不调用 Provider，也不信任模型返回的数据库 ID。
 
 长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。
 
 进入 `generating` 后执行章节流水线：
 
-Chapter Planner 的 completion token 上限独立于 Scene Writer：首次、第一次重试和最终重试默认依次为 12,000、16,000、24,000，并把预算序号与实际采用值冻结到 `context_snapshot.generation_preferences`。OpenAI 的推理 Token 与结构化正文共用 completion 额度；若 `finish_reason=length`，Provider 必须返回实际 Token 用量供费用追踪，再由结构化输出层标记为可重试的 `plan_output_truncated`。最高预算仍截断时，下一次在 Provider 请求前转为 `plan_output_budget_exhausted`。
-
-Scene Writer 同样为推理 Token 和结构化正文保留独立额度：三级默认为 12,000、16,000、24,000，实际值冻结进 Run Snapshot；最高预算被截断后转为 `scene_output_budget_exhausted`，不再重复请求。Provider 连接请求超时默认 150 秒；Scene 最多包含一次长度修复，因此两次最坏请求仍须小于 330 秒 Job timeout。旧版默认值创建且仍保持 60 秒的 DeepSeek 连接在迁移时提升到 150 秒，后台人工设置为其他值的连接不覆盖。
-
-Chapter Assembly 的完整正文、Scene Coverage 和伏笔 Coverage 共用 completion 额度。首次请求默认 12,000；连续截断时按同一输入、Provider、Model 和 Prompt Version 依次提升到 16,000、24,000，并把预算序号和实际采用值冻结到 Run Snapshot。技术重试不得重复使用已经截断的相同最高预算；最高预算仍被截断时，在发起下一次 Provider 请求前转为 `assembly_output_budget_exhausted`，要求调整 Assembler 模型或预算。Assembly 后续的长度修复沿用当前 Run 已冻结的实际预算。
-
-Narrative Review 使用 12,000、16,000、24,000 三级输出预算，为完整七维审校、规划/伏笔契约和高推理路由共同使用的 completion 额度留出空间。因 reasoning Token 用尽而返回空正文时，后续 Run 必须提升预算；最高预算仍截断时以 `review_output_budget_exhausted` 在 Provider 请求前停止。提高上限不改变三级熔断，也不允许 Schema 或业务校验失败伪装为技术重试。
-
-Story Event Extraction 使用 4,000、8,000、12,000，Rewrite 使用 16,000、20,000、24,000，Canonical Chapter Summary 使用 1,200、2,400、4,000。三者都按同一输入、Provider、Model 与 Prompt Version 识别连续截断，并将冻结预算和重试序号写入 Run Snapshot；达到最高预算后，下一次分别以 `event_output_budget_exhausted`、`rewrite_output_budget_exhausted`、`summary_output_budget_exhausted` 在 Provider 请求前停止。预算升级只处理 `finish_reason=length`，不能把确定性的 Schema、业务校验或代码错误伪装成技术重试。
+每个 Provider 阶段在调用前计算“输入 Token + 最大合法输出 + 推理余量”。当前模型无法容纳时，必须拆小任务或在请求前报告路由配置错误，不能用相同大 Schema 逐级增加 Token 反复碰运气。截断不保存半截 Artifact；只有已证明请求可容纳时允许按冻结输入重试一次技术故障。确定性 Assembly 没有 Provider、Token 预算、AI Request Log 或 Usage Record。
 
 ```text
 GenerateNextChapterAction
 → PlanChapterJob
+→ Plan Admission Gate
 → ContextBuilder
 → GenerateSceneJob × N（顺序）
-→ AssembleChapterJob
+→ AssembleChapterJob（Laravel Deterministic Assembly）
 → ExtractStoryEventsJob
 → StatePatchBuilder
 → StateValidator
-→ ReviewChapterJob
+→ Compact ReviewChapterJob
 → ReviewGate
    ├ PASS + auto_commit=false → Stop，等待用户确认“提交正式章节”
    ├ PASS + auto_commit=true → CommitChapterJob
-   ├ REWRITE → RewriteChapterJob → Extract/Validate/Review
+   ├ REWRITE → Paragraph/Scene Rewrite → Assembly → Extract/Validate/Review
+   ├ 规划问题 → 新 Plan Version → 从最早受影响 Scene 重建
    └ NEEDS_ATTENTION/BLOCK → Stop
 
 自动策略或用户确认提交
 → CommitChapterJob → CanonicalCommitService
+→ Persist Milestone / Beat Completion（满足时）
 → UpdateMemoryJob
 → GenerateCanonicalChapterSummaryJob
 → RefreshNovelProjectionJob
@@ -73,7 +75,7 @@ GenerateNextChapterAction
 
 `PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 只在 Review Artifact 对应当前 Draft、小说未暂停、`settings.auto_commit_configured=true` 且 `settings.auto_commit=true` 时自动派发 Commit；遗留的未确认 `auto_commit` 键保持惰性。关闭时只允许用户确认动作启动 Commit。两条路径都调用同一 `CommitChapterJob → CanonicalCommitService`，不得复制或绕过提交门禁。
 
-`AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan、Scene、Assembly、Event Extraction、Review 和 Rewrite Job 成功后都调用该动作，不再各自维护后续分支。
+`AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan Admission、Scene、Deterministic Assembly、Event Extraction、Review 和局部 Rewrite 成功后都调用该动作，不再各自维护后续分支。
 
 推进器使用 `GenerationJobDispatcher` 的短期待执行标记消除重复入队窗口，但断点判断只依赖 PostgreSQL。Scene 按 sequence 严格串行；Chapter Draft 必须对应当前 Scene Artifact，Event Candidate 必须来源于当前 Chapter Draft，State Patch 必须来源于当前 Event Candidate 且匹配当前 State Version，Review 必须来源于当前 Chapter Draft。任一来源不匹配时，从最早失效阶段恢复，不复用失效的下游结果。PASS、NEEDS_ATTENTION、BLOCK、暂停、正式提交或废弃章节都不会继续派发生成 Job。
 
@@ -83,6 +85,11 @@ MVP 只使用两个 Queue。
 
 ```text
 generation:
+  GenerateNovelOutlineJob
+  GenerateNovelFoundationJob
+  GenerateNovelOutlineSkeletonJob
+  GenerateNovelBeatDetailJob
+  FinalizeNovelOutlineJob
   PlanChapterJob
   GenerateSceneJob
   AssembleChapterJob
@@ -204,7 +211,7 @@ Current Bible
 Current Novel Outline
 Current Volume
 Active Arcs
-Current Outline Target
+Current Outline Target（完整 Arc / Beat / Milestone / Handoff 外键链）
 Current Story State
 Due Foreshadowings
 Recent Summaries
@@ -225,18 +232,17 @@ plan:{chapter_id}:{state_version}:{bible_version}:{outline_id}:{outline_checksum
 
 ```text
 读取 novels.current_outline_id
-→ 选择 Active Volume
-→ 选择该 Volume 中 sequence 最小的 Active Main Arc
-→ 从 Active story_arc_beat_completed Events 取得已完成 Beat Keys
-→ 合并经人工确认的历史 baseline_completions（仅用于迁移起点）
-→ 选择 sequence 最小的未完成 Beat
+→ 通过关系表选择 mainline_sequence 最小的未完成 Main Arc / Beat
+→ 从 Active Completion Events 取得已完成 Beat / Milestone IDs
+→ 选择当前 Beat 内 sequence 最小的未完成 Milestone
+→ 解析当前 Beat 的 Handoff 和相邻下一 Main Beat
 → 统计该 Beat 已占用的 Canonical Chapter 数
 → 生成 Current Outline Target
 ```
 
-`baseline_completions` 不会创建 Story Event，也不会推进 Arc Progress；新 Outline 生效后的 Beat 只能由 Canonical Commit 完成。Current Outline Target 必须包含 Volume / Arc / Beat Key、标题、Sequence、预算、验收条件、必须/禁止内容以及已解析 Candidate。
+Current Outline Target 必须包含 Outline/Volume/Arc/Beat/Milestone 的数据库 ID、稳定 Key、Sequence、预算、验收条件、必须/禁止内容、已解析 Candidate 和 Handoff。不得加载或解析完整 Outline JSONB，也不存在 `baseline_completions` 或旧 Key 回退。
 
-若当前 Beat 的 Canonical Chapter 使用数已经达到非空 `chapter_budget.max` 且仍无正式 Completion，系统必须在创建 Planning Run 和调用 Provider 前停止自动生成，进入 `NEEDS_ATTENTION`。用户只能通过延长预算、修订未来 Outline、人工调整新 Plan 或处理历史映射后再继续；LLM 不能自行跳到下一 Beat。
+`chapter_budget_min` 只做规模提示和偏差观测，不阻止 Milestone/Beat 自然完成。当前 Beat 使用章数达到非空 `chapter_budget_max` 且仍未完成时，在创建 Planning Run 和调用 Provider 前停止自动生成并进入 `NEEDS_ATTENTION`；用户只能修订未来 Outline、创建新 Plan 或处理完成证据，LLM 不能自行跳到下一 Beat。
 
 Plan 至少包含：
 
@@ -258,18 +264,21 @@ foreshadowing_actions
 scene_plans
 ```
 
-`chapter_plans.novel_outline_id` 冻结本次规划采用的精确 Outline Version。`arc_contributions` 以 `arc_id + beat_key + beat_index + role` 引用该版本的真实 Beat，并冻结目标 Scene 和验收条件；每个新 Plan 必须恰有一个 `role=primary`，且只能是 Current Outline Target。Secondary 允许推进获准支线，但不能替代 Primary 或提前完成后续 Main Beat。自然语言 `arc_contribution` 仅作说明。
+Chapter Plan 冻结 `novel_outline_id + outline_checksum + arc_id + beat_id + milestone_id` 完整父链、目标 Scene 和 Handoff；每个新 Plan 必须恰有一个 Primary，且只能是 Current Outline Target。Secondary 允许推进获准支线，但不能替代 Primary 或提前完成后续 Main Beat/Milestone。自然语言 `arc_contribution` 仅作说明。
 
 `character_candidates` 与 `world_entity_candidates` 以稳定临时键记录正文确实需要且 Canonical Domain 中尚不存在的对象，并包含去重依据、潜在重复对象、引入理由和目标 Scene。它们在 Review PASS 和 Canonical Commit 前都只是 Draft 契约。Planner 只能选择 Current Beat 授权的 Candidate；不得仅因模型认为剧情需要就新增核心人物或世界规则。
 
-PlanValidator 必须拒绝缺失 Primary、Outline Version 不一致、已完成 Beat、顺序跳跃、预算耗尽、必须内容缺失、规划禁止内容和非法 Character Candidate。若一章不能完成当前 Beat，Plan 必须给出可验证的中间结果，不能重复背景说明。
+Plan Admission Gate 在 Scene 1 前确定性拒绝缺失 Primary、Outline 父链不一致、已完成或顺序跳跃的 Beat/Milestone、Handoff 错配、预算耗尽、Scene Sequence/衔接缺失、字数不可容纳、必须内容缺失、规划禁止内容和非法 Candidate。结构字段可由 Laravel 从关系表恢复；真正缺少剧情意图时返回 Chapter Planning 或人工修正。若一章不能完成当前 Milestone，Plan 必须给出可验证的推进结果，不能重复背景说明。
+
+Beat `must_include` 表示 Beat 完成前至少一次具有 Canonical 证据；Milestone `must_include` 表示该 Milestone 完成前至少一次具有 Canonical 证据；Chapter `must_reveal` 只包含本章承担的项目。已经由前序 Canonical Chapter 满足的内容不得继续强制每章重复，Beat/Milestone 的 `must_not_include` 在其整个生命周期持续生效。
 
 Generation Run 的 Context Snapshot 固定记录：
 
 ```text
 novel_outline_id / outline_version / outline_checksum
-primary_arc_id / primary_beat_key / primary_beat_sequence
-canonical_completed_beat_keys
+primary_arc_id / primary_beat_id / primary_milestone_id
+handoff_next_beat_id / handoff_checksum
+canonical_completed_beat_ids / canonical_completed_milestone_ids
 chapters_used_for_current_beat
 chapter_budget
 ```
@@ -282,9 +291,9 @@ chapter_budget
 
 `scene_plans[*].transition_from_previous` 明确记录衔接安排。存在上一章正式版本时，第一场景必须说明如何承接上一章结尾；发生时间、地点或行动跳跃时，正文必须呈现必要的抵达、安置或时间流逝过程，不能直接从上一章行动跳到次日新地点。
 
-小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数；Assembler 继续遵守同一总字数与 Style Profile。题材、故事基调和人物属性不得混入文风名称。
+小说级 `Style Profile` 只从 Current Bible Version 构建，由 Bible 的 tone、pov、tense、主文风 Preset、最多两种辅助文风、语言时代感、故事节奏及六项可选参数组成。Prompt Config 只负责将稳定 code 展开为指令，不能成为第二个小说级来源。Chapter Planner 使用小说设置确定 `target_words`；Scene Writer 共享章节总字数预算，按其他场景实际字数和剩余场景数动态计算当前参考字数。Deterministic Assembler 只统计拼接结果，不读取文风 Prompt，也不改写正文。题材、故事基调和人物属性不得混入文风名称。
 
-字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用的字数预算由后续 Scene 承接；每个 Scene 同时受动态硬上限约束，且在计算当前上限时，必须按章节下限和 Scene 总数为每个尚未生成的后续 Scene 保留最低字数空间，不能让前置 Scene 用完章节硬上限后再把最后一个完整剧情任务压缩成极短文本。最后一个待生成 Scene 负责将场景总量补足至章节下限。Scene 和 Assembler 输出超出当前上下限时最多进行一次定向扩写或压缩；Rewrite 可进行最多两次，解决首次修复后仍轻微欠长或超长的问题。Scene 长度修复必须把原草稿的 `foreshadowing_coverage` 身份列表视为冻结模板；模型只能重新判断状态和逐字证据。Laravel 丢弃其他 Scene 的额外动作，并将漏项、重复或错写身份的模板项保守降级为 `missing`，使叙事问题进入 Rewrite/Review，而不是以 Coverage 结构错误终止 Run。整章 Rewrite 的长度修复不得再次返回整章替换稿，而应返回逐字唯一命中的 `search` / `replacement` 局部补丁；Laravel 负责应用补丁和重新计数，并拒绝让过长稿跨越下限成为过短稿、或让过短稿跨越上限成为过长稿，以避免扩写和压缩在硬范围两侧振荡。修复提示使用目标字数 95%～105% 的窄目标区间提供安全余量，最终硬范围仍为 85%～115%。修复后仍不合规则不得提升为当前 Artifact。最终审校与 Canonical Commit 均由 Laravel 确定性检查该范围，超出范围必须进入 Rewrite，不能因模型评分较高而自动 PASS。人工确需接受超限版本时，必须使用独立的“接受超限版本”动作，保留原字数 Finding、正文实际字数、严格上限和原因，不得把它记录成清空问题的普通 Override。Assembler 和 Rewrite 可以补足既定场景的表现细节，但不得用重复内容凑字或新增重大事实。
+字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用预算由后续 Scene 承接；最后一个待生成 Scene 负责补足章节下限。确定性拼章后若总字数不合格，Laravel 根据 Scene 实际字数、计划权重和剩余空间选择具体 Scene 做一次有界扩写或压缩，不得把全部正文交给模型。局部修复必须保留该 Scene 冻结的 Coverage 身份，由 Laravel 校验补丁方向、字数硬边界和来源链；修复后仍不合格则进入 `NEEDS_ATTENTION`。人工接受超限版本必须保留原 Finding、实际字数、严格上限和原因。
 
 Scene Draft 的正文、临时状态、声明事件和 Coverage 先经过本地校验。`temporary_state_delta` 或 `declared_events` 仅发生 JSON 语法或对象结构错误时，流水线最多执行两次 `scene-support-fields-repair-v1` 定向修复；该修复不得改写正文和 Coverage，也不得引入输入之外的新事实。无法可靠结构化的临时状态返回空对象，无法可靠结构化的声明事件丢弃。Coverage 引用先执行空白、引号和高置信连续重合片段的确定性归位，再执行独立的证据修复。证据修复耗尽后，不得把未经验证的引用当成事实，也不得仅因引用格式阻塞整章；系统将对应 Coverage 保守降为 `missing`，生成可自动 Rewrite 的计划覆盖 Finding。
 
@@ -321,13 +330,13 @@ Snapshot Schema v3 必须记录版本、实体 IDs、Fact/Memory IDs、Recent Ch
 
 `ForeshadowingContextContract` 从冻结的 Bible Version、Canonical State Version 和 Chapter Plan Version 确定性构建完整动作契约。每项包含伏笔定义、promised payoff、Canonical 优先的内容状态、时限、兑现窗口、重要度、所属 Arc、本章动作、目标 Scene、验收条件，以及不晚于冻结 State Version 的最近 Active Story Event 和证据。只有 `foreshadowing_actions` 中的目标具有本章处理权限；历史 `due_foreshadowings` 只记录为 legacy reference，未来未选中伏笔不会进入 actions。
 
-Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Assembler、Event Extractor、Reviewer 和 Rewriter 从各自 Run 的 `foreshadowing_contract` 读取同一结构并保存 checksum。`promised_payoff` 是作者侧约束，仍受 `must_not_reveal` 限制，不能被模型解释为允许提前揭晓。
+Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Deterministic Assembler 只聚合 Scene Artifact 中已验证的契约结果；Event Extractor、Reviewer 和 Rewriter 从各自 Run 的 `foreshadowing_contract` 读取同一结构并保存 checksum。`promised_payoff` 是作者侧约束，仍受 `must_not_reveal` 限制，不能被模型解释为允许提前揭晓。
 
 同一 Context 还必须携带冻结的 `arc_contributions` 和 `world_entity_candidates`。Writer 只能使用这些候选临时键引入重大世界资料；Reviewer 对每个计划 Beat、Arc Completion Condition 和 Entity Candidate 输出逐字证据审计，并单独列出未批准的重大实体。缺少、错序、引用其他小说或 Volume 的 Arc、与现有实体冲突、证据无法逐字命中，都会形成确定性 Finding 并阻止其进入 Canonical Commit。
 
 Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；当 fulfilled 审校的模型证据为拼接引用时，Laravel 使用同一伏笔 ID、动作和目标 Scene 下已经通过逐字校验的 Coverage Evidence。`rewrite_required / needs_attention` 的模型证据若包含多个分号或省略号分隔的片段，Laravel 逐段映射当前正文并保留最长的连续逐字片段；至少一段可验证时不因格式问题丢弃整个 Review，全部无法验证时仍拒绝。原始 Provider 响应保留在请求日志中。rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
 
-整章 Rewrite 使用与 Assembly 相同的结构化 `content + scene_coverage + introduced_major_facts` 契约，但允许重写在实际修正文后把原先 missing/contradicted 的 Coverage 重新判为 fulfilled；证据仍须逐字校验，必要时只修复证据引用。`scene_id` 应使用数据库主键；如果模型返回的完整 Coverage 数组严格等于冻结 Scene 的章内 sequence 顺序，Laravel 将其一一映射为对应数据库 ID。只有完整、同序且不重复的 sequence 列表可以映射，乱序、重复、部分混用、跨章或无法解析的引用仍然拒绝。整章 Rewrite Artifact 保存新的 `scene_coverage` 和 `plan_findings`，随后推进器因 source artifact 已变化而重新执行 Event Extraction、State Patch 和 Review。Scene 级 Rewrite 仍先回到 Assembly，再执行同一完整下游链。Rewrite 不能写 Story Event、伏笔领域投影或 Canonical State。
+自动 Rewrite 只允许 Paragraph Patch 或单 Scene Rewrite。Paragraph Patch 必须逐字且唯一命中所属 Scene；Scene Rewrite 返回该 Scene 的 `content + self_check`，并重新校验 Coverage。跨 Scene 连续性从最早受影响 Scene 开始有限级联；涉及章功能、Milestone、Handoff 或关键剧情结果的问题必须创建新 Plan Version并级联重生成。任何局部修复都先回到 Deterministic Assembly，再重新执行 Event Extraction、State Patch 和 Review。Rewrite 不能写 Story Event、进度投影或 Canonical State。
 
 ## 8. Temporary Chapter State
 
@@ -386,21 +395,25 @@ MVP 不做 Scene Parallel。
 
 ## 10. AssembleChapterJob
 
-输入 Ordered Scene Artifacts + Chapter Plan + Style Constraints；输出 `chapter_draft`。
+输入 Ordered Current Scene Artifacts + Chapter Plan；输出不可变 `chapter_draft`。该阶段不调用 `AiProvider`。
 
-只负责衔接、过渡、语气统一、重复清理、局部语言修正，不得主动改变 Scene Outcome、增加重大事实/能力/世界规则/人物知识。
+算法固定为：
 
-Assembler 使用结构化响应：`content`、按 Scene 顺序返回的 `scene_coverage`，以及必须为空的 `introduced_major_facts`。每个 coverage 固定检查 goal/conflict/turn/outcome，并包含该 Scene 的 `foreshadowing_coverage`；两类 Coverage 都执行原文 evidence 校验。Scene ID 必须完整、顺序一致、不得重复或跨章引用；伏笔 Coverage 必须与冻结契约中的目标 Scene、伏笔 ID、动作和顺序一致。若 Scene Draft 已把普通计划项或伏笔动作报告为 missing/contradicted，Assembler 不得将其直接提升为 fulfilled。若组装删除了 Scene Draft 中唯一的伏笔完成证据，最终状态必须报告 missing/contradicted 并写入 Chapter Draft Artifact 的 `plan_findings`，供后续自动 Rewrite 使用。跨 Scene 的动作以各 Scene Coverage 保留并在 Chapter Draft 中聚合。
+1. 按 Scene Sequence 读取当前 `scene_draft`/局部 `rewrite_draft`；缺失、跨章、状态错误或 Checksum 变化立即停止。
+2. 对每个 Scene Content 执行 `trim`，使用固定的两个换行连接；不改写字句、不生成桥接段落、不删除内容。
+3. 从 Scene Artifact 已验证的 `self_check` 聚合 `scene_coverage`；Scene ID、Sequence 和 Plan 身份由 Laravel 恢复。
+4. 按冻结契约聚合 `foreshadowing_coverage`，不得重新判定、提升或修复状态。
+5. 保存 Ordered Scene IDs、Artifact IDs、Checksums、Assembly Algorithm Version、Assembly Hash、字数和聚合 Findings。
 
-上述校验可以确定响应结构、引用关系和模型是否声明新增重大事实；它不能只凭模型自报确定语义真实性。重大事实是否被隐性新增仍由后续 Event/State Validation 与最终 Review 检查。Evidence Repair 只修正 quote 且不能改变 status；当最终 Coverage 报 missing 时，Review 阶段可以执行一次 `coverage-judgment-repair-v1` 聚焦复核，只允许重判 status/evidence，不得改正文、Plan 或 Canonical State。复核仍不确定或失败时保留原 Finding 和 `ai_request_log_id`；相同输入复用不可变 Context Artifact，不重复付费。
+衔接责任属于相邻 Scene Plan 的 `transition_from_previous` 和后一 Scene Writer。连续性或字数检查失败时，从最早受影响 Scene 做有界 Rewrite/级联重生成，再重新 Assembly；不得将整章发给模型。新增重大事实继续由 Event Extraction、State Validation 和 Review 判断。
 
 幂等键：
 
 ```text
-assemble:{chapter_id}:{ordered_scene_checksums}:{prompt_version}
+assemble:{chapter_id}:{ordered_scene_checksums}:{assembly_algorithm_version}
 ```
 
-技术失败只 Retry Assembly。
+重复 Job 在 Scene Checksums 和算法版本一致时复用成功 Artifact。确定性 Assembly 不产生 AI Request Log、Usage Record、`assembly_output_truncated` 或 `assembly_schema_invalid`。
 
 ## 11. Event Extraction / State Validation
 
@@ -467,42 +480,37 @@ BLOCK            Locked Fact 或其他不可接受硬冲突
 
 Narrative Finding 使用固定 code，并包含 `dimension`、`severity`、`scene_id`、`scope`、`auto_fixable`、`requires_human_decision`、`message`、`evidence`。`scene_id` 非空时必须属于本章，`scope = scene` 时必须提供；模型不能创建 hard finding。低于通过分数却没有可自动修复或需要人工决策的 Finding，属于不一致的 Reviewer 响应，应拒绝持久化。最终 Review Artifact 保存命中的决策规则和 Finding code，模型的 `recommended_decision` 仅作为审校证据保存。
 
-Narrative Review 必须在一次响应中完成七个维度的全量审计，不得发现首个问题后提前结束。`findings` 是问题集合的权威来源；Laravel 根据最终 Findings 确定性派生 `dimension_audits.status = pass|issues_found`，并同时保存模型原始状态和归一化状态。原状态声称有问题但没有 Finding 时，执行一次 `review-schema-repair-v3` 单维结构修复；修复绑定相同 Draft、State Version、Bible Version 与 Reviewer Prompt 来源链，不重新运行完整 Review，也不消耗正文 Rewrite 配额。修复失败生成带 `ai_request_log_id` 的 NEEDS_ATTENTION，不把 Chapter 标为 blocked。同一根因合并为一个 Finding，一轮内返回当前正文全部有明确证据的问题。
+Review 调用前，Laravel 先确定性检查字数、Scene 顺序、Artifact Lineage、State Version、Locked Facts、Plan/Milestone/Handoff 身份、Coverage 完整性、Candidate 引用和 Evidence 逐字命中。模型只返回需要语义判断的七维分数、紧凑审计和可执行 Findings，不重复输出权威 ID/顺序/Coverage 全量镜像。`findings` 是问题集合的权威来源，Laravel 结合确定性 Findings、分数和 Rewrite 预算派生最终 Decision；模型建议不能覆盖 Hard Conflict 或顺序门禁。
 
-规划契约审计的 ID、顺序和目标 Scene 以冻结 Chapter Plan 为准。模型返回 `missing + evidence=null + scene_id=null` 时，Laravel 只在审计数量、顺序、`arc_id / beat_key / candidate_key` 全部匹配且目标 Scene 可解析时，确定性补入目标数据库 Scene ID；不改变 `missing` 状态，也不生成 evidence。`fulfilled / introduced / contradicted` 仍必须返回正确目标 Scene 和逐字证据，错误 Scene 不得被覆盖，以免把其他 Scene 的证据绑定到当前契约。
+每个 Review Job 只发出一次认知请求。Schema/Evidence 修复如确有必要，必须作为具有独立输入指纹、Run 和 Artifact 的子阶段执行，不能在一个 Job 内循环调用 Provider。响应 Schema 和最大合法输出在调用前计算；无法容纳时请求前失败，再次截断进入明确配置处理，不保存半截 Review。
+
+规划契约的 Outline/Arc/Beat/Milestone ID、顺序、目标 Scene 和 Handoff 以冻结 Chapter Plan 与关系表为准，模型不得重建这些身份。Review 只判断正文是否满足验收语义；Laravel 将结果附着到权威契约并拒绝跨 Scene、跨 Chapter 或跨 Outline 的证据。
 
 Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Findings 作为回归清单，为每项保存 `resolved / still_present / replaced` 结果，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
 
-Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 使用确定性规则选择最小安全范围：单一有效 `scene_id` 进入 Scene Rewrite；Paragraph Finding 只在 evidence 能唯一命中一个当前 Scene Artifact 时映射到该 Scene；任一 Chapter Finding 或多个 Scene 受影响时进入 Chapter Rewrite。无效 Scene 引用、不支持的 scope 或不唯一的段落证据会追加 `REWRITE_SCOPE_UNRESOLVED` 并转为 `NEEDS_ATTENTION`，不猜测修复位置。Review Artifact 固定保存 `rewrite_scope`，队列派发与暂停恢复均优先使用该不可变路由。
+Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 只允许 Paragraph 或 Scene：Paragraph Finding 必须逐字且唯一命中一个当前 Scene Artifact；单一有效 `scene_id` 进入 Scene Rewrite；多 Scene 连续性从最早受影响 Scene 开始有限级联。章功能、关键结果、Milestone/Handoff 或无法唯一定位的问题不得回退整章 Rewrite，而应创建新 Plan Version、级联重生成或进入 `NEEDS_ATTENTION`。Review Artifact 固定保存不可变修复路由。
 
 `ReviewChapterJob` 保存结果后调用 `AdvanceChapterPipelineAction`。推进器只在 Decision 为 REWRITE 且范围、预算和状态允许时派发 `RewriteChapterJob`；PASS、NEEDS_ATTENTION 与 BLOCK 均停止。预算到限时保留已完成的 Review，写入 `budget_limit` 自动停止原因，不派发下一阶段；小说在结果保存后被暂停时同样不得派发。每个 Review Job 带有稳定的 operation ID，使同一强制审校投递被重复执行时复用已完成 Run，而新的人工强制审校仍可创建新 Run。
 
 ## 13. RewriteChapterJob
 
-输入 Source Artifact、Review Findings 及 evidence、Plan 验收项、Current State、Locked Facts 和冻结 Style Contract；输出新的 `rewrite_draft`，不覆盖原 Artifact。
+输入当前 Scene Artifact、同一批可修复 Findings、冻结 Plan/State/Style/Handoff；输出 Paragraph Patch 或单 Scene `rewrite_draft`，不覆盖原 Artifact。每个 Rewrite Job 最多一次 Provider 请求。
 
-重写跨章连续性问题时同时输入 `previous_chapter_ending`，使模型能依据真实上一章结尾补写过渡，而不是只依赖 Finding 的概述。
+- `scope=paragraph`：模型只返回逐字唯一命中的 `search/replacement`；Laravel 在所属 Scene 上应用补丁并创建新 Scene Rewrite Artifact。零命中、多命中或跨 Scene 时拒绝。
+- `scope=scene`：模型只返回目标 Scene 的完整替换稿及该 Scene Coverage；其他 Scene 指针不变。
+- 多 Scene 连续性：从最早受影响 Scene 开始按顺序执行有限的 Scene Rewrite，每步读取前一 Scene 实际结尾。
+- 规划或 Canonical 问题：不调用 Rewrite；修改 Outline/Chapter Plan/Scene Plan，或进入受控 Correction/`NEEDS_ATTENTION`。
 
-Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。
-
-同一 Review 的全部可修复 Findings 构成一个不可拆分的批量修复合同。Rewrite 必须在一次响应中逐项解决全部问题，随后对七个维度、计划边界、时间地点、人物状态、物品位置、动作因果和 Style Contract 进行全量自检，并在返回前修复发现的连带问题；不得只处理首个或最严重的 Finding。
-
-整章 Rewrite 的首轮提示同时给出 95%～105% 的优选字数区间。若首轮仍越界，长度修复只请求最多 12 项精确局部替换，并给出进入优选区间所需的净增减字符数。`search` 必须在当前正文中逐字且唯一命中；压缩补丁的 replacement 必须更短，扩写补丁必须更长。Laravel 逐项应用并确定性校验方向和硬上下限，跨越另一侧硬边界的补丁拒绝应用，拒绝原因反馈给下一次修复。这样任何无效补丁都不会覆盖当前 Draft，也不会在压缩和扩写之间切换输入。
-
-优先 Scene Rewrite，再 Whole Chapter Rewrite。Paragraph 在当前 Artifact 粒度下不单独产生半个 Scene 的 Artifact；可唯一定位的 Paragraph Finding 改写所属的完整 Scene。默认 `max_rewrite_attempts = 2`。
-
-Scene Rewrite 返回结构化 `content + self_check`，保留 goal/conflict/turn/outcome 验收证据，仅更新目标 Scene 的 `current_artifact_id`；其他 Scene 指针保持不变，然后重新 Assembly 并继续 Event/Patch/Review。Chapter Rewrite 产生整章替换稿，然后直接重新 Event/Patch/Review。
-
-自动 Rewrite 次数只统计当前成功 Chapter Plan 之后成功创建、且不含 `manual_edit = true` 的自动正文 `rewrite_draft`；Reviewer、Rewriter 与章节工作台共用同一统计口径。人工修改、长度 Repair、Coverage Repair、Review Schema Repair、Provider 失败与 Schema 失败都不消耗正文 Rewrite 次数。Artifact 展示版本仍按全部不可变重写稿连续递增。自动派发读取 Review Artifact 中冻结的 `rewrite_scope`，按其选择 Scene 或 Chapter Rewrite。
+Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止改变内容。自动 Rewrite 次数只统计当前成功 Chapter Plan 后成功创建的自动正文 Rewrite Artifact，默认 `max_rewrite_attempts = 2`；人工修改、技术失败和独立 Schema/Evidence 修复不消耗该配额。
 
 最后一次 Rewrite 后若重新审校仍应为 `REWRITE`，Laravel 必须在该次 Review 中直接将最终决策转为 `NEEDS_ATTENTION`，不得等待一次无法从 UI 发起的额外 Rewrite 才标记耗尽。
 
-`NEEDS_ATTENTION` 必须提供明确的人工处理入口：人工修改正文时创建新的不可变 `rewrite_draft`，记录修改原因，并重新执行事件提取、状态补丁和 Review；没有 Hard Conflict 时允许填写原因后人工 Override，创建新的 PASS Review，同时保留原 Review、Findings 和操作原因。
+`NEEDS_ATTENTION` 必须提供问题层级、建议字段、影响范围和恢复路径。人工修改正文时创建新的 Scene Rewrite Artifact 并记录原因；修改 Plan 时创建新 Plan Version并从最早受影响 Scene 重建；Canonical Fact/State 问题必须使用受控 Correction 或回滚。没有 Hard Conflict 时的人工 Override 仍保留原 Review、Findings 和操作原因。
 
 Rewrite 后必须重新：
 
 ```text
-Extract Events → Build State Patch → State Validation → Review
+Deterministic Assembly → Extract Events → Build State Patch → State Validation → Review
 ```
 
 不得沿用旧 Candidate/Patch。
@@ -510,7 +518,7 @@ Extract Events → Build State Patch → State Validation → Review
 幂等键：
 
 ```text
-rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
+rewrite:{source_scene_artifact_id}:{scope}:{finding_hash}:{attempt}:{prompt_version}
 ```
 
 ## 14. CommitChapterJob
@@ -519,7 +527,7 @@ rewrite:{source_artifact_id}:{finding_hash}:{attempt}:{prompt_version}
 
 该 Job 由用户在 PASS 后确认“提交正式章节”，或由 `auto_commit=true` 的 Review PASS 安全分支派发。两条路径都必须验证当前 Review/Draft 来源、Pause、Expected State Version 和幂等键，并调用同一 `CanonicalCommitService`；Resume 本身不得绕过这些条件直接提交。
 
-Canonical Commit 的数据库事务固定已验收 Character / World Entity Candidate、Story Events、Facts、State Version、Chapter、Novel 指针和 Story Arc 进度。Candidate 使用 `(novel_id, source_chapter_id, source_candidate_key)` 幂等创建，临时键在写 Event、State 和后续 Memory 前解析为正式 ID。`story_arc_beat_completed` 必须对应冻结 Primary Beat，并由 Reviewer 对全部验收条件给出 `fulfilled` 和正文逐字证据；Draft、Review 或 Rewrite 不能直接完成 Beat。Story Arc Progress 只根据 Active Completion Events 中的唯一 Beat 重算。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；其他领域投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
+Canonical Commit 的数据库事务固定已验收 Character / World Entity Candidate、Story Events、Facts、State Version、Chapter、Novel 指针和 Milestone/Beat/Arc 进度。Candidate 使用 `(novel_id, source_chapter_id, source_candidate_key)` 幂等创建，临时键在写 Event、State 和后续 Memory 前解析为正式 ID。`story_arc_beat_milestone_completed` 必须对应冻结 Primary Milestone并具有逐字证据；`story_arc_beat_completed` 还要求全部 Milestone 已完成、Beat 验收条件全部满足且最终 Handoff 已建立。Draft、Plan、Review、Rewrite 或章节预算不能直接完成进度。事务成功后派发唯一键为 `novel:{novel_id}:state:{state_version_id}` 的 `RefreshNovelProjectionJob`；其他领域投影刷新不进入 Commit 事务，失败由 Queue/Horizon 按独立 Job 重试，因此不能回滚已经成功的正式章节。Job 只处理仍为当前 Canonical 指针的 State Version，过期任务直接结束，避免旧投影覆盖新状态。
 
 投影重建以最新的无章节 State Version 为基线，按 `state_version, id` 重放不晚于目标版本的 Active 伏笔事件，并复核结果与目标 Canonical State 的 `status` 和 `reinforce_count` 一致。`setup_chapter_id` 只取有效 `foreshadowing_planted` 事件，`payoff_chapter_id` 只取有效 `foreshadowing_paid_off` 事件；不存在相应有效事件时字段必须为 `null`。它计算目标值后整体覆盖漂移字段，不在表当前值上执行 `+1`。
 
@@ -532,6 +540,8 @@ Review PASS
 无 Hard Finding
 Artifact checksum 未变化
 Expected State Version 匹配
+Outline / Arc / Beat / Milestone 完整父链匹配
+Completion / Handoff 证据匹配当前 Draft
 ```
 
 幂等键：
@@ -548,20 +558,21 @@ SELECT novel FOR UPDATE
 Validate state version
 SELECT chapter FOR UPDATE
 Validate review/artifact
-Validate planning acceptance and verbatim evidence
+Validate planning, Milestone, Beat, Handoff acceptance and verbatim evidence
 Create approved World Entities and resolve temporary keys
 Persist Story Events
+Persist eligible Milestone / Beat Completion Events
 Apply Fact Changes
 Create State Version N+1
 Update Chapter
 Update Novel pointers
-Recalculate Story Arc progress
+Recalculate Milestone / Beat / Story Arc progress
 COMMIT
 ```
 
 相同 Commit 重复执行返回已有结果；不同 Artifact 覆盖已 Canonical Chapter必须 BLOCK。Commit 阶段禁止外部 LLM 调用。
 
-Latest Canonical Chapter Rollback 在同一事务中失效该章事件和记忆、恢复 State 指针、删除只由该章首次引入且没有后续 Active Canonical Event 引用的 Entity，并从剩余 Canonical Arc Events 重算进度。存在后续正式引用时必须阻止简单删除。历史 Plan 没有结构化 Beat 引用时保持可读，但不得据此猜测完成度；`story:rebuild-arc-progress` 默认只输出 dry-run，只有显式 `--execute` 才写入重算结果。
+Latest Canonical Chapter Rollback 在同一事务中失效该章事件和记忆、恢复 State 指针、删除只由该章首次引入且没有后续 Active Canonical Event 引用的 Entity，并从剩余 Canonical Completion Events 重算 Milestone/Beat/Arc 进度。存在后续正式引用时必须阻止简单删除；不得根据章节数、预算或自然语言猜测完成度。
 
 ## 15. Post-Commit
 
@@ -574,6 +585,7 @@ Fact Changes
 Story State Version
 Chapter Canonical State
 Novel Canonical Pointers
+Milestone / Beat Completion and Arc Progress
 ```
 
 事务后：
@@ -623,6 +635,10 @@ UpdateMemoryJob
 ```
 
 Memory、摘要或 Projection 失败不回滚正文，但阻止本次自动续写并在 Generation 恢复中心留下恢复点。Embedding 独立重试，不阻塞下一章。Summary Job 必须核对任务携带的 Canonical Artifact ID；来源已经变化时安全结束，不覆盖新摘要。
+
+下一章准备度和 Filament 展示必须调用同一规则来源：重新解析 Current Main Beat、最早未完成 Milestone、Handoff、上一 Canonical Summary、State Version、暂停/停止条件和 Post-Commit 派生状态。UI 显示 Ready 不能替代执行时的领域门禁。
+
+若 Current Beat 尚未满足退出条件，下一章继续选择该 Beat 最早未完成 Milestone；若 Beat Completion 已提交，则下一章选择 Handoff 指向 Beat 的 Entry Milestone，并读取上一章结尾、Handoff Carried States/Open Threads 和新的 Canonical State。首版一章只能有一个 Main Primary Beat：前一 Beat 最后一章可建立 Next Trigger，但下一 Beat 的正式 Milestone Progress 从下一章开始。
 
 ## 17. Auto Generate
 
@@ -700,7 +716,7 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 ## 20. Timeout / Retry Budget
 
-统一配置 planning、scene_generation、assembly、event_extraction、review、rewrite、embedding timeout。
+统一配置 outline_foundation、outline_skeleton、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Deterministic Assembly 没有 Provider Timeout。
 
 默认超时链：
 
@@ -749,7 +765,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 ```text
 chapter-planner-v10+natural-prose-v1
 scene-writer-v15+natural-prose-v1
-assembler-v12+natural-prose-v1
+assembly-algorithm-v1
 event-extractor-v8
 reviewer-v16+natural-prose-v1
 rewrite-v14+natural-prose-v1
@@ -760,17 +776,17 @@ rewrite-length-patch-v2
 summary-v2+natural-prose-v1
 ```
 
-`NarrativeProsePolicy::VERSION = natural-prose-v1` 是规划、正文和审校共用的自然表达契约。Novel Planner 与 Chapter Planner 要把抽象主题落成可验证的人物行动、阻力和后果；Scene Writer、Assembler、Rewrite 及其长度修复要通过动作、对白、POV 感知和具体后果呈现信息，抑制解释性套句、机械同构、空泛升华、设定复述和人人同声；Reviewer 及单维审计修复只在这些特征反复出现或实质损害叙事时生成 `STYLE_MISMATCH`；Canonical Summary 只记录事件、状态变化和未决后果。
+`NarrativeProsePolicy::VERSION = natural-prose-v1` 是规划、Scene 正文、局部 Rewrite 和审校共用的自然表达契约。Novel Planner 与 Chapter Planner 要把抽象主题落成可验证的人物行动、阻力和后果；Scene Writer 与局部 Rewrite 通过动作、对白、POV 感知和具体后果呈现信息；Reviewer 只在这些特征反复出现或实质损害叙事时生成 `STYLE_MISMATCH`；Canonical Summary 只记录事件、状态变化和未决后果。Deterministic Assembler 不读取该策略。
 
-`PromptVersionResolver` 为 Planner、Writer、Assembler、Reviewer、Rewrite 和 Summary 返回 `{stage_prompt_version}+{narrative_policy_version}`。该有效版本同时进入 Run、Context Snapshot、Input Hash、Idempotency Key 和 Provider 请求诊断；修改任一组成部分都会形成新的复用边界。Extractor 等不注入自然文风策略的结构化阶段保持独立版本。`AiDebugService` 原样执行用户输入，不注入该策略，因此使用基础阶段版本。
+`PromptVersionResolver` 为 Provider 阶段的 Planner、Writer、Reviewer、Local Rewrite 和 Summary 返回 `{stage_prompt_version}+{narrative_policy_version}`。该有效版本同时进入 Run、Context Snapshot、Input Hash、Idempotency Key 和 Provider 请求诊断；修改任一组成部分都会形成新的复用边界。Assembly 使用独立算法版本，不注册 Prompt Version，也不产生 Provider Usage。Extractor 等不注入自然文风策略的结构化阶段保持独立版本。
 
-当前 21 个 `AiRequest` 调用点均已核查。Story Event 提取、Coverage/Event 逐字证据校对、Scene 辅助 JSON 修复、Arc 完成审计、Coverage 判定复核只承担结构化判断或原文引用，因此保持精确任务 Prompt，不附加正文写作规则。`AiDebugService` 原样执行用户输入，便于诊断 Provider，不注入小说文风。该边界避免“去 AI 味”规则改变证据文本、事件事实或修复结构。
+每个 Provider Job 最多发出一次认知请求。Story Event 提取、Evidence/Schema 修复和 Coverage 判定若仍需 Provider，必须成为具有独立输入指纹、Run 和 Artifact 的子阶段；不得在 Planner、Writer、Reviewer 或 Rewriter 的同一 `handle()` 中循环请求。`AiDebugService` 原样执行用户输入，便于诊断 Provider，不注入小说文风。
 
 文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。`ai_model_routes` 同时保存各 Stage 的可选 `reasoning_effort`，允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。小说级 Provider/Model 覆盖仍继承同一 Stage 路由的推理程度。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。每个新 Run 在创建时冻结 `provider`、`model_policy` 与推理程度；Provider、Model 或推理程度都参与 `input_hash`，避免错误复用采用不同推理策略生成的旧 Artifact。后台设置变更只影响之后创建的请求和 Run，历史 Run 不改写。
 
 文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。Base URL、API Key 和 Timeout 优先读取 `ai_provider_connections` 中对应的启用连接，API Key 使用 Eloquent `encrypted` cast，后台不回显；连接不存在时才兼容回退环境配置。成本按实际 Provider 和响应 Model 从 `ai_model_prices` 读取启用价格，按 `billing_unit` 计算并保存到 Usage；没有匹配价格时才回退旧全局环境单价。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema。Embedding 固定使用 OpenAI 配置，不随文本 Stage 切换。
 
-Scene Generation 是一个拥有多个实际 Provider 调用的复合 Run。Run 顶层 `provider` / `model_policy` 表示正文 Writer 路由；正文、结构与 Coverage 修复、字数修复的实际路由分别冻结在 `context_snapshot.generation_preferences.substage_routes`。每个请求必须携带明确的 `route_key`，Router 按该键校验冻结的 Provider 与 Model；不得把修复请求错误地与 Run 顶层 Writer Provider 比较，也不得在重试时静默采用最新全局路由。`usage_records.request_metadata` 同步记录 `route_key`，用于区分同一 Run 内的实际调用和费用。
+每个 Provider Run 在创建时冻结唯一 `route_key`、Provider、Model、Reasoning Effort、Prompt Version、Schema Version 和输出预算；Job 必须从 Run Snapshot 构造 Provider，不能重试时重新路由。证据修复、Schema 修复或字数修复使用独立 Run 和路由，因此不会与正文 Writer 的冻结值混淆。`provider_run_mismatch` 必须在请求前报告冻结值与解析值。
 
 代码和 `.env.example` 当前将 `gpt-5.6-luna` 作为文本生成默认模型，将 `text-embedding-3-small` 作为 Embedding 默认模型。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
 
@@ -830,16 +846,27 @@ php artisan novel:recover-bible-chapter NOVEL_ID CHAPTER_SEQUENCE \
 
 输出中的 `plan_hash` 同时覆盖章节状态、Plan 状态、Scene 当前 Artifact 指针、Run 和 Artifact checksum。执行阶段还要求现有 User 的 `--actor`，并在事务锁内重新计算报告；任一来源发生漂移都会拒绝旧 hash。执行只允许当前 Canonical 章的下一章，保留所有旧 Run、Artifact 和 Usage，重置 Draft 指针后派发新的 Chapter Planning。该命令不能绕过 Review 或 Canonical Commit。
 
+### 23.2 删除与人工修复边界
+
+章节删除采用 Tail Truncation：删除第 N 章及全部后续章节。操作前暂停小说、确认没有活动 Run、预览影响并记录原因；事务内恢复 N-1 的 State/Chapter 指针，删除后缀产生的 Event、State、Fact、Memory、Candidate、Projection、Run、Artifact、Review、Usage、Scene、Plan 和 Chapter，再从剩余 Canonical Events 重算 Milestone/Beat/Arc Progress。小说删除采用完整物理删除，并在一个事务中清空全部直接和间接关联数据。两项功能分别等待 NGC-008/NGC-009 实现。
+
+人工处理必须先返回问题层级、推荐修改字段、影响范围和自动恢复路径。Outline/Milestone 问题修订未来 Outline Version；Chapter/Scene Plan 问题创建新 Plan Version并从最早 Scene 重建；Canonical Fact/State 问题使用受控 Correction 或回滚；只有局部文字问题进入 Paragraph/Scene Rewrite。任何人工正文修改都创建新 Artifact，并失效旧 Event Candidate、State Patch 和 Review。
+
 ## 24. 测试
 
 Workflow：
 
 ```text
 normal full chapter
+Foundation / Skeleton / Beat Detail / Finalize recovery
+Plan Admission rejects invalid Outline chain before Scene 1
 multiple scenes sequential
+deterministic Assembly preserves ordered Scene content and makes no Provider request
 review pass then stop without commit
 manual commit after pass
 rewrite then pass
+paragraph patch and single Scene rewrite rebuild all downstream artifacts
+whole-chapter rewrite is unavailable
 rewrite exhausted
 needs attention
 block
@@ -865,6 +892,7 @@ pause during provider call
 resume from assembled draft
 resume from PASS waits for manual commit
 state version conflict before commit
+Milestone completion and Beat Handoff resume from persisted events
 ```
 
 Canonical Safety：
@@ -874,6 +902,7 @@ Draft never changes state
 Pause blocks commit
 Hard Conflict blocks commit
 Duplicate Commit exactly-once
+Completion Event duplicate delivery exactly-once
 Embedding failure does not rollback chapter
 ```
 
@@ -886,6 +915,8 @@ rewrite respects limit
 ```
 
 ## 25. Implementation Batches
+
+下列 G1～G10 是历史实现批次记录；NGC-001 后的目标实现顺序以 `NOVEL_GENERATION_CONTROL_AND_CONTENT_DELETION_OPTIMIZATION_PLAN.md` 的 NGC-002A～NGC-012 为准，不得把历史批次状态当作新架构已经完成。
 
 ```text
 G1 GenerateNextChapterAction + Preflight + Run helpers
@@ -981,6 +1012,10 @@ Hard Stop 条件可靠
 10. Post-commit derived failures never rollback canonical text.
 11. Resume is determined from persisted state, not queue presence.
 12. Auto generation stops on hard errors and advances only after a user-confirmed commit.
+13. Outline planning reads relational Volume/Arc/Beat/Milestone data, never a full JSONB tree.
+14. Deterministic Assembly never calls a Provider or rewrites Scene text.
+15. Automatic Rewrite is limited to Paragraph/Scene and always rebuilds downstream artifacts.
+16. Milestone/Beat progress changes only through Canonical Completion Events.
 ```
 
 # END OF generation-pipeline.md

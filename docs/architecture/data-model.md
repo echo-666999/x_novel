@@ -2,6 +2,8 @@
 
 # AI Long-Form Fiction Platform
 
+> NGC-001 目标数据基线。关系化 Outline 与新外键尚待 NGC-002A 实现；当前代码和现有数据库仍是旧结构，实施时从 `migrate:fresh` 后的空数据库开始，不迁移、不 Backfill 旧数据。
+
 本项目是一个由单人开发、单人使用、单人维护的 AI 长篇网络小说自动生成系统。
 
 目标不是构建复杂 SaaS，而是构建一个：
@@ -151,9 +153,9 @@ Ending Control
 ```text
 Novel Bible
     ↓
-Volume
+Current Outline Version
     ↓
-Story Arc
+Volume → Arc → Beat → Milestone
     ↓
 Chapter Plan
     ↓
@@ -161,11 +163,11 @@ Context Builder
     ↓
 Scene Generation
     ↓
-Chapter Assembly
+Deterministic Chapter Assembly
     ↓
-Review
+Event Extraction / State Validation
     ↓
-Rewrite if needed
+Compact Review / Paragraph or Scene Rewrite if needed
     ↓
 Review PASS
     ↓
@@ -246,7 +248,7 @@ CanonicalCommitService
 
 才能更新正式状态。
 
-`story_arcs.progress` 是 Canonical 投影：只从已提交章节的结构化 Beat 完成记录计算。Plan、Draft、Review 和 Rewrite 只能携带候选贡献；回滚最新正式章节时必须从剩余 Canonical 记录重算，不能递减一个猜测值。
+`story_arcs.progress` 是 Canonical 投影：只从已提交章节的 Active Milestone/Beat Completion Events 计算。Plan、Draft、Review 和 Rewrite 只能携带候选贡献；回滚最新正式章节时必须从剩余 Active Canonical Events 重算，不能递减一个猜测值。
 
 正文中新出现的世界实体在 PASS 前只能保存为 Candidate。只有 `CanonicalCommitService` 可以在同一事务中验证引用并创建正式 `world_entities`。类型覆盖用于提示缺口，不构成“所有类型必须非空”的约束。
 
@@ -453,11 +455,13 @@ novel_outline_id
 outline_version
 outline_checksum
 primary_arc_id
-primary_beat_key
-primary_beat_sequence
-canonical_completed_beat_keys
+primary_beat_id
+primary_milestone_id
+handoff_next_beat_id
+canonical_completed_beat_ids
+canonical_completed_milestone_ids
 chapters_used_for_current_beat
-chapter_budget
+chapter_budget_min / chapter_budget_max
 character_ids
 world_entity_ids
 foreshadowing_ids
@@ -585,11 +589,9 @@ Hard Conflict 优先于总分。
 Paragraph
 ↓
 Scene
-↓
-Chapter
 ```
 
-不要因为局部问题无条件重写整章。
+自动路径禁止 Whole Chapter Rewrite。多 Scene 连续性从最早受影响 Scene 有限级联；章功能、Milestone/Handoff 或关键结果问题返回 Plan 修订，无法安全定位时进入 `NEEDS_ATTENTION`。
 
 每次 Rewrite 必须创建新的 Artifact。
 
@@ -824,6 +826,7 @@ default
 PlanChapterJob
 GenerateSceneJob
 AssembleChapterJob
+ExtractStoryEventsJob
 ReviewChapterJob
 RewriteChapterJob
 CommitChapterJob
@@ -1191,12 +1194,16 @@ Complex JOIN
 
 ## 40. Current Data Model
 
-Outline 调整后的 MVP 为 19 张核心表；`novel_outlines` 是唯一新增核心表：
+NGC-001 目标基线为 23 张核心表：现有 19 张基线增加 4 张版本化 Outline 子表，不新增独立 Handoff 表：
 
 ```text
 novels
 novel_bibles
 novel_outlines
+novel_outline_volumes
+novel_outline_arcs
+novel_outline_beats
+novel_outline_milestones
 
 volumes
 story_arcs
@@ -1249,13 +1256,13 @@ style_parameters
 
 叙事与文风发生变化时必须创建新 Bible Version，不得原地修改历史版本。`novels.settings.editorial` 只允许在迁移窗口中用于迁移预览、冲突对照和数据复制；章节生成不得把它作为回退来源。迁移完成后应清理旧来源，但不得改写历史 Run、Artifact 或 Context Snapshot。
 
-首次 AI 小说蓝图生成发生在 Current Bible 创建前，可以生成完整 Bible 候选；用户采用并创建 Current Bible 后，Planner、Writer、Assembler、Reviewer、Rewriter 和长度修复必须读取同一个冻结 Bible Version。
+Foundation 发生在 Current Bible 创建前，可以生成完整 Bible 候选；用户采用并创建 Current Bible 后，Planner、Writer、Reviewer、Local Rewriter 和长度修复必须读取同一个冻结 Bible Version。Deterministic Assembler 不调用 Provider或读取文风 Prompt，只按 Scene Artifact 拼接。
 
-### 40.2 Novel Outline、结构化 Beat 与 Candidate
+### 40.2 Novel Outline、Milestone、Handoff 与 Candidate
 
-人工确认的 Current Novel Outline 是 Chapter Planning 的上游权威，Canonical Story State 与 Active Story Events 仍是已经发生之故事事实的权威。AI 只能生成 Outline Candidate 或拆分 Laravel 指定的当前 Beat，不能排序 Main Beat、切换主线、跳过节点或宣告节点完成。
+人工确认的 Current Novel Outline 是 Chapter Planning 的上游权威。正式层级固定为 `Volume → Arc → Beat → Milestone → Chapter → Scene`；Canonical Story State 与 Active Story Events 是已经发生之故事事实和完成进度的权威。AI 只能生成候选结构，Laravel 决定顺序、解析引用并选择当前 Main Beat/Milestone。
 
-新增 `novel_outlines`：
+`novel_outlines` 只保存不可变版本头和全局约束，不再包含 `content`：
 
 ```text
 id bigint PK
@@ -1264,8 +1271,12 @@ version unsigned integer
 status draft | current | superseded
 source ai | manual | revision
 schema_version unsigned integer
-content jsonb
+title text
+summary text
+must_include jsonb
+must_not_include jsonb
 checksum char(64)
+source_artifact_id nullable FK generation_artifacts.id
 based_on_outline_id nullable FK novel_outlines.id
 created_by nullable FK users.id
 applied_at nullable timestamp
@@ -1273,57 +1284,76 @@ created_at
 updated_at
 ```
 
-数据库约束为 `unique(novel_id, version)`、`version > 0`、`schema_version > 0`、枚举值 CHECK，以及 PostgreSQL 部分唯一索引保证同一 Novel 最多一个 `current`。`novels.current_outline_id` 可空并引用 `novel_outlines.id`。采用或修订 Current Outline 时必须锁定 Novel，在同一事务内 supersede 旧版本并切换指针。
-
-`content` 固定为：
+完整规划定义只存在于：
 
 ```text
-title
-summary
-must_include[]
-must_not_include[]
-baseline_completions[]（仅旧小说迁移）
-volumes[]
-  key / sequence / title / goal / climax / target_words
-  arcs[]
-    key / sequence / type / title / goal / stakes / completion_conditions[]
-    beats[]
+novel_outline_volumes
+  id / novel_outline_id / volume_key / sequence
+  title / goal / climax / target_words
+
+novel_outline_arcs
+  id / novel_outline_id / novel_outline_volume_id
+  arc_key / sequence / mainline_sequence nullable
+  type / title / goal / stakes / completion_conditions
+
+novel_outline_beats
+  id / novel_outline_id / novel_outline_arc_id
+  beat_key / sequence / mainline_sequence nullable
+  title / summary
+  chapter_budget_min / chapter_budget_max nullable
+  acceptance_criteria / must_include / must_not_include
+  character_candidates / world_entity_candidates
+  handoff_next_beat_id nullable
+  handoff_transition_mode / handoff_exit_result / handoff_next_trigger
+  handoff_carried_states / handoff_open_threads
+  handoff_required_transition / handoff_forbidden_jump
+
+novel_outline_milestones
+  id / novel_outline_id / novel_outline_beat_id
+  milestone_key / sequence
+  title / objective
+  acceptance_criteria / must_include / must_not_include
 ```
 
-Volume、Arc、Beat Key 在同一 Outline 内全局唯一且版本创建后不可原地修改；各层 `sequence` 从 1 连续排列。至少存在一个 Main Arc，每个 Main Arc 至少存在一个 Beat。结构化 Beat 至少包含：
+所有子表通过非空外键、组合唯一键和组合外键保证完整父链属于同一 Outline Version。各层 Key 和同级 Sequence 唯一；Main Arc/Beat 的 `mainline_sequence` 在同一 Outline 内唯一；每个 Main Beat 至少一个 Milestone；除最终 Main Beat 外，`handoff_next_beat_id` 必须指向同版本相邻 Main Beat。Handoff 首版与 Beat 一对一，不新增表。
+
+首版 Milestone/Handoff 只属于 Main Beat；Subplot 使用 Arc Completion Conditions 和 Chapter Plan Secondary Contribution，不创建独立 Milestone Completion。
+
+`chapter_budget_min >= 1`，`chapter_budget_max` 为空或不小于最小值。Min 只用于规模提示和偏差观测，Max 只用于异常停留保护；二者都不是完成条件。
+
+Source of Truth 边界：
+
+- `novel_outline_*` 保存不可变规划定义；修订创建新版本。
+- `story_events` 保存正式 Milestone/Beat Completion，不回写 Outline 表。
+- 运行态 `volumes.source_outline_volume_id`、`story_arcs.source_outline_arc_id` 非空且唯一。
+- 删除 `volumes.outline_key`、`story_arcs.outline_key` 和 `story_arcs.beats`。
+- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链。
+- 不保留 `baseline_completions`、旧 JSONB Outline 双读或 Key 回退。
+
+版本创建在一个事务中按 Volume、Arc、Beat、Milestone 顺序写入，随后按稳定 `beat_key` 回填 Handoff 自外键，并从持久化关系重新计算 Checksum。任一引用、顺序、邻接或 Checksum 校验失败都回滚整个版本。`source=ai` 时 `source_artifact_id` 必须引用同小说同规划批次的最终 `outline_blueprint` Artifact，且一个 Finalize Artifact 最多创建一个 Outline Version。
+
+Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Finalize 或采用 Outline 都不会创建正式对象；只有对应 Plan、Review 证据、Introduced Event 和 State Version 校验通过后，Canonical Commit 才能幂等转正。
+
+本基线明确放弃现有数据库数据，不迁移、不 Backfill 旧 `novel_outlines.content`、`story_arcs.beats`、旧 `beat_key` 或历史 Canonical 映射。Migration 实施和验收从停止 Worker 后的开发环境 `migrate:fresh` 开始。
+
+### 40.3 Outline 生成与完成进度
+
+新建 Outline 使用 `Foundation → Skeleton → 单 Beat Detail → Finalize`。Foundation 生成 Bible/初始领域候选；Skeleton 生成 Volume/Arc/Beat 骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestones/Handoff；Finalize 不调用 Provider，只合并成功 Artifact、解析稳定 Key 并事务写入关系表。禁止一次 Provider 请求生成全部层级和明细。
+
+正式进度继续复用 `story_events`：
 
 ```text
-key
-sequence
-title
-summary
-chapter_budget { min, max nullable }
-acceptance_criteria[]
-must_include[]
-must_not_include[]
-character_candidates[]
-world_entity_candidates[]
+story_arc_beat_milestone_completed
+story_arc_beat_completed
 ```
 
-Beat 必须满足 `min >= 1`、非空 `max >= min`、至少一个验收条件，且同一文本不能同时为必须和禁止内容。旧字符串 Beat 由 Normalizer 只读兼容：原文本继续通过现有 `StoryArcBeatContract` 计算完全相同的 Key，数组位置成为 Sequence，默认预算为 `{min: 1, max: null}`，原文本成为临时验收条件。不得改写已有 Canonical Event 的 Beat Key。
+Milestone Completion 必须引用完整 Outline/Arc/Beat/Milestone 父链。Beat Completion 只在全部 Milestone 已完成、Beat 验收条件具有 Canonical 证据且最终 Handoff 已满足时创建。Outline 定义表和运行态 Arc 表不保存可变完成游标。
 
-相关投影字段冻结为：
+### 40.4 删除边界
 
-```text
-volumes.outline_key nullable
-story_arcs.outline_key nullable
-story_arcs.sequence unsigned integer default 1
-chapter_plans.novel_outline_id nullable FK novel_outlines.id
-chapter_plans.character_candidates jsonb default []
-characters.source_chapter_id nullable FK chapters.id
-characters.source_candidate_key nullable
-```
+Outline 头到四层定义内部使用级联删除；运行态 Volume/Arc、Chapter Plan 和 Story Event 对 Outline 节点使用限制删除，防止误删正在使用的定义。完整小说删除由领域 Action 在一个事务中先删除外部运行引用，再删除 Outline Version 和全部小说数据。
 
-唯一约束包括 `unique(novel_id, outline_key) WHERE outline_key IS NOT NULL`、`unique(volume_id, sequence)` 和 `unique(novel_id, source_chapter_id, source_candidate_key)`。`story_arcs.beats` 升级为结构化对象数组；`chapter_plans.arc_contributions[*].role` 只允许 `primary | secondary`，每个新 Plan 恰有一个 Primary。
-
-Character Candidate 至少保存 `candidate_key`、`name`、`role`、`motivation`、`profile`、`personality`、`abilities`、`knowledge`、`deduplication_basis`、`possible_duplicate_character_ids`、`introduction_reason`、`target_scene_sequence`。World Entity Candidate 继续使用现有同类冻结结构。Candidate Key 在 Outline 内唯一；保存 Draft 或采用 Outline 都不会创建正式 Character / World Entity。只有对应 Chapter Plan、Review 逐字证据、匹配的 Introduced Event 与 State Version 校验全部通过后，Canonical Commit 才能幂等转正。
-
-`baseline_completions` 每项保存 `beat_key`、Canonical `chapter_ids`、逐字 `evidence`、`reason`、`confirmed_by`、`confirmed_at`。它只供旧小说选择迁移后的起始节点，不创建 Story Event，不修改历史 Canonical State 或 Arc Progress，也不能与 Canonical `story_arc_beat_completed` 混同。
+章节删除采用 Tail Truncation：只允许删除目标 Sequence 及其后的完整章节后缀，并同步删除或重建相关 Event、State、Fact、Memory、Candidate、Foreshadowing Projection、Run、Artifact、Review 和 Usage。不能依靠单个 Chapter 外键级联来猜测 Canonical 恢复顺序；Action 必须先锁定 Novel、恢复前一 State Version，再按显式依赖顺序处理。
 
 ---
 
@@ -1335,6 +1365,10 @@ Character Candidate 至少保存 `candidate_key`、`name`、`role`、`motivation
 novels
 novel_bibles
 novel_outlines
+novel_outline_volumes
+novel_outline_arcs
+novel_outline_beats
+novel_outline_milestones
 volumes
 story_arcs
 chapters

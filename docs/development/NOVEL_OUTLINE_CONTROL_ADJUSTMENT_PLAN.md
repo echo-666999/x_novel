@@ -1,9 +1,21 @@
 # 人工全书大纲与受控章节生成调整方案
 
 > 日期：2026-09-21
-> 状态：实施中（OUT-001、OUT-002、OUT-003、OUT-004、OUT-005、OUT-006、OUT-007、OUT-008、OUT-009 已完成）
+> 状态：历史实施记录（OUT-001～OUT-009 已完成；Outline Source of Truth、Beat 完成与迁移语义自 NGC-001 起由新方案替代）
 > 范围：新建小说的全书大纲、连载中的未来大纲修订、Chapter Planner 按大纲生成、AI Prompt 日志开关、AI 配置后台维护、DeepSeek 生成支持、《六环余光》迁移准备
 > 不包含：本文件不修改业务代码，不调用 AI Provider，不修改《六环余光》的小说数据
+
+## 0. NGC-001 后续替代说明
+
+自 2026-09-26 起，`NOVEL_GENERATION_CONTROL_AND_CONTENT_DELETION_OPTIMIZATION_PLAN.md` 和对应 PRD/Architecture 是后续实现的权威来源。本文件保留 OUT-001～OUT-009 的历史背景和实施记录，但以下旧设计不得继续作为新代码依据：
+
+- `novel_outlines.content` 和 `story_arcs.beats` 不再是 Outline Source of Truth；目标结构改为版本头加 `novel_outline_volumes/arcs/beats/milestones` 四张关系表。
+- 不保留旧数据迁移、`baseline_completions`、旧 Beat Key 回退或 JSONB 双读；实施从 `migrate:fresh` 后的空数据库开始。
+- Laravel 选择最早未完成 Main Beat 及其最早未完成 Milestone；章节预算只用于规模观测和异常停留保护。
+- `story_arc_beat_milestone_completed` 是正式 Milestone Completion；只有全部 Milestone 完成、Beat 验收条件满足且最终 Handoff 成立时，才允许 `story_arc_beat_completed`。
+- Draft、Plan、Review、Rewrite 和 Outline 表都不能推进进度；只有 Canonical Commit 写入的 Active Completion Events 是正式完成来源。
+
+本文件中关于 JSONB Outline、历史基线、`arc_id + beat_key` 直接完成 Beat 和旧小说专项迁移的章节均标记为历史记录；若与上述规则冲突，以上述规则及当前 Architecture 为准。
 
 ## 1. 目标
 
@@ -488,7 +500,7 @@ COMMIT
 
 重复执行必须返回同一已采用结果或明确拒绝，不能创建第二套 Volume、Arc 或人物。
 
-## 6. Chapter Planner 按大纲生成
+## 6. Chapter Planner 按大纲生成（历史方案，已由 NGC-001 关系化 Milestone/Handoff 流程替代）
 
 ## 6.1 当前节点选择
 
@@ -556,9 +568,9 @@ INVALID_CHARACTER_CANDIDATE
 - 当前 Beat 已达到 `chapter_budget.max` 且仍未完成时，停止自动生成并进入 `NEEDS_ATTENTION`；
 - 用户必须选择延长预算、修改节点、人工调整 Chapter Plan 或修订 Outline。
 
-## 6.4 Review 与 Canonical Commit
+## 6.4 Review 与 Canonical Commit（NGC-001 修正语义）
 
-Reviewer 必须逐项返回当前 Primary Beat 的验收状态：
+Reviewer 必须逐项返回当前 Primary Milestone 及其所属 Beat/Handoff 的验收状态：
 
 ```text
 fulfilled
@@ -566,15 +578,16 @@ not_met
 contradicted
 ```
 
-只有 `fulfilled` 且 Evidence 逐字命中正文时，Event Extractor 才允许输出 `story_arc_beat_completed`。
+只有 Milestone 全部条件为 `fulfilled` 且 Evidence 逐字命中正文时，Event Extractor 才允许输出 `story_arc_beat_milestone_completed`。`story_arc_beat_completed` 还要求当前 Beat 的全部 Milestone 已有 Active Completion Event、Beat 全部验收条件满足，并且最终 Handoff 已建立。
 
 Canonical Commit 必须校验：
 
 - Chapter Plan 冻结的 Outline Version 仍可追踪；
-- Beat 属于该 Outline；
-- Review、Event Candidate 和 Plan 使用相同 `arc_id + beat_key`；
-- 同一 Beat 已有 Active 完成事件时保持幂等，不重复推进；
-- Commit 成功后由 `StoryArcProgressProjector` 更新进度；
+- Arc、Beat、Milestone 属于同一关系化 Outline Version 完整父链；
+- Review、Event Candidate 和 Plan 使用相同的 Outline/Arc/Beat/Milestone 数据库 ID；
+- 同一 Milestone/Beat 已有 Active 完成事件时保持幂等，不重复推进；
+- Beat Completion 同时验证全部 Milestone 和最终 Handoff；
+- Commit 成功后从 Active Completion Events 更新 Milestone/Beat/Arc 进度；
 - Draft、Review、Rewrite 均不得提前改变 Outline 或 Arc Progress。
 
 ## 7. 连载中的大纲修订
@@ -751,7 +764,7 @@ confirmed_at
 
 Baseline Completion 只用于决定新 Outline 从哪个节点继续，不创建虚构 Story Event，不修改历史 Canonical State。UI 必须显示“历史基线”，不能伪装成新流程产生的 Canonical Beat Event。
 
-新大纲采用后的章节必须回到正常规则：只有 Review PASS + Canonical Commit 才能完成 Beat。
+历史方案曾使用 Baseline Completion 选择迁移起点。NGC-001 后的新流程不迁移旧数据、不保存 Baseline Completion；Milestone/Beat 只能由 Review PASS 后的 Canonical Commit 写入 Active Completion Events 完成。
 
 ## 9.4 补齐 Canonical Chapter Summary
 
