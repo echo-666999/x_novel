@@ -44,6 +44,7 @@ class CanonicalCommitService
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly StoryEventApplier $storyEventApplier,
         private readonly StoryArcProgressProjector $storyArcProgressProjector,
+        private readonly OutlineCompletionService $outlineCompletion,
     ) {}
 
     public function commit(CanonicalCommitData $data): StoryStateVersion
@@ -76,7 +77,7 @@ class CanonicalCommitService
                 throw ValidationException::withMessages(['state_patch' => 'State Patch 校验和与应用结果不一致。']);
             }
 
-            $planning = $this->validatePlanningAcceptance($chapter, $review, $events);
+            $planning = $this->validatePlanningAcceptance($chapter, $review, $candidateArtifact, $events);
             $characters = $this->persistCharacterCandidates($novel, $chapter, $planning['character_candidates']);
             $worldEntities = $this->persistWorldEntityCandidates($novel, $chapter, $planning['world_entity_candidates']);
             $events = $this->resolveCharacterEvents($events, $planning['character_candidates'], $characters);
@@ -108,6 +109,7 @@ class CanonicalCommitService
                 'canonical_artifact_id' => $artifact->getKey(),
                 'word_count' => $this->lengthPolicy->count($artifact->content),
                 'canonical_metadata' => [
+                    'outline_completion' => $planning['outline_completion'],
                     'arc_beat_audits' => $planning['arc_beat_audits'],
                     'arc_completion_audits' => $planning['arc_completion_audits'],
                     'character_introductions' => collect($characters)->map(
@@ -398,9 +400,9 @@ class CanonicalCommitService
 
     /**
      * @param  array<int, StoryEventCandidate>  $events
-     * @return array{arc_beat_audits: array<int, array<string, mixed>>, arc_completion_audits: array<int, array<string, mixed>>, character_candidates: array<string, array<string, mixed>>, world_entity_candidates: array<string, array<string, mixed>>}
+     * @return array{outline_completion: array<string, mixed>, arc_beat_audits: array<int, array<string, mixed>>, arc_completion_audits: array<int, array<string, mixed>>, character_candidates: array<string, array<string, mixed>>, world_entity_candidates: array<string, array<string, mixed>>}
      */
-    private function validatePlanningAcceptance(Chapter $chapter, Review $review, array $events): array
+    private function validatePlanningAcceptance(Chapter $chapter, Review $review, GenerationArtifact $candidateArtifact, array $events): array
     {
         $plan = $chapter->latestPlan;
         $reviewData = $review->artifact->data;
@@ -418,6 +420,12 @@ class CanonicalCommitService
         );
         $worldContracts = collect($plan?->world_entity_candidates ?? [])->keyBy('candidate_key');
         $characterContracts = collect($plan?->character_candidates ?? [])->keyBy('candidate_key');
+        $outlineCompletion = $this->outlineCompletion->validateCommit(
+            $chapter,
+            $reviewData,
+            $candidateArtifact->data ?? [],
+            $events,
+        );
 
         if ($allArcAudits->count() !== $arcContracts->count()
             || $allCharacterAudits->count() !== $characterContracts->count()
@@ -434,14 +442,8 @@ class CanonicalCommitService
 
         foreach ($arcAudits as $audit) {
             $key = ((int) ($audit['arc_id'] ?? 0)).':'.($audit['beat_key'] ?? '');
-            $matchingEvent = collect($events)->first(fn (StoryEventCandidate $event): bool => $event->eventType === EventType::StoryArcBeatCompleted
-                && $event->subjectType === 'story_arc'
-                && $event->subjectId === (string) ($audit['arc_id'] ?? '')
-                && ($event->payload['beat_key'] ?? null) === ($audit['beat_key'] ?? null)
-                && collect($event->evidence)->contains(fn (array $evidence): bool => ($evidence['quote'] ?? null) === ($audit['evidence'] ?? null))
-            );
-            if (! $arcContracts->has($key) || $matchingEvent === null) {
-                throw ValidationException::withMessages(['arc_contributions' => '已验收的 Story Arc Beat 缺少匹配的 Plan 契约或 Event Candidate。']);
+            if (! $arcContracts->has($key)) {
+                throw ValidationException::withMessages(['arc_contributions' => '已验收的 Story Arc Contribution 缺少匹配的 Plan 契约。']);
             }
         }
 
@@ -478,26 +480,9 @@ class CanonicalCommitService
         if ($unapprovedIntroduction !== null) {
             throw ValidationException::withMessages(['world_entity_candidates' => '未通过 Review 的世界实体候选不能进入 Canonical Commit。']);
         }
-        $acceptedArcKeys = $arcAudits->map(fn (array $audit): string => ((int) $audit['arc_id']).':'.$audit['beat_key']);
-        $unapprovedArcEvent = collect($events)->first(fn (StoryEventCandidate $event): bool => $event->eventType === EventType::StoryArcBeatCompleted
-            && ! $acceptedArcKeys->contains(((int) $event->subjectId).':'.($event->payload['beat_key'] ?? '')));
-        if ($unapprovedArcEvent !== null) {
-            throw ValidationException::withMessages(['arc_contributions' => '未通过 Review 的 Story Arc Beat 不能计入 Canonical Progress。']);
-        }
-        foreach ($arcAudits as $audit) {
-            $duplicateExists = $chapter->novel->storyEvents()
-                ->where('status', 'active')
-                ->where('event_type', EventType::StoryArcBeatCompleted->value)
-                ->where('subject_type', 'story_arc')
-                ->where('subject_id', (string) $audit['arc_id'])
-                ->get()
-                ->contains(fn (StoryEvent $event): bool => data_get($event->payload, 'beat_key') === $audit['beat_key']);
-            if ($duplicateExists) {
-                throw ValidationException::withMessages(['arc_contributions' => '该 Story Arc Beat 已存在 Active Completion Event，不能重复完成。']);
-            }
-        }
 
         return [
+            'outline_completion' => $outlineCompletion,
             'arc_beat_audits' => $arcAudits->all(),
             'arc_completion_audits' => collect(data_get($reviewData, 'arc_completion_audits', []))->where('status', 'fulfilled')->values()->all(),
             'character_candidates' => $characterAudits->map(fn (array $audit, string $key): array => [

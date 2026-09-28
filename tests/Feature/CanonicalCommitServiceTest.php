@@ -35,6 +35,7 @@ use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
+use App\Models\Scene;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
@@ -45,6 +46,7 @@ use App\Services\CanonicalCommitService;
 use App\Services\EmergencyStopService;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\MemoryInvalidator;
+use App\Services\OutlineCompletionService;
 use App\Services\ProjectionRebuilder;
 use App\Services\StateValidator;
 use App\Services\StoryArcProgressProjector;
@@ -78,6 +80,14 @@ function canonicalCommitFixture(array $patchOverrides = [], ReviewDecision $deci
         'generation_run_id' => $draftRun->getKey(), 'type' => ArtifactType::ChapterDraft,
         'content' => $draftContent, 'checksum' => hash('sha256', $draftContent),
     ]);
+    $completionContract = app(OutlineCompletionService::class)->contract($chapter);
+    $defaultOutlineCompletion = [
+        'milestone_completion' => ['status' => 'not_met', 'criteria' => collect($completionContract['milestone_criteria'])->map(fn (string $criterion): array => ['criterion' => $criterion, 'status' => 'not_met', 'evidence' => null, 'scene_id' => null])->all()],
+        'beat_exit' => ['status' => 'not_met', 'criteria' => collect($completionContract['beat_exit_criteria'])->map(fn (string $criterion): array => ['criterion' => $criterion, 'status' => 'not_met', 'evidence' => null, 'scene_id' => null])->all()],
+        'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+        'identity' => $completionContract['identity'],
+        'contract_checksum' => $completionContract['checksum'],
+    ];
     $events = [[
         'event_type' => EventType::CharacterMoved->value,
         'subject_type' => null,
@@ -95,7 +105,7 @@ function canonicalCommitFixture(array $patchOverrides = [], ReviewDecision $deci
         'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::EventExtraction, 'status' => RunStatus::Succeeded,
         'state_version' => 0,
     ]);
-    $candidateData = ['status' => 'candidate', 'source_artifact_id' => $draft->getKey(), 'events' => $events];
+    $candidateData = ['status' => 'candidate', 'source_artifact_id' => $draft->getKey(), 'outline_completion' => $defaultOutlineCompletion, 'events' => $events];
     $candidate = GenerationArtifact::factory()->create([
         'generation_run_id' => $eventRun->getKey(), 'type' => ArtifactType::EventCandidate,
         'data' => $candidateData, 'content' => json_encode($events),
@@ -123,7 +133,17 @@ function canonicalCommitFixture(array $patchOverrides = [], ReviewDecision $deci
         'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded,
         'state_version' => 0,
     ]);
-    $reviewData = ['decision' => $decision->value, 'source_artifact_id' => $draft->getKey(), 'findings' => []];
+    $reviewData = [
+        'decision' => $decision->value,
+        'source_artifact_id' => $draft->getKey(),
+        'findings' => [],
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '沈澜走进灯塔', 'scene_id' => null],
+        'milestone_completion' => $defaultOutlineCompletion['milestone_completion'],
+        'beat_exit' => $defaultOutlineCompletion['beat_exit'],
+        'handoff_readiness' => $defaultOutlineCompletion['handoff_readiness'],
+        'outline_completion_identity' => $completionContract['identity'],
+        'outline_completion_contract_checksum' => $completionContract['checksum'],
+    ];
     $reviewArtifact = GenerationArtifact::factory()->create([
         'generation_run_id' => $reviewRun->getKey(), 'type' => ArtifactType::ReviewResult,
         'data' => $reviewData, 'content' => json_encode($reviewData), 'checksum' => hash('sha256', json_encode($reviewData)),
@@ -166,21 +186,41 @@ function addPlanningClosureToCanonicalFixture(array $fixture): StoryArc
     ]);
     $candidateData = $fixture['candidate']->fresh()->data;
     $events = data_get($candidateData, 'events', []);
+    $scene = Scene::factory()->for($fixture['chapter'])->create([
+        'sequence' => 1,
+        'current_artifact_id' => $fixture['draft']->getKey(),
+    ]);
     $evidence = [[
         'artifact_id' => $fixture['draft']->getKey(),
-        'scene_id' => null,
+        'scene_id' => $scene->getKey(),
         'quote' => '隐藏的星图',
         'start_offset' => 10,
         'end_offset' => 15,
     ]];
-    $events[] = [
-        'event_type' => EventType::StoryArcBeatCompleted->value,
-        'subject_type' => 'story_arc',
-        'subject_id' => (string) $arc->getKey(),
-        'payload' => ['beat_key' => $beatKey],
-        'evidence' => $evidence,
-        'story_time' => '第一日夜晚',
-        'confidence' => 0.98,
+    $completionContract = app(OutlineCompletionService::class)->contract($fixture['chapter']->fresh());
+    $completion = [
+        'milestone_completion' => [
+            'status' => 'fulfilled',
+            'criteria' => collect($completionContract['milestone_criteria'])->map(fn (string $criterion): array => [
+                'criterion' => $criterion, 'status' => 'fulfilled', 'evidence' => '隐藏的星图', 'scene_id' => $scene->getKey(),
+            ])->all(),
+        ],
+        'beat_exit' => [
+            'status' => 'fulfilled',
+            'criteria' => collect($completionContract['beat_exit_criteria'])->map(fn (string $criterion): array => [
+                'criterion' => $criterion, 'status' => 'fulfilled', 'evidence' => '隐藏的星图', 'scene_id' => $scene->getKey(),
+            ])->all(),
+        ],
+        'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+        'identity' => $completionContract['identity'],
+        'contract_checksum' => $completionContract['checksum'],
+    ];
+    $events = [
+        ...$events,
+        ...array_map(
+            fn ($candidate): array => $candidate->toArray(),
+            app(OutlineCompletionService::class)->eventCandidates($completion, $fixture['chapter']->fresh(), $fixture['draft']),
+        ),
     ];
     $events[] = [
         'event_type' => EventType::WorldEntityIntroduced->value,
@@ -192,11 +232,17 @@ function addPlanningClosureToCanonicalFixture(array $fixture): StoryArc
         'confidence' => 0.98,
     ];
     DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
-        'data' => json_encode([...$candidateData, 'events' => $events]),
+        'data' => json_encode([...$candidateData, 'outline_completion' => $completion, 'events' => $events]),
     ]);
     $currentReviewData = $fixture['review']->artifact()->firstOrFail()->data;
     $reviewData = [
         ...$currentReviewData,
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '沈澜走进灯塔', 'scene_id' => null],
+        'milestone_completion' => $completion['milestone_completion'],
+        'beat_exit' => $completion['beat_exit'],
+        'handoff_readiness' => $completion['handoff_readiness'],
+        'outline_completion_identity' => $completionContract['identity'],
+        'outline_completion_contract_checksum' => $completionContract['checksum'],
         'arc_beat_audits' => [[
             'arc_id' => $arc->getKey(),
             'beat_key' => $beatKey,
@@ -331,7 +377,7 @@ test('canonical commit closes accepted arc beats and world entity candidates exa
         ->and(WorldEntity::query()->count())->toBe(0);
 });
 
-test('canonical commit reuses duplicate active milestone completion effects', function () {
+test('canonical commit rejects duplicate milestone completion candidates', function () {
     $fixture = canonicalCommitFixture();
     addPlanningClosureToCanonicalFixture($fixture);
     $plan = $fixture['chapter']->latestPlan;
@@ -356,15 +402,35 @@ test('canonical commit reuses duplicate active milestone completion effects', fu
     ]);
     $service = app(CanonicalCommitService::class);
 
-    $service->commit($fixture['data']);
-    $service->commit($fixture['data']);
+    expect(fn () => $service->commit($fixture['data']))
+        ->toThrow(ValidationException::class, '重复 Milestone/Beat Completion Candidate');
 
-    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
-        ->and(StoryEvent::query()
-            ->where('event_type', EventType::StoryArcBeatMilestoneCompleted)
-            ->where('status', 'active')
-            ->count())->toBe(1);
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
+        ->and(StoryEvent::query()->count())->toBe(0);
 });
+
+test('canonical commit rejects cross version or wrong owner completion candidates', function (string $case) {
+    $fixture = canonicalCommitFixture();
+    addPlanningClosureToCanonicalFixture($fixture);
+    $candidateData = $fixture['candidate']->fresh()->data;
+    $eventIndex = collect($candidateData['events'])->search(
+        fn (array $event): bool => $event['event_type'] === EventType::StoryArcBeatMilestoneCompleted->value,
+    );
+    if ($case === 'cross_version') {
+        $candidateData['events'][$eventIndex]['payload']['novel_outline_id']++;
+    } else {
+        $candidateData['events'][$eventIndex]['subject_id'] = '999999';
+    }
+    DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
+        'data' => json_encode($candidateData, JSON_THROW_ON_ERROR),
+    ]);
+
+    expect(fn () => app(CanonicalCommitService::class)->commit($fixture['data']))
+        ->toThrow(ValidationException::class);
+
+    expect(StoryEvent::query()->count())->toBe(0)
+        ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull();
+})->with(['cross_version', 'wrong_owner']);
 
 test('canonical commit rejects an unconfirmed character candidate without creating it', function () {
     $fixture = canonicalCommitFixture();
@@ -413,10 +479,13 @@ test('beat completion requires matching plan review event and evidence', functio
     }
 
     if ($missingLink === 'evidence') {
-        $reviewData = $fixture['review']->artifact()->firstOrFail()->data;
-        $reviewData['arc_beat_audits'][0]['evidence'] = '沈澜走进灯塔';
-        DB::table('generation_artifacts')->where('id', $fixture['review']->artifact_id)->update([
-            'data' => json_encode($reviewData),
+        $candidateData = $fixture['candidate']->fresh()->data;
+        $eventIndex = collect($candidateData['events'])->search(
+            fn (array $event): bool => $event['event_type'] === EventType::StoryArcBeatCompleted->value,
+        );
+        $candidateData['events'][$eventIndex]['evidence'][0]['quote'] = '正文中不存在的完成证据';
+        DB::table('generation_artifacts')->where('id', $fixture['candidate']->getKey())->update([
+            'data' => json_encode($candidateData),
         ]);
     }
 

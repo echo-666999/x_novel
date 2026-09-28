@@ -1,6 +1,6 @@
 # Story Engine Design — 单人精简版
 
-> NGC-002A 已实现 Milestone/Handoff 关系表、Plan 完整父链和 Completion Event 来源外键。Milestone/Beat 的最终完成判定、Commit 与重建语义仍待 NGC-003～NGC-005 完成；本轮不迁移旧数据。
+> NGC-005 已实现 Milestone/Handoff 关系表、Plan 完整父链、Canonical Progress，以及 Review/Event/Commit 的 Milestone/Beat 最终完成判定；不迁移旧数据。
 
 > 建议路径：`docs/architecture/story-engine.md`
 >
@@ -1956,7 +1956,7 @@ story_arc_beat_milestone_completed
 story_arc_beat_completed
 ```
 
-两个 Completion Event 必须引用关系化 Outline 的完整父链；该数据库父链已由 NGC-002A 实现。Beat Completion 还必须验证全部 Milestone 和最终 Handoff，对应领域语义继续由 NGC-003～NGC-005 实现；旧数据不迁移。
+两个 Completion Event 必须引用关系化 Outline 的完整父链。Milestone Completion 只在当前 Milestone 全部验收条件具有本章逐字证据时产生；Beat Completion 还必须综合历史 Active Canonical Milestone Events、当前最终 Milestone、Beat Exit 与 Handoff。Review、Event Candidate 与 Canonical Commit 分别保存并重新验证同一冻结契约；旧数据不迁移。
 
 这些修改属于初始架构完善，不需要单独 ADR。
 

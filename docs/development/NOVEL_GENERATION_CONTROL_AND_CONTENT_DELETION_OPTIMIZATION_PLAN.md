@@ -1125,7 +1125,7 @@ flowchart TD
 | NGC-003 | Canonical Milestone Progress | P0 | DONE | NGC-002B |
 | NGC-004 | Chapter Planner 选择当前 Milestone | P0 | DONE | NGC-003 |
 | NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | DONE | NGC-004 |
-| NGC-005 | Review、Event、Commit 完成语义 | P0 | TODO | NGC-004A |
+| NGC-005 | Review、Event、Commit 完成语义 | P0 | DONE | NGC-004A |
 | NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | TODO | NGC-005 |
 | NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | TODO | NGC-006A |
 | NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | TODO | NGC-006B |
@@ -1551,7 +1551,7 @@ Next Task
 ## NGC-005 — Review、Event、Commit 完成语义
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-004A
 
 ### 实现
@@ -1576,6 +1576,24 @@ Next Task
 
 - “本章写完”“Milestone 完成”“Beat 完成”成为三个独立且可追踪的判断。
 - Review/Extractor/Commit 不再依赖模型自行决定流程跳转。
+
+### 实施结果（2026-09-28）
+
+- 新增 `OutlineCompletionService`，统一构建冻结的 Outline 完成契约。Review 分别保存 Chapter Plan Completion、Milestone Completion、Beat Exit 和 Handoff Readiness；Laravel 恢复 Outline/Arc/Beat/Milestone/Story Arc 身份与契约 Checksum。
+- Review 与 Event Extraction 都按关系化 Outline 中的条件原顺序返回逐项审计；Laravel 校验数组身份、顺序、汇总状态、正文逐字证据、当前 Chapter Scene 和 Current Outline 完整父链。Chapter Plan 完成、Milestone 完成与 Beat 完成互不替代。
+- Event Extractor 不再接受模型直接决定 Completion Event。模型只返回语义审计；Laravel 仅在当前 Milestone 全部条件 fulfilled 时创建 Milestone Candidate，并用历史 Active Canonical Milestone Events、当前最终 Milestone、Beat Exit 与 Handoff 决定 Beat Candidate。
+- Completion Candidate 的主体、Outline 父链、Key、Checksum 和 Evidence 全部由 Laravel 生成并在 Commit 前重算。跨 Outline Version、错属 Story Arc、跨 Chapter/Scene、顺序错误、重复 Candidate 或 Review/Extractor 结论不一致都会拒绝提交。
+- `CanonicalCommitService` 在原有 Novel 行锁事务内写入 Completion Events、State Version、Chapter 与 Novel 指针；重复 Job 继续返回同一正式结果，事务后段失败不会留下 Milestone/Beat 半提交。Canonical Metadata 保存最终四类完成审计与权威身份。
+- 人工接受超限版本会完整继承原 Review 的 Outline Completion 和规划验收记录，不会通过派生 PASS Review 丢失提交前置证据。
+
+### 验证结果（2026-09-28）
+
+- 针对性回归覆盖 Review、Extractor、Commit、端到端流水线、人工超限派生 Review 和 Style Contract；新增用例覆盖章节完成但 Milestone 未完成、Milestone 完成但 Beat 未完成、最终 Milestone 缺失 Handoff、全部条件完成、历史 Milestone 汇总、顺序/重复/跨 Scene 证据、跨版本/错属 Candidate 和事务回滚。
+- 针对性回归：147 tests，147 passed，737 assertions，0 failures。
+- 全量 `php artisan test`：1031 tests，1008 passed，23 skipped，5976 assertions，0 failures，3 warnings。
+- `vendor/bin/pint --dirty` 与 `git diff --check`：通过。
+- 未执行真实 Provider 调用或业务数据库写入；Provider 契约由 Fake Provider Feature Tests 验证，本任务没有新增 Migration。
+- NGC-006A 的确定性 Assembly 与 Scene 局部恢复仍未实施。
 
 ## NGC-006A — 确定性 Assembly 与 Scene 局部恢复
 

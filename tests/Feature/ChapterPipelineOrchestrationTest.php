@@ -49,6 +49,7 @@ use App\Models\Volume;
 use App\Services\CanonicalChapterSummaryService;
 use App\Services\MemoryUpdater;
 use App\Services\NarrativeStyleProfile;
+use App\Services\OutlineCompletionService;
 use App\Services\OutlineProgressResolver;
 use App\Services\ProjectionRebuilder;
 use Database\Factories\Support\NormalizedOutlineDefinition;
@@ -616,66 +617,47 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             ->orderBy('sequence')
             ->firstOrFail()
             ->currentArtifact?->content;
-        $primary = collect($chapter->latestPlan?->arc_contributions ?? [])->firstWhere('role', 'primary');
-        $arcEvent = [
-            'event_type' => EventType::StoryArcBeatCompleted->value,
-            'subject_type' => 'story_arc',
-            'subject_id' => (string) $primary['arc_id'],
-            'payload' => ['beat_key' => $primary['beat_key']],
-            'evidence' => [[
-                'artifact_id' => $draft->getKey(),
-                'scene_id' => null,
-                'quote' => $quote,
-                'start_offset' => null,
-                'end_offset' => null,
-            ]],
-            'story_time' => "第{$chapter->sequence}日夜晚",
-            'confidence' => 0.98,
-        ];
-        $milestoneEvent = [
-            ...$arcEvent,
-            'event_type' => EventType::StoryArcBeatMilestoneCompleted->value,
-            'payload' => [
-                'beat_key' => $primary['beat_key'],
-                'milestone_key' => $chapter->latestPlan->primaryOutlineMilestone->milestone_key,
-            ],
-        ];
-
         if ($this->foreshadowingId !== null) {
             $scene = $chapter->scenes()->orderBy('sequence')->firstOrFail();
 
-            return ['events' => [[
-                'event_type' => $this->foreshadowingEventType($chapter->sequence)->value,
-                'subject_type' => 'foreshadowing',
-                'subject_id' => (string) $this->foreshadowingId,
-                'payload' => '{}',
+            return [
+                'events' => [[
+                    'event_type' => $this->foreshadowingEventType($chapter->sequence)->value,
+                    'subject_type' => 'foreshadowing',
+                    'subject_id' => (string) $this->foreshadowingId,
+                    'payload' => '{}',
+                    'evidence' => [[
+                        'artifact_id' => $draft->getKey(),
+                        'scene_id' => $scene->getKey(),
+                        'quote' => $this->foreshadowingEvidence($chapter->sequence),
+                        'start_offset' => null,
+                        'end_offset' => null,
+                    ]],
+                    'story_time' => "第{$chapter->sequence}日夜晚",
+                    'confidence' => 0.98,
+                ]],
+                'outline_completion' => $this->outlineCompletion($chapter),
+            ];
+        }
+
+        return [
+            'events' => [[
+                'event_type' => EventType::CharacterMoved->value,
+                'subject_type' => 'character',
+                'subject_id' => (string) $this->characterId,
+                'payload' => ['from' => '城内', 'to' => '灯塔'],
                 'evidence' => [[
                     'artifact_id' => $draft->getKey(),
-                    'scene_id' => $scene->getKey(),
-                    'quote' => $this->foreshadowingEvidence($chapter->sequence),
+                    'scene_id' => null,
+                    'quote' => $quote,
                     'start_offset' => null,
                     'end_offset' => null,
                 ]],
-                'story_time' => "第{$chapter->sequence}日夜晚",
+                'story_time' => '第一日夜晚',
                 'confidence' => 0.98,
-            ], $milestoneEvent, $arcEvent]];
-        }
-
-        return ['events' => [[
-            'event_type' => EventType::CharacterMoved->value,
-            'subject_type' => 'character',
-            'subject_id' => (string) $this->characterId,
-            'payload' => ['from' => '城内', 'to' => '灯塔'],
-            'evidence' => [[
-                'artifact_id' => $draft->getKey(),
-                'scene_id' => null,
-                'quote' => $quote,
-                'start_offset' => null,
-                'end_offset' => null,
             ]],
-            'story_time' => '第一日夜晚',
-            'confidence' => 0.98,
-        ], $milestoneEvent, $arcEvent]];
+            'outline_completion' => $this->outlineCompletion($chapter),
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -732,6 +714,12 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'summary' => '正文、Coverage 和 Event Candidate 已共同完成本章冻结动作。',
                 'evidence' => $this->foreshadowingEvidence(Chapter::query()->findOrFail($chapterId)->sequence),
             ]],
+            'chapter_plan_completion' => [
+                'status' => 'fulfilled',
+                'evidence' => $targetScene->currentArtifact->content,
+                'scene_id' => $targetScene->getKey(),
+            ],
+            ...$this->outlineCompletion($chapter),
             'arc_beat_audits' => [[
                 'arc_id' => $primary['arc_id'],
                 'beat_key' => $primary['beat_key'],
@@ -749,6 +737,33 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'unapproved_characters' => [],
             'unapproved_world_entities' => [],
             'findings' => $findings,
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function outlineCompletion(Chapter $chapter): array
+    {
+        $contract = app(OutlineCompletionService::class)->contract($chapter);
+        $scene = $chapter->scenes()->with('currentArtifact')->orderBy('sequence')->firstOrFail();
+        $evidence = (string) $scene->currentArtifact?->content;
+        $criteria = fn (array $items): array => collect($items)->map(fn (string $criterion): array => [
+            'criterion' => $criterion,
+            'status' => 'fulfilled',
+            'evidence' => $evidence,
+            'scene_id' => $scene->getKey(),
+        ])->all();
+
+        return [
+            'milestone_completion' => ['status' => 'fulfilled', 'criteria' => $criteria($contract['milestone_criteria'])],
+            'beat_exit' => ['status' => 'fulfilled', 'criteria' => $criteria($contract['beat_exit_criteria'])],
+            'handoff_readiness' => $contract['handoff_next_beat_id'] === null
+                ? ['status' => 'not_applicable', 'checks' => []]
+                : ['status' => 'ready', 'checks' => collect($contract['handoff_checks'])->map(fn (array $check): array => [
+                    ...$check,
+                    'status' => 'fulfilled',
+                    'evidence' => $evidence,
+                    'scene_id' => $scene->getKey(),
+                ])->all()],
         ];
     }
 

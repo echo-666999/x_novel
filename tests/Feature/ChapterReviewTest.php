@@ -34,6 +34,7 @@ use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Services\ArcCompletionAuditRepairer;
 use App\Services\ChapterReviewer;
+use App\Services\OutlineCompletionService;
 use App\Services\PlanningReviewAudit;
 use App\Services\StateValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -81,9 +82,46 @@ function reviewResponse(string $decision = 'PASS', int $score = 90, array $findi
             ]];
         })
         ->all();
-    $data = ['recommended_decision' => $decision, 'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score], 'dimension_audits' => $dimensionAudits, 'foreshadowing_audits' => $foreshadowingAudits, 'arc_beat_audits' => [], 'arc_completion_audits' => [], 'character_candidate_audits' => [], 'world_entity_candidate_audits' => [], 'unapproved_characters' => [], 'unapproved_world_entities' => [], 'findings' => $findings];
+    $data = [
+        'recommended_decision' => $decision,
+        'scores' => ['continuity' => $score, 'plan' => $score, 'character' => $score, 'progress' => $score, 'repetition' => $score, 'pacing' => $score, 'style' => $score],
+        'dimension_audits' => $dimensionAudits,
+        'foreshadowing_audits' => $foreshadowingAudits,
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '林舟守住城门', 'scene_id' => null],
+        'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
+            'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ]]],
+        'beat_exit' => ['status' => 'not_met', 'criteria' => [[
+            'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ]]],
+        'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+        'arc_beat_audits' => [],
+        'arc_completion_audits' => [],
+        'character_candidate_audits' => [],
+        'world_entity_candidate_audits' => [],
+        'unapproved_characters' => [],
+        'unapproved_world_entities' => [],
+        'findings' => $findings,
+    ];
 
     return new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'review-request', model: 'review-test');
+}
+
+/** @return array<string, mixed> */
+function outlineCompletionReviewDefaults(Chapter $chapter): array
+{
+    $contract = app(OutlineCompletionService::class)->contract($chapter);
+
+    return [
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '林舟守住城门', 'scene_id' => null],
+        'milestone_completion' => ['status' => 'not_met', 'criteria' => collect($contract['milestone_criteria'])->map(fn (string $criterion): array => ['criterion' => $criterion, 'status' => 'not_met', 'evidence' => null, 'scene_id' => null])->all()],
+        'beat_exit' => ['status' => 'not_met', 'criteria' => collect($contract['beat_exit_criteria'])->map(fn (string $criterion): array => ['criterion' => $criterion, 'status' => 'not_met', 'evidence' => null, 'scene_id' => null])->all()],
+        'handoff_readiness' => $contract['handoff_next_beat_id'] === null
+            ? ['status' => 'not_applicable', 'checks' => []]
+            : ['status' => 'not_ready', 'checks' => collect($contract['handoff_checks'])->map(fn (array $check): array => [
+                ...$check, 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+            ])->all()],
+    ];
 }
 
 function truncatedReviewResponse(int $outputTokens): AiResponse
@@ -195,6 +233,7 @@ test('planning review audits require verbatim evidence and surface missing or un
         ]],
     ]);
     $payload = [
+        ...outlineCompletionReviewDefaults($fixture['chapter']),
         'arc_beat_audits' => [[
             'arc_id' => $arc->getKey(), 'beat_key' => $beatKey, 'status' => 'fulfilled',
             'evidence' => '守住城门', 'scene_id' => $scene->getKey(),
@@ -251,6 +290,7 @@ test('planning review binds a missing arc audit to its frozen target scene witho
         'acceptance_criteria' => '正文明确守住城门。',
     ]]]);
     $payload = [
+        ...outlineCompletionReviewDefaults($fixture['chapter']),
         'arc_beat_audits' => [[
             'arc_id' => $arc->getKey(),
             'beat_key' => $beatKey,
@@ -299,6 +339,7 @@ test('planning review audits normalize quoted evidence with an omission marker t
         'acceptance_criteria' => '正文明确守住城门。',
     ]]]);
     $payload = [
+        ...outlineCompletionReviewDefaults($fixture['chapter']),
         'arc_beat_audits' => [[
             'arc_id' => $arc->getKey(),
             'beat_key' => $beatKey,

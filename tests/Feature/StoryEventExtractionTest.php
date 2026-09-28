@@ -79,8 +79,30 @@ function eventExtractionResponse(array $fixture, array $overrides = []): AiRespo
     ];
 
     return new AiResponse(
-        content: json_encode(['events' => [$event]], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-        structuredData: ['events' => [$event]],
+        content: json_encode([
+            'events' => [$event],
+            'outline_completion' => [
+                'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
+                    'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+                ]]],
+                'beat_exit' => ['status' => 'not_met', 'criteria' => [[
+                    'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+                ]]],
+                'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+            ],
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: [
+            'events' => [$event],
+            'outline_completion' => [
+                'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
+                    'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+                ]]],
+                'beat_exit' => ['status' => 'not_met', 'criteria' => [[
+                    'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+                ]]],
+                'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+            ],
+        ],
         inputTokens: 200,
         outputTokens: 100,
         cachedTokens: 0,
@@ -183,21 +205,32 @@ function eventForeshadowingFixture(ForeshadowingStatus $status, array $actions, 
 
 function foreshadowingEventResponse(array $fixture, array $events): AiResponse
 {
-    $payload = ['events' => collect($events)->map(fn (array $event): array => [
-        'event_type' => $event['event_type'],
-        'subject_type' => 'foreshadowing',
-        'subject_id' => (string) $fixture['foreshadowing']->getKey(),
-        'payload' => [],
-        'evidence' => $event['evidence'] ?? [[
-            'artifact_id' => $fixture['draft']->getKey(),
-            'scene_id' => array_key_exists('scene_id', $event) ? $event['scene_id'] : $fixture['scene']->getKey(),
-            'quote' => $event['quote'],
-            'start_offset' => null,
-            'end_offset' => null,
-        ]],
-        'story_time' => null,
-        'confidence' => 0.98,
-    ])->all()];
+    $payload = [
+        'events' => collect($events)->map(fn (array $event): array => [
+            'event_type' => $event['event_type'],
+            'subject_type' => 'foreshadowing',
+            'subject_id' => (string) $fixture['foreshadowing']->getKey(),
+            'payload' => [],
+            'evidence' => $event['evidence'] ?? [[
+                'artifact_id' => $fixture['draft']->getKey(),
+                'scene_id' => array_key_exists('scene_id', $event) ? $event['scene_id'] : $fixture['scene']->getKey(),
+                'quote' => $event['quote'],
+                'start_offset' => null,
+                'end_offset' => null,
+            ]],
+            'story_time' => null,
+            'confidence' => 0.98,
+        ])->all(),
+        'outline_completion' => [
+            'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
+                'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+            ]]],
+            'beat_exit' => ['status' => 'not_met', 'criteria' => [[
+                'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+            ]]],
+            'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+        ],
+    ];
 
     return new AiResponse(
         content: json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),

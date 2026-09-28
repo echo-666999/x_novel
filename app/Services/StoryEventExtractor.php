@@ -34,6 +34,7 @@ class StoryEventExtractor
         private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
         private readonly ContextBuilder $contextBuilder,
         private readonly ForeshadowingEventValidator $foreshadowingEventValidator,
+        private readonly OutlineCompletionService $outlineCompletion,
         private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
@@ -87,7 +88,7 @@ class StoryEventExtractor
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。正文确实完成声明 Beat 时输出 story_arc_beat_completed，subject_type=story_arc，subject_id=arc_id，payload 包含 beat_key。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；evidence.scene_id 只能填 current_scene_references[].scene_id 中的数据库 ID，不得把 sequence 当作 scene_id。未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。不要在 events 中输出 story_arc_beat_completed 或 story_arc_beat_milestone_completed；必须改为在 outline_completion 中按冻结条件原顺序分别审计 Milestone、Beat Exit 和 Handoff，不得返回数据库 ID。fulfilled/contradicted 必须给出当前正文逐字证据和所属数据库 Scene ID，not_met 的 evidence 必须为 null。Laravel 会结合历史 Canonical Milestone Event、恢复冻结 ID 并决定是否创建 Completion Candidate。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；evidence.scene_id 只能填 current_scene_references[].scene_id 中的数据库 ID，不得把 sequence 当作 scene_id。未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                 prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
                 maxTokens: $maxTokens,
@@ -96,7 +97,7 @@ class StoryEventExtractor
                 metadata: $metadata,
             ));
 
-            $candidates = $this->validateCandidates(
+            [$candidates, $outlineCompletion] = $this->validateCandidates(
                 StructuredOutput::require($response, 'event', 'Story Event Candidates'),
                 $chapter,
                 $draft,
@@ -111,6 +112,7 @@ class StoryEventExtractor
                 $chapter,
                 $draft,
                 $candidates,
+                $outlineCompletion,
                 $context['state_version'],
                 $context['foreshadowing_contract_checksum'],
             );
@@ -132,12 +134,13 @@ class StoryEventExtractor
         return [
             'type' => 'object',
             'additionalProperties' => false,
-            'required' => ['events'],
+            'required' => ['events', 'outline_completion'],
             'properties' => [
                 'events' => [
                     'type' => 'array',
                     'items' => StoryEventCandidate::schema(),
                 ],
+                'outline_completion' => OutlineCompletionService::extractionSchema(),
             ],
         ];
     }
@@ -189,6 +192,7 @@ class StoryEventExtractor
             'current_state' => $chapter->novel->canonicalStateVersion->state,
             'foreshadowing_contract_checksum' => $foreshadowingContract['checksum'],
             'foreshadowing_contract' => $foreshadowingContract,
+            'outline_completion_contract' => $this->outlineCompletion->contract($chapter),
             'event_subject_type_rules' => collect(EventType::generationCases())->mapWithKeys(
                 fn (EventType $type): array => [$type->value => $type->allowedSubjectTypes()],
             )->all(),
@@ -259,49 +263,58 @@ class StoryEventExtractor
         });
     }
 
-    /** @return array<int, StoryEventCandidate> */
+    /** @return array{0: array<int, StoryEventCandidate>, 1: array<string, mixed>} */
     private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract, ?string $reasoningEffort): array
     {
-        if (array_keys($payload) !== ['events'] || ! is_array($payload['events'])) {
-            throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须只返回 events 数组。']);
+        if (! $this->hasExactKeys($payload, ['events', 'outline_completion']) || ! is_array($payload['events']) || ! is_array($payload['outline_completion'])) {
+            throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须返回 events 与 outline_completion。']);
         }
 
-        $candidates = collect($payload['events'])->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata, $reasoningEffort): StoryEventCandidate {
-            if (! is_array($event)) {
-                throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
-            }
+        $outlineCompletion = $this->outlineCompletion->validateExtraction($payload['outline_completion'], $chapter, $draft);
 
-            try {
-                $event = $this->normalizeEvidence($event, $chapter, $draft);
-
-                try {
-                    $candidate = StoryEventCandidate::fromArray($event);
-                    $this->validateEvidence($candidate, $chapter, $draft);
-                } catch (ValidationException $exception) {
-                    if (! $this->isEvidenceQuoteMismatch($exception)) {
-                        throw $exception;
-                    }
-
-                    $event['evidence'] = $this->evidenceRepairer->repair(
-                        event: $event,
-                        content: (string) $draft->content,
-                        model: $model,
-                        metadata: $metadata,
-                        eventIndex: $index,
-                        reasoningEffort: $reasoningEffort,
-                    );
-                    $event = $this->normalizeEvidence($event, $chapter, $draft);
-                    $candidate = StoryEventCandidate::fromArray($event);
-                    $this->validateEvidence($candidate, $chapter, $draft);
+        $candidates = collect($payload['events'])
+            ->reject(fn (mixed $event): bool => is_array($event) && in_array(
+                $event['event_type'] ?? null,
+                [EventType::StoryArcBeatCompleted->value, EventType::StoryArcBeatMilestoneCompleted->value],
+                true,
+            ))
+            ->values()
+            ->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata, $reasoningEffort): StoryEventCandidate {
+                if (! is_array($event)) {
+                    throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
                 }
 
-                $this->validateSubject($candidate, $chapter);
+                try {
+                    $event = $this->normalizeEvidence($event, $chapter, $draft);
 
-                return $candidate;
-            } catch (ValidationException $exception) {
-                throw $this->withCandidateIndex($exception, $index);
-            }
-        })->all();
+                    try {
+                        $candidate = StoryEventCandidate::fromArray($event);
+                        $this->validateEvidence($candidate, $chapter, $draft);
+                    } catch (ValidationException $exception) {
+                        if (! $this->isEvidenceQuoteMismatch($exception)) {
+                            throw $exception;
+                        }
+
+                        $event['evidence'] = $this->evidenceRepairer->repair(
+                            event: $event,
+                            content: (string) $draft->content,
+                            model: $model,
+                            metadata: $metadata,
+                            eventIndex: $index,
+                            reasoningEffort: $reasoningEffort,
+                        );
+                        $event = $this->normalizeEvidence($event, $chapter, $draft);
+                        $candidate = StoryEventCandidate::fromArray($event);
+                        $this->validateEvidence($candidate, $chapter, $draft);
+                    }
+
+                    $this->validateSubject($candidate, $chapter);
+
+                    return $candidate;
+                } catch (ValidationException $exception) {
+                    throw $this->withCandidateIndex($exception, $index);
+                }
+            })->all();
 
         $candidates = $this->foreshadowingEventValidator->attachCoverageEvidence(
             $chapter,
@@ -317,7 +330,10 @@ class StoryEventExtractor
             ])->all());
         }
 
-        return $candidates;
+        return [
+            [...$candidates, ...$this->outlineCompletion->eventCandidates($outlineCompletion, $chapter, $draft)],
+            $outlineCompletion,
+        ];
     }
 
     /** @param array<string, mixed> $event
@@ -476,9 +492,9 @@ class StoryEventExtractor
     }
 
     /** @param array<int, StoryEventCandidate> $candidates */
-    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $candidates, int $expectedStateVersion, string $foreshadowingContractChecksum): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, GenerationArtifact $draft, array $candidates, array $outlineCompletion, int $expectedStateVersion, string $foreshadowingContractChecksum): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $chapter, $draft, $candidates, $expectedStateVersion, $foreshadowingContractChecksum): GenerationArtifact {
+        return DB::transaction(function () use ($run, $chapter, $draft, $candidates, $outlineCompletion, $expectedStateVersion, $foreshadowingContractChecksum): GenerationArtifact {
             $chapter = Chapter::query()->lockForUpdate()->with('novel.canonicalStateVersion')->findOrFail($chapter->getKey());
 
             if ($chapter->novel->canonicalStateVersion?->version !== $expectedStateVersion) {
@@ -494,6 +510,7 @@ class StoryEventExtractor
                 'status' => 'candidate',
                 'source_artifact_id' => $draft->getKey(),
                 'foreshadowing_contract_checksum' => $foreshadowingContractChecksum,
+                'outline_completion' => $outlineCompletion,
                 'events' => $events,
             ];
             $artifact = $run->artifacts()->create([
@@ -516,5 +533,15 @@ class StoryEventExtractor
             $exception,
             $exception instanceof ValidationException ? 'event_validation_failed' : 'event_extraction_failed',
         );
+    }
+
+    /** @param array<string, mixed> $value @param array<int, string> $keys */
+    private function hasExactKeys(array $value, array $keys): bool
+    {
+        $actual = array_keys($value);
+        sort($actual);
+        sort($keys);
+
+        return $actual === $keys;
     }
 }

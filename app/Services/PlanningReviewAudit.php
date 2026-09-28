@@ -9,12 +9,15 @@ use Illuminate\Validation\ValidationException;
 
 class PlanningReviewAudit
 {
+    public function __construct(private readonly OutlineCompletionService $outlineCompletion) {}
+
     /** @return array<string, array<string, mixed>> */
     public static function schema(): array
     {
         $evidence = ['type' => ['string', 'null']];
 
         return [
+            ...OutlineCompletionService::reviewSchema(),
             'arc_beat_audits' => ['type' => 'array', 'items' => [
                 'type' => 'object', 'additionalProperties' => false,
                 'required' => ['arc_id', 'beat_key', 'status', 'evidence', 'scene_id'],
@@ -157,7 +160,7 @@ class PlanningReviewAudit
             }
         }
 
-        return $payload;
+        return $this->outlineCompletion->validateReview($payload, $chapter, $draft);
     }
 
     /** @param array<string, mixed> $payload @return array<int, array<string, mixed>> */
@@ -166,7 +169,7 @@ class PlanningReviewAudit
         $findings = [];
         foreach ($payload['arc_beat_audits'] as $audit) {
             if ($audit['status'] !== 'fulfilled') {
-                $findings[] = $this->finding('ARC_BEAT_NOT_FULFILLED', 'progress', $audit['scene_id'], '声明的 Story Arc Beat 未被正文验收，不会计入 Canonical Progress。', $audit['evidence']);
+                $findings[] = $this->finding('ARC_BEAT_NOT_FULFILLED', 'progress', $audit['scene_id'], '本章声明的 Story Arc Contribution 未被正文验收，不会作为本章计划完成证据。', $audit['evidence']);
             }
         }
         foreach ($payload['character_candidate_audits'] as $audit) {
@@ -186,7 +189,10 @@ class PlanningReviewAudit
             $findings[] = $this->finding('UNAPPROVED_CHARACTER', 'plan', $character['scene_id'], "正文引入了未在 Chapter Plan 批准的持续性人物「{$character['name']}」。", $character['evidence'], true);
         }
 
-        return $findings;
+        return [
+            ...$findings,
+            ...$this->outlineCompletion->findings($payload),
+        ];
     }
 
     /**

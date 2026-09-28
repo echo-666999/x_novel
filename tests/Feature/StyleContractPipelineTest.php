@@ -101,6 +101,14 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
             'style' => ['status' => 'issues_found', 'summary' => '已一次列出文风维度发现的全部问题。'],
         ],
         'foreshadowing_audits' => [],
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '组装后的章节正文', 'scene_id' => null],
+        'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
+            'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ]]],
+        'beat_exit' => ['status' => 'not_met', 'criteria' => [[
+            'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ]]],
+        'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
         'arc_beat_audits' => [],
         'arc_completion_audits' => [],
         'character_candidate_audits' => [],
