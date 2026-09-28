@@ -585,6 +585,9 @@ class ChapterRewriter
                         'introduced_major_facts' => $payload['introduced_major_facts'],
                     ] : [
                         'self_check' => $payload['self_check'],
+                        // 确定性 Assembly 只读取当前 Scene Artifact；局部 Rewrite 必须继续携带
+                        // 冻结的伏笔 Coverage 身份，不能让章节拼装回退到模型重建该数组。
+                        'foreshadowing_coverage' => data_get($source->data, 'foreshadowing_coverage', []),
                         'plan_findings' => PlanCoverage::findings(
                             $sceneId,
                             $payload['self_check'],

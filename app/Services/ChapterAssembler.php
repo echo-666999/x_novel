@@ -2,151 +2,73 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsResolver;
-use App\AI\Contracts\AiProvider;
-use App\AI\Data\AiRequest;
+use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\AI\Exceptions\AiProviderException;
-use App\AI\NarrativeProsePolicy;
-use App\AI\PromptVersionResolver;
-use App\AI\StructuredOutput;
-use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
+use App\Jobs\RepairSceneLengthJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Scene;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class ChapterAssembler
 {
+    public const ALGORITHM_VERSION = 'deterministic-assembly-v1';
+
+    public const SEPARATOR = "\n\n";
+
     public function __construct(
-        private readonly AiProvider $provider,
-        private readonly AiSettingsResolver $settingsResolver,
-        private readonly PromptVersionResolver $promptVersionResolver,
-        private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
-        private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRunLease $runLease,
-        private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
-        private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer,
+        private readonly ContextBuilder $contextBuilder,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly RegenerateSceneSequenceAction $regenerateScenes,
     ) {}
 
     public function assemble(int $chapterId, bool $regenerate = false): ?GenerationArtifact
     {
         $chapter = Chapter::query()->with([
-            'novel.canonicalStateVersion',
-            'latestPlan',
-            'scenes.currentArtifact.generationRun',
+            'novel.canonicalStateVersion', 'latestPlan', 'scenes.currentArtifact.generationRun',
         ])->findOrFail($chapterId);
 
         if ($chapter->novel->status === NovelStatus::Paused) {
             throw new AiProviderException('novel_paused', '小说已暂停，不能开始 Chapter Assembly。', false);
         }
 
-        $artifacts = $this->orderedSceneArtifacts($chapter);
-        $settings = $this->settingsResolver->resolve(AiStage::Assembler, $chapter->novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Assembler);
-        $context = $this->context($chapter, $artifacts);
-        $context['prompt_version'] = $promptVersion;
-        $context['generation_preferences']['assembly_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.assembly_max_output_tokens', 12_000),
-            'retry_max_completion_tokens' => (int) config('generation.assembly_retry_max_output_tokens', 16_000),
-            'final_retry_max_completion_tokens' => (int) config('generation.assembly_final_retry_max_output_tokens', 24_000),
-        ];
-        $inputHash = hash('sha256', json_encode([
-            'context' => $context,
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'prompt_version' => $promptVersion,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        $checksumHash = hash('sha256', implode('|', $context['ordered_scene_checksums']));
-        $baseKey = "assemble:{$chapter->getKey()}:{$checksumHash}:{$promptVersion}";
-        [$run, $reused] = $this->startRun(
-            $chapter,
-            $baseKey,
-            $inputHash,
-            $context,
-            $settings->provider,
-            $settings->model,
-            $promptVersion,
-            $regenerate,
-        );
+        $candidate = $this->candidate($chapter, $this->sourceRows($chapter));
+        [$run, $reused] = $this->startRun($chapter, $candidate, $regenerate);
 
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::ChapterDraft)->latest('version')->first();
         }
+        if (($continuitySceneId = $this->earliestContinuitySceneId($candidate)) !== null) {
+            return $this->deferContinuityRecovery($run, $chapter, $continuitySceneId);
+        }
+        if (! $this->lengthIsValid($candidate)) {
+            return $this->deferLengthRepair($run, $candidate);
+        }
 
         try {
-            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
-            $response = $this->provider->generate(new AiRequest(
-                model: $settings->model,
-                provider: $settings->provider,
-                reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 章节组装器。将给定场景组装成一章完整、流畅的简体中文正文。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；必须保留各动作在指定 Scene 中已经实现的内容，不得把未列入 actions 的伏笔改写成本章主动处理目标，也不得把 promised_payoff 当作允许直接揭晓的正文信息；始终遵守 chapter_plan.must_not_reveal。l4 是唯一的 Style Contract；保持各 Scene 已有的 POV、时态和叙述声音，不得重新选择文风来源或让辅助文风覆盖主文风。开头必须与 previous_chapter_ending 连续，并保留 chapter_plan.scene_plans[0].transition_from_previous 对时间、地点和行动过渡的交代。必须保留各场景的目标、冲突、转折、结果及 outcome_allowed / outcome_forbidden 行为边界；按 continuity_requirements 合并跨 Scene 持续状态，只保留首次建立、真实变化和章末回扣，persist 场景只保留推动本场动作所需的最短增量表达。scene_coverage 必须按 Scene 顺序逐项返回 goal、conflict、turn、outcome 的 fulfilled、missing 或 contradicted 状态；每个 Scene 的 foreshadowing_coverage 必须按契约顺序完整返回分配给该 Scene 的全部伏笔动作。只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled；仅有主题相近措辞、但没有动作结果时必须标记 missing；正文反转既定动作时标记 contradicted。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终 content，missing 的 evidence 必须为 null。Assembler 不能创作 Scene Draft 中不存在的重大剧情结果来补齐 coverage，也不得删除 Scene Draft 中唯一能够证明伏笔动作已完成的证据；introduced_major_facts 必须返回 []。成稿必须达到 chapter_minimum_words，并尽量接近 chapter_target_words，chapter_maximum_words 是不可超过的硬上限；字数统计排除空白和换行。可以补足必要的场景衔接，但不得用无意义重复凑字，不得把正文压缩成摘要，也不得新增重大事实、能力、世界规则或角色知识。保持场景顺序和结果，返回符合 Schema 的 JSON。'.NarrativeProsePolicy::writing(),
-                prompt: '请组装以下场景并返回结构化章节结果：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: 0.3,
-                maxTokens: $maxTokens,
-                responseSchema: ChapterAssemblyPayload::schema(),
-                promptVersion: $promptVersion,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $chapter->novel_id,
-                    'chapter_id' => $chapter->getKey(),
-                    'stage' => AiStage::Assembler->value,
-                ],
-            ));
-            $payload = $this->validatePayloadWithCoverageRepair(
-                payload: StructuredOutput::require($response, 'assembly', 'Chapter Assembly'),
-                chapter: $chapter,
-                artifacts: $artifacts,
-                context: $context,
-                provider: $settings->provider,
-                model: $settings->model,
-                reasoningEffort: $settings->reasoningEffort,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $chapter->novel_id,
-                    'chapter_id' => $chapter->getKey(),
-                    'stage' => AiStage::Assembler->value,
-                ],
-            );
-            $payload = $this->repairLengthIfNeeded(
-                payload: $payload,
-                chapter: $chapter,
-                artifacts: $artifacts,
-                context: $context,
-                provider: $settings->provider,
-                model: $settings->model,
-                promptVersion: $promptVersion,
-                reasoningEffort: $settings->reasoningEffort,
-                maxTokens: $maxTokens,
-                metadata: [
-                    'generation_run_id' => $run->getKey(),
-                    'novel_id' => $chapter->novel_id,
-                    'chapter_id' => $chapter->getKey(),
-                    'stage' => AiStage::Assembler->value,
-                ],
-            );
-            $this->validateLength($payload['content'], $context['writing_constraints']);
+            return $this->complete($run, $chapter, $candidate);
+        } catch (AiProviderException $exception) {
+            $this->failurePolicy->record($run, $exception, 'chapter_assembly_failed');
+            if (in_array($exception->errorCode, ['state_version_conflict', 'scene_artifact_conflict'], true)) {
+                $this->recoverChangedScenes($chapter, $candidate);
 
-            return $this->complete(
-                $run,
-                $chapter,
-                $payload,
-                $context['state_version'],
-                $context['ordered_scene_checksums'],
-            );
+                return null;
+            }
+
+            throw $exception;
         } catch (Throwable $exception) {
-            $this->failRun($run, $exception);
+            $this->failurePolicy->record($run, $exception, 'chapter_assembly_failed');
             throw $exception;
         }
     }
@@ -156,162 +78,197 @@ class ChapterAssembler
         Chapter::query()->whereKey($chapterId)->update(['status' => ChapterStatus::Blocked]);
     }
 
-    /** @return Collection<int, GenerationArtifact> */
-    private function orderedSceneArtifacts(Chapter $chapter): Collection
+    /** @return Collection<int, array{scene: Scene, artifact: GenerationArtifact}> */
+    private function sourceRows(Chapter $chapter): Collection
     {
         if ($chapter->latestPlan === null || $chapter->scenes->isEmpty()) {
             throw new AiProviderException('assembly_input_incomplete', 'Chapter Assembly 缺少 Chapter Plan 或 Scenes。', false);
         }
 
-        foreach ($chapter->scenes as $scene) {
+        return $chapter->scenes->sortBy('sequence')->values()->map(function (Scene $scene) use ($chapter): array {
+            $artifact = $scene->currentArtifact;
             if (! in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true)
-                || $scene->currentArtifact === null
-                || ! in_array($scene->currentArtifact->type, [ArtifactType::SceneDraft, ArtifactType::RewriteDraft], true)) {
-                throw new AiProviderException(
-                    'assembly_scene_incomplete',
-                    "Scene {$scene->sequence} 尚未成功，不能组装 Chapter。",
-                    false,
-                );
+                || $artifact === null
+                || ! in_array($artifact->type, [ArtifactType::SceneDraft, ArtifactType::RewriteDraft], true)) {
+                throw new AiProviderException('assembly_scene_incomplete', "Scene {$scene->sequence} 尚未成功，不能组装 Chapter。", false);
             }
-        }
+            if ((int) $artifact->generationRun?->scene_id !== $scene->getKey()
+                || (int) $artifact->generationRun?->chapter_id !== $chapter->getKey()) {
+                throw new AiProviderException('assembly_scene_lineage_invalid', "Scene {$scene->sequence} 的当前 Artifact 不属于该 Scene/Chapter。", false);
+            }
+            if (! hash_equals($artifact->checksum, hash('sha256', (string) $artifact->content))) {
+                throw new AiProviderException('assembly_scene_checksum_invalid', "Scene {$scene->sequence} 的当前 Artifact checksum 与正文不一致。", false);
+            }
 
-        return $chapter->scenes->pluck('currentArtifact')->values();
+            return compact('scene', 'artifact');
+        });
     }
 
-    /** @param Collection<int, GenerationArtifact> $artifacts
+    /**
+     * @param  Collection<int, array{scene: Scene, artifact: GenerationArtifact}>  $sources
      * @return array<string, mixed>
      */
-    private function context(Chapter $chapter, Collection $artifacts): array
+    private function candidate(Chapter $chapter, Collection $sources): array
     {
         $stateVersion = $chapter->novel->canonicalStateVersion?->version;
-
         if ($stateVersion === null) {
             throw new AiProviderException('assembly_context_incomplete', 'Chapter Assembly 缺少 Story State。', false);
         }
 
-        $targetWords = (int) $chapter->latestPlan->target_words;
-        $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
-        $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
+        $contract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
+        $contents = [];
+        $coverage = [];
+        $findings = [];
+
+        foreach ($sources as $index => $source) {
+            $scene = $source['scene'];
+            $artifact = $source['artifact'];
+            $content = trim((string) $artifact->content);
+            if ($content === '') {
+                throw new AiProviderException('assembly_scene_incomplete', "Scene {$scene->sequence} 正文为空，不能组装 Chapter。", false);
+            }
+            $selfCheck = PlanCoverage::validate(
+                is_array(data_get($artifact->data, 'self_check')) ? data_get($artifact->data, 'self_check') : [],
+                $content,
+                "scene_coverage.{$index}",
+            );
+            $expectations = ForeshadowingCoverage::expectationsForScene($contract, (int) $scene->sequence);
+            $foreshadowing = ForeshadowingCoverage::validate(
+                is_array(data_get($artifact->data, 'foreshadowing_coverage')) ? data_get($artifact->data, 'foreshadowing_coverage') : [],
+                $content,
+                $expectations,
+                "scene_coverage.{$index}.foreshadowing_coverage",
+            );
+            $scenePlan = data_get($chapter->latestPlan?->scene_plans, $index, []);
+            $coverage[] = ['scene_id' => $scene->getKey(), ...$selfCheck, 'foreshadowing_coverage' => $foreshadowing];
+            $findings = [
+                ...$findings,
+                ...PlanCoverage::findings(
+                    $scene->getKey(), $selfCheck,
+                    PlanCoverage::expectations($scene->only(PlanCoverage::ELEMENTS), is_array($scenePlan) ? $scenePlan : []),
+                    'assembly_coverage',
+                ),
+                ...ForeshadowingCoverage::findings($scene->getKey(), $foreshadowing, $expectations, 'assembly_foreshadowing_coverage'),
+                ...$this->continuityFindings($artifact, $scene),
+            ];
+            $contents[] = $content;
+        }
+
+        $content = implode(self::SEPARATOR, $contents);
+        $target = (int) $chapter->latestPlan->target_words;
+        $sourceData = $sources->map(fn (array $source): array => [
+            'scene_id' => $source['scene']->getKey(),
+            'sequence' => (int) $source['scene']->sequence,
+            'artifact_id' => $source['artifact']->getKey(),
+            'checksum' => $source['artifact']->checksum,
+            'word_count' => $this->lengthPolicy->count($source['artifact']->content),
+        ])->all();
+        $assemblyHash = hash('sha256', json_encode([
+            'algorithm_version' => self::ALGORITHM_VERSION,
+            'separator' => self::SEPARATOR,
+            'sources' => $sourceData,
+            'content_checksum' => hash('sha256', $content),
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
         return [
-            'chapter_id' => $chapter->getKey(),
+            'content' => $content,
+            'checksum' => hash('sha256', $content),
+            'assembly_hash' => $assemblyHash,
             'state_version' => $stateVersion,
-            'bible_version' => $styleContract['bible_version'],
-            'style_contract_checksum' => $styleContract['checksum'],
-            'l4' => $styleContract,
-            'foreshadowing_contract_checksum' => $foreshadowingContract['checksum'],
-            'foreshadowing_contract' => $foreshadowingContract,
-            'chapter_plan' => $chapter->latestPlan->only([
-                'id', 'version', 'chapter_function', 'arc_contribution', 'reader_promise', 'tone', 'hook_type',
-                'must_reveal', 'may_hint', 'must_not_reveal', 'forbidden_conflicts', 'arc_contributions',
-                'world_entity_candidates', 'foreshadowing_actions', 'scene_plans',
-            ]),
-            'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
-            'writing_constraints' => [
-                'chapter_target_words' => $targetWords,
-                'chapter_minimum_words' => $this->lengthPolicy->chapterMinimum($targetWords),
-                'chapter_maximum_words' => $this->lengthPolicy->chapterMaximum($targetWords),
-                'source_scene_words' => $artifacts->sum(fn (GenerationArtifact $artifact): int => $this->lengthPolicy->count($artifact->content)),
-            ],
-            'ordered_scene_checksums' => $artifacts->pluck('checksum')->all(),
-            'scenes' => $chapter->scenes->values()->map(fn ($scene, int $index): array => [
-                'scene_id' => $scene->getKey(),
-                'sequence' => $scene->sequence,
-                'checksum' => $artifacts[$index]->checksum,
-                'content' => $artifacts[$index]->content,
-            ])->all(),
+            'bible_version' => $this->contextBuilder->bibleVersionForChapter($chapter),
+            'plan_id' => $chapter->latestPlan->getKey(),
+            'plan_version' => $chapter->latestPlan->version,
+            'sources' => $sourceData,
+            'scene_coverage' => $coverage,
+            'plan_findings' => $findings,
+            'word_count' => $this->lengthPolicy->count($content),
+            'target_words' => $target,
+            'minimum_words' => $this->lengthPolicy->chapterMinimum($target),
+            'maximum_words' => $this->lengthPolicy->chapterMaximum($target),
         ];
     }
 
     /** @return array{0: GenerationRun, 1: bool} */
-    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate): array
+    private function startRun(Chapter $chapter, array $candidate, bool $regenerate): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate): array {
+        return DB::transaction(function () use ($chapter, $candidate, $regenerate): array {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::ChapterAssembly);
             $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
-
             if ($this->runLease->isFresh($active)) {
                 return [$active, true];
             }
-
             if ($active !== null) {
                 $active->update([
-                    'status' => RunStatus::Failed,
-                    'error_code' => 'worker_interrupted',
+                    'status' => RunStatus::Failed, 'error_code' => 'worker_interrupted',
                     'error_message' => 'Assembly Run 超时未完成，已由后续投递恢复。',
-                    'error_retryable' => false,
-                    'error_metadata' => ['category' => 'worker_lost'],
-                    'finished_at' => now(),
+                    'error_retryable' => false, 'error_metadata' => ['category' => 'worker_lost'], 'finished_at' => now(),
                 ]);
             }
-
-            if (! $regenerate && ($succeeded = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
+            if (! $regenerate && ($succeeded = $runs->clone()->where('input_hash', $candidate['assembly_hash'])->where('status', RunStatus::Succeeded)->latest('id')->first())) {
                 return [$succeeded, true];
             }
 
             $attempt = ((int) $runs->clone()->max('attempt')) + 1;
-            $key = $attempt === 1 ? $baseKey : $baseKey.':attempt:'.$attempt;
-
+            $baseKey = "assemble:{$chapter->getKey()}:{$candidate['assembly_hash']}:".self::ALGORITHM_VERSION;
             if ($chapter->status === ChapterStatus::Blocked) {
                 $chapter->update(['status' => ChapterStatus::Generating]);
             }
 
             return [GenerationRun::query()->create([
-                'novel_id' => $chapter->novel_id,
-                'chapter_id' => $chapter->getKey(),
-                'scene_id' => null,
-                'scope_type' => 'chapter',
-                'scope_id' => $chapter->getKey(),
-                'stage' => GenerationStage::ChapterAssembly,
-                'status' => RunStatus::Running,
-                'attempt' => $attempt,
-                'idempotency_key' => $key,
-                'input_hash' => $inputHash,
-                'state_version' => $context['state_version'],
-                'bible_version' => $context['bible_version'],
-                'prompt_version' => $promptVersion,
-                'provider' => $provider,
-                'model_policy' => $model,
-                'context_snapshot' => $context,
+                'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => null,
+                'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(),
+                'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Running, 'attempt' => $attempt,
+                'idempotency_key' => $attempt === 1 ? $baseKey : $baseKey.':attempt:'.$attempt,
+                'input_hash' => $candidate['assembly_hash'], 'state_version' => $candidate['state_version'],
+                'bible_version' => $candidate['bible_version'], 'prompt_version' => null, 'provider' => null, 'model_policy' => null,
+                'context_snapshot' => [
+                    'assembly_algorithm_version' => self::ALGORITHM_VERSION,
+                    'assembly_hash' => $candidate['assembly_hash'],
+                    'state_version' => $candidate['state_version'],
+                    'chapter_plan_id' => $candidate['plan_id'],
+                    'chapter_plan_version' => $candidate['plan_version'],
+                    'ordered_sources' => $candidate['sources'],
+                    'writing_constraints' => collect($candidate)->only(['target_words', 'minimum_words', 'maximum_words'])->all(),
+                ],
                 'started_at' => now(),
             ]), false];
         });
     }
 
-    /** @param array<int, string> $expectedChecksums */
-    private function complete(GenerationRun $run, Chapter $chapter, array $payload, int $expectedStateVersion, array $expectedChecksums): GenerationArtifact
+    private function complete(GenerationRun $run, Chapter $chapter, array $candidate): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $chapter, $payload, $expectedStateVersion, $expectedChecksums): GenerationArtifact {
-            $chapter = Chapter::query()->lockForUpdate()->with(['novel', 'scenes.currentArtifact'])->findOrFail($chapter->getKey());
-            $currentStateVersion = $chapter->novel->canonicalStateVersion()->value('version');
-            $currentChecksums = $chapter->scenes->pluck('currentArtifact.checksum')->all();
-
-            if ($currentStateVersion !== $expectedStateVersion) {
-                throw new AiProviderException('state_version_conflict', 'Assembly 期间 Canonical Story State 已变化。', false);
+        return DB::transaction(function () use ($run, $chapter, $candidate): GenerationArtifact {
+            $chapter = Chapter::query()->lockForUpdate()->with(['novel.canonicalStateVersion', 'latestPlan', 'scenes.currentArtifact.generationRun'])->findOrFail($chapter->getKey());
+            if ($chapter->novel->canonicalStateVersion?->version !== $candidate['state_version']) {
+                throw new AiProviderException('state_version_conflict', 'Assembly 保存前 Canonical Story State 已变化。', false);
+            }
+            $current = $this->sourceRows($chapter)->map(fn (array $source): array => [
+                'scene_id' => $source['scene']->getKey(), 'sequence' => (int) $source['scene']->sequence,
+                'artifact_id' => $source['artifact']->getKey(), 'checksum' => $source['artifact']->checksum,
+                'word_count' => $this->lengthPolicy->count($source['artifact']->content),
+            ])->all();
+            if ($current !== $candidate['sources']) {
+                throw new AiProviderException('scene_artifact_conflict', 'Assembly 保存前 Scene Artifact 已变化。', false);
             }
 
-            if ($currentChecksums !== $expectedChecksums) {
-                throw new AiProviderException('scene_artifact_conflict', 'Assembly 期间 Scene Artifact 已变化。', false);
-            }
-
-            $version = GenerationArtifact::query()
+            $version = (int) GenerationArtifact::query()
                 ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
-                ->where('type', ArtifactType::ChapterDraft)
-                ->max('version');
+                ->where('type', ArtifactType::ChapterDraft)->max('version') + 1;
             $artifact = $run->artifacts()->create([
-                'type' => ArtifactType::ChapterDraft,
-                'version' => ((int) $version) + 1,
-                'content' => $payload['content'],
+                'type' => ArtifactType::ChapterDraft, 'version' => $version, 'content' => $candidate['content'],
                 'data' => [
-                    ...collect($payload)->except('content')->all(),
-                    'ordered_scene_checksums' => $expectedChecksums,
-                    'word_count' => $this->lengthPolicy->count($payload['content']),
-                    'target_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_target_words'),
-                    'minimum_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_minimum_words'),
-                    'maximum_words' => (int) data_get($run->context_snapshot, 'writing_constraints.chapter_maximum_words'),
+                    'scene_coverage' => $candidate['scene_coverage'], 'plan_findings' => $candidate['plan_findings'],
+                    'introduced_major_facts' => [],
+                    'ordered_scene_ids' => array_column($candidate['sources'], 'scene_id'),
+                    'ordered_artifact_ids' => array_column($candidate['sources'], 'artifact_id'),
+                    'ordered_scene_checksums' => array_column($candidate['sources'], 'checksum'),
+                    'assembly_algorithm_version' => self::ALGORITHM_VERSION,
+                    'assembly_hash' => $candidate['assembly_hash'],
+                    'word_count' => $candidate['word_count'], 'target_words' => $candidate['target_words'],
+                    'minimum_words' => $candidate['minimum_words'], 'maximum_words' => $candidate['maximum_words'],
                 ],
-                'checksum' => hash('sha256', $payload['content']),
+                'checksum' => $candidate['checksum'],
             ]);
             $run->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
 
@@ -319,201 +276,131 @@ class ChapterAssembler
         });
     }
 
-    /** @param array<string, mixed> $context
-     * @param  array<string, mixed>  $metadata
-     */
-    private function repairLengthIfNeeded(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $provider, string $model, string $promptVersion, ?string $reasoningEffort, int $maxTokens, array $metadata): array
+    private function lengthIsValid(array $candidate): bool
     {
-        $constraints = $context['writing_constraints'];
-
-        for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
-            $actual = $this->lengthPolicy->count($payload['content']);
-            $minimum = (int) $constraints['chapter_minimum_words'];
-            $maximum = (int) $constraints['chapter_maximum_words'];
-            $tooShort = $actual < $minimum;
-            $tooLong = $actual > $maximum;
-
-            if (! $tooShort && ! $tooLong) {
-                break;
-            }
-
-            $response = $this->provider->generate(new AiRequest(
-                model: $model,
-                provider: $provider,
-                reasoningEffort: $reasoningEffort,
-                systemPrompt: ($tooLong
-                    ? '你是 XNovel 章节压缩器。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。将超限草稿压缩为完整章节，保留计划中的场景目标、冲突、转折、结果、行为边界、必要连续性和正式事实。删除重复解释、重复感受、重复争论与不推动情节的细节，但不得删除 Scene Draft 中唯一能够证明伏笔动作已完成的证据。重新按 Schema 输出覆盖最终 content 的 scene_coverage，并按 foreshadowing_contract 完整返回每个 Scene 的 foreshadowing_coverage；不得改变伏笔 ID、动作或目标 Scene，只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled，仅有主题相近措辞必须标记 missing。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终正文，missing 的 evidence 必须为 null，introduced_major_facts 必须返回 []。最终正文应接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。'
-                    : '你是 XNovel 章节扩写器。l4 是唯一的 Style Contract；扩写后必须保持其中的 POV、时态、主文风和辅助文风层级。将过短草稿扩写为完整章节，保留计划、行为边界和既定事实，通过既定场景内的动作、对话、环境、感官、心理和自然过渡补足。重新按 Schema 输出覆盖最终 content 的 scene_coverage，并按 foreshadowing_contract 完整返回每个 Scene 的 foreshadowing_coverage；不得改变伏笔 ID、动作或目标 Scene，只有最终正文足以证明 acceptance_criteria 时才能标记 fulfilled，仅有主题相近措辞必须标记 missing。所有 fulfilled 和 contradicted 的 evidence 必须逐字引用最终正文，missing 的 evidence 必须为 null，introduced_major_facts 必须返回 []。最终正文至少达到 chapter_minimum_words，并尽量接近 chapter_target_words，且不得超过 chapter_maximum_words；字数统计排除空白和换行。不得无意义重复，不得新增重大事实。').NarrativeProsePolicy::writing(),
-                prompt: ($tooLong ? '请压缩以下超限章节：' : '请扩写以下过短章节：').json_encode([
-                    'chapter_plan' => $context['chapter_plan'],
-                    'writing_constraints' => $constraints,
-                    'l4' => $context['l4'],
-                    'foreshadowing_contract' => $context['foreshadowing_contract'],
-                    'current_words' => $actual,
-                    'required_reduction_words' => $tooLong ? $actual - $maximum : 0,
-                    'repair_attempt' => $attempt,
-                    'draft' => $payload,
-                ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: 0.2,
-                maxTokens: $maxTokens,
-                responseSchema: ChapterAssemblyPayload::schema(),
-                promptVersion: $promptVersion,
-                metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
-            ));
-            $payload = $this->validatePayloadWithCoverageRepair(
-                payload: StructuredOutput::require($response, 'assembly', 'Chapter Assembly'),
-                chapter: $chapter,
-                artifacts: $artifacts,
-                context: $context,
-                provider: $provider,
-                model: $model,
-                reasoningEffort: $reasoningEffort,
-                metadata: $metadata,
-            );
-        }
-
-        return $payload;
+        return $candidate['word_count'] >= $candidate['minimum_words']
+            && $candidate['word_count'] <= $candidate['maximum_words'];
     }
 
-    /**
-     * @param  array<string, mixed>  $payload
-     * @param  Collection<int, GenerationArtifact>  $artifacts
-     * @param  array<string, mixed>  $context
-     * @param  array<string, mixed>  $metadata
-     * @return array<string, mixed>
-     */
-    private function validatePayloadWithCoverageRepair(array $payload, Chapter $chapter, Collection $artifacts, array $context, string $provider, string $model, ?string $reasoningEffort, array $metadata): array
+    /** @return array<int, array<string, mixed>> */
+    private function continuityFindings(GenerationArtifact $artifact, Scene $scene): array
     {
-        $repairedIndexes = [];
+        $rows = [
+            ...((array) data_get($artifact->data, 'continuity_findings', [])),
+            ...((array) data_get($artifact->data, 'plan_findings', [])),
+        ];
 
-        while (true) {
-            try {
-                return ChapterAssemblyPayload::validate(
-                    $payload,
-                    $chapter,
-                    $artifacts,
-                    $context['foreshadowing_contract'],
-                );
-            } catch (ValidationException $exception) {
-                $fields = array_keys($exception->errors());
-                $planEvidenceErrors = $fields !== [] && collect($fields)->every(
-                    fn (string $field): bool => preg_match('/^scene_coverage\.\d+\.(goal|conflict|turn|outcome)\.evidence$/', $field) === 1,
-                );
-                $foreshadowingEvidenceErrors = $fields !== [] && collect($fields)->every(
-                    fn (string $field): bool => preg_match('/^scene_coverage\.\d+\.foreshadowing_coverage\.\d+\.evidence$/', $field) === 1,
-                );
-
-                if (! $planEvidenceErrors && ! $foreshadowingEvidenceErrors) {
-                    throw $exception;
-                }
-            }
-
-            $index = (int) explode('.', $fields[0])[1];
-            $repairKey = ($foreshadowingEvidenceErrors ? 'foreshadowing:' : 'plan:').$index;
-
-            if (isset($repairedIndexes[$repairKey])) {
-                throw $exception;
-            }
-
-            $row = data_get($payload, "scene_coverage.{$index}");
-
-            if (! is_array($row)) {
-                throw $exception;
-            }
-
-            if ($foreshadowingEvidenceErrors) {
-                $expectations = ForeshadowingCoverage::expectationsForScene(
-                    $context['foreshadowing_contract'],
-                    (int) data_get($context, "scenes.{$index}.sequence"),
-                );
-                $payload['scene_coverage'][$index]['foreshadowing_coverage'] = $this->foreshadowingCoverageEvidenceRepairer->repair(
-                    coverage: is_array($row['foreshadowing_coverage'] ?? null) ? $row['foreshadowing_coverage'] : [],
-                    content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
-                    expectations: $expectations,
-                    provider: $provider,
-                    model: $model,
-                    metadata: $metadata,
-                    path: "scene_coverage.{$index}.foreshadowing_coverage",
-                    reasoningEffort: $reasoningEffort,
-                );
-            } else {
-                $coverage = $this->coverageEvidenceRepairer->repair(
-                    coverage: collect($row)->except(['scene_id', 'foreshadowing_coverage'])->all(),
-                    content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
-                    provider: $provider,
-                    model: $model,
-                    metadata: $metadata,
-                    task: data_get($context, "chapter_plan.scene_plans.{$index}"),
-                    path: "scene_coverage.{$index}",
-                    reasoningEffort: $reasoningEffort,
-                );
-                $payload['scene_coverage'][$index] = [
-                    'scene_id' => $row['scene_id'] ?? null,
-                    ...$coverage,
-                    'foreshadowing_coverage' => $row['foreshadowing_coverage'] ?? [],
-                ];
-            }
-            $repairedIndexes[$repairKey] = true;
-        }
+        return collect($rows)
+            ->filter(fn (mixed $finding): bool => is_array($finding)
+                && (($finding['dimension'] ?? null) === 'continuity'
+                    || str_starts_with((string) ($finding['code'] ?? ''), 'CONTINUITY_')))
+            ->map(fn (array $finding): array => [
+                ...$finding,
+                'scene_id' => $scene->getKey(),
+                'source' => 'assembly_scene_continuity',
+            ])
+            ->values()
+            ->all();
     }
 
-    /** @param array<string, mixed> $constraints */
-    private function validateLength(string $content, array $constraints): void
+    private function earliestContinuitySceneId(array $candidate): ?int
     {
-        $actual = $this->lengthPolicy->count($content);
-        $minimum = (int) $constraints['chapter_minimum_words'];
-        $maximum = (int) $constraints['chapter_maximum_words'];
+        $finding = collect($candidate['plan_findings'])->first(
+            fn (mixed $finding): bool => is_array($finding) && ($finding['source'] ?? null) === 'assembly_scene_continuity',
+        );
+        $sceneId = is_array($finding) ? ($finding['scene_id'] ?? null) : null;
 
-        if ($actual < $minimum || $actual > $maximum) {
-            throw new AiProviderException(
+        return is_int($sceneId) ? $sceneId : null;
+    }
+
+    private function deferContinuityRecovery(GenerationRun $run, Chapter $chapter, int $sceneId): ?GenerationArtifact
+    {
+        $scene = $chapter->scenes->firstWhere('id', $sceneId);
+        if ($scene === null) {
+            throw new AiProviderException('assembly_continuity_scene_invalid', '连续性 Finding 引用了非当前章节 Scene。', false);
+        }
+        $run->update([
+            'status' => RunStatus::Failed,
+            'error_code' => 'assembly_continuity_recovery_scheduled',
+            'error_message' => "Scene {$scene->sequence} 存在连续性错误，已从该 Scene 开始级联恢复。",
+            'error_retryable' => false,
+            'error_metadata' => ['category' => 'targeted_repair', 'scene_id' => $sceneId],
+            'finished_at' => now(),
+        ]);
+        $this->regenerateScenes->handle($scene);
+
+        return null;
+    }
+
+    private function deferLengthRepair(GenerationRun $run, array $candidate): ?GenerationArtifact
+    {
+        if (collect($candidate['sources'])->contains(fn (array $source): bool => (bool) data_get(
+            GenerationArtifact::query()->find($source['artifact_id'])?->data, 'assembly_length_repair', false,
+        ))) {
+            $exception = new AiProviderException(
                 'assembly_length_out_of_range',
-                "章节组装稿 {$actual} 字，必须控制在 {$minimum}～{$maximum} 字。",
+                "Scene 局部字数修复后章节仍为 {$candidate['word_count']} 字，要求 {$candidate['minimum_words']}～{$candidate['maximum_words']} 字。",
                 false,
             );
-        }
-    }
-
-    private function failRun(GenerationRun $run, Throwable $exception): void
-    {
-        $this->failurePolicy->record($run, $exception, 'chapter_assembly_failed');
-    }
-
-    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
-    {
-        $priorTruncatedRuns = GenerationRun::query()
-            ->where('chapter_id', $run->chapter_id)
-            ->where('stage', GenerationStage::ChapterAssembly)
-            ->where('provider', $run->provider)
-            ->where('model_policy', $run->model_policy)
-            ->where('id', '<', $run->getKey())
-            ->where('error_code', 'assembly_output_truncated')
-            ->get(['idempotency_key', 'context_snapshot'])
-            ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
-                || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
-            ->values();
-        $retryOrdinal = $priorTruncatedRuns->count() + 1;
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.assembly_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
-        $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.assembly_retry_ordinal', $retryOrdinal);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
-        $run->update(['context_snapshot' => $snapshot]);
-
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
-            throw new AiProviderException(
-                'assembly_output_budget_exhausted',
-                "Chapter Assembly 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Assembler 模型后再重试。",
-                false,
-            );
+            $this->failurePolicy->record($run, $exception, 'chapter_assembly_failed');
+            throw $exception;
         }
 
-        return $maxTokens;
+        $mode = $candidate['word_count'] < $candidate['minimum_words'] ? 'expand' : 'compress';
+        $source = $this->selectLengthRepairSource($candidate, $mode);
+        $current = (int) $source['word_count'];
+        if ($mode === 'expand') {
+            $minimum = $current + ($candidate['minimum_words'] - $candidate['word_count']);
+            $target = $current + max(0, $candidate['target_words'] - $candidate['word_count']);
+            $maximum = $current + ($candidate['maximum_words'] - $candidate['word_count']);
+        } else {
+            $minimum = max(1, $current - ($candidate['word_count'] - $candidate['minimum_words']));
+            $target = max($minimum, $current - max(0, $candidate['word_count'] - $candidate['target_words']));
+            $maximum = max(1, $current - ($candidate['word_count'] - $candidate['maximum_words']));
+        }
+        $run->update([
+            'status' => RunStatus::Failed,
+            'error_code' => 'assembly_scene_length_repair_scheduled',
+            'error_message' => "确定性拼章为 {$candidate['word_count']} 字，已选择 Scene {$source['sequence']} 执行{$mode}修复。",
+            'error_retryable' => false,
+            'error_metadata' => [
+                'category' => 'targeted_repair', 'scene_id' => $source['scene_id'], 'mode' => $mode,
+                'minimum_words' => $minimum, 'target_words' => $target, 'maximum_words' => $maximum,
+            ],
+            'finished_at' => now(),
+        ]);
+        RepairSceneLengthJob::dispatch(
+            $source['scene_id'], $source['artifact_id'], $mode, $minimum, $target, $maximum, $candidate['assembly_hash'],
+        );
+
+        return null;
+    }
+
+    /** @return array<string, int|string> */
+    private function selectLengthRepairSource(array $candidate, string $mode): array
+    {
+        $sceneTarget = max(1, (int) ceil($candidate['target_words'] / count($candidate['sources'])));
+
+        return collect($candidate['sources'])->sortByDesc(fn (array $source): int => $mode === 'expand'
+            ? max(0, $sceneTarget - (int) $source['word_count'])
+            : max(0, (int) $source['word_count'] - $sceneTarget))->first();
+    }
+
+    private function recoverChangedScenes(Chapter $chapter, array $candidate): void
+    {
+        $chapter->refresh()->load('novel.canonicalStateVersion', 'scenes.currentArtifact');
+        $expected = collect($candidate['sources'])->keyBy('scene_id');
+        $firstChanged = $chapter->scenes->sortBy('sequence')->first(function (Scene $scene) use ($chapter, $candidate, $expected): bool {
+            if ($chapter->novel->canonicalStateVersion?->version !== $candidate['state_version']) {
+                return true;
+            }
+            $source = $expected->get($scene->getKey());
+
+            return $source === null || $scene->current_artifact_id !== $source['artifact_id']
+                || $scene->currentArtifact?->checksum !== $source['checksum'];
+        });
+        if ($firstChanged !== null) {
+            $this->regenerateScenes->handle($firstChanged);
+        }
     }
 }

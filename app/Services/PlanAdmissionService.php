@@ -22,7 +22,6 @@ class PlanAdmissionService
     /** @var array<int, AiStage> */
     private const PIPELINE_STAGES = [
         AiStage::Writer,
-        AiStage::Assembler,
         AiStage::Extractor,
         AiStage::Reviewer,
         AiStage::Rewrite,
@@ -200,7 +199,6 @@ class PlanAdmissionService
     {
         return match ($stage) {
             AiStage::Writer => (int) config('generation.scene_final_retry_max_output_tokens', 24_000),
-            AiStage::Assembler => (int) config('generation.assembly_final_retry_max_output_tokens', 24_000),
             AiStage::Extractor => (int) config('generation.event_extraction_final_retry_max_output_tokens', 12_000),
             AiStage::Reviewer => (int) config('generation.review_final_retry_max_output_tokens', 24_000),
             AiStage::Rewrite => (int) config('generation.rewrite_final_retry_max_output_tokens', 24_000),

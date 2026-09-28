@@ -6,7 +6,6 @@ enum AiStage: string
 {
     case Planner = 'planner';
     case Writer = 'writer';
-    case Assembler = 'assembler';
     case Extractor = 'extractor';
     case Reviewer = 'reviewer';
     case Rewrite = 'rewrite';
@@ -18,7 +17,6 @@ enum AiStage: string
         return match ($this) {
             self::Planner => '章节规划',
             self::Writer => '场景写作',
-            self::Assembler => '章节组装',
             self::Extractor => '事件提取',
             self::Reviewer => '叙事审校',
             self::Rewrite => '章节重写',

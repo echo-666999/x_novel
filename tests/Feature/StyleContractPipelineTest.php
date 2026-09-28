@@ -28,7 +28,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
-test('assembly review and rewrite keep the style contract frozen by the chapter plan', function () {
+test('deterministic assembly avoids style prompting while review and rewrite keep the frozen style contract', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
     $firstBible = NovelBible::factory()->for($novel)->create([
@@ -50,7 +50,7 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
         'scene_plans' => [],
     ]);
 
-    foreach ([1 => '甲乙', 2 => '丙丁'] as $sequence => $content) {
+    foreach ([1 => '甲乙丙丁', 2 => '戊己庚辛'] as $sequence => $content) {
         $scene = Scene::factory()->for($chapter)->create([
             'sequence' => $sequence,
             'status' => SceneStatus::Draft,
@@ -64,6 +64,12 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
         $artifact = GenerationArtifact::factory()->for($run)->create([
             'type' => ArtifactType::SceneDraft,
             'content' => $content,
+            'data' => [
+                'self_check' => collect(['goal', 'conflict', 'turn', 'outcome'])
+                    ->mapWithKeys(fn (string $key): array => [$key => ['status' => 'fulfilled', 'evidence' => $content]])
+                    ->all(),
+                'foreshadowing_coverage' => [],
+            ],
             'checksum' => hash('sha256', $content),
         ]);
         $scene->update(['current_artifact_id' => $artifact->getKey()]);
@@ -101,7 +107,7 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
             'style' => ['status' => 'issues_found', 'summary' => '已一次列出文风维度发现的全部问题。'],
         ],
         'foreshadowing_audits' => [],
-        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '组装后的章节正文', 'scene_id' => null],
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '甲乙丙丁', 'scene_id' => null],
         'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
             'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
         ]]],
@@ -124,23 +130,10 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
             'auto_fixable' => true,
             'requires_human_decision' => false,
             'message' => '动作力度不足，未达到主文风要求。',
-            'evidence' => '组装后的章节正文',
+            'evidence' => '甲乙丙丁',
         ]],
     ];
-    $assembledContent = '组装后的章节正文';
-    $fulfilled = ['status' => 'fulfilled', 'evidence' => $assembledContent];
-    $assemblyPayload = [
-        'content' => $assembledContent,
-        'scene_coverage' => $chapter->scenes()->orderBy('sequence')->get()->map(fn (Scene $scene): array => [
-            'scene_id' => $scene->getKey(),
-            'goal' => $fulfilled,
-            'conflict' => $fulfilled,
-            'turn' => $fulfilled,
-            'outcome' => $fulfilled,
-            'foreshadowing_coverage' => [],
-        ])->all(),
-        'introduced_major_facts' => [],
-    ];
+    $assembledContent = "甲乙丙丁\n\n戊己庚辛";
     $rewriteContent = '修订后的章节正文';
     $rewriteFulfilled = ['status' => 'fulfilled', 'evidence' => $rewriteContent];
     $rewritePayload = [
@@ -156,7 +149,6 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
         'introduced_major_facts' => [],
     ];
     $fake = (new FakeAiProvider)
-        ->enqueue(new AiResponse(json_encode($assemblyPayload), $assemblyPayload, 10, 10, 0, 10, 'assembly', 'test'))
         ->enqueue(new AiResponse(json_encode($reviewPayload), $reviewPayload, 10, 10, 0, 10, 'review', 'test'))
         ->enqueue(new AiResponse(json_encode($rewritePayload), $rewritePayload, 10, 10, 0, 10, 'rewrite', 'test'));
     app()->instance(AiProvider::class, $fake);
@@ -173,17 +165,20 @@ test('assembly review and rewrite keep the style contract frozen by the chapter 
         ->oldest('id')
         ->get();
     $expectedChecksum = app(NarrativeStyleProfile::class)->contractForBible($firstBible)['checksum'];
-    $foreshadowingChecksums = $runs->pluck('context_snapshot')
+    $providerRuns = $runs->whereIn('stage', [GenerationStage::Review, GenerationStage::Rewrite]);
+    $foreshadowingChecksums = $providerRuns->pluck('context_snapshot')
         ->map(fn (array $snapshot): mixed => data_get($snapshot, 'foreshadowing_contract_checksum'));
 
     expect($runs)->toHaveCount(3)
         ->and($runs->pluck('bible_version')->all())->toBe([1, 1, 1])
-        ->and($runs->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'style_contract_checksum'))->unique()->all())->toBe([$expectedChecksum])
-        ->and($foreshadowingChecksums->filter()->count())->toBe(3)
+        ->and(data_get($runs->first()->context_snapshot, 'assembly_algorithm_version'))->toBe(ChapterAssembler::ALGORITHM_VERSION)
+        ->and(data_get($runs->first()->context_snapshot, 'style_contract_checksum'))->toBeNull()
+        ->and($providerRuns->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'style_contract_checksum'))->unique()->all())->toBe([$expectedChecksum])
+        ->and($foreshadowingChecksums->filter()->count())->toBe(2)
         ->and($foreshadowingChecksums->unique()->count())->toBe(1)
-        ->and($runs->pluck('context_snapshot')->every(fn (array $snapshot): bool => data_get($snapshot, 'foreshadowing_contract.chapter_plan_id') === $plan->getKey()))->toBeTrue()
-        ->and($runs->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'l4.primary_style.name'))->unique()->all())->toBe(['热血激昂'])
-        ->and($fake->requests())->toHaveCount(3)
+        ->and($providerRuns->pluck('context_snapshot')->every(fn (array $snapshot): bool => data_get($snapshot, 'foreshadowing_contract.chapter_plan_id') === $plan->getKey()))->toBeTrue()
+        ->and($providerRuns->pluck('context_snapshot')->map(fn (array $snapshot): mixed => data_get($snapshot, 'l4.primary_style.name'))->unique()->all())->toBe(['热血激昂'])
+        ->and($fake->requests())->toHaveCount(2)
         ->and(collect($fake->requests())->every(fn ($request): bool => str_contains($request->prompt, '热血激昂') && str_contains($request->prompt, '第一人称')))->toBeTrue()
         ->and(collect($fake->requests())->every(fn ($request): bool => ! str_contains($request->prompt, '冷峻克制')))->toBeTrue();
 });

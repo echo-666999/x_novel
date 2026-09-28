@@ -10,7 +10,6 @@ final class PromptVersionResolver
     private const NARRATIVE_POLICY_STAGES = [
         AiStage::Planner,
         AiStage::Writer,
-        AiStage::Assembler,
         AiStage::Reviewer,
         AiStage::Rewrite,
         AiStage::Summary,

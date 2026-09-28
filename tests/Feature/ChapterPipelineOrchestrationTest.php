@@ -183,7 +183,6 @@ function assertFrozenPipelineStyle(Chapter $chapter, NovelBible $bible): void
     $stages = [
         GenerationStage::ChapterPlanning,
         GenerationStage::SceneGeneration,
-        GenerationStage::ChapterAssembly,
         GenerationStage::Review,
         GenerationStage::Rewrite,
     ];
@@ -283,7 +282,6 @@ test('one trigger reaches pass then manual commit creates canonical state memory
             AiStage::Planner->value,
             AiStage::Writer->value,
             AiStage::Writer->value,
-            AiStage::Assembler->value,
             AiStage::Extractor->value,
             AiStage::Reviewer->value,
         ]);
@@ -476,7 +474,6 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         $payload = match ($stage) {
             AiStage::Planner->value => $this->plan((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Writer->value => $this->scene((int) data_get($request->metadata, 'scene_id')),
-            AiStage::Assembler->value => $this->assembly((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Extractor->value => $this->events((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Reviewer->value => $this->review((int) data_get($request->metadata, 'chapter_id')),
             AiStage::Rewrite->value => $this->rewrite((int) data_get($request->metadata, 'scene_id')),

@@ -12,7 +12,6 @@ return [
     'models' => [
         'planner' => env('AI_MODEL_PLANNER', env('AI_MODEL', 'gpt-5.6-luna')),
         'writer' => env('AI_MODEL_WRITER', env('AI_MODEL', 'gpt-5.6-luna')),
-        'assembler' => env('AI_MODEL_ASSEMBLER', env('AI_MODEL', 'gpt-5.6-luna')),
         'extractor' => env('AI_MODEL_EXTRACTOR', env('AI_MODEL', 'gpt-5.6-luna')),
         'reviewer' => env('AI_MODEL_REVIEWER', env('AI_MODEL', 'gpt-5.6-luna')),
         'rewrite' => env('AI_MODEL_REWRITE', env('AI_MODEL', 'gpt-5.6-luna')),

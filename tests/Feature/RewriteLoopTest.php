@@ -447,6 +447,7 @@ test('scene rewrite replaces only the target pointer and preserves plan and styl
 
     expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
         ->and($artifact->data['scope'])->toBe('scene')
+        ->and($artifact->data['foreshadowing_coverage'])->toBe([])
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['target']['artifact']->getKey())
         ->and($artifact->data['repair_findings'])->toHaveCount(1)
         ->and(data_get($artifact->data, 'repair_findings.0.evidence'))->toBe('旧稿失速')

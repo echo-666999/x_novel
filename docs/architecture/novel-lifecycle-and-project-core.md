@@ -598,7 +598,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 ## 12. Prompt 版本与模型调用追踪
 
-用户指定的 `PromptVersionResolver` 是主 AI Stage 的版本入口。它从 `config/prompts.php` 读取阶段版本；缺失、空值、未知 Stage 或错误配置会直接抛出异常，不允许静默使用一个无法追踪的 Prompt。Planner、Writer、Assembler、Reviewer、Rewrite 和 Summary 的有效版本为 `{stage_prompt_version}+{NarrativeProsePolicy::VERSION}`；Extractor 保持独立阶段版本。
+用户指定的 `PromptVersionResolver` 是 Provider Stage 的版本入口。它从 `config/prompts.php` 读取阶段版本；缺失、空值、未知 Stage 或错误配置会直接抛出异常，不允许静默使用一个无法追踪的 Prompt。Planner、Writer、Reviewer、Rewrite 和 Summary 的有效版本为 `{stage_prompt_version}+{NarrativeProsePolicy::VERSION}`；Extractor 保持独立阶段版本。确定性 Assembly 使用算法版本，不注册 Prompt Version。
 
 当前配置为：
 
@@ -606,8 +606,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 |---|---|
 | planner | `chapter-planner-v10+natural-prose-v1` |
 | writer | `scene-writer-v15+natural-prose-v1` |
-| assembler | `assembler-v12+natural-prose-v1` |
-| extractor | `event-extractor-v7` |
+| extractor | `event-extractor-v8` |
 | reviewer | `reviewer-v16+natural-prose-v1` |
 | rewrite | `rewrite-v14+natural-prose-v1` |
 | summary | `summary-v2+natural-prose-v1` |
@@ -616,7 +615,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 - Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v7`，局部 Outline 修订记录 `novel-outline-node-v2`；两者都不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
-- 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。
+- 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。
 
 ## 13. 数据与职责地图

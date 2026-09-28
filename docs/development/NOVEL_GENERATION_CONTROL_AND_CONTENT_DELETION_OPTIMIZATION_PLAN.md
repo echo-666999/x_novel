@@ -1126,7 +1126,7 @@ flowchart TD
 | NGC-004 | Chapter Planner 选择当前 Milestone | P0 | DONE | NGC-003 |
 | NGC-004A | Chapter Plan 调用前准备度门禁 | P0 | DONE | NGC-004 |
 | NGC-005 | Review、Event、Commit 完成语义 | P0 | DONE | NGC-004A |
-| NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | TODO | NGC-005 |
+| NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | DONE | NGC-005 |
 | NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | TODO | NGC-006A |
 | NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | TODO | NGC-006B |
 | NGC-006 | Beat 交接、恢复与重复任务 | P0 | TODO | NGC-006C |
@@ -1598,7 +1598,7 @@ Next Task
 ## NGC-006A — 确定性 Assembly 与 Scene 局部恢复
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-005
 
 ### 实现
@@ -1624,6 +1624,18 @@ Next Task
 
 - 新主链不存在 `assembly_output_truncated`、`assembly_schema_invalid` 或 Assembly Coverage 顺序漂移。
 - Assembly 不改写正文，不产生新增重大事实。
+
+### 完成记录（2026-09-28）
+
+- `ChapterAssembler` 已改为 `deterministic-assembly-v1`：严格按 Scene Sequence 对当前 Artifact 正文执行 `trim`，再以固定两个换行连接；Assembly Run 的 Provider、Model 和 Prompt Version 均为空，不产生 Provider Request 或 Usage。
+- Assembly 从 Scene Artifact 已验证的 `self_check` 与 `foreshadowing_coverage` 聚合章节 Coverage，Laravel 恢复 Scene/Artifact 身份和顺序，并保存 Ordered Scene IDs、Artifact IDs、Checksums、算法版本、Assembly Hash、字数与 Findings。
+- 保存前在 Chapter 行锁内复核 Canonical State Version 与完整 Scene 来源链。Scene 指针或 Checksum 变化时，从最早变化 Scene 清空当前指针并级联恢复；State Version 变化时从第一 Scene 恢复，冲突候选均不保存 Chapter Draft。
+- 章节字数不合格时按等权 Scene 计划预算与当前实际字数选择单个 Scene，派发一次有界 `RepairSceneLengthJob`。局部修复使用冻结 Rewrite Route，创建新的 Scene `rewrite_draft` 并重新进入确定性 Assembly；若局部修复后仍越界则停止，不连续付费修复，也不调用整章模型。
+- 已从 `AiStage`、Plan Admission Route、Plan Validator、Prompt/Model 配置和默认测试流水线删除 Assembler Provider Route 与 Assembly 输出预算。`ChapterAssemblyPayload` 已从 Assembly 默认路径移除；它仍被 NGC-006B 尚未删除的 Whole Chapter Rewrite 兼容路径合法引用，因此本批次不提前删除该类。
+- 针对性回归：71 tests，71 passed，466 assertions，0 failures。
+- 全量 `php artisan test`：1022 tests，999 passed，23 skipped，5936 assertions，0 failures，3 warnings。
+- `vendor/bin/pint --dirty` 与 `git diff --check`：通过。
+- 未执行真实 Provider 调用或业务数据库写入；Scene 局部字数修复的 Provider 契约由 Fake Provider Feature Test 验证，本任务没有新增 Migration。
 
 ## NGC-006B — 精简 Review 与最小范围 Rewrite
 

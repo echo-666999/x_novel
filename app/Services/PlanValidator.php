@@ -543,7 +543,7 @@ class PlanValidator
             }
         }
 
-        foreach (['writer', 'assembler', 'extractor', 'reviewer', 'rewrite', 'summary'] as $stage) {
+        foreach (['writer', 'extractor', 'reviewer', 'rewrite', 'summary'] as $stage) {
             $route = data_get($snapshot, "routes.{$stage}");
             if (! is_array($route)
                 || blank($route['provider'] ?? null)
