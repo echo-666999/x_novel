@@ -249,6 +249,19 @@ function sceneRewriteFixture(): array
             'evidence' => '守军待命',
         ],
     ]]);
+    $fixture['draft'] = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 2,
+        'content' => '原始章节正文',
+        'data' => ['ordered_scene_checksums' => collect($scenes)->pluck('artifact.checksum')->all()],
+        'checksum' => hash('sha256', '原始章节正文'),
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($fixture['review']->generationRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'version' => 2,
+        'data' => ['source_artifact_id' => $fixture['draft']->getKey()],
+    ]);
+    $fixture['review']->update(['artifact_id' => $reviewArtifact->getKey()]);
 
     return [...$fixture, 'target' => $scenes[0], 'untouched' => $scenes[1]];
 }
@@ -300,6 +313,48 @@ test('scene rewrite repairs invalid coverage evidence without rewriting its cont
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->promptVersion)->toBe('coverage-evidence-repair-v1')
         ->and(data_get($fake->requests()[1]->metadata, 'coverage_path'))->toBe('self_check');
+});
+
+test('rewrite job checkpoints a paid response and resumes repair in a new job attempt', function () {
+    Queue::fake();
+    $fixture = sceneRewriteFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneRewriteResponse(evidence: '他成功破门'))
+        ->enqueue(truncatedRewriteResponse())
+        ->enqueue(sceneRewriteCoverageResponse('破门'));
+    app()->instance(AiProvider::class, $fake);
+
+    (new RewriteChapterJob(
+        $fixture['chapter']->getKey(),
+        $fixture['target']['scene']->getKey(),
+    ))->handle(app(ChapterRewriter::class));
+
+    $firstRun = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->sole();
+    expect($fake->requests())->toHaveCount(1)
+        ->and($firstRun->status)->toBe(RunStatus::Failed)
+        ->and($firstRun->error_code)->toBe('generation_stage_deferred')
+        ->and($firstRun->artifacts()->where('type', ArtifactType::Context)->count())->toBe(1);
+    Queue::assertPushed(RewriteChapterJob::class, 1);
+
+    (new RewriteChapterJob(
+        $fixture['chapter']->getKey(),
+        $fixture['target']['scene']->getKey(),
+    ))->handle(app(ChapterRewriter::class));
+
+    expect($fake->requests())->toHaveCount(2)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->latest('id')->first()->error_code)->toBe('generation_stage_deferred');
+
+    (new RewriteChapterJob(
+        $fixture['chapter']->getKey(),
+        $fixture['target']['scene']->getKey(),
+    ))->handle(app(ChapterRewriter::class));
+
+    expect($fake->requests())->toHaveCount(3)
+        ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1)
+        ->and(data_get($fake->requests()[2]->metadata, 'coverage_repair_attempt'))->toBe(2)
+        ->and($fixture['target']['scene']->fresh()->currentArtifact?->type)->toBe(ArtifactType::RewriteDraft)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->count())->toBe(3);
+    Queue::assertPushed(AssembleChapterJob::class, 1);
 });
 
 test('scene rewrite job returns to assembly before event extraction', function () {

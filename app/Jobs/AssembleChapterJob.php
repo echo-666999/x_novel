@@ -4,9 +4,11 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterAssembler;
+use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,12 +21,18 @@ class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 330;
 
-    /** @var array<int> */
-    public array $backoff = [10, 30];
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::ChapterAssembly);
+    }
+
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::ChapterAssembly);
+    }
 
     public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false, public readonly bool $continueRewrite = false)
     {
@@ -48,23 +56,19 @@ class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
 
             $this->releaseGenerationDispatch();
         } catch (AiProviderException $exception) {
-            if (! $exception->retryable) {
-                if (! in_array($exception->errorCode, [
-                    'novel_paused',
-                    'assembly_input_incomplete',
-                    'assembly_scene_incomplete',
-                    'assembly_context_incomplete',
-                ], true)) {
-                    $assembler->markTerminalFailure($this->chapterId);
-                }
-
-                $this->releaseGenerationDispatch();
-                $this->fail($exception);
-
-                return;
+            $policy = app(GenerationFailurePolicy::class);
+            if ($policy->shouldQueueRetry($exception, GenerationStage::ChapterAssembly)) {
+                throw $exception;
             }
 
-            throw $exception;
+            if ($policy->shouldMarkTerminal(GenerationStage::ChapterAssembly, $exception)) {
+                $assembler->markTerminalFailure($this->chapterId);
+            }
+
+            $this->releaseGenerationDispatch();
+            $this->fail($exception);
+
+            return;
         } catch (Throwable $exception) {
             $this->handleUnexpectedGenerationFailure($exception);
         }
@@ -74,6 +78,8 @@ class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
     {
         $this->releaseGenerationDispatch();
         app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
-        app(ChapterAssembler::class)->markTerminalFailure($this->chapterId);
+        if (app(GenerationFailurePolicy::class)->shouldMarkTerminal(GenerationStage::ChapterAssembly, $exception)) {
+            app(ChapterAssembler::class)->markTerminalFailure($this->chapterId);
+        }
     }
 }

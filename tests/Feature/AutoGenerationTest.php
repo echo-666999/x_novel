@@ -10,7 +10,10 @@ use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryArc;
+use App\Models\StoryStateVersion;
 use App\Models\Volume;
+use App\Services\StoryStateService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 
@@ -93,11 +96,20 @@ function autoGenerationFixture(bool $enabled): array
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
     $chapter = Chapter::factory()->for($novel)->for($volume)->create([
         'sequence' => 4,
         'status' => ChapterStatus::Canonical,
         'summary' => '上一正式章节摘要。',
     ]);
+    attachCanonicalArtifact($novel, $chapter);
+    $state = $novel->fresh()->canonicalStateVersion->state;
+    $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
+        'version' => 1,
+        'state' => $state,
+        'checksum' => app(StoryStateService::class)->checksum($state),
+    ]);
+    $novel->update(['canonical_state_version_id' => $version->getKey()]);
 
     return [$novel->refresh(), $chapter];
 }

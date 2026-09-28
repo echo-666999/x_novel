@@ -4,10 +4,13 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
+use App\Exceptions\GenerationStageDeferredException;
 use App\Exceptions\SceneStageDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\Scene;
 use App\Services\AutoStopService;
+use App\Services\GenerationFailurePolicy;
 use App\Services\SceneGenerator;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
@@ -21,12 +24,18 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 330;
 
-    /** @var array<int> */
-    public array $backoff = [10, 30];
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::SceneGeneration);
+    }
+
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::SceneGeneration);
+    }
 
     public function __construct(
         public readonly int $sceneId,
@@ -47,7 +56,7 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {
-            $artifact = $generator->generate($this->sceneId, $this->regenerate, $this->regenerationBatchId);
+            $artifact = $generator->generate($this->sceneId, $this->regenerate, $this->regenerationBatchId, singleProviderCall: true);
 
             if ($artifact !== null) {
                 $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
@@ -57,29 +66,28 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
             }
 
             $this->releaseGenerationDispatch();
-        } catch (SceneStageDeferredException) {
+        } catch (SceneStageDeferredException|GenerationStageDeferredException) {
             $this->releaseGenerationDispatch();
-            $this->dispatchGenerationJob(new self(
-                $this->sceneId,
-                $this->regenerate,
-                $this->cascade,
-                $this->regenerationBatchId,
-            ));
+            $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
+            if ($chapterId !== null) {
+                $advance->handle((int) $chapterId, $this->regenerationBatchId);
+            }
 
             return;
         } catch (AiProviderException $exception) {
-            if (! $exception->retryable) {
-                if (! in_array($exception->errorCode, ['novel_paused', 'previous_scene_incomplete'], true)) {
-                    $generator->markTerminalFailure($this->sceneId, $exception);
-                }
-
-                $this->releaseGenerationDispatch();
-                $this->fail($exception);
-
-                return;
+            $policy = app(GenerationFailurePolicy::class);
+            if ($policy->shouldQueueRetry($exception, GenerationStage::SceneGeneration)) {
+                throw $exception;
             }
 
-            throw $exception;
+            if ($policy->shouldMarkTerminal(GenerationStage::SceneGeneration, $exception)) {
+                $generator->markTerminalFailure($this->sceneId, $exception);
+            }
+
+            $this->releaseGenerationDispatch();
+            $this->fail($exception);
+
+            return;
         } catch (Throwable $exception) {
             $this->handleUnexpectedGenerationFailure($exception);
         }
@@ -92,9 +100,11 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
         if ($chapterId !== null) {
             app(AutoStopService::class)->stopForFailure((int) $chapterId, $exception);
         }
-        app(SceneGenerator::class)->markTerminalFailure(
-            $this->sceneId,
-            $exception ?? new AiProviderException('scene_generation_failed', 'Scene 生成失败。', false),
-        );
+        if (app(GenerationFailurePolicy::class)->shouldMarkTerminal(GenerationStage::SceneGeneration, $exception)) {
+            app(SceneGenerator::class)->markTerminalFailure(
+                $this->sceneId,
+                $exception ?? new AiProviderException('scene_generation_failed', 'Scene 生成失败。', false),
+            );
+        }
     }
 }

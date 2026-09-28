@@ -18,6 +18,7 @@ use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
+use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
@@ -37,9 +38,18 @@ function reliabilityNovel(int $currentSequence = 0): array
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
 
     if ($currentSequence > 0) {
-        Chapter::factory()->for($novel)->for($volume)->create(['sequence' => $currentSequence, 'status' => ChapterStatus::Canonical, 'summary' => '正式摘要']);
+        $chapter = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => $currentSequence, 'status' => ChapterStatus::Canonical, 'summary' => '正式摘要']);
+        attachCanonicalArtifact($novel, $chapter);
+        $state = $novel->fresh()->canonicalStateVersion->state;
+        $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
+            'version' => $currentSequence,
+            'state' => $state,
+            'checksum' => app(StoryStateService::class)->checksum($state),
+        ]);
+        $novel->update(['canonical_state_version_id' => $version->getKey()]);
     }
 
     return [$novel->fresh(), $volume];
@@ -69,6 +79,7 @@ test('fifty sequential canonical callbacks stop exactly at reliability boundary'
 
     foreach (range(1, 50) as $sequence) {
         $chapter->update(['status' => ChapterStatus::Canonical, 'summary' => "第 {$sequence} 章摘要"]);
+        attachCanonicalArtifact($novel, $chapter);
         $versionState = [...$state, 'timeline' => ['chapter' => $sequence]];
         $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
             'version' => $sequence,

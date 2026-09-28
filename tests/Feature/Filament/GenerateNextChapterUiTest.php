@@ -8,6 +8,7 @@ use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Jobs\PlanChapterJob;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryArc;
 use App\Models\User;
 use App\Models\Volume;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -25,7 +26,8 @@ test('the novel overview can create the next chapter and open its workbench', fu
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
-    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
 
     $component = Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertActionEnabled('generateNextChapter')

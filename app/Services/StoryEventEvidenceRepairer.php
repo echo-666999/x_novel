@@ -21,7 +21,7 @@ final class StoryEventEvidenceRepairer
      * @param  array<string, mixed>  $metadata
      * @return array<int, array<string, mixed>>
      */
-    public function repair(array $event, string $content, string $model, array $metadata, int $eventIndex, ?string $reasoningEffort = null): array
+    public function repair(array $event, string $content, string $model, array $metadata, int $eventIndex, ?string $reasoningEffort = null, ?callable $beforeRequest = null, int $startingAttempt = 1, ?array $resumeStructuredData = null, ?callable $afterResponse = null): array
     {
         $evidence = $event['evidence'] ?? null;
 
@@ -30,11 +30,19 @@ final class StoryEventEvidenceRepairer
         }
 
         $lastException = null;
+        if ($resumeStructuredData !== null) {
+            try {
+                return $this->validatedEvidence($resumeStructuredData, $evidence, $content);
+            } catch (ValidationException $exception) {
+                $lastException = $exception;
+            }
+        }
 
-        for ($attempt = 1; $attempt <= (int) config('generation.max_event_evidence_repair_attempts', 2); $attempt++) {
+        for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_event_evidence_repair_attempts', 2); $attempt++) {
             $maxTokens = $attempt === 1
                 ? (int) config('generation.event_evidence_repair_max_output_tokens', 1_000)
                 : (int) config('generation.event_evidence_repair_retry_max_output_tokens', 4_000);
+            $beforeRequest?->__invoke('event_evidence_repair');
             $response = $this->provider->generate(new AiRequest(
                 model: $model,
                 reasoningEffort: $reasoningEffort,
@@ -50,6 +58,7 @@ final class StoryEventEvidenceRepairer
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'event_evidence_repair_attempt' => $attempt, 'event_index' => $eventIndex],
             ));
+            $afterResponse?->__invoke($response->structuredData, $attempt);
 
             $quotes = data_get($response->structuredData, 'quotes');
 
@@ -70,30 +79,7 @@ final class StoryEventEvidenceRepairer
             }
 
             try {
-                $repairedEvidence = collect($evidence)->values()->map(function (mixed $item, int $index) use ($quotes, $content): ?array {
-                    if (! is_array($item) || ! is_string($quotes[$index] ?? null)) {
-                        return null;
-                    }
-
-                    $quote = $this->quoteResolver->resolve($content, $quotes[$index]);
-
-                    if ($quote === '' || ! str_contains($content, $quote)) {
-                        return null;
-                    }
-
-                    return [
-                        ...$item,
-                        'quote' => $quote,
-                        'start_offset' => null,
-                        'end_offset' => null,
-                    ];
-                })->filter()->values()->all();
-
-                if ($repairedEvidence === []) {
-                    throw ValidationException::withMessages(['evidence' => '修复后的 Candidate Evidence quote 必须逐字来自当前 Chapter Draft。']);
-                }
-
-                return $repairedEvidence;
+                return $this->validatedEvidence($response->structuredData, $evidence, $content);
             } catch (ValidationException $exception) {
                 $lastException = $exception;
             }
@@ -102,6 +88,40 @@ final class StoryEventEvidenceRepairer
         throw $lastException ?? ValidationException::withMessages([
             'evidence' => 'Story Event evidence 修复失败。',
         ]);
+    }
+
+    /** @param array<string, mixed> $structuredData @param array<int, mixed> $evidence @return array<int, array<string, mixed>> */
+    private function validatedEvidence(array $structuredData, array $evidence, string $content): array
+    {
+        $quotes = data_get($structuredData, 'quotes');
+        if (! is_array($quotes) || count($quotes) !== count($evidence)) {
+            throw ValidationException::withMessages(['evidence' => 'Story Event evidence 修复响应结构无效。']);
+        }
+
+        $repairedEvidence = collect($evidence)->values()->map(function (mixed $item, int $index) use ($quotes, $content): ?array {
+            if (! is_array($item) || ! is_string($quotes[$index] ?? null)) {
+                return null;
+            }
+
+            $quote = $this->quoteResolver->resolve($content, $quotes[$index]);
+
+            if ($quote === '' || ! str_contains($content, $quote)) {
+                return null;
+            }
+
+            return [
+                ...$item,
+                'quote' => $quote,
+                'start_offset' => null,
+                'end_offset' => null,
+            ];
+        })->filter()->values()->all();
+
+        if ($repairedEvidence === []) {
+            throw ValidationException::withMessages(['evidence' => '修复后的 Candidate Evidence quote 必须逐字来自当前 Chapter Draft。']);
+        }
+
+        return $repairedEvidence;
     }
 
     /** @return array<string, mixed> */

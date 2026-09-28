@@ -8,6 +8,7 @@ use App\Filament\Pages\Dashboard;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryArc;
 use App\Models\User;
 use App\Models\Volume;
 use Filament\Actions\Testing\TestAction;
@@ -36,7 +37,8 @@ test('dashboard starts and displays mvp soak progress', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating, 'title' => '星河长卷']);
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
-    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
 
     Livewire::test(Dashboard::class)
         ->callAction(TestAction::make('startMvpSoakRun')->schemaComponent('acceptanceActions', 'content'), data: ['novel_id' => $novel->getKey()])
@@ -58,6 +60,7 @@ test('dashboard reports an active chapter workflow instead of throwing when star
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
     Chapter::factory()->for($novel)->create([
         'volume_id' => $volume->getKey(),
         'sequence' => 5,

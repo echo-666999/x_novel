@@ -1,5 +1,12 @@
 <?php
 
+use App\Enums\ArtifactType;
+use App\Enums\GenerationStage;
+use App\Enums\RunStatus;
+use App\Models\Chapter;
+use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
+use App\Models\Novel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -47,4 +54,18 @@ expect()->extend('toBeOne', function () {
 function something()
 {
     // ..
+}
+
+function attachCanonicalArtifact(Novel $novel, Chapter $chapter): GenerationArtifact
+{
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Commit,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::ChapterDraft,
+    ]);
+    $chapter->update(['canonical_artifact_id' => $artifact->getKey()]);
+
+    return $artifact;
 }

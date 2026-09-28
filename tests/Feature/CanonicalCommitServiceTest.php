@@ -1039,7 +1039,16 @@ test('canonical commit starts the next chapter only after required post commit w
     $fixture = canonicalCommitFixture();
     NovelBible::factory()->for($fixture['novel'])->create();
     $fixture['novel']->update(['settings' => ['auto_generate' => true]]);
-    Volume::factory()->for($fixture['novel'])->create(['status' => VolumeStatus::Active]);
+    $arc = StoryArc::query()
+        ->where('source_outline_arc_id', $fixture['chapter']->latestPlan->primary_outline_arc_id)
+        ->firstOrFail();
+    $volume = $arc->volume ?? Volume::factory()->for($fixture['novel'])->create([
+        'source_outline_volume_id' => $arc->sourceOutlineArc->novel_outline_volume_id,
+        'status' => VolumeStatus::Active,
+    ]);
+    $volume->update(['status' => VolumeStatus::Active]);
+    $fixture['chapter']->update(['volume_id' => $volume->getKey()]);
+    $arc->update(['volume_id' => $volume->getKey(), 'status' => 'active']);
 
     $service = app(CanonicalCommitService::class);
     $version = $service->commit($fixture['data']);

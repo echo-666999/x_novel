@@ -29,8 +29,10 @@ final class ForeshadowingCoverageEvidenceRepairer
         string $path,
         ?string $reasoningEffort = null,
         ?callable $beforeRequest = null,
+        int $startingAttempt = 1,
+        ?callable $afterResponse = null,
     ): array {
-        for ($attempt = 1; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
+        for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
             $maxTokens = $attempt === 1
                 ? (int) config('generation.coverage_repair_max_output_tokens', 1_000)
                 : (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000);
@@ -53,6 +55,7 @@ final class ForeshadowingCoverageEvidenceRepairer
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'foreshadowing_coverage_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
             ));
+            $afterResponse?->__invoke($response->structuredData, $attempt);
 
             $repairedCoverage = data_get($response->structuredData, 'coverage');
 

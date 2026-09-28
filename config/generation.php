@@ -1,6 +1,18 @@
 <?php
 
 return [
+    'stage_policies' => [
+        'chapter_planning' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => [], 'non_terminal_codes' => ['novel_paused']],
+        'scene_generation' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['schema', 'evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'previous_scene_incomplete']],
+        'chapter_assembly' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => ['length'], 'non_terminal_codes' => ['novel_paused', 'assembly_input_incomplete', 'assembly_scene_incomplete', 'assembly_context_incomplete']],
+        'event_extraction' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['evidence'], 'non_terminal_codes' => ['novel_paused']],
+        'review' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => [], 'non_terminal_codes' => ['novel_paused', 'review_prerequisite_missing']],
+        'rewrite' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => ['evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'rewrite_exhausted']],
+        'commit' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
+        'memory_summary' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
+        'embedding' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
+        'ending_audit' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => []],
+    ],
     'acceptance_tools_enabled' => (bool) env('GENERATION_ACCEPTANCE_TOOLS_ENABLED', false),
     'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 300),
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),

@@ -15,6 +15,7 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
+use App\Exceptions\GenerationStageDeferredException;
 use App\Exceptions\SceneStageDeferredException;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -30,7 +31,7 @@ class SceneGenerator
         private readonly PlanAdmissionService $planAdmission,
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
-        private readonly GenerationRunLease $runLease,
+        private readonly GenerationRunCoordinator $runCoordinator,
         private readonly SceneDraftStructureRepairer $structureRepairer,
         private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer,
         private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer,
@@ -38,8 +39,9 @@ class SceneGenerator
         private readonly SceneExecutionClock $executionClock,
     ) {}
 
-    public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null): ?GenerationArtifact
+    public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null, bool $singleProviderCall = false): ?GenerationArtifact
     {
+        $providerCalls = 0;
         $jobStartedAt = $this->executionClock->start();
         $scene = Scene::query()->with([
             'chapter.novel.canonicalStateVersion',
@@ -110,16 +112,19 @@ class SceneGenerator
             data_get($context, 'l0.foreshadowing_contract', []),
             $scene->sequence,
         );
-        $inputHash = hash('sha256', json_encode([
-            'context' => $context,
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'prompt_version' => $promptVersion,
-            'extractor_route' => $context['generation_preferences']['substage_routes']['structure_and_coverage'],
-            'rewrite_route' => $context['generation_preferences']['substage_routes']['length_repair'],
-            'regeneration_batch_id' => $regenerationBatchId,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $inputHash = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::SceneGeneration,
+            $context,
+            upstreamChecksums: array_values(array_filter([$previousArtifact?->checksum, $plan->checksum])),
+            frozen: [
+                'provider' => $settings->provider,
+                'model' => $settings->model,
+                'reasoning_effort' => $settings->reasoningEffort,
+                'extractor_route' => $context['generation_preferences']['substage_routes']['structure_and_coverage'],
+                'rewrite_route' => $context['generation_preferences']['substage_routes']['length_repair'],
+            ],
+            contractVersion: $promptVersion,
+        );
         $baseKey = "scene:{$scene->getKey()}:{$inputHash}:{$promptVersion}:{$settings->model}";
 
         [$run, $reused] = $this->startRun($scene, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate, $regenerationBatchId);
@@ -152,11 +157,20 @@ class SceneGenerator
                 $resumeContext['scene_execution']['resumed_from_substage'] = $checkpoint['substage'];
                 $run->update(['context_snapshot' => $resumeContext]);
             }
-            $beforeRequest = fn (string $substage, string $provider) => $this->assertProviderCallFits(
+            $beforeRequest = function (string $substage, string $provider) use ($run, $jobStartedAt, $singleProviderCall, &$providerCalls): void {
+                $this->assertProviderCallFits($run, $jobStartedAt, $provider, $substage);
+                if ($singleProviderCall && $providerCalls >= 1) {
+                    throw new GenerationStageDeferredException(GenerationStage::SceneGeneration, $substage);
+                }
+                $providerCalls++;
+            };
+            $afterRepairResponse = fn (string $kind, int $attempt, array $repairPayload) => $this->saveCheckpoint(
                 $run,
-                $jobStartedAt,
-                $provider,
-                $substage,
+                'repair_response',
+                $repairPayload,
+                $inputHash,
+                $checkpoint['substage'] ?? null,
+                ['repair_kind' => $kind, 'repair_attempt' => $attempt],
             );
 
             if (! is_array($payload)) {
@@ -187,6 +201,8 @@ class SceneGenerator
                     reasoningEffort: $this->sentReasoningEffort($extractorSettings->provider, $extractorSettings->reasoningEffort),
                     metadata: [...$metadata, 'route_key' => 'structure_and_coverage'],
                     beforeRequest: $beforeRequest,
+                    repairState: $checkpoint ?? [],
+                    afterRepairResponse: $afterRepairResponse,
                 );
                 $this->validatePlanConstraints($payload['content'], $plan->must_not_reveal ?? []);
                 $this->saveCheckpoint($run, 'evidence_validated', $payload, $inputHash, 'prose_generated');
@@ -206,6 +222,19 @@ class SceneGenerator
                     extractorProvider: $extractorSettings->provider,
                     extractorModel: $extractorSettings->model,
                     extractorReasoningEffort: $this->sentReasoningEffort($extractorSettings->provider, $extractorSettings->reasoningEffort),
+                    startingAttempt: ($checkpoint['repair_kind'] ?? null) === 'length'
+                        ? ((int) ($checkpoint['repair_attempt'] ?? 0)) + 1
+                        : 1,
+                    afterResponse: fn (int $attempt, array $repairPayload) => $this->saveCheckpoint(
+                        $run,
+                        'length_repair_response',
+                        $repairPayload,
+                        $inputHash,
+                        $checkpoint['substage'] ?? 'evidence_validated',
+                        ['repair_kind' => 'length', 'repair_attempt' => $attempt],
+                    ),
+                    repairState: $checkpoint ?? [],
+                    afterRepairResponse: $afterRepairResponse,
                 );
                 $this->saveCheckpoint($run, 'length_validated', $payload, $inputHash, 'evidence_validated');
             }
@@ -287,31 +316,14 @@ class SceneGenerator
     /** @return array{0: GenerationRun, 1: bool} */
     private function startRun(Scene $scene, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate, ?string $regenerationBatchId): array
     {
-        return DB::transaction(function () use ($scene, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate, $regenerationBatchId): array {
+        return DB::transaction(function () use ($scene, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerationBatchId): array {
             $scene = Scene::query()->lockForUpdate()->findOrFail($scene->getKey());
             $runs = $scene->generationRuns()->where('stage', GenerationStage::SceneGeneration);
-            $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
-
-            if ($this->runLease->isFresh($active)) {
-                return [$active, true];
+            $resolution = $this->runCoordinator->resolve($runs->getQuery(), $inputHash, 'Scene Run 超时未完成，已由后续投递恢复。');
+            if ($resolution['reused']) {
+                return [$resolution['run'], true];
             }
-
-            if ($active !== null) {
-                $active->update([
-                    'status' => RunStatus::Failed,
-                    'error_code' => 'worker_interrupted',
-                    'error_message' => 'Scene Run 超时未完成，已由后续投递恢复。',
-                    'error_retryable' => false,
-                    'error_metadata' => ['category' => 'worker_lost'],
-                    'finished_at' => now(),
-                ]);
-            }
-
-            if (! $regenerate && ($succeeded = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
-                return [$succeeded, true];
-            }
-
-            $attempt = ((int) $runs->clone()->max('attempt')) + 1;
+            $attempt = $resolution['attempt'];
             $key = $attempt === 1 ? $baseKey : $baseKey.':attempt:'.$attempt;
             $run = GenerationRun::query()->create([
                 'novel_id' => $scene->chapter->novel_id,
@@ -450,12 +462,16 @@ class SceneGenerator
         ?string $extractorProvider = null,
         ?string $extractorModel = null,
         ?string $extractorReasoningEffort = null,
+        int $startingAttempt = 1,
+        ?callable $afterResponse = null,
+        array $repairState = [],
+        ?callable $afterRepairResponse = null,
     ): array {
         $constraints = $context['writing_constraints'];
         $required = (int) $constraints['required_scene_words'];
         $maximum = (int) $constraints['maximum_scene_words'];
 
-        for ($attempt = 1; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
+        for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_length_repair_attempts', 1); $attempt++) {
             $actual = $this->lengthPolicy->count($payload['content']);
             $tooShort = $required > 0 && $actual < $required;
             $tooLong = $actual > $maximum;
@@ -498,6 +514,14 @@ class SceneGenerator
                 metadata: [...$metadata, 'stage' => AiStage::Rewrite->value, 'substage' => 'length_repair', 'route_key' => 'length_repair', 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             ));
 
+            $repairedPayload = $response->structuredData;
+            if (is_array($repairedPayload)) {
+                $repairedPayload['foreshadowing_coverage'] = ForeshadowingCoverage::reconcileWithIdentityTemplate(
+                    is_array($repairedPayload['foreshadowing_coverage'] ?? null) ? $repairedPayload['foreshadowing_coverage'] : [],
+                    $foreshadowingCoverageTemplate,
+                );
+            }
+            $afterResponse?->__invoke($attempt, is_array($repairedPayload) ? $repairedPayload : $payload);
             $repairedPayload = StructuredOutput::require($response, 'scene', 'Scene Draft');
             $repairedPayload['foreshadowing_coverage'] = ForeshadowingCoverage::reconcileWithIdentityTemplate(
                 is_array($repairedPayload['foreshadowing_coverage'] ?? null) ? $repairedPayload['foreshadowing_coverage'] : [],
@@ -511,6 +535,8 @@ class SceneGenerator
                 reasoningEffort: $extractorReasoningEffort ?? $reasoningEffort,
                 metadata: [...$metadata, 'route_key' => 'structure_and_coverage'],
                 beforeRequest: $beforeRequest,
+                repairState: $repairState,
+                afterRepairResponse: $afterRepairResponse,
             );
         }
 
@@ -525,7 +551,7 @@ class SceneGenerator
      * @param  array<string, mixed>  $metadata
      * @return array<string, mixed>
      */
-    private function validatePayloadWithCoverageRepair(array $payload, array $context, string $provider, string $model, ?string $reasoningEffort, array $metadata, ?callable $beforeRequest = null): array
+    private function validatePayloadWithCoverageRepair(array $payload, array $context, string $provider, string $model, ?string $reasoningEffort, array $metadata, ?callable $beforeRequest = null, array $repairState = [], ?callable $afterRepairResponse = null): array
     {
         $structureRepaired = false;
         $coverageRepaired = false;
@@ -534,6 +560,9 @@ class SceneGenerator
             data_get($context, 'l0.foreshadowing_contract', []),
             (int) data_get($context, 'scene_task.sequence'),
         );
+        $startingAttempt = static fn (string $kind): int => ($repairState['repair_kind'] ?? null) === $kind
+            ? ((int) ($repairState['repair_attempt'] ?? 0)) + 1
+            : 1;
 
         while (true) {
             try {
@@ -550,6 +579,10 @@ class SceneGenerator
                             sceneTask: $context['scene_task'] ?? null,
                             reasoningEffort: $reasoningEffort,
                             beforeRequest: $beforeRequest,
+                            startingAttempt: $startingAttempt('structure'),
+                            afterResponse: function (?array $response, int $attempt) use (&$payload, $afterRepairResponse): void {
+                                $afterRepairResponse?->__invoke('structure', $attempt, is_array($response) ? [...$payload, ...$response] : $payload);
+                            },
                         ),
                     ];
                     $structureRepaired = true;
@@ -568,6 +601,13 @@ class SceneGenerator
                         path: 'self_check',
                         reasoningEffort: $reasoningEffort,
                         beforeRequest: $beforeRequest,
+                        startingAttempt: $startingAttempt('coverage'),
+                        afterResponse: function (?array $response, int $attempt) use (&$payload, $afterRepairResponse): void {
+                            $afterRepairResponse?->__invoke('coverage', $attempt, [
+                                ...$payload,
+                                'self_check' => is_array($response) ? $response : ($payload['self_check'] ?? null),
+                            ]);
+                        },
                     );
                     $coverageRepaired = true;
 
@@ -585,6 +625,15 @@ class SceneGenerator
                         path: 'foreshadowing_coverage',
                         reasoningEffort: $reasoningEffort,
                         beforeRequest: $beforeRequest,
+                        startingAttempt: $startingAttempt('foreshadowing_coverage'),
+                        afterResponse: function (?array $response, int $attempt) use (&$payload, $afterRepairResponse): void {
+                            $afterRepairResponse?->__invoke('foreshadowing_coverage', $attempt, [
+                                ...$payload,
+                                'foreshadowing_coverage' => is_array(data_get($response, 'coverage'))
+                                    ? data_get($response, 'coverage')
+                                    : ($payload['foreshadowing_coverage'] ?? []),
+                            ]);
+                        },
                     );
                     $foreshadowingCoverageRepaired = true;
 
@@ -647,7 +696,7 @@ class SceneGenerator
         );
     }
 
-    /** @return array{substage: string, payload: array<string, mixed>, artifact_id: int, generation_run_id: int}|null */
+    /** @return array{substage: string, payload: array<string, mixed>, artifact_id: int, generation_run_id: int, repair_kind?: string, repair_attempt?: int}|null */
     private function latestCheckpoint(Scene $scene, string $inputHash): ?array
     {
         $artifacts = GenerationArtifact::query()
@@ -659,27 +708,30 @@ class SceneGenerator
             ->latest('id')
             ->get();
 
-        foreach (['length_validated', 'evidence_validated', 'prose_generated'] as $substage) {
-            $artifact = $artifacts->first(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'checkpoint') === $substage
-                && is_array(data_get($artifact->data, 'payload')));
+        $artifact = $artifacts->first(fn (GenerationArtifact $candidate): bool => in_array(
+            data_get($candidate->data, 'checkpoint'),
+            ['length_validated', 'evidence_validated', 'repair_response', 'length_repair_response', 'prose_generated'],
+            true,
+        ) && is_array(data_get($candidate->data, 'payload')));
 
-            if ($artifact !== null) {
-                return [
-                    'substage' => $substage,
-                    'payload' => data_get($artifact->data, 'payload'),
-                    'artifact_id' => $artifact->getKey(),
-                    'generation_run_id' => $artifact->generation_run_id,
-                ];
-            }
+        if ($artifact !== null) {
+            return array_filter([
+                'substage' => data_get($artifact->data, 'checkpoint'),
+                'payload' => data_get($artifact->data, 'payload'),
+                'artifact_id' => $artifact->getKey(),
+                'generation_run_id' => $artifact->generation_run_id,
+                'repair_kind' => data_get($artifact->data, 'repair_kind'),
+                'repair_attempt' => data_get($artifact->data, 'repair_attempt'),
+            ], static fn (mixed $value): bool => $value !== null);
         }
 
         return null;
     }
 
-    /** @param array<string, mixed> $payload */
-    private function saveCheckpoint(GenerationRun $run, string $substage, array $payload, string $inputHash, ?string $sourceCheckpoint): GenerationArtifact
+    /** @param array<string, mixed> $payload @param array<string, mixed> $checkpointMetadata */
+    private function saveCheckpoint(GenerationRun $run, string $substage, array $payload, string $inputHash, ?string $sourceCheckpoint, array $checkpointMetadata = []): GenerationArtifact
     {
-        return DB::transaction(function () use ($run, $substage, $payload, $inputHash, $sourceCheckpoint): GenerationArtifact {
+        return DB::transaction(function () use ($run, $substage, $payload, $inputHash, $sourceCheckpoint, $checkpointMetadata): GenerationArtifact {
             $lockedRun = GenerationRun::query()->lockForUpdate()->findOrFail($run->getKey());
             $existing = $lockedRun->artifacts()
                 ->where('type', ArtifactType::Context)
@@ -690,12 +742,22 @@ class SceneGenerator
                 return $existing;
             }
 
+            $substageFingerprint = app(GenerationStageFingerprint::class)->make(
+                GenerationStage::SceneGeneration,
+                ['checkpoint' => $substage, 'payload' => $payload, 'metadata' => $checkpointMetadata],
+                upstreamChecksums: array_values(array_filter([$inputHash, $sourceCheckpoint])),
+                frozen: ['state_version' => $lockedRun->state_version, 'prompt_version' => $lockedRun->prompt_version],
+                contractVersion: 'scene-substage-checkpoint-v1',
+            );
+
             $data = array_filter([
                 'checkpoint' => $substage,
                 'source_checkpoint' => $sourceCheckpoint,
                 'input_hash' => $inputHash,
+                'substage_fingerprint' => $substageFingerprint,
                 'state_version' => $lockedRun->state_version,
                 'prompt_version' => $lockedRun->prompt_version,
+                ...$checkpointMetadata,
                 'payload' => $payload,
             ], static fn (mixed $value): bool => $value !== null);
 
@@ -704,7 +766,7 @@ class SceneGenerator
                 'version' => ((int) $lockedRun->artifacts()->where('type', ArtifactType::Context)->max('version')) + 1,
                 'content' => is_string($payload['content'] ?? null) ? $payload['content'] : null,
                 'data' => $data,
-                'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+                'checksum' => $substageFingerprint,
             ]);
         });
     }
@@ -712,7 +774,7 @@ class SceneGenerator
     private function checkpointRank(?string $substage): int
     {
         return match ($substage) {
-            'prose_generated' => 1,
+            'prose_generated', 'repair_response', 'length_repair_response' => 1,
             'evidence_validated' => 2,
             'length_validated' => 3,
             default => 0,

@@ -4,7 +4,6 @@ namespace App\Actions\Generation;
 
 use App\AI\BudgetService;
 use App\Enums\ChapterStatus;
-use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
 use App\Exceptions\GenerationPreflightException;
@@ -12,17 +11,16 @@ use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\Volume;
 use App\Services\GenerationRunLease;
-use App\Services\NarrativeStyleProfile;
+use App\Services\NovelGenerationReadiness;
 use App\Services\StalledRunRecoveryService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 
 class GenerateNextChapterAction
 {
     public function __construct(
         private readonly BudgetService $budgetService,
-        private readonly NarrativeStyleProfile $narrativeStyleProfile,
         private readonly GenerationRunLease $runLease,
+        private readonly NovelGenerationReadiness $readiness,
     ) {}
 
     public function handle(Novel $novel): Chapter
@@ -34,8 +32,11 @@ class GenerateNextChapterAction
         return DB::transaction(function () use ($novel): Chapter {
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
 
-            $this->validateNovel($lockedNovel);
-            $this->validateLatestCanonicalSummary($lockedNovel);
+            $result = $this->readiness->nextChapter($lockedNovel);
+            if (! $result->isReady()) {
+                $blocker = $result->blockers[0];
+                throw GenerationPreflightException::fromReadiness($blocker['code'], $blocker['message']);
+            }
 
             $volume = $this->currentVolume($lockedNovel);
             $nextSequence = ($lockedNovel->current_chapter_sequence ?? 0) + 1;
@@ -85,29 +86,6 @@ class GenerateNextChapterAction
             ]);
     }
 
-    private function validateNovel(Novel $novel): void
-    {
-        if ($novel->status === NovelStatus::Paused) {
-            throw GenerationPreflightException::paused();
-        }
-
-        if (! in_array($novel->status, [NovelStatus::Generating, NovelStatus::Completing], true)) {
-            throw GenerationPreflightException::unavailableStatus();
-        }
-
-        try {
-            $this->narrativeStyleProfile->forNovel($novel);
-        } catch (ValidationException $exception) {
-            $detail = (string) collect($exception->errors())->flatten()->first();
-
-            throw GenerationPreflightException::bibleIncomplete($detail);
-        }
-
-        if ($novel->canonical_state_version_id === null) {
-            throw GenerationPreflightException::stateUninitialized();
-        }
-    }
-
     private function currentVolume(Novel $novel): Volume
     {
         $volume = $novel->volumes()
@@ -120,23 +98,6 @@ class GenerateNextChapterAction
         }
 
         return $volume;
-    }
-
-    private function validateLatestCanonicalSummary(Novel $novel): void
-    {
-        $sequence = $novel->current_chapter_sequence;
-        if ($sequence === null) {
-            return;
-        }
-
-        $chapter = $novel->chapters()
-            ->where('sequence', $sequence)
-            ->where('status', ChapterStatus::Canonical)
-            ->first();
-
-        if ($chapter !== null && blank($chapter->summary)) {
-            throw GenerationPreflightException::previousChapterSummaryMissing($chapter->sequence);
-        }
     }
 
     private function validateWorkflow(Novel $novel, ?Chapter $targetChapter): void

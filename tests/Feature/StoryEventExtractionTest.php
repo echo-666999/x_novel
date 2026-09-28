@@ -778,6 +778,47 @@ test('extractor repairs invalid event quotes without changing the event', functi
         ->and(data_get($fake->requests()[2]->metadata, 'event_index'))->toBe(0);
 });
 
+test('event extraction job resumes evidence repair from a paid response checkpoint', function () {
+    Queue::fake();
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(eventExtractionResponse($fixture, [
+            'evidence' => [[
+                'artifact_id' => $fixture['draft']->getKey(),
+                'scene_id' => null,
+                'quote' => '林舟抵达洛阳城下。',
+                'start_offset' => null,
+                'end_offset' => null,
+            ]],
+        ]))
+        ->enqueue(truncatedEventEvidenceResponse())
+        ->enqueue(eventEvidenceRepairResponse(['林舟终于抵达洛阳城下。']));
+    app()->instance(AiProvider::class, $fake);
+
+    (new ExtractStoryEventsJob($fixture['chapter']->getKey()))->handle(app(StoryEventExtractor::class));
+
+    $firstRun = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole();
+    expect($fake->requests())->toHaveCount(1)
+        ->and($firstRun->status)->toBe(RunStatus::Failed)
+        ->and($firstRun->error_code)->toBe('generation_stage_deferred')
+        ->and($firstRun->artifacts()->where('type', ArtifactType::Context)->count())->toBe(1);
+    Queue::assertPushed(ExtractStoryEventsJob::class, 1);
+
+    (new ExtractStoryEventsJob($fixture['chapter']->getKey()))->handle(app(StoryEventExtractor::class));
+
+    expect($fake->requests())->toHaveCount(2)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->error_code)->toBe('generation_stage_deferred');
+
+    (new ExtractStoryEventsJob($fixture['chapter']->getKey()))->handle(app(StoryEventExtractor::class));
+
+    expect($fake->requests())->toHaveCount(3)
+        ->and(data_get($fake->requests()[1]->metadata, 'event_evidence_repair_attempt'))->toBe(1)
+        ->and(data_get($fake->requests()[2]->metadata, 'event_evidence_repair_attempt'))->toBe(2)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->count())->toBe(3)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->status)->toBe(RunStatus::Succeeded);
+    Queue::assertPushed(ReviewChapterJob::class, 1);
+});
+
 test('extractor keeps only repaired evidence with a high confidence exact overlap', function () {
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)

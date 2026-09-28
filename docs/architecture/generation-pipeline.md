@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：关系化 Outline、分阶段 Outline、关系化 Chapter Planning、Plan Admission、完成语义、确定性 Assembly、Compact Review 与 Paragraph/Scene Rewrite 已由 NGC-002A～NGC-006B 实现。Assembly 当前按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；自动 Whole Chapter Rewrite 兼容路径已删除。
+> 实施状态：关系化 Outline、分阶段 Outline、关系化 Chapter Planning、Plan Admission、完成语义、确定性 Assembly、Compact Review、Paragraph/Scene Rewrite、统一阶段指纹/失败策略与下一章门禁已由 NGC-002A～NGC-006C 实现。Assembly 当前按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；自动 Whole Chapter Rewrite 兼容路径已删除。
 
 ## 1. 目标
 
@@ -113,6 +113,8 @@ default:
 
 Filament、Artisan、Scheduler 共用统一入口。
 
+`NovelGenerationReadiness::nextChapter()` 生成只读的 `NextChapterReadinessResult`；`GenerateNextChapterAction` 在锁定 Novel 后消费同一结果。展示层和执行层因此共享阻断码、关联记录与建议动作，失败检查不会预留 Chapter、创建 Run 或调用 Provider。
+
 Preflight：
 
 ```text
@@ -184,7 +186,7 @@ summary
 context
 ```
 
-`input_hash` 只包含真正影响输出的 Prompt、Model、State、Plan、Context、Source Artifact checksum。
+`GenerationStageFingerprint` 负责所有章节 Stage 的 `input_hash`：只包含真正影响输出的业务输入、冻结 Prompt/Model/Route/State/Plan、上游 Artifact checksum 和算法版本；递归排序 Map 键、保留 List 顺序，并排除时间戳、Attempt、Queue/Job ID 和操作元数据。
 
 通用幂等：
 
@@ -196,6 +198,10 @@ context
 ```
 
 技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 且没有可解析结构化结果时，必须记录为对应阶段的 `*_output_truncated` 技术故障，不能把它误记为普通 Schema 内容错误。使用固定预算的全书大纲请求遇到截断时终止当前 Job，避免相同参数自动重试并重复计费；其他阶段只有在提高后续请求预算时才允许重试。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
+
+`GenerationRunCoordinator` 在行锁事务内统一处理有效 Lease、过期 Worker、同指纹成功 Run 和新 Attempt。Scene、Event Extraction、Rewrite 若在一次付费响应后仍需 Evidence/Length Repair，会先保存不可变 `context` Checkpoint；Checkpoint 带独立 `substage_fingerprint`，当前 Run 以 `generation_stage_deferred` 结束，再由 `AdvanceChapterPipelineAction` 派发新 Job 从 Checkpoint 继续。每个 Queue Job attempt 因此最多产生一次 Provider 请求。
+
+`GenerationFailurePolicy` 按 Stage 统一读取最大尝试次数、backoff、允许修复范围和非终态错误码，并负责错误分类、Queue Retry 与终态判断。失败 Run 的 metadata 固定包含 Stage、Input Hash、来源 Artifact 和下一动作，章节 Job 不再维护自己的终止错误数组。
 
 Queue Job 必须区分可重试的外部或数据库故障与不可重试的应用代码异常。`QueryException` 等临时基础设施错误可由 Queue 退避重试；`ErrorException`、`TypeError`、未定义数组键等本地代码故障必须立即终止当前 Job，进入失败与阻断流程，不得再次调用 AI Provider。
 
@@ -636,7 +642,7 @@ UpdateMemoryJob
 
 Memory、摘要或 Projection 失败不回滚正文，但阻止本次自动续写并在 Generation 恢复中心留下恢复点。Embedding 独立重试，不阻塞下一章。Summary Job 必须核对任务携带的 Canonical Artifact ID；来源已经变化时安全结束，不覆盖新摘要。
 
-下一章准备度和 Filament 展示必须调用同一规则来源：重新解析 Current Main Beat、最早未完成 Milestone、Handoff、上一 Canonical Summary、State Version、暂停/停止条件和 Post-Commit 派生状态。UI 显示 Ready 不能替代执行时的领域门禁。
+下一章准备度和 Filament 展示调用同一个 `NovelGenerationReadiness::nextChapter()`：重新解析 Current Main Beat、最早未完成 Milestone、Handoff、上一 Canonical Artifact/Summary、State Version、暂停/停止条件和 Post-Commit 派生状态。`GenerateNextChapterAction` 在 Novel 行锁内再次消费该结果；Summary 缺失会阻断，Memory/Embedding 缺失或失败不会阻断。
 
 若 Current Beat 尚未满足退出条件，下一章继续选择该 Beat 最早未完成 Milestone；若 Beat Completion 已提交，则下一章选择 Handoff 指向 Beat 的 Entry Milestone，并读取上一章结尾、Handoff Carried States/Open Threads 和新的 Canonical State。首版一章只能有一个 Main Primary Beat：前一 Beat 最后一章可建立 Next Trigger，但下一 Beat 的正式 Milestone Progress 从下一章开始。
 

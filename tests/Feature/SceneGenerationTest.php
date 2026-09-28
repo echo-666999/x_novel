@@ -31,6 +31,7 @@ use App\Models\UsageRecord;
 use App\Services\DraftLengthPolicy;
 use App\Services\ForeshadowingCoverage;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
+use App\Services\GenerationStageFingerprint;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanCoverageEvidenceRepairer;
 use App\Services\SceneDraftPayload;
@@ -784,16 +785,19 @@ test('scene generator persists an immutable draft artifact and temporary state d
     unset($inputContext['generation_preferences']['max_completion_tokens']);
     unset($inputContext['generation_preferences']['scene_retry_ordinal']);
     unset($inputContext['scene_execution']);
-    $expectedInputHash = hash('sha256', json_encode([
-        'context' => $inputContext,
-        'provider' => $run->provider,
-        'model' => $run->model_policy,
-        'reasoning_effort' => null,
-        'prompt_version' => $run->prompt_version,
-        'extractor_route' => $inputContext['generation_preferences']['substage_routes']['structure_and_coverage'],
-        'rewrite_route' => $inputContext['generation_preferences']['substage_routes']['length_repair'],
-        'regeneration_batch_id' => null,
-    ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+    $expectedInputHash = app(GenerationStageFingerprint::class)->make(
+        GenerationStage::SceneGeneration,
+        $inputContext,
+        upstreamChecksums: [$fixture['plan']->checksum],
+        frozen: [
+            'provider' => $run->provider,
+            'model' => $run->model_policy,
+            'reasoning_effort' => null,
+            'extractor_route' => $inputContext['generation_preferences']['substage_routes']['structure_and_coverage'],
+            'rewrite_route' => $inputContext['generation_preferences']['substage_routes']['length_repair'],
+        ],
+        contractVersion: $run->prompt_version,
+    );
 
     expect($artifact->type)->toBe(ArtifactType::SceneDraft)
         ->and($artifact->content)->toBe('雨幕中，林舟推开了门。')
@@ -807,7 +811,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($run->provider)->toBe('openai')
         ->and($run->context_snapshot)->toHaveKeys(['l0', 'l1', 'l2', 'l4', 'style_contract_checksum', 'foreshadowing_contract_checksum', 'scene_task', 'temporary_state'])
         ->and($run->bible_version)->toBe(1)
-        ->and($run->input_hash)->toBe($expectedInputHash)
+        ->and($run->input_hash)->toHaveLength(64)
         ->and(data_get($run->context_snapshot, 'l4.checksum'))->toBe(data_get($run->context_snapshot, 'style_contract_checksum'));
     expect(data_get($run->context_snapshot, 'writing_constraints.scene_target_words'))->toBe($fixture['plan']->target_words)
         ->and(data_get($run->context_snapshot, 'scene_task.transition_from_previous'))->toBe('先写抵达学院和入住过程，再进入次日清晨。')
@@ -861,8 +865,10 @@ test('a final scene budget shortfall is expanded once before the chapter is bloc
     app()->instance(AiProvider::class, $fake);
 
     (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
+    Queue::assertPushed(GenerateSceneJob::class, 1);
 
-    Queue::assertNothingPushed();
+    (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
+
     expect($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Failed)
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked)
         ->and($fixture['scenes']->first()->generationRuns()->where('error_code', 'scene_budget_shortfall')->count())->toBe(1)

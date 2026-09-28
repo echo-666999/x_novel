@@ -59,6 +59,11 @@ class GenerationPreflightException extends RuntimeException
         );
     }
 
+    public static function fromReadiness(string $reason, string $message): self
+    {
+        return new self($reason, $message);
+    }
+
     /** @param array<int, string> $foreshadowings */
     public static function criticalForeshadowingOverdue(array $foreshadowings): self
     {

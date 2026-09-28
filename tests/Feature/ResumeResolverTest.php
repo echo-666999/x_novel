@@ -26,6 +26,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Models\StoryArc;
 use App\Models\Volume;
 use App\Services\OutlineProgressResolver;
 use App\Services\ResumeResolver;
@@ -234,7 +235,8 @@ function pausedResumeNovel(array $settings = [], ?int $currentSequence = null): 
     ]);
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
-    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
 
     return $novel->refresh();
 }

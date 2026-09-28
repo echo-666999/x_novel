@@ -4,9 +4,12 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
+use App\Exceptions\GenerationStageDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterRewriter;
+use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,11 +22,18 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 330;
 
-    public array $backoff = [10, 30];
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::Rewrite);
+    }
+
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::Rewrite);
+    }
 
     public function __construct(public readonly int $chapterId, public readonly ?int $sceneId = null)
     {
@@ -40,7 +50,7 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {
-            $artifact = $rewriter->rewrite($this->chapterId, $this->sceneId);
+            $artifact = $rewriter->rewrite($this->chapterId, $this->sceneId, singleProviderCall: true);
             if ($artifact === null) {
                 $this->releaseGenerationDispatch();
 
@@ -48,17 +58,23 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
             }
             $advance->handle($this->chapterId);
             $this->releaseGenerationDispatch();
-        } catch (AiProviderException $exception) {
-            if (! $exception->retryable) {
-                if (! in_array($exception->errorCode, ['novel_paused', 'rewrite_exhausted'], true)) {
-                    $rewriter->markTerminalFailure($this->chapterId);
-                }
-                $this->releaseGenerationDispatch();
-                $this->fail($exception);
+        } catch (GenerationStageDeferredException) {
+            $this->releaseGenerationDispatch();
+            $advance->handle($this->chapterId);
 
-                return;
+            return;
+        } catch (AiProviderException $exception) {
+            $policy = app(GenerationFailurePolicy::class);
+            if ($policy->shouldQueueRetry($exception, GenerationStage::Rewrite)) {
+                throw $exception;
             }
-            throw $exception;
+            if ($policy->shouldMarkTerminal(GenerationStage::Rewrite, $exception)) {
+                $rewriter->markTerminalFailure($this->chapterId);
+            }
+            $this->releaseGenerationDispatch();
+            $this->fail($exception);
+
+            return;
         } catch (Throwable $exception) {
             $this->handleUnexpectedGenerationFailure($exception);
         }
@@ -67,10 +83,9 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
     public function failed(?Throwable $exception): void
     {
         $this->releaseGenerationDispatch();
-        app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
-        if ($exception instanceof AiProviderException && in_array($exception->errorCode, ['novel_paused', 'rewrite_exhausted'], true)) {
-            return;
+        if (app(GenerationFailurePolicy::class)->shouldMarkTerminal(GenerationStage::Rewrite, $exception)) {
+            app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
+            app(ChapterRewriter::class)->markTerminalFailure($this->chapterId);
         }
-        app(ChapterRewriter::class)->markTerminalFailure($this->chapterId);
     }
 }

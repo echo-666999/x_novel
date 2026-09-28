@@ -3,16 +3,21 @@
 use App\Actions\Generation\GenerateNextChapterAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\BudgetExceededException;
+use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
+use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Models\Chapter;
+use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryArc;
+use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\Volume;
 use App\Services\StalledRunRecoveryService;
@@ -29,7 +34,34 @@ function generationReadyNovel(array $attributes = []): Novel
 
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
-    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    $novel->refresh();
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => StoryArcStatus::Active]);
+
+    if (($sequence = (int) ($novel->current_chapter_sequence ?? 0)) > 0) {
+        $chapter = Chapter::factory()->for($novel)->create([
+            'volume_id' => $volume->getKey(),
+            'sequence' => $sequence,
+            'status' => ChapterStatus::Canonical,
+            'summary' => "第 {$sequence} 章摘要",
+        ]);
+        $run = GenerationRun::factory()->for($novel)->create([
+            'chapter_id' => $chapter->getKey(),
+            'scope_type' => 'chapter',
+            'scope_id' => $chapter->getKey(),
+            'stage' => GenerationStage::Commit,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterDraft]);
+        $chapter->update(['canonical_artifact_id' => $artifact->getKey()]);
+        $current = $novel->canonicalStateVersion;
+        $state = StoryStateVersion::factory()->for($novel)->create([
+            'chapter_id' => $chapter->getKey(),
+            'version' => ((int) $current->version) + 1,
+            'state' => $current->state,
+        ]);
+        $novel->update(['canonical_state_version_id' => $state->getKey()]);
+    }
 
     return $novel->refresh();
 }
@@ -134,16 +166,11 @@ test('preflight rejects a blocked review', function () {
     ]);
 
     app(GenerateNextChapterAction::class)->handle($novel);
-})->throws(GenerationPreflightException::class, '存在被审校阻塞的章节');
+})->throws(GenerationPreflightException::class, '存在被审校或生成错误阻塞的章节');
 
 test('preflight requires the latest canonical chapter summary', function () {
     $novel = generationReadyNovel(['current_chapter_sequence' => 4]);
-    Chapter::factory()->for($novel)->create([
-        'volume_id' => $novel->volumes()->firstOrFail()->getKey(),
-        'sequence' => 4,
-        'status' => ChapterStatus::Canonical,
-        'summary' => null,
-    ]);
+    $novel->chapters()->where('sequence', 4)->update(['summary' => null]);
 
     try {
         app(GenerateNextChapterAction::class)->handle($novel);

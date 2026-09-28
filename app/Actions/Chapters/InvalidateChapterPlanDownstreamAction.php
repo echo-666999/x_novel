@@ -2,8 +2,7 @@
 
 namespace App\Actions\Chapters;
 
-use App\Enums\ChapterStatus;
-use App\Enums\SceneStatus;
+use App\Enums\GenerationStage;
 use App\Models\Chapter;
 
 /**
@@ -11,19 +10,10 @@ use App\Models\Chapter;
  */
 class InvalidateChapterPlanDownstreamAction
 {
+    public function __construct(private readonly InvalidateChapterStageDownstreamAction $invalidation) {}
+
     public function execute(Chapter $chapter): void
     {
-        if ($chapter->status === ChapterStatus::Canonical) {
-            return;
-        }
-
-        $chapter->scenes()->update([
-            'status' => SceneStatus::Planned->value,
-            'current_artifact_id' => null,
-        ]);
-        $chapter->update([
-            'status' => ChapterStatus::Generating,
-            'canonical_artifact_id' => null,
-        ]);
+        $this->invalidation->execute($chapter, GenerationStage::ChapterPlanning);
     }
 }

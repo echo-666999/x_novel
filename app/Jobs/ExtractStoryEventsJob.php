@@ -4,8 +4,11 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
+use App\Exceptions\GenerationStageDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
+use App\Services\GenerationFailurePolicy;
 use App\Services\StoryEventExtractor;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -20,12 +23,18 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 330;
 
-    /** @var array<int> */
-    public array $backoff = [10, 30];
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::EventExtraction);
+    }
+
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::EventExtraction);
+    }
 
     public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false, public readonly bool $continueRewrite = false)
     {
@@ -42,25 +51,31 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {
-            $artifact = $extractor->extract($this->chapterId, $this->regenerate);
+            $artifact = $extractor->extract($this->chapterId, $this->regenerate, singleProviderCall: true);
             if ($artifact !== null) {
                 $advance->handle($this->chapterId);
             }
 
             $this->releaseGenerationDispatch();
+        } catch (GenerationStageDeferredException) {
+            $this->releaseGenerationDispatch();
+            $advance->handle($this->chapterId);
+
+            return;
         } catch (AiProviderException $exception) {
-            if (! $exception->retryable) {
-                if ($exception->errorCode !== 'novel_paused') {
-                    $extractor->markTerminalFailure($this->chapterId);
-                }
-
-                $this->releaseGenerationDispatch();
-                $this->fail($exception);
-
-                return;
+            $policy = app(GenerationFailurePolicy::class);
+            if ($policy->shouldQueueRetry($exception, GenerationStage::EventExtraction)) {
+                throw $exception;
             }
 
-            throw $exception;
+            if ($policy->shouldMarkTerminal(GenerationStage::EventExtraction, $exception)) {
+                $extractor->markTerminalFailure($this->chapterId);
+            }
+
+            $this->releaseGenerationDispatch();
+            $this->fail($exception);
+
+            return;
         } catch (ValidationException $exception) {
             $extractor->markTerminalFailure($this->chapterId);
             $this->releaseGenerationDispatch();
@@ -76,6 +91,8 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
     {
         $this->releaseGenerationDispatch();
         app(AutoStopService::class)->stopForFailure($this->chapterId, $exception);
-        app(StoryEventExtractor::class)->markTerminalFailure($this->chapterId);
+        if (app(GenerationFailurePolicy::class)->shouldMarkTerminal(GenerationStage::EventExtraction, $exception)) {
+            app(StoryEventExtractor::class)->markTerminalFailure($this->chapterId);
+        }
     }
 }

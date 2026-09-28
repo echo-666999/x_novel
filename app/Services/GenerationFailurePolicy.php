@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Data\GenerationFailure;
+use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Models\GenerationRun;
 use Illuminate\Database\QueryException;
@@ -17,6 +18,7 @@ final class GenerationFailurePolicy
         'provider_connection_failed',
         'provider_rate_limited',
         'scene_stage_deferred',
+        'generation_stage_deferred',
     ];
 
     public function fromException(Throwable $exception, string $fallbackCode): GenerationFailure
@@ -41,6 +43,53 @@ final class GenerationFailurePolicy
         );
     }
 
+    /** @return array{max_attempts: int, backoff: array<int, int>, repairs: array<int, string>, non_terminal_codes: array<int, string>} */
+    public function stagePolicy(GenerationStage $stage): array
+    {
+        $policy = (array) config("generation.stage_policies.{$stage->value}", []);
+
+        return [
+            'max_attempts' => max(1, (int) ($policy['max_attempts'] ?? 1)),
+            'backoff' => array_values(array_map('intval', (array) ($policy['backoff'] ?? []))),
+            'repairs' => array_values(array_filter((array) ($policy['repairs'] ?? []), 'is_string')),
+            'non_terminal_codes' => array_values(array_filter((array) ($policy['non_terminal_codes'] ?? []), 'is_string')),
+        ];
+    }
+
+    public function maxAttempts(GenerationStage $stage): int
+    {
+        return $this->stagePolicy($stage)['max_attempts'];
+    }
+
+    /** @return array<int, int> */
+    public function backoff(GenerationStage $stage): array
+    {
+        return $this->stagePolicy($stage)['backoff'];
+    }
+
+    public function allowsRepair(GenerationStage $stage, string $repair): bool
+    {
+        return in_array($repair, $this->stagePolicy($stage)['repairs'], true);
+    }
+
+    /** Queue retries only temporary infrastructure/provider faults for the same stage. */
+    public function shouldQueueRetry(Throwable $exception, GenerationStage $stage): bool
+    {
+        $failure = $this->fromException($exception, "{$stage->value}_failed");
+
+        return $failure->retryable
+            && in_array($failure->metadata['category'] ?? null, ['external_temporary', 'infrastructure_temporary'], true);
+    }
+
+    public function shouldMarkTerminal(GenerationStage $stage, ?Throwable $exception): bool
+    {
+        if (! $exception instanceof AiProviderException) {
+            return true;
+        }
+
+        return ! in_array($exception->errorCode, $this->stagePolicy($stage)['non_terminal_codes'], true);
+    }
+
     public function forRun(GenerationRun $run): GenerationFailure
     {
         $code = (string) ($run->error_code ?: 'generation_failed');
@@ -60,16 +109,32 @@ final class GenerationFailurePolicy
     public function record(GenerationRun $run, Throwable $exception, string $fallbackCode): GenerationFailure
     {
         $failure = $this->fromException($exception, $fallbackCode);
+        $sourceArtifactId = data_get($run->context_snapshot, 'source_artifact_id')
+            ?? data_get($run->context_snapshot, 'draft.artifact_id')
+            ?? data_get($run->context_snapshot, 'chapter_draft.artifact_id');
+        $metadata = $failure->metadata + array_filter([
+            'stage' => $run->stage->value,
+            'input_hash' => $run->input_hash,
+            'source_artifact_id' => is_numeric($sourceArtifactId) ? (int) $sourceArtifactId : null,
+            'next_action' => $failure->recommendedAction,
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
+
         $run->update([
             'status' => RunStatus::Failed,
             'error_code' => $failure->code,
             'error_message' => $failure->message,
             'error_retryable' => $failure->retryable,
-            'error_metadata' => $failure->metadata,
+            'error_metadata' => $metadata,
             'finished_at' => now(),
         ]);
 
-        return $failure;
+        return new GenerationFailure(
+            code: $failure->code,
+            message: $failure->message,
+            retryable: $failure->retryable,
+            metadata: $metadata,
+            recommendedAction: $failure->recommendedAction,
+        );
     }
 
     public function legacyRetryable(string $code, ?int $status = null): bool
@@ -87,8 +152,13 @@ final class GenerationFailurePolicy
         if ($code === StalledRunRecoveryService::ERROR_CODE || $code === 'worker_interrupted') {
             return 'worker_lost';
         }
-        if ($code === 'scene_stage_deferred') {
+        if (in_array($code, ['scene_stage_deferred', 'generation_stage_deferred'], true)) {
             return 'workflow_deferred';
+        }
+        if ($exception instanceof AiProviderException
+            && $exception->retryable
+            && str_contains($code, 'truncated')) {
+            return 'external_temporary';
         }
         if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
             return 'provider_configuration';
@@ -96,13 +166,13 @@ final class GenerationFailurePolicy
         if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException) {
             return $exception instanceof QueryException ? 'infrastructure_temporary' : 'external_temporary';
         }
-        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json') || str_contains($code, 'output_budget_exhausted')) {
+        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json') || str_contains($code, 'output_budget_exhausted') || str_contains($code, 'evidence')) {
             return 'structured_output';
         }
         if (str_contains($code, 'state_version') || str_starts_with($code, 'stale_') || str_contains($code, 'artifact_conflict')) {
             return 'state_conflict';
         }
-        if ($exception instanceof ValidationException || str_contains($code, 'validation') || str_contains($code, 'plan_violation')) {
+        if ($exception instanceof ValidationException || str_contains($code, 'validation') || str_contains($code, 'plan_violation') || str_contains($code, 'planning')) {
             return 'domain_validation';
         }
 
@@ -114,7 +184,7 @@ final class GenerationFailurePolicy
         if ($code === StalledRunRecoveryService::ERROR_CODE) {
             return '恢复';
         }
-        if ($code === 'worker_interrupted' || $code === 'scene_stage_deferred') {
+        if ($code === 'worker_interrupted' || in_array($code, ['scene_stage_deferred', 'generation_stage_deferred'], true)) {
             return '继续执行';
         }
         if ($retryable) {

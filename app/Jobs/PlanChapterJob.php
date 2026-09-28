@@ -4,10 +4,12 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
 use App\Exceptions\GenerationPreflightException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterPlanner;
+use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -21,12 +23,18 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 330;
 
-    /** @var array<int> */
-    public array $backoff = [10, 30];
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::ChapterPlanning);
+    }
+
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::ChapterPlanning);
+    }
 
     public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false)
     {
@@ -48,14 +56,14 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
                 $advance->handle($this->chapterId);
             }
         } catch (AiProviderException $exception) {
-            if (! $exception->retryable) {
-                $this->releaseGenerationDispatch();
-                $this->fail($exception);
-
-                return;
+            if (app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::ChapterPlanning)) {
+                throw $exception;
             }
 
-            throw $exception;
+            $this->releaseGenerationDispatch();
+            $this->fail($exception);
+
+            return;
         } catch (GenerationPreflightException|ValidationException $exception) {
             $this->releaseGenerationDispatch();
             $this->fail($exception);

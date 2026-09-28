@@ -151,17 +151,17 @@ test('identical assembly input reuses the same successful run and artifact', fun
         ->and(GenerationArtifact::query()->where('type', ArtifactType::ChapterDraft)->count())->toBe(1);
 });
 
-test('forced regeneration remains byte identical and records a stable assembly hash', function () {
+test('forced regeneration with the same fingerprint reuses the protected assembly result', function () {
     $fixture = deterministicAssemblyFixture();
     $assembler = app(ChapterAssembler::class);
 
     $first = $assembler->assemble($fixture['chapter']->getKey());
     $second = $assembler->assemble($fixture['chapter']->getKey(), true);
 
-    expect($second?->is($first))->toBeFalse()
+    expect($second?->is($first))->toBeTrue()
         ->and($second?->content)->toBe($first?->content)
         ->and($second?->data['assembly_hash'])->toBe($first?->data['assembly_hash'])
-        ->and($second?->version)->toBe(2);
+        ->and($second?->version)->toBe(1);
 });
 
 test('assembly refuses missing and invalid scene inputs without saving a chapter draft', function (Closure $corrupt, string $message) {

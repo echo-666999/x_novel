@@ -41,7 +41,7 @@ class ChapterPlanner
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
         private readonly ContextBuilder $contextBuilder,
         private readonly PreviousChapterEnding $previousChapterEnding,
-        private readonly GenerationRunLease $runLease,
+        private readonly GenerationRunCoordinator $runCoordinator,
         private readonly ForeshadowingPlanningGate $foreshadowingPlanningGate,
         private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
         private readonly StoryArcBeatContract $storyArcBeatContract,
@@ -70,13 +70,12 @@ class ChapterPlanner
             'retry_max_completion_tokens' => (int) config('generation.planner_retry_max_output_tokens', 16_000),
             'final_retry_max_completion_tokens' => (int) config('generation.planner_final_retry_max_output_tokens', 24_000),
         ];
-        $inputHash = hash('sha256', json_encode([
-            'context' => $context,
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'prompt_version' => $promptVersion,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $inputHash = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::ChapterPlanning,
+            $context,
+            frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
+            contractVersion: $promptVersion,
+        );
         $baseKey = "plan:{$chapter->getKey()}:{$context['state_version']}:{$context['bible_version']}:".
             $context['novel_outline_id'].':'.$context['outline_checksum'].":{$promptVersion}:".
             hash('sha256', $settings->provider.'|'.$settings->model.'|'.($settings->reasoningEffort ?? 'default').'|'.$settings->source);
@@ -259,32 +258,15 @@ class ChapterPlanner
     /** @return array{0: GenerationRun, 1: bool} */
     private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate): array {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion): array {
             Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = GenerationRun::query()->where('chapter_id', $chapter->getKey())->where('stage', GenerationStage::ChapterPlanning);
 
-            $activeRun = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
-
-            if ($this->runLease->isFresh($activeRun)) {
-                return [$activeRun, true];
+            $resolution = $this->runCoordinator->resolve($runs, $inputHash, '规划 Run 超时未完成，已由后续投递恢复。');
+            if ($resolution['reused']) {
+                return [$resolution['run'], true];
             }
-
-            if ($activeRun !== null) {
-                $activeRun->update([
-                    'status' => RunStatus::Failed,
-                    'error_code' => 'worker_interrupted',
-                    'error_message' => '规划 Run 超时未完成，已由后续投递恢复。',
-                    'error_retryable' => false,
-                    'error_metadata' => ['category' => 'worker_lost'],
-                    'finished_at' => now(),
-                ]);
-            }
-
-            if (! $regenerate && ($succeeded = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
-                return [$succeeded, true];
-            }
-
-            $attempt = ((int) $runs->clone()->max('attempt')) + 1;
+            $attempt = $resolution['attempt'];
             $key = $attempt === 1 ? $baseKey : $baseKey.":attempt:{$attempt}";
 
             return [GenerationRun::query()->create([

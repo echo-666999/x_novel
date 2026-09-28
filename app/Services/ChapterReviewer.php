@@ -42,7 +42,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunLease $runLease, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -134,7 +134,12 @@ class ChapterReviewer
             'pass_score' => config('generation.review_pass_score', 80),
             ...($reviewOperationId === null ? [] : ['operation_id' => $reviewOperationId]),
         ];
-        $inputHash = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $inputHash = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::Review,
+            $input,
+            upstreamChecksums: [$draft->checksum],
+            contractVersion: $promptVersion,
+        );
         $baseKey = "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}";
         [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate, $reviewOperationId);
         if ($reused) {
@@ -417,21 +422,14 @@ class ChapterReviewer
 
     private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate, ?string $operationId): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate, $operationId) {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $operationId) {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::Review);
-            $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
-            if ($this->runLease->isFresh($active)) {
-                return [$active, true];
+            $resolution = $this->runCoordinator->resolve($runs->getQuery(), $inputHash, 'Review Run 超时未完成，已由后续投递恢复。');
+            if ($resolution['reused']) {
+                return [$resolution['run'], true];
             }
-            if ($active) {
-                $active->update(['status' => RunStatus::Failed, 'error_code' => 'worker_interrupted', 'error_message' => 'Review Run 超时未完成，已由后续投递恢复。', 'error_retryable' => false, 'error_metadata' => ['category' => 'worker_lost'], 'finished_at' => now()]);
-            }
-            if ((! $regenerate || $operationId !== null)
-                && ($done = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
-                return [$done, true];
-            }
-            $attempt = (int) $runs->clone()->max('attempt') + 1;
+            $attempt = $resolution['attempt'];
             $run = GenerationRun::query()->create(['novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Running, 'attempt' => $attempt, 'idempotency_key' => $attempt === 1 ? $baseKey : "$baseKey:attempt:$attempt", 'input_hash' => $inputHash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'], 'prompt_version' => $promptVersion, 'provider' => $provider, 'model_policy' => $model, 'context_snapshot' => [...$context, 'draft' => collect($context['draft'])->except('content')->all(), ...($operationId === null ? [] : ['operation_id' => $operationId])], 'started_at' => now()]);
 
             return [$run, false];

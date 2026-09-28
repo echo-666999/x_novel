@@ -27,7 +27,7 @@ class ChapterAssembler
 
     public function __construct(
         private readonly DraftLengthPolicy $lengthPolicy,
-        private readonly GenerationRunLease $runLease,
+        private readonly GenerationRunCoordinator $runCoordinator,
         private readonly ContextBuilder $contextBuilder,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly RegenerateSceneSequenceAction $regenerateScenes,
@@ -163,12 +163,12 @@ class ChapterAssembler
             'checksum' => $source['artifact']->checksum,
             'word_count' => $this->lengthPolicy->count($source['artifact']->content),
         ])->all();
-        $assemblyHash = hash('sha256', json_encode([
-            'algorithm_version' => self::ALGORITHM_VERSION,
-            'separator' => self::SEPARATOR,
-            'sources' => $sourceData,
-            'content_checksum' => hash('sha256', $content),
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $assemblyHash = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::ChapterAssembly,
+            ['separator' => self::SEPARATOR, 'sources' => $sourceData, 'content_checksum' => hash('sha256', $content)],
+            upstreamChecksums: array_column($sourceData, 'checksum'),
+            contractVersion: self::ALGORITHM_VERSION,
+        );
 
         return [
             'content' => $content,
@@ -191,25 +191,14 @@ class ChapterAssembler
     /** @return array{0: GenerationRun, 1: bool} */
     private function startRun(Chapter $chapter, array $candidate, bool $regenerate): array
     {
-        return DB::transaction(function () use ($chapter, $candidate, $regenerate): array {
+        return DB::transaction(function () use ($chapter, $candidate): array {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::ChapterAssembly);
-            $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
-            if ($this->runLease->isFresh($active)) {
-                return [$active, true];
+            $resolution = $this->runCoordinator->resolve($runs->getQuery(), $candidate['assembly_hash'], 'Assembly Run 超时未完成，已由后续投递恢复。');
+            if ($resolution['reused']) {
+                return [$resolution['run'], true];
             }
-            if ($active !== null) {
-                $active->update([
-                    'status' => RunStatus::Failed, 'error_code' => 'worker_interrupted',
-                    'error_message' => 'Assembly Run 超时未完成，已由后续投递恢复。',
-                    'error_retryable' => false, 'error_metadata' => ['category' => 'worker_lost'], 'finished_at' => now(),
-                ]);
-            }
-            if (! $regenerate && ($succeeded = $runs->clone()->where('input_hash', $candidate['assembly_hash'])->where('status', RunStatus::Succeeded)->latest('id')->first())) {
-                return [$succeeded, true];
-            }
-
-            $attempt = ((int) $runs->clone()->max('attempt')) + 1;
+            $attempt = $resolution['attempt'];
             $baseKey = "assemble:{$chapter->getKey()}:{$candidate['assembly_hash']}:".self::ALGORITHM_VERSION;
             if ($chapter->status === ChapterStatus::Blocked) {
                 $chapter->update(['status' => ChapterStatus::Generating]);

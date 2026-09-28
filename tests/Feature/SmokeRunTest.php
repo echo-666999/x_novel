@@ -12,6 +12,7 @@ use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\Volume;
@@ -33,13 +34,22 @@ function smokeRunNovel(int $currentSequence = 0): array
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
 
     if ($currentSequence > 0) {
-        Chapter::factory()->for($novel)->for($volume)->create([
+        $chapter = Chapter::factory()->for($novel)->for($volume)->create([
             'sequence' => $currentSequence,
             'status' => ChapterStatus::Canonical,
             'summary' => '正式摘要',
         ]);
+        attachCanonicalArtifact($novel, $chapter);
+        $state = $novel->fresh()->canonicalStateVersion->state;
+        $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
+            'version' => $currentSequence,
+            'state' => $state,
+            'checksum' => app(StoryStateService::class)->checksum($state),
+        ]);
+        $novel->update(['canonical_state_version_id' => $version->getKey()]);
     }
 
     return [$novel->fresh(), $volume];
@@ -96,6 +106,7 @@ test('twenty sequential commit callbacks create no duplicate or skipped chapter'
     foreach (range(1, 20) as $sequence) {
         expect($chapter->sequence)->toBe($sequence);
         $chapter->update(['status' => ChapterStatus::Canonical, 'summary' => "第 {$sequence} 章摘要"]);
+        attachCanonicalArtifact($novel, $chapter);
         $versionState = [...$state, 'timeline' => ['chapter' => $sequence]];
         $version = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
             'version' => $sequence,
@@ -106,7 +117,6 @@ test('twenty sequential commit callbacks create no duplicate or skipped chapter'
             'current_chapter_sequence' => $sequence,
             'canonical_state_version_id' => $version->getKey(),
         ]);
-
         $next = $checkNext->handle($novel->fresh(), $chapter->getKey());
         $duplicateCallback = $checkNext->handle($novel->fresh(), $chapter->getKey());
 

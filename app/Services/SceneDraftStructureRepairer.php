@@ -21,11 +21,11 @@ final class SceneDraftStructureRepairer
      * @param  array<string, mixed>  $metadata
      * @return array{temporary_state_delta: array<string, mixed>, declared_events: array<int, array<string, mixed>>}
      */
-    public function repair(array $payload, string $provider, string $model, array $metadata, mixed $sceneTask, ?string $reasoningEffort = null, ?callable $beforeRequest = null): array
+    public function repair(array $payload, string $provider, string $model, array $metadata, mixed $sceneTask, ?string $reasoningEffort = null, ?callable $beforeRequest = null, int $startingAttempt = 1, ?callable $afterResponse = null): array
     {
         $lastException = null;
 
-        for ($attempt = 1; $attempt <= (int) config('generation.max_scene_structure_repair_attempts', 2); $attempt++) {
+        for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_scene_structure_repair_attempts', 2); $attempt++) {
             $maxTokens = $attempt === 1
                 ? (int) config('generation.scene_structure_repair_max_output_tokens', 1_000)
                 : (int) config('generation.scene_structure_repair_retry_max_output_tokens', 4_000);
@@ -47,6 +47,7 @@ final class SceneDraftStructureRepairer
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'scene_structure_repair', 'scene_structure_repair_attempt' => $attempt],
             ));
+            $afterResponse?->__invoke($response->structuredData, $attempt);
 
             if ($response->structuredData === null) {
                 $lastException = data_get($response->metadata, 'finish_reason') === 'length'

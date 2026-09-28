@@ -16,6 +16,7 @@ use App\Enums\EventType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
+use App\Exceptions\GenerationStageDeferredException;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -29,7 +30,7 @@ class StoryEventExtractor
         private readonly AiProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
         private readonly PromptVersionResolver $promptVersionResolver,
-        private readonly GenerationRunLease $runLease,
+        private readonly GenerationRunCoordinator $runCoordinator,
         private readonly StoryEventEvidenceRepairer $evidenceRepairer,
         private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
         private readonly ContextBuilder $contextBuilder,
@@ -38,8 +39,9 @@ class StoryEventExtractor
         private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
-    public function extract(int $chapterId, bool $regenerate = false): ?GenerationArtifact
+    public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false): ?GenerationArtifact
     {
+        $providerCalls = 0;
         $chapter = Chapter::query()->with([
             'novel.canonicalStateVersion',
             'latestPlan',
@@ -62,13 +64,13 @@ class StoryEventExtractor
         ];
         $settings = $this->settingsResolver->resolve(AiStage::Extractor, $chapter->novel);
         $promptVersion = $this->promptVersionResolver->resolve(AiStage::Extractor);
-        $inputHash = hash('sha256', json_encode([
-            'context' => $context,
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'prompt_version' => $promptVersion,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $inputHash = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::EventExtraction,
+            $context,
+            upstreamChecksums: [$draft->checksum],
+            frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
+            contractVersion: $promptVersion,
+        );
         $baseKey = "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}";
         [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate);
 
@@ -84,27 +86,42 @@ class StoryEventExtractor
                 'chapter_id' => $chapter->getKey(),
                 'stage' => AiStage::Extractor->value,
             ];
-            $response = $this->provider->generate(new AiRequest(
-                model: $settings->model,
-                provider: $settings->provider,
-                reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。不要在 events 中输出 story_arc_beat_completed 或 story_arc_beat_milestone_completed；必须改为在 outline_completion 中按冻结条件原顺序分别审计 Milestone、Beat Exit 和 Handoff，不得返回数据库 ID。fulfilled/contradicted 必须给出当前正文逐字证据和所属数据库 Scene ID，not_met 的 evidence 必须为 null。Laravel 会结合历史 Canonical Milestone Event、恢复冻结 ID 并决定是否创建 Completion Candidate。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；evidence.scene_id 只能填 current_scene_references[].scene_id 中的数据库 ID，不得把 sequence 当作 scene_id。未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
-                prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: 0.2,
-                maxTokens: $maxTokens,
-                responseSchema: $this->responseSchema(),
-                promptVersion: $promptVersion,
-                metadata: $metadata,
-            ));
+            $beforeRequest = function (string $substage) use ($singleProviderCall, &$providerCalls): void {
+                if ($singleProviderCall && $providerCalls >= 1) {
+                    throw new GenerationStageDeferredException(GenerationStage::EventExtraction, $substage);
+                }
+                $providerCalls++;
+            };
+            $payload = $this->latestPayloadCheckpoint($chapter, $inputHash);
+            if ($payload === null) {
+                $beforeRequest('event_extraction');
+                $response = $this->provider->generate(new AiRequest(
+                    model: $settings->model,
+                    provider: $settings->provider,
+                    reasoningEffort: $settings->reasoningEffort,
+                    systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。不要在 events 中输出 story_arc_beat_completed 或 story_arc_beat_milestone_completed；必须改为在 outline_completion 中按冻结条件原顺序分别审计 Milestone、Beat Exit 和 Handoff，不得返回数据库 ID。fulfilled/contradicted 必须给出当前正文逐字证据和所属数据库 Scene ID，not_met 的 evidence 必须为 null。Laravel 会结合历史 Canonical Milestone Event、恢复冻结 ID 并决定是否创建 Completion Candidate。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；evidence.scene_id 只能填 current_scene_references[].scene_id 中的数据库 ID，不得把 sequence 当作 scene_id。未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
+                    prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    temperature: 0.2,
+                    maxTokens: $maxTokens,
+                    responseSchema: $this->responseSchema(),
+                    promptVersion: $promptVersion,
+                    metadata: $metadata,
+                ));
+                $payload = StructuredOutput::require($response, 'event', 'Story Event Candidates');
+                $this->savePayloadCheckpoint($run, $payload, $inputHash, $draft);
+            }
 
             [$candidates, $outlineCompletion] = $this->validateCandidates(
-                StructuredOutput::require($response, 'event', 'Story Event Candidates'),
+                $payload,
                 $chapter,
                 $draft,
                 $settings->model,
                 $metadata,
                 $context['foreshadowing_contract'],
                 $settings->reasoningEffort,
+                $beforeRequest,
+                $run,
+                $inputHash,
             );
 
             return $this->complete(
@@ -208,31 +225,14 @@ class StoryEventExtractor
     /** @return array{0: GenerationRun, 1: bool} */
     private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $regenerate): array {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion): array {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::EventExtraction);
-            $active = $runs->clone()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->latest('id')->first();
-
-            if ($this->runLease->isFresh($active)) {
-                return [$active, true];
+            $resolution = $this->runCoordinator->resolve($runs->getQuery(), $inputHash, 'Event Extraction Run 超时未完成，已由后续投递恢复。');
+            if ($resolution['reused']) {
+                return [$resolution['run'], true];
             }
-
-            if ($active !== null) {
-                $active->update([
-                    'status' => RunStatus::Failed,
-                    'error_code' => 'worker_interrupted',
-                    'error_message' => 'Event Extraction Run 超时未完成，已由后续投递恢复。',
-                    'error_retryable' => false,
-                    'error_metadata' => ['category' => 'worker_lost'],
-                    'finished_at' => now(),
-                ]);
-            }
-
-            if (! $regenerate && ($succeeded = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first())) {
-                return [$succeeded, true];
-            }
-
-            $attempt = ((int) $runs->clone()->max('attempt')) + 1;
+            $attempt = $resolution['attempt'];
 
             if ($chapter->status === ChapterStatus::Blocked) {
                 $chapter->update(['status' => ChapterStatus::Generating]);
@@ -264,7 +264,7 @@ class StoryEventExtractor
     }
 
     /** @return array{0: array<int, StoryEventCandidate>, 1: array<string, mixed>} */
-    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract, ?string $reasoningEffort): array
+    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract, ?string $reasoningEffort, ?callable $beforeRequest, GenerationRun $run, string $inputHash): array
     {
         if (! $this->hasExactKeys($payload, ['events', 'outline_completion']) || ! is_array($payload['events']) || ! is_array($payload['outline_completion'])) {
             throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须返回 events 与 outline_completion。']);
@@ -279,7 +279,7 @@ class StoryEventExtractor
                 true,
             ))
             ->values()
-            ->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata, $reasoningEffort): StoryEventCandidate {
+            ->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata, $reasoningEffort, $beforeRequest, $run, $inputHash): StoryEventCandidate {
                 if (! is_array($event)) {
                     throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
                 }
@@ -295,6 +295,7 @@ class StoryEventExtractor
                             throw $exception;
                         }
 
+                        $repairCheckpoint = $this->latestEvidenceRepairCheckpoint($chapter, $inputHash, $index);
                         $event['evidence'] = $this->evidenceRepairer->repair(
                             event: $event,
                             content: (string) $draft->content,
@@ -302,6 +303,10 @@ class StoryEventExtractor
                             metadata: $metadata,
                             eventIndex: $index,
                             reasoningEffort: $reasoningEffort,
+                            beforeRequest: $beforeRequest,
+                            startingAttempt: (int) ($repairCheckpoint['attempt'] ?? 0) + 1,
+                            resumeStructuredData: $repairCheckpoint['response'] ?? null,
+                            afterResponse: fn (?array $response, int $attempt) => $this->saveEvidenceRepairCheckpoint($run, $inputHash, $draft, $index, $attempt, $response),
                         );
                         $event = $this->normalizeEvidence($event, $chapter, $draft);
                         $candidate = StoryEventCandidate::fromArray($event);
@@ -489,6 +494,99 @@ class StoryEventExtractor
         if (! $valid) {
             throw ValidationException::withMessages(['subject_id' => 'Story Event Candidate 引用了当前 Novel 之外的实体。']);
         }
+    }
+
+    /** @return array<string, mixed>|null */
+    private function latestPayloadCheckpoint(Chapter $chapter, string $inputHash): ?array
+    {
+        $artifact = GenerationArtifact::query()
+            ->where('type', ArtifactType::Context)
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->where('stage', GenerationStage::EventExtraction)
+                ->where('input_hash', $inputHash))
+            ->latest('id')->get()
+            ->first(fn (GenerationArtifact $candidate): bool => data_get($candidate->data, 'checkpoint') === 'event_payload');
+        $payload = data_get($artifact?->data, 'payload');
+
+        return is_array($payload) ? $payload : null;
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function savePayloadCheckpoint(GenerationRun $run, array $payload, string $inputHash, GenerationArtifact $draft): void
+    {
+        $substageFingerprint = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::EventExtraction,
+            $payload,
+            upstreamChecksums: [$inputHash, $draft->checksum],
+            contractVersion: 'event-payload-checkpoint-v1',
+        );
+        $data = [
+            'checkpoint' => 'event_payload',
+            'input_hash' => $inputHash,
+            'substage_fingerprint' => $substageFingerprint,
+            'source_artifact_id' => $draft->getKey(),
+            'source_artifact_checksum' => $draft->checksum,
+            'payload' => $payload,
+        ];
+        $run->artifacts()->create([
+            'type' => ArtifactType::Context,
+            'version' => ((int) $run->artifacts()->where('type', ArtifactType::Context)->max('version')) + 1,
+            'content' => null,
+            'data' => $data,
+            'checksum' => $substageFingerprint,
+        ]);
+    }
+
+    /** @return array{attempt: int, response: array<string, mixed>|null}|null */
+    private function latestEvidenceRepairCheckpoint(Chapter $chapter, string $inputHash, int $eventIndex): ?array
+    {
+        $artifact = GenerationArtifact::query()
+            ->where('type', ArtifactType::Context)
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->where('stage', GenerationStage::EventExtraction)
+                ->where('input_hash', $inputHash))
+            ->latest('id')->get()
+            ->first(fn (GenerationArtifact $candidate): bool => data_get($candidate->data, 'checkpoint') === 'event_evidence_repair'
+                && (int) data_get($candidate->data, 'event_index', -1) === $eventIndex);
+
+        if ($artifact === null) {
+            return null;
+        }
+
+        $response = data_get($artifact->data, 'response');
+
+        return [
+            'attempt' => (int) data_get($artifact->data, 'repair_attempt'),
+            'response' => is_array($response) ? $response : null,
+        ];
+    }
+
+    /** @param array<string, mixed>|null $response */
+    private function saveEvidenceRepairCheckpoint(GenerationRun $run, string $inputHash, GenerationArtifact $draft, int $eventIndex, int $attempt, ?array $response): void
+    {
+        $substageFingerprint = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::EventExtraction,
+            ['event_index' => $eventIndex, 'repair_attempt' => $attempt, 'response' => $response],
+            upstreamChecksums: [$inputHash, $draft->checksum],
+            contractVersion: 'event-evidence-repair-v1',
+        );
+        $run->artifacts()->create([
+            'type' => ArtifactType::Context,
+            'version' => ((int) $run->artifacts()->where('type', ArtifactType::Context)->max('version')) + 1,
+            'content' => null,
+            'data' => [
+                'checkpoint' => 'event_evidence_repair',
+                'input_hash' => $inputHash,
+                'substage_fingerprint' => $substageFingerprint,
+                'source_artifact_id' => $draft->getKey(),
+                'event_index' => $eventIndex,
+                'repair_attempt' => $attempt,
+                'response' => $response,
+            ],
+            'checksum' => $substageFingerprint,
+        ]);
     }
 
     /** @param array<int, StoryEventCandidate> $candidates */

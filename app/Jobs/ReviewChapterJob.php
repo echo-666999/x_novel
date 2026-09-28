@@ -4,9 +4,11 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
+use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -21,11 +23,18 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 330;
 
-    public array $backoff = [10, 30];
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::Review);
+    }
+
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::Review);
+    }
 
     public readonly string $operationId;
 
@@ -53,17 +62,18 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
 
             $this->releaseGenerationDispatch();
         } catch (AiProviderException $e) {
-            if (! $e->retryable) {
-                if (! in_array($e->errorCode, ['novel_paused', 'review_prerequisite_missing'], true)) {
-                    $reviewer->markTerminalFailure($this->chapterId);
-                }
-                $this->releaseGenerationDispatch();
-                $this->fail($e);
-
-                return;
+            $policy = app(GenerationFailurePolicy::class);
+            if ($policy->shouldQueueRetry($e, GenerationStage::Review)) {
+                throw $e;
             }
 
-            throw $e;
+            if ($policy->shouldMarkTerminal(GenerationStage::Review, $e)) {
+                $reviewer->markTerminalFailure($this->chapterId);
+            }
+            $this->releaseGenerationDispatch();
+            $this->fail($e);
+
+            return;
         } catch (ValidationException $e) {
             $reviewer->markTerminalFailure($this->chapterId);
             $this->releaseGenerationDispatch();
@@ -78,11 +88,9 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
     public function failed(?Throwable $e): void
     {
         $this->releaseGenerationDispatch();
-        if ($e instanceof AiProviderException && in_array($e->errorCode, ['novel_paused', 'review_prerequisite_missing'], true)) {
-            return;
+        if (app(GenerationFailurePolicy::class)->shouldMarkTerminal(GenerationStage::Review, $e)) {
+            app(AutoStopService::class)->stopForFailure($this->chapterId, $e);
+            app(ChapterReviewer::class)->markTerminalFailure($this->chapterId);
         }
-
-        app(AutoStopService::class)->stopForFailure($this->chapterId, $e);
-        app(ChapterReviewer::class)->markTerminalFailure($this->chapterId);
     }
 }

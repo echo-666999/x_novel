@@ -1128,7 +1128,7 @@ flowchart TD
 | NGC-005 | Review、Event、Commit 完成语义 | P0 | DONE | NGC-004A |
 | NGC-006A | 确定性 Assembly 与 Scene 局部恢复 | P0 | DONE | NGC-005 |
 | NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | DONE | NGC-006A |
-| NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | TODO | NGC-006B |
+| NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | DONE | NGC-006B |
 | NGC-006 | Beat 交接、恢复与重复任务 | P0 | TODO | NGC-006C |
 | NGC-007 | 人工修复建议与结构化重建 | P0 | TODO | NGC-006 |
 | NGC-008 | 从指定章节起安全删除 | P1 | TODO | NGC-002A |
@@ -1680,7 +1680,7 @@ Next Task
 ## NGC-006C — 阶段指纹、失败分流与下一章门禁
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-006B
 
 ### 实现
@@ -1706,6 +1706,16 @@ Next Task
 
 - 每个失败都能定位到唯一 Stage、输入指纹、来源 Artifact、错误类别和下一动作。
 - 已成功阶段不会因下游故障重复计费。
+
+### 实施结果（2026-09-29）
+
+- 新增 `GenerationStageGraph`，在现有 Stage、Run、Artifact 与 `AdvanceChapterPipelineAction` 上声明阶段顺序、产物归属和下游失效范围；`InvalidateChapterStageDownstreamAction` 只清除受影响 Chapter/Scene 的当前指针，历史 Run/Artifact 和其他章节保持不变，未新增 Pipeline Step 表。
+- 新增 `GenerationStageFingerprint`，递归规范化 Map 键和枚举/时间值，保留 List 顺序并剔除 Attempt、Queue/Job ID、运行时间与操作元数据。Planning、Scene、Assembly、Event Extraction、Review、Rewrite 和 Summary 均以业务输入、冻结 Route/Version 与上游 checksum 计算语义指纹。
+- 新增 `GenerationRunCoordinator`，统一有效 Lease 复用、过期 Worker 恢复、同指纹成功 Run 复用与新 Attempt 分配；Planner、Scene、Assembly、Event Extraction、Review 和 Rewrite 不再各自维护同类判断，相同指纹的成功结果优先返回且不被后到 Retry 覆盖。
+- Scene、Event Extraction 和 Rewrite 的 Job 模式执行单次 Provider 调用上限。原始付费响应与验证后的结果保存为不可变 `context` Checkpoint，并带独立 `substage_fingerprint`；需要 Evidence/Length Repair 时记录 `generation_stage_deferred`，由 `AdvanceChapterPipelineAction` 在新 Job 中从 Checkpoint 继续。Service 的同步调用入口仍保留给测试和人工诊断，不改变 Queue Job 的付费边界。
+- `generation.stage_policies` 统一保存各 Stage 的最大尝试次数、backoff、允许修复范围和非终态错误码；`GenerationFailurePolicy` 统一失败分类、Queue Retry 判断、终态判断、来源 Stage/Input/Artifact 与下一动作元数据，章节 Job 已删除各自的终止错误数组。
+- `NovelGenerationReadiness::nextChapter()` 成为下一章只读准备度结果；`GenerateNextChapterAction` 在 Novel 行锁内消费同一结果。检查覆盖 Current Outline Target、最早未完成 Milestone/Handoff、上一 Canonical Artifact/State/Summary、活动或失败章节、有效 Run、BLOCK/NEEDS_ATTENTION 与暂停状态；阻断不会创建 Chapter/Run 或调用 Provider。
+- 下一章继续强制上一 Canonical Chapter 的 Summary 完整；Memory/Embedding 失败未加入门禁。定向测试覆盖指纹稳定性、阶段图、精确失效、Stage Policy、共享阻断码、无副作用失败、缺失 Embedding 放行，以及 Scene/Event/Rewrite 的跨 Job 单请求 Checkpoint 恢复。格式化后的全量回归为 965 个测试、942 通过、23 跳过、5719 个断言、0 失败（测试工具报告 3 个 warning）。
 
 ## NGC-006 — Beat 交接、恢复与重复任务
 

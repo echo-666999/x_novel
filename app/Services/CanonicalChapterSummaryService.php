@@ -103,14 +103,13 @@ class CanonicalChapterSummaryService
             'retry_max_completion_tokens' => (int) config('generation.summary_retry_max_output_tokens', 2_400),
             'final_retry_max_completion_tokens' => (int) config('generation.summary_final_retry_max_output_tokens', 4_000),
         ];
-        $inputHash = hash('sha256', json_encode([
-            'canonical_artifact_checksum' => $source->checksum,
-            'prompt_version' => $promptVersion,
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'token_budget' => $tokenBudget,
-        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $inputHash = app(GenerationStageFingerprint::class)->make(
+            GenerationStage::MemorySummary,
+            ['chapter_id' => $chapter->getKey(), 'token_budget' => $tokenBudget],
+            upstreamChecksums: [$source->checksum],
+            frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
+            contractVersion: $promptVersion,
+        );
 
         [$run, $reusable] = $this->startRun($chapter, $source, $inputHash, $promptVersion, $settings->provider, $settings->model);
 

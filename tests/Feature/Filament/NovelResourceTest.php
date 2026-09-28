@@ -204,7 +204,8 @@ test('draft novels leave planning in the outline workspace and generating novels
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     NovelBible::factory()->for($novel)->create();
     app(InitializeNovelStateAction::class)->handle($novel);
-    Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
 
     $component = Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertSee('尚无正式章节')
