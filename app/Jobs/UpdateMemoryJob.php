@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Chapter;
 use App\Services\MemoryUpdater;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -24,6 +25,10 @@ class UpdateMemoryJob implements ShouldQueue
 
     public function handle(MemoryUpdater $memoryUpdater): void
     {
+        if (! Chapter::query()->whereKey($this->chapterId)->exists()) {
+            return;
+        }
+
         $memoryUpdater->update($this->chapterId);
     }
 }

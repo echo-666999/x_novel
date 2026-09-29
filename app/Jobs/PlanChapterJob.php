@@ -48,6 +48,10 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(ChapterPlanner $planner, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        if ($this->stopWhenChapterWasDeleted($this->chapterId)) {
+            return;
+        }
+
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {

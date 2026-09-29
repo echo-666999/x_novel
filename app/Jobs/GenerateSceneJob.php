@@ -53,6 +53,10 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 
     public function handle(SceneGenerator $generator, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        if ($this->stopWhenSceneWasDeleted($this->sceneId)) {
+            return;
+        }
+
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {

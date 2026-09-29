@@ -42,6 +42,10 @@ class RepairSceneLengthJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(SceneLengthRepairer $repairer, AdvanceChapterPipelineAction $advance): void
     {
+        if ($this->stopWhenSceneWasDeleted($this->sceneId)) {
+            return;
+        }
+
         $artifact = $repairer->repair(
             $this->sceneId,
             $this->sourceArtifactId,

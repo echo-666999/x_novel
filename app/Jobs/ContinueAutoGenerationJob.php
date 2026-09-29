@@ -35,7 +35,11 @@ class ContinueAutoGenerationJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(CheckNextAction $checkNextAction): void
     {
-        $chapter = Chapter::query()->with('novel')->findOrFail($this->chapterId);
+        $chapter = Chapter::query()->with('novel')->find($this->chapterId);
+
+        if ($chapter === null) {
+            return;
+        }
         $novel = $chapter->novel;
 
         if ($chapter->status !== ChapterStatus::Canonical

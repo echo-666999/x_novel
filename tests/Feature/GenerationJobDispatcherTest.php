@@ -6,11 +6,15 @@ use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
+use App\Models\Chapter;
 use App\Services\ChapterPlanner;
 use App\Services\GenerationJobDispatcher;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
+
+uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Cache::flush();
@@ -49,9 +53,10 @@ test('dispatcher records queue state immediately and rejects a duplicate dispatc
 
 test('a completed job releases its pending queue state', function () {
     $dispatcher = app(GenerationJobDispatcher::class);
-    $job = new PlanChapterJob(12);
+    $chapter = Chapter::factory()->create();
+    $job = new PlanChapterJob($chapter->getKey());
     $planner = Mockery::mock(ChapterPlanner::class);
-    $planner->shouldReceive('generate')->once()->with(12, false)->andReturnNull();
+    $planner->shouldReceive('generate')->once()->with($chapter->getKey(), false)->andReturnNull();
 
     expect($dispatcher->reserve($job))->toBeTrue()
         ->and($dispatcher->isPending($job))->toBeTrue();

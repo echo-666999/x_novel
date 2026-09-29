@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Models\Memory;
 use App\Services\GenerationFailurePolicy;
 use App\Services\MemoryEmbedder;
 use Illuminate\Bus\Queueable;
@@ -30,6 +31,10 @@ class GenerateEmbeddingJob implements ShouldQueue
 
     public function handle(MemoryEmbedder $embedder): void
     {
+        if (! Memory::query()->whereKey($this->memoryId)->exists()) {
+            return;
+        }
+
         try {
             $embedder->embed($this->memoryId);
         } catch (AiProviderException $exception) {

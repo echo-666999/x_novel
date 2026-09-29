@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\Actions\Chapters\DeleteChapterRangeAction;
 use App\Actions\Chapters\InvalidateChapterPlanDownstreamAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
@@ -12,6 +13,7 @@ use App\Enums\FactStatus;
 use App\Enums\ForeshadowingPlanAction;
 use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
@@ -408,6 +410,63 @@ class ManageNovelChapters extends ManageRelatedRecords
                             ->addable(false)
                             ->reorderable(false),
                     ]),
+                Action::make('deleteChapterRange')
+                    ->label('从本章起删除')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->disabled(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused)
+                    ->tooltip(fn (): ?string => $this->getRecord()->status !== NovelStatus::Paused
+                        ? '必须先暂停小说，并确认没有排队中或运行中的 Generation Run。'
+                        : null)
+                    ->requiresConfirmation()
+                    ->modalHeading(fn (Chapter $record): string => "从第 {$record->sequence} 章起物理删除？")
+                    ->modalDescription('本章及全部后续章节都会删除，并恢复到前一正式章节的故事状态。成功后只能从数据库备份恢复。')
+                    ->modalSubmitActionLabel('确认删除本章及全部后续章节')
+                    ->modalWidth('3xl')
+                    ->fillForm(fn (Chapter $record, DeleteChapterRangeAction $delete): array => [
+                        'impact' => $delete->impact($record),
+                        'reason' => null,
+                    ])
+                    ->schema([
+                        Section::make('删除影响预览')
+                            ->description('Outline 的 Volume / Arc / Beat / Milestone 定义会保留；下列运行时数据将物理删除或重建。')
+                            ->columns(3)
+                            ->schema([
+                                TextEntry::make('impact.range')->label('章节范围')->columnSpanFull(),
+                                TextEntry::make('impact.state')->label('Canonical State'),
+                                TextEntry::make('impact.chapters')->label('章节'),
+                                TextEntry::make('impact.scenes')->label('Scenes'),
+                                TextEntry::make('impact.plans')->label('Plans'),
+                                TextEntry::make('impact.runs')->label('Runs'),
+                                TextEntry::make('impact.artifacts')->label('Artifacts'),
+                                TextEntry::make('impact.reviews')->label('Reviews'),
+                                TextEntry::make('impact.usage')->label('Usage'),
+                                TextEntry::make('impact.events')->label('Events'),
+                                TextEntry::make('impact.facts')->label('Facts'),
+                                TextEntry::make('impact.memories')->label('Memories'),
+                                TextEntry::make('impact.characters')->label('新人物'),
+                                TextEntry::make('impact.world_entities')->label('新世界实体'),
+                                TextEntry::make('impact.foreshadowing_projections')->label('伏笔投影'),
+                            ]),
+                        Textarea::make('reason')
+                            ->label('删除原因')
+                            ->helperText('原因会写入小说操作记录；删除成功后不可在界面撤销。')
+                            ->required()
+                            ->maxLength(2000)
+                            ->rows(3),
+                    ])
+                    ->action(function (Chapter $record, array $data, DeleteChapterRangeAction $delete): void {
+                        $result = $delete->execute($record, (string) $data['reason'], auth()->id());
+
+                        Notification::make()
+                            ->title($result['status'] === 'already_deleted'
+                                ? '该章节范围已删除'
+                                : "已删除 {$result['chapters']} 个章节并完成状态重建")
+                            ->success()
+                            ->send();
+
+                        $this->resetTable();
+                    }),
             ])
             ->emptyStateHeading('尚未建立章节')
             ->emptyStateDescription('创建 planned Chapter 后，再为它补充完整章节计划。')

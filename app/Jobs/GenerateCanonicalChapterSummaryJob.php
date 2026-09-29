@@ -40,7 +40,11 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(CanonicalChapterSummaryService $summaries): void
     {
-        $chapter = Chapter::query()->findOrFail($this->chapterId);
+        $chapter = Chapter::query()->find($this->chapterId);
+
+        if ($chapter === null) {
+            return;
+        }
 
         if ((int) $chapter->canonical_artifact_id !== $this->canonicalArtifactId) {
             return;

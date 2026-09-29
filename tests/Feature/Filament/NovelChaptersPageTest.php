@@ -6,6 +6,7 @@ use App\Enums\ChapterStatus;
 use App\Enums\CharacterStatus;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
@@ -498,4 +499,29 @@ test('the chapter plan exposes a live findings panel', function () {
 
     expect($result->status()->value)->toBe('blocked')
         ->and(collect($result->findings)->pluck('code'))->toContain('DECEASED_POV');
+});
+
+test('the chapter table previews and executes tail deletion only while the novel is paused', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Paused]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 4]);
+    Chapter::factory()->for($novel)->create(['sequence' => 5]);
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionEnabled('deleteChapterRange', $chapter)
+        ->mountTableAction('deleteChapterRange', $chapter)
+        ->assertTableActionDataSet(fn (array $data): bool => $data['impact']['range'] === '第 4–5 章（含全部后续章节）')
+        ->setTableActionData(['reason' => '删除错误章节链'])
+        ->callMountedTableAction()
+        ->assertHasNoTableActionErrors();
+
+    expect($novel->chapters()->exists())->toBeFalse();
+});
+
+test('the chapter table disables tail deletion until the novel is paused', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+    $chapter = Chapter::factory()->for($novel)->create();
+
+    Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
+        ->assertTableActionDisabled('deleteChapterRange', $chapter);
 });

@@ -36,6 +36,10 @@ class CommitChapterJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(CanonicalCommitService $canonicalCommit): void
     {
+        if ($this->stopWhenChapterWasDeleted($this->chapterId)) {
+            return;
+        }
+
         try {
             $canonicalCommit->commit($this->commitData());
         } finally {

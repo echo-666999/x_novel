@@ -2,6 +2,8 @@
 
 namespace App\Jobs\Concerns;
 
+use App\Models\Chapter;
+use App\Models\Scene;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationJobDispatcher;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -18,6 +20,28 @@ trait PreventsDuplicateGeneration
     protected function releaseGenerationDispatch(): void
     {
         app(GenerationJobDispatcher::class)->release($this);
+    }
+
+    protected function stopWhenChapterWasDeleted(int $chapterId): bool
+    {
+        if (Chapter::query()->whereKey($chapterId)->exists()) {
+            return false;
+        }
+
+        $this->releaseGenerationDispatch();
+
+        return true;
+    }
+
+    protected function stopWhenSceneWasDeleted(int $sceneId): bool
+    {
+        if (Scene::query()->whereKey($sceneId)->exists()) {
+            return false;
+        }
+
+        $this->releaseGenerationDispatch();
+
+        return true;
     }
 
     protected function dispatchGenerationJob(ShouldQueue&ShouldBeUnique $job): bool

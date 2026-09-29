@@ -1131,7 +1131,7 @@ flowchart TD
 | NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | DONE | NGC-006B |
 | NGC-006 | Beat 交接、恢复与重复任务 | P0 | DONE | NGC-006C |
 | NGC-007 | 人工修复建议与结构化重建 | P0 | DONE | NGC-006 |
-| NGC-008 | 从指定章节起安全删除 | P1 | TODO | NGC-002A |
+| NGC-008 | 从指定章节起安全删除 | P1 | DONE | NGC-002A |
 | NGC-009 | 小说及全部关联数据删除 | P1 | TODO | NGC-008 |
 | NGC-010 | 创建小说题材选择列表 | P2 | TODO | NGC-001 |
 | NGC-011 | `.env` 默认目标平台 | P2 | TODO | NGC-001 |
@@ -1798,7 +1798,7 @@ Next Task
 ## NGC-008 — 从指定章节起安全删除
 
 **优先级：** P1
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-002A
 
 ### 实现
@@ -1831,6 +1831,14 @@ Next Task
 
 - 物理删除不可在应用内撤销，执行前必须依赖数据库备份。
 - Action 失败使用数据库事务自动回滚；成功后只能从备份恢复。
+
+### 完成说明（2026-09-29）
+
+- 新增 `DeleteChapterRangeAction::impact()` / `execute()`：要求 Novel 已暂停且没有 queued/running Run，在 Novel 行锁事务内恢复前一 Canonical State 指针，按依赖顺序物理删除目标章节及全部后续章节的 Scene、Plan、Run、Artifact、Review、Usage、Event、Fact、Memory 与尾部引入实体。
+- 删除继续保留不可变 Outline Version 及 Volume/Arc/Beat/Milestone 定义；事务内从剩余 Active Events 刷新 Story Arc 进度、Character/World Entity/Foreshadowing 投影，并以 `StoryStateRebuilder` 校验剩余 Canonical State 无差异。
+- 章节列表新增“从本章起删除”，展示完整范围与各类影响计数，明确成功后只能通过数据库备份恢复；删除原因与操作者写入 Novel 操作记录。
+- 章节与 Scene 生成 Job、Memory/Embedding、Canonical Summary 和自动续写 Job 在目标已被物理删除时安全结束，不创建新的失败 Run；重复删除返回 `already_deleted`。
+- 自动测试覆盖纯草稿章、最后 Canonical 章、中段 Tail、运行中门禁、尾部实体引用、伏笔与 Outline/Arc/Milestone 投影、Usage 清理、事务回滚、重复提交、删除后队列安全退出及 Filament 文案/门禁。
 
 ## NGC-009 — 小说及全部关联数据删除
 

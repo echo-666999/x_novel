@@ -46,6 +46,10 @@ class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(ChapterAssembler $assembler, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        if ($this->stopWhenChapterWasDeleted($this->chapterId)) {
+            return;
+        }
+
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {

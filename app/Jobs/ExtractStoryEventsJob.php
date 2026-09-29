@@ -48,6 +48,10 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(StoryEventExtractor $extractor, ?AdvanceChapterPipelineAction $advance = null): void
     {
+        if ($this->stopWhenChapterWasDeleted($this->chapterId)) {
+            return;
+        }
+
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {
