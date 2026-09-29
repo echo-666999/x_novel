@@ -800,7 +800,7 @@ summary-v2+natural-prose-v1
 
 每个 Provider Run 在创建时冻结唯一 `route_key`、Provider、Model、Reasoning Effort、Prompt Version、Schema Version 和输出预算；Job 必须从 Run Snapshot 构造 Provider，不能重试时重新路由。证据修复、Schema 修复或字数修复使用独立 Run 和路由，因此不会与正文 Writer 的冻结值混淆。`provider_run_mismatch` 必须在请求前报告冻结值与解析值。
 
-代码和 `.env.example` 当前将 `gpt-5.6-luna` 作为文本生成默认模型，将 `text-embedding-3-small` 作为 Embedding 默认模型。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
+代码在没有环境覆盖时将 `gpt-5.6-luna` 作为文本生成兜底模型；`.env.example` 提供均衡推荐：Planner、Writer、Rewrite 使用 `gpt-5.6-terra`，Reviewer 使用 `gpt-5.6-sol`，Extractor、Summary 使用 `gpt-5.6-luna`，Embedding 使用 `text-embedding-3-small`。管理后台模型路由保存后优先于这些环境值。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
 
 ## 23. Observability
 
