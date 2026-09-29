@@ -1130,7 +1130,7 @@ flowchart TD
 | NGC-006B | 精简 Review 与最小范围 Rewrite | P0 | DONE | NGC-006A |
 | NGC-006C | 阶段指纹、失败分流与下一章门禁 | P0 | DONE | NGC-006B |
 | NGC-006 | Beat 交接、恢复与重复任务 | P0 | DONE | NGC-006C |
-| NGC-007 | 人工修复建议与结构化重建 | P0 | TODO | NGC-006 |
+| NGC-007 | 人工修复建议与结构化重建 | P0 | DONE | NGC-006 |
 | NGC-008 | 从指定章节起安全删除 | P1 | TODO | NGC-002A |
 | NGC-009 | 小说及全部关联数据删除 | P1 | TODO | NGC-008 |
 | NGC-010 | 创建小说题材选择列表 | P2 | TODO | NGC-001 |
@@ -1763,7 +1763,7 @@ Next Task
 ## NGC-007 — 人工修复建议与结构化重建
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-006
 
 ### 实现
@@ -1785,6 +1785,15 @@ Next Task
 
 - `NEEDS_ATTENTION` 页面给出可以直接执行的操作方向。
 - 用户不需要猜测应该改正文、Scene、Plan、Milestone 还是 Canonical Fact。
+
+### 完成说明（2026-09-29）
+
+- 新增 `ChapterRepairRecommendation`，只读取当前 Plan 边界后的持久化 Run 错误与 Review Findings，确定性输出问题层级、证据、建议字段、影响阶段和恢复入口，不调用 Provider、不新增表。
+- 章节工作台新增“人工修复建议”，区分局部正文、Scene、Chapter Plan、Outline/Milestone、Canonical Fact/State 与生成流程；Milestone/Handoff 问题可直接复用 `RestartChapterFromOutlineAction`。
+- 手工 Chapter Plan 保存现在同时创建新的 Plan Version、成功的人工 Planning Run 与不可变 Chapter Plan Artifact。该 Run 成为新来源链边界，旧 Draft/Event/Patch/Review 保留审计但不再作为当前提交候选。
+- Plan 仅修改某个 Scene Plan 时，从首个语义变化的 Scene 调用 `InvalidateChapterPlanDownstreamAction`、`SyncScenesFromChapterPlanAction` 与 `RegenerateSceneSequenceAction`；更早 Scene 的当前 Artifact 保留，受影响 Scene 及后续链路重建。
+- “人工修改正文”收窄为“人工修改局部正文”：只有唯一定位到 Scene 的 paragraph Finding 才显示和执行。操作创建 Scene 范围的不可变 Rewrite Artifact；后续 Scene 使用现有级联重生成，无后续 Scene 时从 Deterministic Assembly 继续。Plan、Milestone、Locked Fact 或 Canonical State 问题会被明确拒绝。
+- 新增/扩展测试覆盖五类修复层级映射、新 Plan 来源链边界、局部 Plan 失效、Scene 级联重建与历史 Artifact 保留，以及正文编辑不能绕过 Locked Fact/Canonical State。
 
 ## NGC-008 — 从指定章节起安全删除
 

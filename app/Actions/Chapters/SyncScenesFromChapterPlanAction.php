@@ -10,9 +10,9 @@ use Illuminate\Validation\ValidationException;
 
 class SyncScenesFromChapterPlanAction
 {
-    public function execute(Chapter $chapter, bool $replaceGenerated = false): int
+    public function execute(Chapter $chapter, bool $replaceGenerated = false, int $fromSceneSequence = 1): int
     {
-        return DB::transaction(function () use ($chapter, $replaceGenerated): int {
+        return DB::transaction(function () use ($chapter, $replaceGenerated, $fromSceneSequence): int {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $plan = $chapter->plans()->reorder()->orderByDesc('version')->first();
 
@@ -23,7 +23,8 @@ class SyncScenesFromChapterPlanAction
             }
 
             $existingScenes = $chapter->scenes()->lockForUpdate()->get();
-            $protectedScene = $existingScenes->first(fn ($scene): bool => $scene->status !== SceneStatus::Planned || $scene->current_artifact_id !== null
+            $protectedScene = $existingScenes->first(fn ($scene): bool => $scene->sequence >= $fromSceneSequence
+                && ($scene->status !== SceneStatus::Planned || $scene->current_artifact_id !== null)
             );
 
             $canReplaceGenerated = $replaceGenerated && $chapter->status === ChapterStatus::Void;
@@ -37,6 +38,9 @@ class SyncScenesFromChapterPlanAction
             $scenePlans = array_values($plan->scene_plans ?? []);
 
             foreach ($scenePlans as $index => $scenePlan) {
+                if (($index + 1) < $fromSceneSequence) {
+                    continue;
+                }
                 $chapter->scenes()->updateOrCreate(
                     ['sequence' => $index + 1],
                     [
@@ -53,7 +57,10 @@ class SyncScenesFromChapterPlanAction
                 );
             }
 
-            $surplusScenes = $chapter->scenes()->where('sequence', '>', count($scenePlans))->get();
+            $surplusScenes = $chapter->scenes()
+                ->where('sequence', '>=', $fromSceneSequence)
+                ->where('sequence', '>', count($scenePlans))
+                ->get();
 
             if ($canReplaceGenerated && $surplusScenes->isNotEmpty()) {
                 $chapter->generationRuns()->whereIn('scene_id', $surplusScenes->modelKeys())->update(['scene_id' => null]);

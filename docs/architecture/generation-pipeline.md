@@ -513,6 +513,10 @@ Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止
 
 `NEEDS_ATTENTION` 必须提供问题层级、建议字段、影响范围和恢复路径。人工修改正文时创建新的 Scene Rewrite Artifact 并记录原因；修改 Plan 时创建新 Plan Version并从最早受影响 Scene 重建；Canonical Fact/State 问题必须使用受控 Correction 或回滚。没有 Hard Conflict 时的人工 Override 仍保留原 Review、Findings 和操作原因。
 
+`ChapterRepairRecommendation` 只读取当前 Planning Run 边界之后的持久化失败和 Review Findings，实时映射 `problem_layer`、`confirmed_evidence`、`recommended_action`、`target_fields`、`affected_stages` 与 `recovery_entry`。它不调用 Provider，也不保存第二份推荐状态。章节工作台据此显示唯一结构化入口：局部 paragraph 才允许人工 Scene 正文修订；Scene 问题从最早受影响 Scene 级联重建；Plan 与 Milestone/Handoff 分别进入新 Plan Version 或 Current Outline 重建；Locked Fact/Canonical State 进入受控事实修复或最新正式章回滚。
+
+手工保存 Chapter Plan 必须创建成功的人工 Chapter Planning Run 与不可变 Chapter Plan Artifact，作为新来源链边界。旧 Draft、Event Candidate、State Patch 和 Review 保留审计，但边界之前的结果不再是当前提交候选。若只有 `scene_plans[N...]` 发生语义变化，更早 Scene Artifact 保持当前指针；从首个变化 Scene 开始同步 Plan、清除当前指针并复用 `RegenerateSceneSequenceAction` 级联重建。
+
 Rewrite 后必须重新：
 
 ```text

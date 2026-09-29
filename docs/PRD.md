@@ -1556,6 +1556,8 @@ Scene
 
 自动流程禁止整章 Rewrite。无法定位到唯一段落/Scene、涉及多个 Scene 的结构问题，或需要改变 Milestone/Handoff/Canonical Fact 时，进入 Plan 修订、级联 Scene 重生成或 `NEEDS_ATTENTION`。
 
+`NEEDS_ATTENTION` 与 `BLOCK` 的章节工作台必须根据已持久化错误和 Findings 显示确定性的修复建议，包括问题层级、确认依据、建议字段、影响范围和恢复入口。局部 paragraph 问题才允许人工修改 Scene 正文，并创建新的不可变 Scene Rewrite Artifact；Scene 结构问题从最早受影响 Scene 级联重建；Plan 修改创建新 Plan Version 和 Planning 来源链边界；Milestone/Handoff 进入 Outline/Plan 重建；Locked Fact 或 Canonical State 问题必须进入受控事实修复或最新正式章回滚，正文编辑不得绕过。
+
 ---
 
 ### NEEDS_ATTENTION

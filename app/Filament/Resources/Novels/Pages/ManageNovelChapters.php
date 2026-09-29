@@ -3,17 +3,23 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Chapters\InvalidateChapterPlanDownstreamAction;
+use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\AiSettingsService;
+use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\ForeshadowingPlanAction;
 use App\Enums\ForeshadowingTimingStatus;
+use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
+use App\Enums\RunStatus;
+use App\Enums\SceneStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Foreshadowing;
+use App\Models\GenerationRun;
 use App\Services\ForeshadowingLifecycleResolver;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanAdmissionService;
@@ -186,7 +192,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->modalHeading(fn (Chapter $record): string => "第 {$record->sequence} 章 · Chapter Plan")
                     ->modalDescription(fn (Chapter $record): string => $record->latestPlan === null
                         ? '手工填写可直接执行的章节计划，不会调用 AI。'
-                        : '编辑当前 Plan 版本；保存不会启动生成流程。')
+                        : '保存会创建新的 Plan Version；若下游 Scene 已生成，将从最早受影响 Scene 开始级联重建。')
                     ->modalWidth('7xl')
                     ->slideOver()
                     ->fillForm(fn (Chapter $record): array => $this->chapterPlanFormData($record))
@@ -197,7 +203,9 @@ class ManageNovelChapters extends ManageRelatedRecords
                         PlanAdmissionService $planAdmission,
                         InvalidateChapterPlanDownstreamAction $invalidatePlanDownstream,
                         SyncScenesFromChapterPlanAction $syncScenes,
+                        RegenerateSceneSequenceAction $regenerateScenes,
                     ): void {
+                        $currentPlan = $record->latestPlan()->first();
                         // 手工计划也必须冻结 Current Outline 的完整父链，不能创建空来源或由用户提交数据库 ID。
                         $target = app(OutlineProgressResolver::class)->resolve($record->novel);
                         if ($target === null) {
@@ -238,6 +246,8 @@ class ManageNovelChapters extends ManageRelatedRecords
                             ],
                         )->values()->all();
                         $data['required_facts'] = array_map('intval', $data['required_facts'] ?? []);
+                        $data['character_candidates'] = $currentPlan?->character_candidates ?? [];
+                        $data['world_entity_candidates'] = $currentPlan?->world_entity_candidates ?? [];
                         // The prior Plan version preserves legacy IDs; every newly saved version uses contracts only.
                         $data['due_foreshadowings'] = [];
                         $data['foreshadowing_actions'] = $this->authorizedForeshadowingActions(
@@ -260,12 +270,68 @@ class ManageNovelChapters extends ManageRelatedRecords
                             return;
                         }
 
-                        DB::transaction(function () use ($record, $data, $version, $admission, $invalidatePlanDownstream, $syncScenes): void {
+                        $fromSceneSequence = $this->earliestAffectedSceneSequence($currentPlan, $candidate);
+                        $hadGeneratedDownstream = $currentPlan !== null && $record->scenes()
+                            ->where('sequence', '>=', $fromSceneSequence)
+                            ->where(fn ($query) => $query
+                                ->where('status', '!=', SceneStatus::Planned->value)
+                                ->orWhereNotNull('current_artifact_id'))
+                            ->exists();
+                        if ($hadGeneratedDownstream && $record->generationRuns()
+                            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
+                            ->exists()) {
+                            throw ValidationException::withMessages([
+                                'plan' => '当前章节仍有排队中或运行中的任务，请等待结束后再修订 Plan。',
+                            ]);
+                        }
+
+                        DB::transaction(function () use ($record, $data, $version, $admission, $invalidatePlanDownstream, $syncScenes, $fromSceneSequence): void {
                             $record->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
-                            $record->plans()->create(['version' => $version, ...$data, ...$admission]);
-                            $invalidatePlanDownstream->execute($record);
-                            $syncScenes->execute($record);
+                            $plan = $record->plans()->create(['version' => $version, ...$data, ...$admission]);
+                            $attempt = (int) $record->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->max('attempt') + 1;
+                            $run = GenerationRun::query()->create([
+                                'novel_id' => $record->novel_id,
+                                'chapter_id' => $record->getKey(),
+                                'scope_type' => 'chapter',
+                                'scope_id' => $record->getKey(),
+                                'stage' => GenerationStage::ChapterPlanning,
+                                'status' => RunStatus::Succeeded,
+                                'attempt' => $attempt,
+                                'idempotency_key' => 'plan:manual:'.$record->getKey().':v'.$version.':'.$admission['input_hash'],
+                                'input_hash' => $admission['input_hash'],
+                                'state_version' => data_get($admission, 'admission_snapshot.state_version'),
+                                'bible_version' => data_get($admission, 'admission_snapshot.bible_version'),
+                                'prompt_version' => 'manual-chapter-plan-v1',
+                                'model_policy' => 'manual',
+                                'context_snapshot' => [
+                                    'manual_plan' => true,
+                                    'chapter_plan_id' => $plan->getKey(),
+                                    'chapter_plan_version' => $plan->version,
+                                    'from_scene_sequence' => $fromSceneSequence,
+                                ],
+                                'started_at' => now(),
+                                'finished_at' => now(),
+                            ]);
+                            $run->artifacts()->create([
+                                'type' => ArtifactType::ChapterPlan,
+                                'version' => $plan->version,
+                                'data' => [
+                                    'manual_plan' => true,
+                                    'chapter_plan_id' => $plan->getKey(),
+                                    'semantic_payload' => $plan->semanticPayload(),
+                                ],
+                                'checksum' => $plan->checksum,
+                            ]);
+                            $invalidatePlanDownstream->execute($record, $fromSceneSequence);
+                            $syncScenes->execute($record, fromSceneSequence: $fromSceneSequence);
                         });
+
+                        if ($hadGeneratedDownstream) {
+                            $scene = $record->scenes()->where('sequence', $fromSceneSequence)->first();
+                            if ($scene !== null) {
+                                $regenerateScenes->handle($scene);
+                            }
+                        }
 
                         Notification::make()
                             ->title('Chapter Plan 已保存')
@@ -358,6 +424,32 @@ class ManageNovelChapters extends ManageRelatedRecords
                 ->modalWidth('3xl')
                 ->successNotificationTitle('计划章节已创建'),
         ];
+    }
+
+    private function earliestAffectedSceneSequence(?ChapterPlan $current, ChapterPlan $candidate): int
+    {
+        if ($current === null) {
+            return 1;
+        }
+
+        $currentPayload = $current->semanticPayload();
+        $candidatePayload = $candidate->semanticPayload();
+        $currentScenes = array_values($currentPayload['scene_plans'] ?? []);
+        $candidateScenes = array_values($candidatePayload['scene_plans'] ?? []);
+        unset($currentPayload['scene_plans'], $candidatePayload['scene_plans']);
+
+        if ($currentPayload !== $candidatePayload) {
+            return 1;
+        }
+
+        $maximum = max(count($currentScenes), count($candidateScenes));
+        for ($index = 0; $index < $maximum; $index++) {
+            if (($currentScenes[$index] ?? null) !== ($candidateScenes[$index] ?? null)) {
+                return $index + 1;
+            }
+        }
+
+        return 1;
     }
 
     /** @return array<int, mixed> */

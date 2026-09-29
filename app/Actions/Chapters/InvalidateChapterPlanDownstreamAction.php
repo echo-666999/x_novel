@@ -12,8 +12,8 @@ class InvalidateChapterPlanDownstreamAction
 {
     public function __construct(private readonly InvalidateChapterStageDownstreamAction $invalidation) {}
 
-    public function execute(Chapter $chapter): void
+    public function execute(Chapter $chapter, ?int $fromSceneSequence = null): void
     {
-        $this->invalidation->execute($chapter, GenerationStage::ChapterPlanning);
+        $this->invalidation->execute($chapter, GenerationStage::ChapterPlanning, $fromSceneSequence);
     }
 }

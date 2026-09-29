@@ -6,6 +6,7 @@ use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
+use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\AI\AiSettingsService;
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
@@ -32,6 +33,7 @@ use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Services\AutomaticRewriteCounter;
 use App\Services\CanonicalCommitService;
+use App\Services\ChapterRepairRecommendation;
 use App\Services\DraftLengthPolicy;
 use App\Services\DraftRewriteDiff;
 use App\Services\GenerationJobDispatcher;
@@ -50,6 +52,7 @@ use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Tabs;
 use Filament\Schemas\Components\Tabs\Tab;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -317,20 +320,27 @@ class ViewNovelChapter extends ViewRecord
                                 ->send();
                         }),
                     Action::make('manuallyReviseChapter')
-                        ->label('人工修改正文')
+                        ->label('人工修改局部正文')
                         ->icon('heroicon-o-pencil-square')
                         ->color('warning')
-                        ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::NeedsAttention, ReviewDecision::Block], true))
-                        ->modalHeading('人工修改当前章节正文')
-                        ->modalDescription('保存后会创建新的不可变人工修订稿，并自动重新提取事件、重建状态补丁和重新审校。')
+                        ->visible(fn (): bool => $this->manualSceneRepairOptions() !== [])
+                        ->modalHeading('人工修改局部 Scene 正文')
+                        ->modalDescription('仅用于修复建议已定位的局部文字问题。保存后创建新的 Scene Rewrite Artifact，并从下一 Scene 开始级联重建。')
                         ->modalSubmitActionLabel('保存并重新审校')
                         ->fillForm(fn (): array => [
-                            'content' => $this->currentReviewDraft()?->content,
+                            'scene_id' => array_key_first($this->manualSceneRepairOptions()),
+                            'content' => $this->manualSceneRepairSourceContent(),
                             'reason' => null,
                         ])
                         ->schema([
+                            Select::make('scene_id')
+                                ->label('受影响 Scene')
+                                ->options(fn (): array => $this->manualSceneRepairOptions())
+                                ->live()
+                                ->afterStateUpdated(fn (mixed $state, Set $set): mixed => $set('content', $this->manualSceneRepairSourceContent((int) $state)))
+                                ->required(),
                             Textarea::make('content')
-                                ->label('章节正文')
+                                ->label('Scene 正文')
                                 ->rows(24)
                                 ->required()
                                 ->columnSpanFull(),
@@ -344,6 +354,7 @@ class ViewNovelChapter extends ViewRecord
                         ->action(function (array $data, ManuallyReviseChapterAction $revise): void {
                             $artifact = $revise->execute(
                                 $this->chapter(),
+                                (int) $data['scene_id'],
                                 $data['content'],
                                 $data['reason'],
                                 auth()->id(),
@@ -351,8 +362,8 @@ class ViewNovelChapter extends ViewRecord
                             $this->cachedChapter = null;
 
                             Notification::make()
-                                ->title('人工修订稿已保存')
-                                ->body("已创建重写稿 v{$artifact->version}，事件提取和重新审校已加入队列。")
+                                ->title('局部人工修订稿已保存')
+                                ->body("已创建 Scene 重写稿 v{$artifact->version}，下游 Scene 与审校链将按顺序重建。")
                                 ->success()
                                 ->send();
                         }),
@@ -449,6 +460,69 @@ class ViewNovelChapter extends ViewRecord
                         ->label('自动流程')
                         ->state($nextStep['flow'])
                         ->columnSpanFull(),
+                ]),
+            Section::make('人工修复建议')
+                ->description('建议由已持久化的错误码和 Findings 确定性生成，不调用 AI。按层级入口操作可保留历史产物并失效旧来源链。')
+                ->visible(fn (): bool => $this->repairRecommendations() !== [])
+                ->headerActions([
+                    Action::make('editRepairPlan')
+                        ->label('打开 Chapter Plan')
+                        ->icon('heroicon-o-clipboard-document-list')
+                        ->visible(fn (): bool => collect($this->repairRecommendations())->contains(
+                            fn (array $row): bool => $row['recovery_key'] === 'edit_plan',
+                        ))
+                        ->url(fn (): string => NovelResource::getUrl('chapters', ['record' => $this->getRecord()])),
+                    Action::make('repairCanonicalState')
+                        ->label('查看正式状态')
+                        ->icon('heroicon-o-shield-exclamation')
+                        ->visible(fn (): bool => collect($this->repairRecommendations())->contains(
+                            fn (array $row): bool => $row['recovery_key'] === 'canonical_fact',
+                        ))
+                        ->url(fn (): string => NovelResource::getUrl('story-state', ['record' => $this->getRecord()])),
+                    Action::make('restartFromOutline')
+                        ->label('从 Outline 重建章节')
+                        ->icon('heroicon-o-arrow-path-rounded-square')
+                        ->color('warning')
+                        ->visible(fn (): bool => collect($this->repairRecommendations())->contains(
+                            fn (array $row): bool => $row['recovery_key'] === 'restart_from_outline',
+                        ))
+                        ->disabled(fn (): bool => $this->generationWorkPending() || $this->getRecord()->currentOutline === null)
+                        ->requiresConfirmation()
+                        ->modalDescription('当前 Plan、Scene 指针和下游结果将失效；历史 Run 与 Artifact 保留，并从 Current Outline 创建新的 Plan Version。')
+                        ->action(function (RestartChapterFromOutlineAction $restart): void {
+                            $outline = $this->getRecord()->currentOutline;
+                            if ($outline === null) {
+                                throw ValidationException::withMessages(['outline' => '当前小说没有可用的 Current Outline。']);
+                            }
+                            $result = $restart->handle(
+                                $this->getRecord(),
+                                $outline->getKey(),
+                                $outline->checksum,
+                                auth()->id(),
+                            );
+                            $this->cachedChapter = null;
+
+                            Notification::make()
+                                ->title('章节已从 Current Outline 开始重建')
+                                ->body($result['dispatched'] ? '新的 Chapter Planning 已加入队列。' : '重建状态已保存，可在恢复中心继续。')
+                                ->success()
+                                ->send();
+                        }),
+                ])
+                ->schema([
+                    RepeatableEntry::make('repair_recommendations')
+                        ->hiddenLabel()
+                        ->state(fn (): array => $this->repairRecommendations())
+                        ->schema([
+                            TextEntry::make('problem_layer')->label('问题层级')->badge(),
+                            TextEntry::make('scene_reference')->label('目标 Scene')->placeholder('—'),
+                            TextEntry::make('recommended_action')->label('建议操作'),
+                            TextEntry::make('confirmed_evidence')->label('确认问题 / 证据')->columnSpanFull(),
+                            TextEntry::make('target_fields')->label('建议字段')->listWithLineBreaks(),
+                            TextEntry::make('affected_stages')->label('影响范围')->listWithLineBreaks(),
+                            TextEntry::make('recovery_entry')->label('恢复入口')->columnSpanFull(),
+                        ])
+                        ->columns(['default' => 1, 'md' => 2]),
                 ]),
             Section::make('叙事审校')
                 ->description('七维评分结合确定性状态检查结果形成最终审校决策。')
@@ -742,6 +816,40 @@ class ViewNovelChapter extends ViewRecord
         $artifactId = (int) data_get($this->latestReview()?->artifact?->data, 'source_artifact_id');
 
         return $artifactId > 0 ? GenerationArtifact::query()->find($artifactId) : null;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function repairRecommendations(): array
+    {
+        return app(ChapterRepairRecommendation::class)->forChapter($this->chapter());
+    }
+
+    /** @return array<int, string> */
+    private function manualSceneRepairOptions(): array
+    {
+        $sceneIds = collect($this->repairRecommendations())
+            ->where('recovery_key', 'manual_scene_edit')
+            ->pluck('scene_id')
+            ->filter(fn (mixed $id): bool => is_int($id) || (is_string($id) && ctype_digit($id)))
+            ->map(fn (mixed $id): int => (int) $id)
+            ->unique()
+            ->values();
+
+        return $this->chapter()->scenes
+            ->whereIn('id', $sceneIds)
+            ->mapWithKeys(fn (Scene $scene): array => [
+                $scene->getKey() => "Scene {$scene->sequence} · {$scene->goal}",
+            ])
+            ->all();
+    }
+
+    private function manualSceneRepairSourceContent(?int $sceneId = null): ?string
+    {
+        $sceneId ??= array_key_first($this->manualSceneRepairOptions());
+
+        return $sceneId === null
+            ? null
+            : $this->chapter()->scenes->firstWhere('id', $sceneId)?->currentArtifact?->content;
     }
 
     private function hasHardReviewFinding(): bool

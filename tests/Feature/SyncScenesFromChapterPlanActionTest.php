@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Chapters\InvalidateChapterPlanDownstreamAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -151,4 +152,33 @@ test('sync requires a chapter plan', function () {
 
     expect(fn () => app(SyncScenesFromChapterPlanAction::class)->execute($chapter))
         ->toThrow(ValidationException::class);
+});
+
+test('plan scene changes invalidate from the earliest affected scene and preserve prior lineage', function () {
+    $chapter = Chapter::factory()->create(['status' => ChapterStatus::Generating]);
+    ChapterPlan::factory()->for($chapter)->create([
+        'version' => 2,
+        'scene_plans' => [
+            ['goal' => '保留目标', 'conflict' => '保留冲突', 'turn' => '保留转折', 'outcome' => '保留结果'],
+            ['goal' => '新目标', 'conflict' => '新冲突', 'turn' => '新转折', 'outcome' => '新结果'],
+        ],
+    ]);
+    $first = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $second = Scene::factory()->for($chapter)->create(['sequence' => 2, 'status' => SceneStatus::Draft]);
+    $firstRun = GenerationRun::factory()->for($chapter->novel)->for($chapter)->for($first)->create();
+    $secondRun = GenerationRun::factory()->for($chapter->novel)->for($chapter)->for($second)->create();
+    $firstArtifact = GenerationArtifact::factory()->for($firstRun)->create(['type' => ArtifactType::SceneDraft]);
+    $secondArtifact = GenerationArtifact::factory()->for($secondRun)->create(['type' => ArtifactType::SceneDraft]);
+    $first->update(['current_artifact_id' => $firstArtifact->getKey()]);
+    $second->update(['current_artifact_id' => $secondArtifact->getKey()]);
+
+    app(InvalidateChapterPlanDownstreamAction::class)->execute($chapter, 2);
+    app(SyncScenesFromChapterPlanAction::class)->execute($chapter, fromSceneSequence: 2);
+
+    expect($first->fresh()->current_artifact_id)->toBe($firstArtifact->getKey())
+        ->and($first->fresh()->status)->toBe(SceneStatus::Draft)
+        ->and($second->fresh()->current_artifact_id)->toBeNull()
+        ->and($second->fresh()->goal)->toBe('新目标')
+        ->and(GenerationArtifact::query()->whereKey($firstArtifact->getKey())->exists())->toBeTrue()
+        ->and(GenerationArtifact::query()->whereKey($secondArtifact->getKey())->exists())->toBeTrue();
 });

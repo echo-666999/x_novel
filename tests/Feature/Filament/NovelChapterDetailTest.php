@@ -340,7 +340,12 @@ test('needs attention review exposes manual edit and override actions instead of
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
-        ->assertSee('人工修改正文')
+        ->assertSee('人工修复建议')
+        ->assertSee('Chapter Plan')
+        ->assertSee('建议字段')
+        ->assertSee('影响范围')
+        ->assertSee('恢复入口')
+        ->assertDontSee('人工修改局部正文')
         ->assertSee('人工通过（Override）')
         ->assertDontSee('强制重新审校');
 });
@@ -380,10 +385,64 @@ test('an overlength review exposes the dedicated acceptance action instead of or
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
-        ->assertSee('人工修改正文')
+        ->assertSee('人工修复建议')
+        ->assertDontSee('人工修改局部正文')
         ->assertSee('接受超限版本')
         ->assertDontSee('人工通过（Override）')
         ->assertDontSee('强制重新审校');
+});
+
+test('a paragraph finding exposes the local scene prose editor', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
+    ChapterPlan::factory()->for($chapter)->create();
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $sceneRun = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $sceneArtifact = GenerationArtifact::factory()->for($sceneRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => '这一句出现了局部重复。',
+    ]);
+    $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => $sceneArtifact->content,
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => ['source_artifact_id' => $draft->getKey()],
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::NeedsAttention,
+        'findings' => [[
+            'code' => 'STYLE_LOCAL_ISSUE',
+            'dimension' => 'style',
+            'severity' => 'warning',
+            'scope' => 'paragraph',
+            'scene_id' => $scene->getKey(),
+            'evidence' => '局部重复',
+            'message' => '删除局部重复表达。',
+        ]],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('局部正文')
+        ->assertSee('人工修改局部正文');
 });
 
 test('chapter detail rejects a chapter from another novel', function () {

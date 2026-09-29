@@ -10,13 +10,16 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
-use App\Jobs\ExtractStoryEventsJob;
+use App\Enums\SceneStatus;
+use App\Jobs\AssembleChapterJob;
+use App\Jobs\GenerateSceneJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Review;
+use App\Models\Scene;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -30,6 +33,21 @@ function manualReviewFixture(array $findings = [], array $reviewData = []): arra
     app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
     ChapterPlan::factory()->for($chapter)->create(['target_words' => 3000]);
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $sceneRun = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'scope_type' => 'scene',
+        'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $sceneArtifact = GenerationArtifact::factory()->for($sceneRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'version' => 1,
+        'content' => '需要人工处理的当前场景正文。',
+        'checksum' => hash('sha256', '需要人工处理的当前场景正文。'),
+    ]);
+    $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
     $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'scope_type' => 'chapter',
         'scope_id' => $chapter->getKey(),
@@ -56,51 +74,128 @@ function manualReviewFixture(array $findings = [], array $reviewData = []): arra
         'version' => 3,
         'data' => ['source_artifact_id' => $draft->getKey(), ...$reviewData],
     ]);
+    if ($findings === []) {
+        $findings = [[
+            'code' => 'STYLE_LOCAL_ISSUE',
+            'dimension' => 'style',
+            'severity' => 'warning',
+            'scope' => 'paragraph',
+            'scene_id' => $scene->getKey(),
+            'evidence' => '需要人工处理',
+            'message' => '局部表达需要人工调整。',
+        ]];
+    }
     $review = Review::factory()->for($reviewRun)->create([
         'artifact_id' => $reviewArtifact->getKey(),
         'decision' => ReviewDecision::NeedsAttention,
         'findings' => $findings,
     ]);
 
-    return compact('novel', 'chapter', 'draft', 'review');
+    return compact('novel', 'chapter', 'scene', 'sceneArtifact', 'draft', 'review');
 }
 
-test('manual chapter revision creates an immutable draft and resumes extraction', function () {
+test('manual prose revision creates a scene artifact and resumes from assembly', function () {
     Queue::fake();
     $fixture = manualReviewFixture();
 
     $artifact = app(ManuallyReviseChapterAction::class)->execute(
         $fixture['chapter'],
-        '人工压缩后的章节正文。',
+        $fixture['scene']->getKey(),
+        '人工压缩后的场景正文。',
         '删除重复段落并控制字数。',
         7,
     );
 
     expect($artifact->type)->toBe(ArtifactType::RewriteDraft)
         ->and($artifact->version)->toBe(3)
-        ->and($artifact->content)->toBe('人工压缩后的章节正文。')
+        ->and($artifact->content)->toBe('人工压缩后的场景正文。')
         ->and(data_get($artifact->data, 'manual_edit'))->toBeTrue()
         ->and(data_get($artifact->data, 'manual_reason'))->toBe('删除重复段落并控制字数。')
         ->and($artifact->generationRun->model_policy)->toBe('manual')
-        ->and($artifact->generationRun->prompt_version)->toBe('manual-edit-v1')
+        ->and($artifact->generationRun->scene_id)->toBe($fixture['scene']->getKey())
+        ->and($artifact->generationRun->prompt_version)->toBe('manual-scene-edit-v1')
+        ->and($fixture['scene']->fresh()->current_artifact_id)->toBe($artifact->getKey())
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Rewrite);
-    Queue::assertPushed(ExtractStoryEventsJob::class, fn (ExtractStoryEventsJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
+    Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey()
         && $job->regenerate
         && $job->continueRewrite);
 });
 
-test('manual chapter revision rejects unchanged content', function () {
+test('manual prose revision rejects unchanged scene content', function () {
     Queue::fake();
     $fixture = manualReviewFixture();
 
     expect(fn () => app(ManuallyReviseChapterAction::class)->execute(
         $fixture['chapter'],
-        $fixture['draft']->content,
+        $fixture['scene']->getKey(),
+        $fixture['sceneArtifact']->content,
         '没有实际修改。',
-    ))->toThrow(ValidationException::class, '正文没有变化');
+    ))->toThrow(ValidationException::class, 'Scene 正文没有变化');
 
     Queue::assertNothingPushed();
 });
+
+test('manual scene revision rebuilds later scenes and preserves historical artifacts', function () {
+    Queue::fake();
+    $fixture = manualReviewFixture();
+    $laterScene = Scene::factory()->for($fixture['chapter'])->create([
+        'sequence' => 2,
+        'status' => SceneStatus::Draft,
+    ]);
+    $laterRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->for($laterScene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $laterArtifact = GenerationArtifact::factory()->for($laterRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => '必须随前文重建的后续场景。',
+    ]);
+    $laterScene->update(['current_artifact_id' => $laterArtifact->getKey()]);
+
+    $manualArtifact = app(ManuallyReviseChapterAction::class)->execute(
+        $fixture['chapter'],
+        $fixture['scene']->getKey(),
+        '人工修改后的第一场景。',
+        '修复局部重复。',
+    );
+
+    expect($fixture['scene']->fresh()->current_artifact_id)->toBe($manualArtifact->getKey())
+        ->and($laterScene->fresh()->current_artifact_id)->toBeNull()
+        ->and(GenerationArtifact::query()->whereKey($fixture['sceneArtifact']->getKey())->exists())->toBeTrue()
+        ->and(GenerationArtifact::query()->whereKey($laterArtifact->getKey())->exists())->toBeTrue();
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $laterScene->getKey()
+        && $job->cascade
+        && $job->regenerationBatchId !== null);
+});
+
+test('manual prose revision cannot bypass locked fact or canonical state findings', function (array $finding) {
+    Queue::fake();
+    $fixture = manualReviewFixture([$finding]);
+
+    expect(fn () => app(ManuallyReviseChapterAction::class)->execute(
+        $fixture['chapter'],
+        $fixture['scene']->getKey(),
+        '试图直接改写正文绕过结构化冲突。',
+        '错误的修复入口。',
+    ))->toThrow(ValidationException::class, '不能通过修改正文绕过');
+
+    expect($fixture['scene']->fresh()->current_artifact_id)->toBe($fixture['sceneArtifact']->getKey());
+    Queue::assertNothingPushed();
+})->with([
+    'locked fact' => [[
+        'code' => 'LOCKED_FACT_CONFLICT',
+        'severity' => 'hard',
+        'scope' => 'scene',
+        'message' => '与锁定事实冲突。',
+    ]],
+    'canonical state' => [[
+        'code' => 'KNOWLEDGE_CONFLICT',
+        'severity' => 'error',
+        'scope' => 'scene',
+        'related_state_path' => 'characters.1.knowledge',
+        'message' => '人物尚未知晓该秘密。',
+    ]],
+]);
 
 test('manual review override creates an audited pass review without changing history', function () {
     $fixture = manualReviewFixture(

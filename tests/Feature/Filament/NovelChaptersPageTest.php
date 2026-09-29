@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Story\InitializeNovelStateAction;
+use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\CharacterStatus;
 use App\Enums\ForeshadowingStatus;
@@ -16,6 +17,7 @@ use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\Foreshadowing;
+use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
@@ -372,6 +374,35 @@ test('editing a plan creates a new version and supersedes the ready predecessor'
         'pov_character_id' => $pov->getKey(),
         'status' => PlanStatus::Ready,
     ]);
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $oldDraft = GenerationArtifact::factory()->for($draftRun)->create(['type' => ArtifactType::ChapterDraft]);
+    $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $oldEvent = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => ['source_artifact_id' => $oldDraft->getKey()],
+    ]);
+    $oldPatch = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::StatePatch,
+        'data' => ['source_artifact_id' => $oldEvent->getKey()],
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $oldReviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => ['source_artifact_id' => $oldDraft->getKey()],
+    ]);
+    $oldReview = Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $oldReviewArtifact->getKey(),
+        'decision' => ReviewDecision::Pass,
+    ]);
 
     Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
         ->mountTableAction('managePlan', $chapter)
@@ -391,12 +422,21 @@ test('editing a plan creates a new version and supersedes the ready predecessor'
         ->assertHasNoTableActionErrors();
 
     $latestPlan = $chapter->latestPlan()->firstOrFail();
+    $planningBoundary = $chapter->generationRuns()
+        ->where('stage', GenerationStage::ChapterPlanning)
+        ->where('status', RunStatus::Succeeded)
+        ->latest('id')
+        ->firstOrFail();
 
     expect($chapter->plans()->count())->toBe(2)
         ->and($plan->fresh()->status)->toBe(PlanStatus::Superseded)
         ->and($latestPlan->version)->toBe(2)
         ->and($latestPlan->reader_promise)->toBe('更新后的读者承诺')
-        ->and($latestPlan->status)->toBe(PlanStatus::Ready);
+        ->and($latestPlan->status)->toBe(PlanStatus::Ready)
+        ->and($planningBoundary->getKey())->toBeGreaterThan($reviewRun->getKey())
+        ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
+        ->and(GenerationArtifact::query()->whereKey([$oldDraft->getKey(), $oldEvent->getKey(), $oldPatch->getKey(), $oldReviewArtifact->getKey()])->count())->toBe(4)
+        ->and($oldReview->fresh()->decision)->toBe(ReviewDecision::Pass);
 });
 
 test('the owner can sync and inspect scenes from a chapter plan', function () {
