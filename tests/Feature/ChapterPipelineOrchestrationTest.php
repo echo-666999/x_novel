@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Generation\CheckNextAction;
+use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
@@ -19,6 +20,7 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
+use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\AssembleChapterJob;
@@ -49,6 +51,7 @@ use App\Models\Volume;
 use App\Services\CanonicalChapterSummaryService;
 use App\Services\MemoryUpdater;
 use App\Services\NarrativeStyleProfile;
+use App\Services\NovelOutlinePipeline;
 use App\Services\OutlineCompletionService;
 use App\Services\OutlineProgressResolver;
 use App\Services\ProjectionRebuilder;
@@ -69,6 +72,125 @@ beforeEach(function () {
 function chapterPipelineBaseline(): array
 {
     return require __DIR__.'/../Fixtures/chapter_pipeline_quality_baseline.php';
+}
+
+/** @return array<string, mixed> */
+function completeNovelPipelineBlueprint(): array
+{
+    return [
+        'bible' => [
+            'logline' => '失忆测绘师在六环城寻找被删除的太阳。',
+            'themes' => ['记忆', '选择'],
+            'tone' => '热血',
+            'pov' => '第一人称',
+            'tense' => '过去时',
+            'taboos' => ['机械降神'],
+            'hard_constraints' => ['死亡不可逆'],
+            'style_profile' => [
+                'subgenre' => '东方玄幻',
+                'target_platform' => 'fanqie',
+                'primary_style' => 'passionate',
+                'secondary_styles' => ['light_humorous'],
+                'language_era' => 'modern_spoken',
+                'pacing' => 'fast',
+                'parameters' => [
+                    'ornateness' => 2,
+                    'dialogue_ratio' => 4,
+                    'description_density' => 3,
+                    'psychology_density' => 2,
+                    'humor_level' => 1,
+                    'literary_level' => 2,
+                ],
+            ],
+            'ending_contract' => [
+                'final_protagonist_state' => '接受真实记忆',
+                'main_conflict_resolution' => '恢复太阳档案',
+                'theme_payoff' => '选择比记忆更能定义一个人',
+                'required_foreshadowing_payoff' => [],
+                'character_arc_requirements' => ['主角停止逃避'],
+                'allowed_open_endings' => ['城外世界'],
+            ],
+        ],
+        'characters' => [[
+            'name' => '林舟', 'role' => '主角', 'motivation' => '找回真相',
+            'profile' => ['失忆测绘师'], 'personality' => ['谨慎'], 'abilities' => ['空间测绘'],
+            'knowledge' => ['不知道太阳档案'], 'current_state' => ['location' => '城内', 'summary' => '准备启程'],
+        ]],
+        'world_entities' => [[
+            'type' => 'location', 'name' => '六环城', 'description' => '被六层环墙包围的城市',
+            'attributes' => ['终年无日'], 'rules' => ['跨环需要许可'], 'current_state' => ['封锁中'],
+        ]],
+        'foreshadowings' => [],
+        'outline' => [
+            'title' => '六环余光全书大纲',
+            'summary' => '林舟寻找太阳档案并恢复城市光明。',
+            'must_include' => ['恢复太阳档案'],
+            'must_not_include' => ['机械降神'],
+            'volumes' => [[
+                'key' => 'vol-01', 'sequence' => 1, 'title' => '余光', 'goal' => '越过第一道环墙', 'climax' => '发现太阳档案', 'target_words' => 200000,
+                'arcs' => [[
+                    'key' => 'arc-01', 'sequence' => 1, 'mainline_sequence' => 1, 'type' => 'main', 'title' => '失落太阳',
+                    'goal' => '寻找太阳档案', 'stakes' => '城市将永远失去光', 'completion_conditions' => ['确认档案位置'],
+                    'beats' => collect(range(1, 2))->map(fn (int $sequence): array => [
+                        'key' => sprintf('beat-%02d', $sequence),
+                        'sequence' => $sequence,
+                        'mainline_sequence' => $sequence,
+                        'title' => $sequence === 1 ? '获得地图' : '穿过环墙',
+                        'summary' => $sequence === 1 ? '林舟获得真实地图。' : '林舟穿过第一道环墙。',
+                        'chapter_budget' => ['min' => 1, 'max' => 2],
+                        'acceptance_criteria' => [$sequence === 1 ? '林舟取得真实地图' : '林舟穿过第一道环墙'],
+                        'must_include' => [$sequence === 1 ? '地图来源可验证' : '跨环代价'],
+                        'must_not_include' => [$sequence === 1 ? '直接抵达终点' : '无代价通行'],
+                        'character_candidates' => [],
+                        'world_entity_candidates' => [],
+                        'milestones' => [[
+                            'key' => sprintf('beat-%02d-m01', $sequence),
+                            'sequence' => 1,
+                            'title' => $sequence === 1 ? '取得地图' : '跨越环墙',
+                            'objective' => $sequence === 1 ? '确认地图来源。' : '付出代价后通过环墙。',
+                            'acceptance_criteria' => [$sequence === 1 ? '林舟取得真实地图' : '林舟穿过第一道环墙'],
+                            'must_include' => [$sequence === 1 ? '地图来源可验证' : '跨环代价'],
+                            'must_not_include' => [],
+                        ]],
+                        'handoff' => [
+                            'next_beat_key' => $sequence === 1 ? 'beat-02' : null,
+                            'transition_mode' => $sequence === 1 ? 'causal' : null,
+                            'exit_result' => $sequence === 1 ? '地图来源已经确认。' : null,
+                            'next_trigger' => $sequence === 1 ? '地图指向第一道环墙。' : null,
+                            'carried_states' => [], 'open_threads' => [], 'required_transition' => [], 'forbidden_jump' => [],
+                        ],
+                    ])->all(),
+                ]],
+            ]],
+        ],
+    ];
+}
+
+/** @return array<int, array<string, mixed>> */
+function completeNovelPipelineOutlineResponses(): array
+{
+    $blueprint = completeNovelPipelineBlueprint();
+    $foundation = collect($blueprint)->only(['bible', 'characters', 'world_entities', 'foreshadowings'])->all();
+    $skeleton = $blueprint['outline'];
+    $details = [];
+
+    foreach ($skeleton['volumes'] as &$volume) {
+        foreach ($volume['arcs'] as &$arc) {
+            foreach ($arc['beats'] as &$beat) {
+                $details[] = [
+                    'beat_key' => $beat['key'],
+                    'milestones' => $beat['milestones'],
+                    'handoff' => $beat['handoff'],
+                ];
+                unset($beat['milestones'], $beat['handoff']);
+            }
+            unset($beat);
+        }
+        unset($arc);
+    }
+    unset($volume);
+
+    return [$foundation, $skeleton, ...$details];
 }
 
 /** @return array{novel: Novel, bible: NovelBible, character: Character, foreshadowing: Foreshadowing|null} */
@@ -251,6 +373,102 @@ function runPostCommitChain(Chapter $chapter): void
         (int) $novel->canonical_state_version_id,
     ))->handle(app(CheckNextAction::class));
 }
+
+test('a novel created from an empty database reaches the next beat handoff through the complete fixed response pipeline', function () {
+    Livewire::test(CreateNovel::class)
+        ->fillForm([
+            'title' => 'NGC-012 全链路验收小说',
+            'genre' => '玄幻奇幻',
+            'target_words' => 200000,
+            'generation_chapter_target_words' => 500,
+            'premise' => '失忆测绘师寻找被删除的太阳。',
+            'workflow_auto_commit' => false,
+        ])
+        ->call('create')
+        ->assertHasNoFormErrors();
+
+    $novel = Novel::query()->where('title', 'NGC-012 全链路验收小说')->sole();
+    $novel->update([
+        'settings' => [
+            ...$novel->settings,
+            'generation' => ['chapter_target_words' => chapterPipelineBaseline()['chapter_target_words']],
+        ],
+    ]);
+    $provider = new ChapterPipelineFixtureProvider(
+        null,
+        chapterPipelineBaseline(),
+        [ReviewDecision::Pass],
+        outlinePayloads: completeNovelPipelineOutlineResponses(),
+    );
+    app()->instance(AiProvider::class, $provider);
+
+    $blueprint = app(NovelOutlinePipeline::class)->runSynchronously($novel, 1);
+    $outline = $novel->outlines()->latest('version')->sole();
+    app(ApplyNovelBlueprintAction::class)->handle($novel, $outline, $blueprint);
+    $novel->refresh();
+
+    Queue::fake();
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->callAction('startNovelGeneration')
+        ->assertNotified('小说已进入生成阶段')
+        ->callAction('startAutoGenerate')
+        ->assertNotified('自动生成已开启，章节流水线已启动');
+
+    runQueuedChapterPipeline();
+    $chapter = $novel->chapters()->where('sequence', 1)->sole();
+    $plan = $chapter->latestPlan;
+
+    expect($chapter->status)->toBe(ChapterStatus::Review)
+        ->and($plan?->novel_outline_id)->toBe($outline->getKey())
+        ->and($plan?->primary_outline_arc_id)->not->toBeNull()
+        ->and($plan?->primary_outline_beat_id)->toBe($outline->beats()->where('beat_key', 'beat-01')->value('id'))
+        ->and($plan?->primary_outline_milestone_id)->not->toBeNull()
+        ->and($chapter->scenes()->count())->toBe(2)
+        ->and($chapter->generationRuns()->where('stage', GenerationStage::ChapterAssembly)->count())->toBe(1)
+        ->and($provider->outlineStages())->toBe([
+            NovelOutlinePipeline::FOUNDATION_SCOPE,
+            NovelOutlinePipeline::SKELETON_SCOPE,
+            NovelOutlinePipeline::BEAT_DETAIL_SCOPE,
+            NovelOutlinePipeline::BEAT_DETAIL_SCOPE,
+        ])
+        ->and($provider->chapterStages())->toBe([
+            AiStage::Planner->value,
+            AiStage::Writer->value,
+            AiStage::Writer->value,
+            AiStage::Extractor->value,
+            AiStage::Reviewer->value,
+        ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])->callAction('commitCanonical')->assertNotified('章节已提交为正式版本');
+
+    runPostCommitChain($chapter);
+    $nextChapter = $novel->chapters()->where('sequence', 2)->sole();
+    $nextTarget = app(OutlineProgressResolver::class)->resolve($novel->fresh());
+    $completionEvents = $chapter->storyEvents()
+        ->whereIn('event_type', [
+            EventType::StoryArcBeatMilestoneCompleted->value,
+            EventType::StoryArcBeatCompleted->value,
+        ])->get();
+
+    expect($chapter->fresh()->status)->toBe(ChapterStatus::Canonical)
+        ->and($chapter->fresh()->summary)->toBe('本章正式摘要。')
+        ->and($nextChapter->status)->toBe(ChapterStatus::Planned)
+        ->and($nextTarget?->beat['key'])->toBe('beat-02')
+        ->and(data_get($nextTarget?->inboundHandoff, 'source_beat_key'))->toBe('beat-01')
+        ->and(data_get($nextTarget?->inboundHandoff, 'contract.next_beat_key'))->toBe('beat-02')
+        ->and($novel->fresh()->currentOutline?->volumes()->count())->toBe(1)
+        ->and($novel->fresh()->currentOutline?->arcs()->count())->toBe(1)
+        ->and($novel->fresh()->currentOutline?->beats()->count())->toBe(2)
+        ->and($novel->fresh()->currentOutline?->milestones()->count())->toBe(2)
+        ->and($completionEvents)->toHaveCount(2)
+        ->and($completionEvents->pluck('novel_outline_id')->unique()->values()->all())->toBe([$outline->getKey()])
+        ->and($completionEvents->pluck('novel_outline_arc_id')->filter()->count())->toBe(2)
+        ->and($completionEvents->pluck('novel_outline_beat_id')->filter()->count())->toBe(2)
+        ->and($provider->chapterStages())->not->toContain('assembly');
+});
 
 test('one trigger reaches pass then manual commit creates canonical state memory work and only the next chapter', function () {
     $fixture = chapterPipelineNovel();
@@ -459,17 +677,31 @@ final class ChapterPipelineFixtureProvider implements AiProvider
 
     private int $reviewIndex = 0;
 
-    /** @param array<int, ReviewDecision> $reviewDecisions */
+    /**
+     * @param  array<int, ReviewDecision>  $reviewDecisions
+     * @param  array<int, array<string, mixed>>  $outlinePayloads
+     */
     public function __construct(
-        private readonly int $characterId,
+        private readonly ?int $characterId,
         private readonly array $baseline,
         private readonly array $reviewDecisions,
         private readonly ?int $foreshadowingId = null,
+        private array $outlinePayloads = [],
     ) {}
 
     public function generate(AiRequest $request): AiResponse
     {
         $this->requests[] = $request;
+        $outlineStage = data_get($request->metadata, 'outline_stage');
+        if (is_string($outlineStage) && filled($outlineStage)) {
+            $payload = array_shift($this->outlinePayloads);
+            if (! is_array($payload)) {
+                throw new RuntimeException("端到端 Fake Provider 缺少 Outline Stage [{$outlineStage}] 响应。");
+            }
+
+            return $this->response($payload);
+        }
+
         $stage = (string) data_get($request->metadata, 'stage');
         $payload = match ($stage) {
             AiStage::Planner->value => $this->plan((int) data_get($request->metadata, 'chapter_id')),
@@ -486,6 +718,12 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             default => throw new RuntimeException("端到端 Fake Provider 不支持 Stage [{$stage}]。"),
         };
 
+        return $this->response($payload);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function response(array $payload): AiResponse
+    {
         return new AiResponse(
             content: json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             structuredData: $payload,
@@ -507,12 +745,33 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         );
     }
 
+    /** @return array<int, string> */
+    public function outlineStages(): array
+    {
+        return collect($this->requests)
+            ->map(fn (AiRequest $request): mixed => data_get($request->metadata, 'outline_stage'))
+            ->filter(fn (mixed $stage): bool => is_string($stage) && filled($stage))
+            ->values()
+            ->all();
+    }
+
+    /** @return array<int, string> */
+    public function chapterStages(): array
+    {
+        return collect($this->requests)
+            ->filter(fn (AiRequest $request): bool => blank(data_get($request->metadata, 'outline_stage')))
+            ->map(fn (AiRequest $request): string => (string) data_get($request->metadata, 'stage'))
+            ->values()
+            ->all();
+    }
+
     /** @return array<string, mixed> */
     private function plan(int $chapterId): array
     {
         $chapter = Chapter::query()->with('novel')->findOrFail($chapterId);
         $chapterSequence = $chapter->sequence;
         $target = app(OutlineProgressResolver::class)->resolve($chapter->novel);
+        $characterId = $this->characterId($chapter);
 
         return [
             'novel_outline_id' => $target->outlineId,
@@ -531,7 +790,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'character_candidates' => [],
             'reader_promise' => '主角抵达灯塔水域',
             'target_words' => $this->baseline['chapter_target_words'],
-            'pov_character_id' => $this->characterId,
+            'pov_character_id' => $characterId,
             'tone' => '热血',
             'time_anchor' => '当日黄昏',
             'hook_type' => '悬念',
@@ -550,7 +809,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'outcome_allowed' => $scene['outcome_allowed'],
                 'outcome_forbidden' => $scene['outcome_forbidden'],
                 'continuity_requirements' => [],
-                'pov_character_id' => $this->characterId,
+                'pov_character_id' => $characterId,
                 'location' => $scene['location'],
                 'time_anchor' => $scene['time_anchor'],
                 'transition_from_previous' => $index === 0
@@ -603,6 +862,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     private function events(int $chapterId): array
     {
         $chapter = Chapter::query()->with('latestPlan')->findOrFail($chapterId);
+        $characterId = $this->characterId($chapter);
         $draft = GenerationArtifact::query()
             ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
             ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapterId)->whereNull('scene_id'))
@@ -641,7 +901,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             'events' => [[
                 'event_type' => EventType::CharacterMoved->value,
                 'subject_type' => 'character',
-                'subject_id' => (string) $this->characterId,
+                'subject_id' => (string) $characterId,
                 'payload' => ['from' => '城内', 'to' => '灯塔'],
                 'evidence' => [[
                     'artifact_id' => $draft->getKey(),
@@ -853,5 +1113,14 @@ final class ChapterPipelineFixtureProvider implements AiProvider
             2 => '潮痕延伸成通往暗门的箭头。',
             3 => '林舟按下潮痕指向的石钮，暗门轰然开启。',
         };
+    }
+
+    private function characterId(Chapter $chapter): int
+    {
+        if ($this->characterId !== null) {
+            return $this->characterId;
+        }
+
+        return (int) $chapter->novel->characters()->where('role', '主角')->valueOrFail('id');
     }
 }

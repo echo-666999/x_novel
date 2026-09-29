@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：关系化 Outline、分阶段 Outline、关系化 Chapter Planning、Plan Admission、完成语义、确定性 Assembly、Compact Review、Paragraph/Scene Rewrite、统一阶段指纹/失败策略、下一章门禁、Beat Handoff 与提交后恢复已由 NGC-002A～NGC-006 实现。Assembly 当前按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；自动 Whole Chapter Rewrite 兼容路径已删除。
+> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。当前流水线包含关系化/分阶段 Outline、Canonical Milestone、Plan Admission、完成语义、确定性 Assembly、Compact Review、Paragraph/Scene Rewrite、统一阶段指纹/失败策略、下一章门禁、Beat Handoff、提交后恢复、安全删除、题材与目标平台配置。Assembly 按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；自动 Whole Chapter Rewrite 兼容路径已删除。
 
 ## 1. 目标
 

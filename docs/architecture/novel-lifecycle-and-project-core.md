@@ -46,7 +46,7 @@ Completed Novel
 
 ```mermaid
 flowchart TD
-    A["新建 Novel<br/>状态 draft"] --> B["generation 队列<br/>GenerateNovelOutlineJob → NovelPlanner"]
+    A["新建 Novel<br/>状态 draft"] --> B["generation 队列<br/>Foundation → Skeleton → Beat Detail → Finalize"]
     B --> C{"人工预览并采用蓝图?"}
     C -- "否" --> B
     C -- "是" --> D["落地 Bible / 角色 / 世界资料<br/>Volume / Story Arc / Foreshadowing"]
@@ -60,7 +60,7 @@ flowchart TD
     I --> J["Plan → Context → Scenes → Assembly"]
     J --> K["Event Candidate → State Patch → Validation"]
     K --> L{"Narrative Review"}
-    L -- "REWRITE" --> M["局部或整章 Rewrite"]
+    L -- "REWRITE" --> M["Paragraph Patch 或单 Scene Rewrite"]
     M --> K
     L -- "NEEDS_ATTENTION / BLOCK" --> N["停止推进，等待人工处理"]
     N --> M
@@ -145,17 +145,18 @@ Filament 的小说表单当前收集：
 
 ### 4.2 生成结构化蓝图
 
-Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Job 在 `generation` 队列调用 `NovelPlanner`，根据小说基础信息生成结构化 Blueprint，避免全书规划受 PHP-FPM 请求时限影响。同一 Novel 同时只允许一个该 Job，网络、超时和临时 Provider 错误最多重试三次；输出截断不会用相同参数自动重复计费。规划请求使用 24,000 completion token，推理程度读取 `planner` 模型路由；该配置为空时采用 Provider 默认行为。Provider Schema 分别约束 `vol-*`、`arc-*`、`beat-*` 键，防止模型把分卷错放到故事线层或用备注/占位节点凑分卷数。当前蓝图 Prompt 版本由 `NovelPlanner` 记录为 `novel-planner-v7`。
+Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Job 创建或恢复同一 Novel 的规划批次，之后严格串行派发 Foundation、Skeleton、逐 Main Beat Detail 和 Finalize。Foundation 只生成 Bible、初始人物、世界实体和伏笔；Skeleton 只生成 Volume / Arc / Beat 骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestone 与 Handoff；Finalize 由 Laravel 合并不可变 Artifact、解析稳定 Key、执行完整结构校验并创建关系化 Draft Outline，不调用 Provider。
 
-Blueprint 至少覆盖：
+每个 Provider Job 最多一次模型请求，并单独保存 Generation Run、不可变 Artifact、输入指纹和恢复点。单个 Beat Detail 失败只恢复该 Beat，已成功的 Foundation、Skeleton 和其他 Beat Detail 不重复计费；截断或 Schema 无效响应不能成为下游来源。规划批次冻结 Provider、Model、Reasoning Effort 和目标平台；目标平台优先取 Current Bible，没有 Bible 时取 `NARRATIVE_DEFAULT_TARGET_PLATFORM`。
 
-- Bible 的核心设定、硬约束、文风配置和 Ending Contract
-- 主要角色，且必须存在主角
-- 世界实体和世界规则
-- 嵌套的 Volume → Story Arc → 结构化 Beat，以及稳定 Key、Sequence、章节预算和验收条件
-- 伏笔及其兑现窗口
+分阶段产物最终至少覆盖：
 
-这个结果保存为 `GenerationArtifact(type=context)`，并关联 Generation Run；其中 Outline 同时创建为 `novel_outlines.status=draft` 的不可变版本。Artifact 和 Draft Outline 都只是候选，不会在 Provider 返回后直接写入 Bible、Volume、Story Arc、Character、World Entity 或 Canonical State。手工入口直接创建 Draft Outline，不调用 Provider；人工编辑和局部重新生成均创建新版本，不覆盖 Artifact 或旧 Outline。
+- Bible 的核心设定、硬约束、文风配置和 Ending Contract；
+- 主要角色，且必须存在主角；
+- 世界实体、世界规则、伏笔及其兑现窗口；
+- 关系化 Volume → Story Arc → Beat → Milestone，以及稳定 Key、Sequence、章节预算、验收条件和相邻 Main Beat Handoff。
+
+Foundation、Skeleton、Beat Detail 和 Blueprint Artifact 都只是候选，不会在 Provider 返回后直接写入正式 Bible、Volume、Story Arc、Character、World Entity 或 Canonical State。只有 Finalize 产生的完整关系化 Draft Outline 可以进入采用流程。手工入口直接创建 Draft Outline，不调用 Provider；人工编辑和局部重新生成均创建新版本，不覆盖 Artifact 或旧 Outline。
 
 ### 4.3 采用蓝图
 
@@ -164,8 +165,8 @@ Blueprint 至少覆盖：
 1. 确认 Draft Outline 属于当前小说、校验结果有效且 checksum 匹配。
 2. 确认小说尚未存在 Current Outline、Volume、Story Arc、Chapter 或 Story Event。
 3. AI 路径从匹配 Artifact 创建不可变 Bible Version、初始 Characters 和 World Entities；未来 Candidate 保留在 Outline Beat 中。
-4. 按 `outline_key + sequence` 创建 Volumes；第一卷为 `active`，其余为 `planned`。
-5. 创建 Story Arcs 并原样保存结构化 Beats；第一卷的 Arc 为 `active`，其他为 `planned`。
+4. 从关系化 `novel_outline_volumes` 创建运行态 Volumes，并写入 `source_outline_volume_id`；第一卷为 `active`，其余为 `planned`。
+5. 从关系化 `novel_outline_arcs` 创建 Story Arcs，并写入 `source_outline_arc_id`；Beat 与 Milestone 只保留在 Outline 定义表，第一卷的 Arc 为 `active`，其他为 `planned`。
 6. AI 路径从匹配 Artifact 创建 Foreshadowings。
 7. 将选定 Outline 改为 `current`、更新 `novels.current_outline_id`，并初始化或刷新 Canonical Story State。
 8. 将 Novel 切换到 `planning`。
@@ -613,7 +614,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 补充边界：
 
-- Novel Blueprint 当前由 `NovelPlanner` 单独记录 `novel-planner-v7`，局部 Outline 修订记录 `novel-outline-node-v2`；两者都不通过 `PromptVersionResolver`。
+- Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。局部 Outline 修订记录 `novel-outline-node-v3`。这些版本由 Outline 服务单独维护，不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。

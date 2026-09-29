@@ -1135,7 +1135,7 @@ flowchart TD
 | NGC-009 | 小说及全部关联数据删除 | P1 | DONE | NGC-008 |
 | NGC-010 | 创建小说题材选择列表 | P2 | DONE | NGC-001 |
 | NGC-011 | `.env` 默认目标平台 | P2 | DONE | NGC-001 |
-| NGC-012 | 综合回归、数据核对与发布收尾 | P0 | TODO | NGC-007～011 |
+| NGC-012 | 综合回归、数据核对与发布收尾 | P0 | DONE | NGC-007～011 |
 
 ## 10. Task Cards
 
@@ -1950,7 +1950,7 @@ Next Task
 ## NGC-012 — 综合回归、数据核对与发布收尾
 
 **优先级：** P0
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-007～011
 
 ### 实现
@@ -1978,6 +1978,79 @@ Next Task
 - 人工修改结构后旧来源链不能 Commit。
 - 题材和平台默认值正常。
 - `git diff --check`、目标测试和完整 Feature Suite 分别记录真实结果。
+
+### 完成记录（2026-09-29）
+
+#### Summary
+
+- 增加从空数据库创建小说到下一 Beat Handoff 的完整固定响应端到端测试，并补齐关系化 Outline 外键、Completion Event 来源和 Deterministic Assembly 零 Provider 调用断言。
+- 增加 PostgreSQL 大规模关系化 Outline 查询测试，覆盖 3 个 Volume、3 个 Main Arc、90 个 Beat 和 180 个 Milestone。
+- 同步 PRD、Generation Pipeline 与 Novel Lifecycle 架构文档，使其与分阶段 Outline、关系化来源链和最小范围 Rewrite 的当前实现一致。
+
+#### Problems Addressed
+
+- 关闭了 NGC-002A～NGC-011 集成后缺少单条完整固定响应链路的问题。
+- 以真实 PostgreSQL 查询数量和 `EXPLAIN` 计划验证关系化 Outline 的当前访问路径，避免用单次耗时作为稳定性能结论。
+- 清理架构文档中残留的单次 `NovelPlanner`、24k 输出、复制 Beat 数据、旧 `outline_key` 和整章自动 Rewrite 描述。
+
+#### Files Changed
+
+- `tests/Feature/ChapterPipelineOrchestrationTest.php`
+- `tests/Feature/NovelOutlineServicesTest.php`
+- `docs/PRD.md`
+- `docs/architecture/generation-pipeline.md`
+- `docs/architecture/novel-lifecycle-and-project-core.md`
+- `docs/development/NOVEL_GENERATION_CONTROL_AND_CONTENT_DELETION_OPTIMIZATION_PLAN.md`
+
+#### Chinese Comments Added
+
+- 本任务只新增测试和同步文档，没有新增生产类、方法或 Migration；因此没有为不存在的新生产业务逻辑添加注释。测试数据和实施记录使用中文业务语义说明验收目的与边界。
+
+#### Database / Canonical State Changes
+
+- 对 PostgreSQL 数据库 `x_novel` 执行 `migrate:fresh --force`，实施前全部表及数据被删除并按当前 Migration 重建；这是本方案已明确接受的破坏性发布边界。
+- 固定响应端到端测试使用隔离测试事务，不调用真实 AI Provider，也未写入正式小说数据。
+- 浏览器验收创建了本地测试小说。按用户最终授权，仅删除测试章节及其后续数据：目标章节已不存在，所属小说仍存在，关联 Scene、Chapter Plan 和 Generation Run 均为 0，并保存删除原因 `NGC-012 浏览器删除流程验收`。
+
+#### Migration Result
+
+- 停止 Horizon Worker 后执行 `php artisan migrate:fresh --force` 成功；`php artisan migrate:status` 显示全部 Migration 位于 Batch 1 且状态为 Ran。
+- PostgreSQL Schema 核对结果：`novel_outlines.content`、`story_arcs.beats`、`chapter_plans.outline_key` 均不存在。
+
+#### Targeted Tests Actually Run
+
+- NGC-002B～NGC-011 目标矩阵：266 个测试，265 通过、1 跳过，1791 个断言。
+- 完整固定响应端到端单测：1 个测试通过，42 个断言。
+- PostgreSQL 大规模 Outline 查询测试：1 个测试通过，10 个断言；解析当前 Outline 共执行 19 条查询。
+- PostgreSQL `EXPLAIN` 命中 `outline_beats_mainline_unique`、`outline_arcs_parent_chain_unique` 和 `outline_volumes_sequence_unique`，并覆盖关系化外键 Join。
+
+#### Full Suite Actually Run
+
+- `php artisan test --testsuite=Feature`：1014 个测试，990 通过、24 跳过，6095 个断言；0 失败，测试框架报告 2 条警告。
+- `git diff --check` 通过。
+
+#### Browser Verification
+
+- 已实际验证 Outline 编辑会创建新版本，页面显示 Version 2 和成功通知。
+- 已实际验证人工修复建议显示问题层级、目标 Scene、级联重建动作、证据和受影响阶段。
+- 已实际验证题材选择与默认目标平台：创建小说可选择“科幻末世”，首次 Bible 显示默认“番茄小说”。
+- 已实际执行章节删除，页面提示删除 1 个章节并完成状态重建，随后数据库核对未发现该章节及其 Scene、Plan、Run 残留。
+- 已验证整书删除弹窗的影响预览、书名确认、原因输入和最终按钮；用户本轮只授权删除测试章节，因此取消了整书删除，没有把浏览器整书删除写成已执行。整书删除的实际数据清理由自动 Feature 测试覆盖。
+
+#### Known Limitations
+
+- 未调用真实 AI Provider；所有生成验收均使用固定响应，不能据此确认外部 Provider 当前可用性、模型质量、延迟或费用。
+- 浏览器未执行整书删除的最终破坏性点击；本地浏览器测试小说仍保留，只有指定测试章节及后续数据被删除。
+- 完整 Feature Suite 的 24 个跳过和 2 条警告未在本任务中改写或归零；本次回归没有测试失败。
+
+#### Rollback / Recovery
+
+- `migrate:fresh` 已永久删除执行前数据库内容，无法由本任务自动恢复；恢复旧数据只能依赖执行前备份，本方案不提供旧数据 Backfill。
+- 固定响应测试数据由测试事务回滚。浏览器章节删除属于 NGC-008 的级联删除与 Canonical 状态重建路径；如需恢复被删内容，只能从备份恢复或重新生成。
+
+#### Next Task
+
+- 本计划 NGC-001～NGC-012 已全部完成；没有在本任务中新增后续范围。
 
 ## 11. 每个任务的完成记录格式
 
