@@ -858,7 +858,7 @@ php artisan novel:recover-bible-chapter NOVEL_ID CHAPTER_SEQUENCE \
 
 ### 23.2 删除与人工修复边界
 
-章节删除采用 Tail Truncation：删除第 N 章及全部后续章节。操作前暂停小说、确认没有活动 Run、预览影响并记录原因；事务内恢复 N-1 的 State/Chapter 指针，删除后缀产生的 Event、State、Fact、Memory、Candidate、Projection、Run、Artifact、Review、Usage、Scene、Plan 和 Chapter，再从剩余 Canonical Events 重算 Milestone/Beat/Arc Progress。小说删除采用完整物理删除，并在一个事务中清空全部直接和间接关联数据。两项功能分别等待 NGC-008/NGC-009 实现。
+章节删除采用 Tail Truncation：删除第 N 章及全部后续章节。操作前暂停小说、确认没有活动 Run、预览影响并记录原因；事务内恢复 N-1 的 State/Chapter 指针，删除后缀产生的 Event、State、Fact、Memory、Candidate、Projection、Run、Artifact、Review、Usage、Scene、Plan 和 Chapter，再从剩余 Canonical Events 重算 Milestone/Beat/Arc Progress。小说删除采用完整物理删除，并在一个事务中清空全部直接和间接关联数据。两项功能已分别由 NGC-008/NGC-009 实现。
 
 人工处理必须先返回问题层级、推荐修改字段、影响范围和自动恢复路径。Outline/Milestone 问题修订未来 Outline Version；Chapter/Scene Plan 问题创建新 Plan Version并从最早 Scene 重建；Canonical Fact/State 问题使用受控 Correction 或回滚；只有局部文字问题进入 Paragraph/Scene Rewrite。任何人工正文修改都创建新 Artifact，并失效旧 Event Candidate、State Patch 和 Review。
 

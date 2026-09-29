@@ -39,8 +39,13 @@ class GenerateNovelBeatDetailJob implements ShouldBeUnique, ShouldQueue
     /** 当前 Beat 成功后再选择下一个缺失阶段。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {
+        $batch = GenerationRun::query()->find($this->batchRunId);
+
+        if ($batch === null) {
+            return;
+        }
+
         try {
-            $batch = GenerationRun::query()->findOrFail($this->batchRunId);
             if ($pipeline->generateBeatDetail($batch, $this->beatKey) !== null) {
                 $pipeline->dispatchNext($batch);
             }

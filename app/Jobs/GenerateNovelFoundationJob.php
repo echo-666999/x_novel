@@ -39,8 +39,13 @@ class GenerateNovelFoundationJob implements ShouldBeUnique, ShouldQueue
     /** 成功后只派发下一个缺失阶段。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {
+        $batch = GenerationRun::query()->find($this->batchRunId);
+
+        if ($batch === null) {
+            return;
+        }
+
         try {
-            $batch = GenerationRun::query()->findOrFail($this->batchRunId);
             if ($pipeline->generateFoundation($batch) !== null) {
                 $pipeline->dispatchNext($batch);
             }

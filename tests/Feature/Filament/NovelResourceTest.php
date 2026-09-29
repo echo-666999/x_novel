@@ -54,6 +54,34 @@ test('the owner can list search and filter novels', function () {
         ->assertCanNotSeeTableRecords([$draft]);
 });
 
+test('the novel list previews and executes permanent deletion only while paused', function () {
+    $novel = Novel::factory()->create([
+        'title' => '将被删除的长篇',
+        'status' => NovelStatus::Paused,
+    ]);
+    NovelBible::factory()->for($novel)->create();
+
+    Livewire::test(ListNovels::class)
+        ->assertTableActionEnabled('deleteNovel', $novel)
+        ->mountTableAction('deleteNovel', $novel)
+        ->assertTableActionDataSet(fn (array $data): bool => $data['impact']['bibles'] === 1)
+        ->setTableActionData([
+            'expected_title' => '将被删除的长篇',
+            'reason' => '清理误建小说',
+        ])
+        ->callMountedTableAction()
+        ->assertHasNoTableActionErrors();
+
+    expect($novel->fresh())->toBeNull();
+});
+
+test('the novel list disables permanent deletion until paused', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+
+    Livewire::test(ListNovels::class)
+        ->assertTableActionDisabled('deleteNovel', $novel);
+});
+
 test('the owner can create a novel and enters its workbench', function () {
     $component = Livewire::test(CreateNovel::class)
         ->assertDontSee('创作风格')

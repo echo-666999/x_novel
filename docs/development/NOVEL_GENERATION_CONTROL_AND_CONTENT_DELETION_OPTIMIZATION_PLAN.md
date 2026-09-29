@@ -1132,7 +1132,7 @@ flowchart TD
 | NGC-006 | Beat 交接、恢复与重复任务 | P0 | DONE | NGC-006C |
 | NGC-007 | 人工修复建议与结构化重建 | P0 | DONE | NGC-006 |
 | NGC-008 | 从指定章节起安全删除 | P1 | DONE | NGC-002A |
-| NGC-009 | 小说及全部关联数据删除 | P1 | TODO | NGC-008 |
+| NGC-009 | 小说及全部关联数据删除 | P1 | DONE | NGC-008 |
 | NGC-010 | 创建小说题材选择列表 | P2 | TODO | NGC-001 |
 | NGC-011 | `.env` 默认目标平台 | P2 | TODO | NGC-001 |
 | NGC-012 | 综合回归、数据核对与发布收尾 | P0 | TODO | NGC-007～011 |
@@ -1843,7 +1843,7 @@ Next Task
 ## NGC-009 — 小说及全部关联数据删除
 
 **优先级：** P1
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-008
 
 ### 实现
@@ -1868,6 +1868,15 @@ Next Task
 
 - 删除后所有直接或间接归属该小说的业务数据为零。
 - 不留下孤立 Usage Record、Artifact、Review、State Version 或 Memory。
+
+### 完成说明（2026-09-29）
+
+- 新增 `DeleteNovelAction::impact()` / `execute()`：要求 Novel 已暂停、没有 queued/running Run、完整标题确认一致且删除原因非空；重复提交返回 `already_deleted`。
+- Action 在 Novel 行锁事务中显式清理 Usage、Review、Memory、Fact、Event、State、Foreshadowing、Plan、Entity、Scene、Chapter、运行态 Arc/Volume，再解除 Outline Beat Handoff 自引用并删除 Outline Version，最后删除 Artifact、Run、Bible 与 Novel 根记录。
+- 删除后同时按捕获 ID 和直接 `novel_id` 校验 Novel、Outline 五层定义、章节链、Canonical 数据、生成追踪及 Usage 全部归零；任何步骤或校验失败都会回滚整个事务。
+- 小说列表新增“删除小说”，展示各表影响数量，要求输入完整小说标题和原因，并明确物理删除成功后只能通过数据库备份恢复。
+- 全书 Outline、Ending Audit、Projection 等队列 Job 在 Novel 或 Batch Run 已被删除时安全结束，不创建新的失败 Run。
+- 自动测试覆盖空小说、完整小说数据图、其他小说隔离、活动 Run 门禁、标题确认、事务回滚、重复提交、删除后队列安全退出和 Filament 操作。
 
 ## NGC-010 — 创建小说题材选择列表
 

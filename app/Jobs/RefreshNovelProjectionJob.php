@@ -36,7 +36,11 @@ class RefreshNovelProjectionJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(ProjectionRebuilder $rebuilder): void
     {
-        $novel = Novel::query()->findOrFail($this->novelId);
+        $novel = Novel::query()->find($this->novelId);
+
+        if ($novel === null) {
+            return;
+        }
 
         if ((int) $novel->canonical_state_version_id !== $this->stateVersionId) {
             return;

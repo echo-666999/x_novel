@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Novel;
 use App\Services\EndingAuditService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -24,6 +25,10 @@ class EndingAuditJob implements ShouldQueue
 
     public function handle(EndingAuditService $endingAudit): void
     {
+        if (! Novel::query()->whereKey($this->novelId)->exists()) {
+            return;
+        }
+
         $endingAudit->audit($this->novelId);
     }
 }

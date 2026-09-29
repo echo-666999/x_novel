@@ -39,8 +39,14 @@ class FinalizeNovelOutlineJob implements ShouldBeUnique, ShouldQueue
     /** 仅执行来源校验、合并和事务写入。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {
+        $batch = GenerationRun::query()->find($this->batchRunId);
+
+        if ($batch === null) {
+            return;
+        }
+
         try {
-            $pipeline->finalize(GenerationRun::query()->findOrFail($this->batchRunId));
+            $pipeline->finalize($batch);
         } catch (Throwable $exception) {
             $this->handleOutlineStageFailure($exception);
         }

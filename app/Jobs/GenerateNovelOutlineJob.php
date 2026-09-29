@@ -40,9 +40,15 @@ class GenerateNovelOutlineJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(NovelOutlinePipeline $pipeline): void
     {
+        $novel = Novel::query()->find($this->novelId);
+
+        if ($novel === null) {
+            return;
+        }
+
         try {
             // 主 Job 只创建或恢复批次并派发下一缺失阶段，不在一次 Worker 生命周期中执行整棵 Outline。
-            $batch = $pipeline->startOrResume(Novel::query()->findOrFail($this->novelId), $this->volumeCount);
+            $batch = $pipeline->startOrResume($novel, $this->volumeCount);
             $pipeline->dispatchNext($batch);
         } catch (AiProviderException $exception) {
             // 相同 Token 上限下重试截断响应只会重复产生费用，必须先调整请求预算。

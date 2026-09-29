@@ -1284,7 +1284,7 @@ Milestone、Beat 与 Arc Progress 同样从剩余 Active `story_arc_beat_milesto
 
 投影刷新失败只留下可重试的 Queue 失败记录，不删除 Story Events、State Version 或 Canonical Chapter。Canonical State 与 Active Story Events 仍是权威来源；管理表在任务完成前可能短暂陈旧，不能反向覆盖 Canonical 数据。这一投影只覆盖已有领域表，不等于引入通用 Event Projection 框架。
 
-Latest Chapter Rollback 与内容删除是两个不同操作。Rollback 保留并失效历史记录；NGC-008 的章节 Tail Truncation 会在暂停、无活动 Run 和影响预览通过后，物理删除目标章节及其后缀的派生数据，并把 Canonical 指针恢复到前一版本。NGC-009 的小说删除会在单一事务中物理删除该小说全部业务数据。两项删除能力尚未实现，不能用现有 Rollback 代替。
+Latest Chapter Rollback 与内容删除是两个不同操作。Rollback 保留并失效历史记录；NGC-008 的章节 Tail Truncation 在暂停、无活动 Run 和影响预览通过后，物理删除目标章节及其后缀的派生数据，并把 Canonical 指针恢复到前一版本。NGC-009 的小说删除在单一事务中物理删除该小说全部业务数据。两项删除能力已实现，不能用现有 Rollback 代替。
 
 ---
 

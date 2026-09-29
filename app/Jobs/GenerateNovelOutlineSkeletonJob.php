@@ -39,8 +39,13 @@ class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
     /** 成功后继续到最早缺失的 Main Beat Detail。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {
+        $batch = GenerationRun::query()->find($this->batchRunId);
+
+        if ($batch === null) {
+            return;
+        }
+
         try {
-            $batch = GenerationRun::query()->findOrFail($this->batchRunId);
             if ($pipeline->generateSkeleton($batch) !== null) {
                 $pipeline->dispatchNext($batch);
             }
