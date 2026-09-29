@@ -1134,7 +1134,7 @@ flowchart TD
 | NGC-008 | 从指定章节起安全删除 | P1 | DONE | NGC-002A |
 | NGC-009 | 小说及全部关联数据删除 | P1 | DONE | NGC-008 |
 | NGC-010 | 创建小说题材选择列表 | P2 | DONE | NGC-001 |
-| NGC-011 | `.env` 默认目标平台 | P2 | TODO | NGC-001 |
+| NGC-011 | `.env` 默认目标平台 | P2 | DONE | NGC-001 |
 | NGC-012 | 综合回归、数据核对与发布收尾 | P0 | TODO | NGC-007～011 |
 
 ## 10. Task Cards
@@ -1914,7 +1914,7 @@ Next Task
 ## NGC-011 — `.env` 默认目标平台
 
 **优先级：** P2
-**状态：** TODO
+**状态：** DONE
 **依赖：** NGC-001
 
 ### 实现
@@ -1938,6 +1938,14 @@ Next Task
 - 番茄小说是默认首选平台。
 - 用户明确选择优先于环境默认值。
 - 不读取或输出 `.env` 中其他敏感配置。
+
+### 完成说明（2026-09-29）
+
+- `.env.example` 增加 `NARRATIVE_DEFAULT_TARGET_PLATFORM=fanqie`，`config/narrative.php` 通过配置缓存兼容的 `env()` 声明读取。
+- `TargetPlatformResolver` 统一执行平台优先级和有效性检查：Current Bible 显式值优先，没有 Bible 时才读取默认配置；无效配置返回字段级错误，不静默回退。
+- Outline Batch Context 冻结平台 code、label 和来源，Foundation Prompt、Strict Schema 与服务端校验共同要求 AI 返回该平台；Batch 与 Foundation Prompt 版本同步升级。
+- Filament 在派发 Outline Job 前执行同一预检；首个手工 Bible 默认使用有效配置，无效配置时保持选择框可用，新版本继续继承 Current Bible。
+- 自动测试覆盖默认 `fanqie`、其他有效默认值、Current Bible 优先、无效值零 Provider 调用、UI 不派发、Provider 返回平台不一致，以及 `config:cache` 后读取一致。
 
 ## NGC-012 — 综合回归、数据核对与发布收尾
 

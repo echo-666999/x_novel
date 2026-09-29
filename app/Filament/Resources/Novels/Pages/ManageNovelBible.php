@@ -7,6 +7,7 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Schemas\NovelBibleDetails;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Services\TargetPlatformResolver;
 use Filament\Actions\Action;
 use Filament\Forms\Components\CheckboxList;
 use Filament\Forms\Components\Select;
@@ -337,7 +338,7 @@ class ManageNovelBible extends ViewRecord
 
         return [
             'subgenre' => null,
-            'target_platform' => 'general',
+            'target_platform' => app(TargetPlatformResolver::class)->defaultCodeOrNull(),
             'primary_style' => $primaryStyle,
             'secondary_styles' => [],
             'language_era' => 'modern_spoken',

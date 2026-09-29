@@ -472,6 +472,8 @@ unique(novel_id, version)
 
 Current Bible Version 是叙事与文风的唯一权威来源。它统一承载 `tone`、`pov`、`tense`、子题材、目标平台、主文风、最多两种辅助文风、语言时代感、节奏和六项高级文风参数。主文风使用有限 Preset，辅助文风与 1～5 级参数用于微调；生成前展开为明确的 Style Contract。
 
+没有 Current Bible 时，初始 Blueprint 和首个手工 Bible 使用 `NARRATIVE_DEFAULT_TARGET_PLATFORM`，默认 `fanqie`。已有 Current Bible 的目标平台优先，环境配置不得覆盖已保存版本。Outline 规划批次必须在首次 Provider 请求前验证并冻结平台；无效配置直接阻断且不得静默回退，Foundation Schema 只接受该批次冻结的平台。
+
 `style_profile` 使用可空 JSONB：新创建的 Bible Version 必须保存通过结构校验的完整对象，历史版本允许为 `null`，不得通过默认值伪造旧文风。现有小说必须创建新 Bible Version 完成迁移。
 
 ---

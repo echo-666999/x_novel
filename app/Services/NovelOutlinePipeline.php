@@ -43,9 +43,9 @@ class NovelOutlinePipeline
 
     public const FINALIZE_SCOPE = 'novel_outline_finalize';
 
-    public const BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v1';
+    public const BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v2';
 
-    public const FOUNDATION_PROMPT_VERSION = 'novel-outline-foundation-v1';
+    public const FOUNDATION_PROMPT_VERSION = 'novel-outline-foundation-v2';
 
     public const SKELETON_PROMPT_VERSION = 'novel-outline-skeleton-v1';
 
@@ -66,6 +66,7 @@ class NovelOutlinePipeline
         private readonly CreateNormalizedNovelOutlineVersionAction $createOutlineVersion,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly GenerationRunLease $runLease,
+        private readonly TargetPlatformResolver $targetPlatformResolver,
     ) {}
 
     /**
@@ -106,9 +107,11 @@ class NovelOutlinePipeline
             }
 
             $settings = $this->settingsResolver->resolve(AiStage::Planner, $locked);
+            $targetPlatform = $this->targetPlatformResolver->forNovel($locked);
             $context = [
                 'novel' => $locked->only(['id', 'title', 'genre', 'premise', 'target_words']),
                 'requested_volume_count' => $volumeCount,
+                'target_platform' => $targetPlatform,
                 'generation_preferences' => [
                     'chapter_target_words' => (int) data_get($locked->settings, 'generation.chapter_target_words', 3_000),
                     'provider' => $settings->provider,
@@ -215,12 +218,38 @@ class NovelOutlinePipeline
         return $this->finalize($batch);
     }
 
+    /**
+     * Filament 使用与领域入口相同的目标平台预检；已有批次只验证冻结值，不读取变化后的环境默认值。
+     */
+    public function assertTargetPlatformReady(Novel $novel, int $volumeCount): void
+    {
+        $batch = GenerationRun::query()
+            ->where('novel_id', $novel->getKey())
+            ->whereNull('chapter_id')
+            ->where('scope_type', self::BATCH_SCOPE)
+            ->where('scope_id', $novel->getKey())
+            ->whereIn('status', [RunStatus::Running, RunStatus::Succeeded])
+            ->latest('id')
+            ->get()
+            ->first(fn (GenerationRun $run): bool => (int) data_get($run->context_snapshot, 'requested_volume_count') === $volumeCount);
+
+        if ($batch !== null) {
+            $this->frozenTargetPlatform($batch);
+
+            return;
+        }
+
+        $this->targetPlatformResolver->forNovel($novel);
+    }
+
     public function generateFoundation(GenerationRun $batch): ?GenerationArtifact
     {
         $this->assertRunnableBatch($batch);
+        $targetPlatform = $this->frozenTargetPlatform($batch);
         $context = [
             'novel' => data_get($batch->context_snapshot, 'novel'),
             'chapter_target_words' => data_get($batch->context_snapshot, 'generation_preferences.chapter_target_words'),
+            'target_platform' => $targetPlatform,
         ];
 
         return $this->providerStage(
@@ -230,11 +259,11 @@ class NovelOutlinePipeline
             promptVersion: self::FOUNDATION_PROMPT_VERSION,
             context: $context,
             maxTokens: self::FOUNDATION_MAX_TOKENS,
-            systemPrompt: '你是 XNovel 小说 Foundation 规划器。只返回严格 JSON。只规划开篇即成立的小说圣经、初始人物、初始世界实体和伏笔候选；不得返回 Volume、Arc、Beat、Milestone、Handoff 或任何数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
+            systemPrompt: '你是 XNovel 小说 Foundation 规划器。只返回严格 JSON。只规划开篇即成立的小说圣经、初始人物、初始世界实体和伏笔候选；不得返回 Volume、Arc、Beat、Milestone、Handoff 或任何数据库 ID。bible.style_profile.target_platform 必须精确返回输入 target_platform.code，不得自行更换平台。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
             prompt: '请根据小说信息生成 Foundation 候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-            schema: $this->foundationSchema(),
+            schema: $this->foundationSchema($targetPlatform['code']),
             outputName: 'novel_outline_foundation',
-            validate: fn (array $data): array => $this->validateFoundation($data),
+            validate: fn (array $data): array => $this->validateFoundation($data, $targetPlatform['code']),
         );
     }
 
@@ -423,7 +452,7 @@ class NovelOutlinePipeline
     }
 
     /** Foundation 只允许 Bible 与初始领域候选，不包含 Outline 节点。 */
-    public function foundationSchema(): array
+    public function foundationSchema(?string $targetPlatform = null): array
     {
         $strings = ['type' => 'array', 'items' => ['type' => 'string']];
         $currentState = $this->object(['location' => ['type' => ['string', 'null']], 'summary' => ['type' => 'string']]);
@@ -436,7 +465,7 @@ class NovelOutlinePipeline
                     'final_protagonist_state' => ['type' => 'string'], 'main_conflict_resolution' => ['type' => 'string'], 'theme_payoff' => ['type' => 'string'],
                     'required_foreshadowing_payoff' => $strings, 'character_arc_requirements' => $strings, 'allowed_open_endings' => $strings,
                 ]),
-                'style_profile' => $this->styleProfileSchema(),
+                'style_profile' => $this->styleProfileSchema($targetPlatform),
             ]),
             'characters' => ['type' => 'array', 'items' => $this->object([
                 'name' => ['type' => 'string'], 'role' => ['type' => 'string', 'enum' => ['主角', '配角', '反派']], 'motivation' => ['type' => 'string'],
@@ -659,7 +688,7 @@ class NovelOutlinePipeline
     }
 
     /** 在持久化前验证 Foundation 的叙事、文风与初始对象边界。 */
-    private function validateFoundation(array $data): array
+    private function validateFoundation(array $data, string $targetPlatform): array
     {
         $rules = [
             'bible' => ['required', 'array'], 'bible.logline' => ['required', 'string'], 'bible.themes' => ['required', 'array', 'min:1'],
@@ -670,7 +699,7 @@ class NovelOutlinePipeline
             'bible.ending_contract' => ['required', 'array'],
             'bible.style_profile' => ['required', 'array'],
             'bible.style_profile.subgenre' => ['present', 'nullable', 'string'],
-            'bible.style_profile.target_platform' => ['required', Rule::in(array_keys(config('narrative.platforms', [])))],
+            'bible.style_profile.target_platform' => ['required', Rule::in([$targetPlatform])],
             'bible.style_profile.primary_style' => ['required', Rule::in(array_keys(config('narrative.styles', [])))],
             'bible.style_profile.secondary_styles' => ['present', 'array', 'max:2'],
             'bible.style_profile.secondary_styles.*' => ['string', 'distinct:strict', Rule::in(array_keys(config('narrative.styles', [])))],
@@ -1068,7 +1097,7 @@ class NovelOutlinePipeline
     }
 
     /** 构造与当前叙事配置枚举一致的完整文风 Schema。 */
-    private function styleProfileSchema(): array
+    private function styleProfileSchema(?string $targetPlatform = null): array
     {
         $parameters = collect(config('narrative.parameter_keys', []))->mapWithKeys(fn (string $key): array => [$key => [
             'type' => 'integer', 'minimum' => 1, 'maximum' => 5,
@@ -1076,13 +1105,32 @@ class NovelOutlinePipeline
 
         return $this->object([
             'subgenre' => ['type' => ['string', 'null']],
-            'target_platform' => ['type' => 'string', 'enum' => array_keys(config('narrative.platforms', []))],
+            'target_platform' => ['type' => 'string', 'enum' => $targetPlatform === null ? array_keys(config('narrative.platforms', [])) : [$targetPlatform]],
             'primary_style' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))],
             'secondary_styles' => ['type' => 'array', 'maxItems' => 2, 'items' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))]],
             'language_era' => ['type' => 'string', 'enum' => array_keys(config('narrative.language_eras', []))],
             'pacing' => ['type' => 'string', 'enum' => array_keys(config('narrative.paces', []))],
             'parameters' => $this->object($parameters),
         ]);
+    }
+
+    /** @return array{code: string, label: string, source: string} */
+    private function frozenTargetPlatform(GenerationRun $batch): array
+    {
+        $selection = data_get($batch->context_snapshot, 'target_platform');
+        $code = is_array($selection) ? ($selection['code'] ?? null) : null;
+
+        if (! is_string($code) || ! array_key_exists($code, config('narrative.platforms', []))) {
+            throw ValidationException::withMessages([
+                'narrative.default_platform' => 'Outline 批次缺少有效的冻结目标平台，不能调用 AI Provider。',
+            ]);
+        }
+
+        return [
+            'code' => $code,
+            'label' => is_string($selection['label'] ?? null) ? $selection['label'] : config("narrative.platforms.{$code}"),
+            'source' => is_string($selection['source'] ?? null) ? $selection['source'] : 'default_config',
+        ];
     }
 
     /** Subplot 与最终 Main Beat 使用显式空 Handoff，而不是 null 占位对象。 */

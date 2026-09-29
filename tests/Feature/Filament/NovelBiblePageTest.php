@@ -118,6 +118,30 @@ test('the owner can create a bible version from its workspace', function () {
         ->and($bible->ending_contract['allowed_open_endings'])->toBe(['保留王都未来走向']);
 });
 
+test('the first bible form defaults to the configured target platform', function () {
+    config()->set('narrative.default_platform', 'fanqie');
+    $novel = Novel::factory()->create();
+
+    Livewire::test(ManageNovelBible::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('createBibleVersion')
+        ->assertActionDataSet([
+            'style_profile.target_platform' => 'fanqie',
+        ]);
+});
+
+test('an invalid default platform leaves the first bible form available for repair', function () {
+    config()->set('narrative.default_platform', 'unsupported-platform');
+    $novel = Novel::factory()->create();
+
+    Livewire::test(ManageNovelBible::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('createBibleVersion')
+        ->assertActionDataSet([
+            'style_profile.target_platform' => null,
+        ])
+        ->assertSchemaComponentExists('style_profile.target_platform', null, fn ($component): bool => $component instanceof Select
+            && array_key_exists('fanqie', $component->getOptions()));
+});
+
 test('ending contract is displayed as six structured requirements', function () {
     $novel = Novel::factory()->create();
     NovelBible::factory()->for($novel)->create([
@@ -166,6 +190,7 @@ test('legacy open ending text is normalized when creating the next bible version
 });
 
 test('the new bible version form prefills the current style profile', function () {
+    config()->set('narrative.default_platform', 'qimao');
     $novel = Novel::factory()->create();
     NovelBible::factory()->for($novel)->create([
         'style_profile' => biblePageStyleProfile([

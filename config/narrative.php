@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'default_platform' => env('NARRATIVE_DEFAULT_TARGET_PLATFORM', 'fanqie'),
     'genres' => [
         '玄幻奇幻',
         '武侠仙侠',

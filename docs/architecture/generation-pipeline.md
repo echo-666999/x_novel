@@ -36,6 +36,8 @@ Novel.status = draft
 
 Foundation、Skeleton 和 Beat Detail 在 Finalize 前都只能保存不可变 Artifact，不得修改正式规划或领域表；初始规划只能应用到尚无规划、章节和正式事件的小说。采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，关系化 Current Novel Outline 是顺序和主线权威。Laravel 选择 Current Beat/Milestone 并解析 Handoff；LLM 不拥有排序、主线切换、跳过、删除或宣告节点完成的权限。
 
+创建 Outline 批次时，Laravel 优先读取已有 Current Bible 明确选择的目标平台；没有 Current Bible 时读取 `config('narrative.default_platform')`，其环境来源默认为 `NARRATIVE_DEFAULT_TARGET_PLATFORM=fanqie`。解析结果的 code、label 和来源随 Batch Context 冻结并参与输入指纹，Foundation Prompt 与 Strict Schema 只允许返回该 code。配置值不属于 `narrative.platforms` 时，Filament 预检和领域入口都必须在派发或调用 Provider 前报告错误；首个手工 Bible 表单仍保留有效平台列表供用户修复。新建 Bible Version 始终继承 Current Bible 表单值，不受之后的环境变更影响。
+
 全书规划必须异步、有界、可恢复。每个调用 Provider 的 Job 最多发出一次模型请求，每阶段保存独立 Run、Artifact、`input_hash` 和幂等键；单个 Beat Detail 失败只恢复该 Beat。禁止一次请求生成 Bible、完整 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Finalize 不调用 Provider，也不信任模型返回的数据库 ID。
 
 长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。

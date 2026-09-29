@@ -51,7 +51,7 @@ function novelBlueprint(): array
             'hard_constraints' => ['死亡不可逆'],
             'style_profile' => [
                 'subgenre' => '东方玄幻',
-                'target_platform' => 'qidian',
+                'target_platform' => 'fanqie',
                 'primary_style' => 'passionate',
                 'secondary_styles' => ['accessible_brisk'],
                 'language_era' => 'modern_spoken',
@@ -214,10 +214,90 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($fake->requests()[0]->maxTokens)->toBe(NovelOutlinePipeline::FOUNDATION_MAX_TOKENS)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'generation_preferences.reasoning_effort'))->toBeNull()
+        ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'target_platform'))->toBe([
+            'code' => 'fanqie',
+            'label' => '番茄小说',
+            'source' => 'default_config',
+        ])
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.properties.style_profile.properties.target_platform.enum'))->toBe(['fanqie'])
+        ->and($fake->requests()[0]->prompt)->toContain('"target_platform":{"code":"fanqie"')
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.required'))->toContain('style_profile')
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.minItems'))->toBe(1)
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.maxItems'))->toBe(1)
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.items.properties.arcs.items.properties.beats.items.required'))->toContain('chapter_budget');
+});
+
+test('ai planning honors another valid configured default target platform', function () {
+    config()->set('narrative.default_platform', 'qimao');
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $blueprint = novelBlueprint();
+    data_set($blueprint, 'bible.style_profile.target_platform', 'qimao');
+    $fake = stagedNovelBlueprintProvider($blueprint);
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(NovelPlanner::class)->generate($novel, 1);
+    $batch = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole();
+
+    expect(data_get($batch->context_snapshot, 'target_platform.code'))->toBe('qimao')
+        ->and(data_get($batch->context_snapshot, 'target_platform.source'))->toBe('default_config')
+        ->and(data_get($artifact->data, 'bible.style_profile.target_platform'))->toBe('qimao');
+});
+
+test('an existing bible target platform overrides the configured default in a new planning batch', function () {
+    config()->set('narrative.default_platform', 'qimao');
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $bible = novelBlueprint()['bible'];
+    data_set($bible, 'style_profile.target_platform', 'qidian');
+    app(CreateBibleVersionAction::class)->execute($novel, $bible);
+
+    $batch = app(NovelOutlinePipeline::class)->startOrResume($novel, 1);
+
+    expect(data_get($batch->context_snapshot, 'target_platform'))->toBe([
+        'code' => 'qidian',
+        'label' => '起点中文网',
+        'source' => 'current_bible',
+    ])->and(data_get($novel->fresh()->currentBible->style_profile, 'target_platform'))->toBe('qidian');
+});
+
+test('invalid default target platform stops before creating a run or calling the provider', function () {
+    config()->set('narrative.default_platform', 'unsupported-platform');
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = stagedNovelBlueprintProvider();
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(NovelPlanner::class)->generate($novel, 1))
+        ->toThrow(ValidationException::class, 'NARRATIVE_DEFAULT_TARGET_PLATFORM');
+
+    expect($fake->requests())->toBeEmpty()
+        ->and($novel->generationRuns()->count())->toBe(0)
+        ->and($novel->outlines()->count())->toBe(0);
+});
+
+test('foundation rejects a target platform different from the frozen selection', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $blueprint = novelBlueprint();
+    data_set($blueprint, 'bible.style_profile.target_platform', 'qidian');
+    $fake = stagedNovelBlueprintProvider($blueprint);
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(NovelPlanner::class)->generate($novel, 1))
+        ->toThrow(ValidationException::class);
+
+    expect($fake->requests())->toHaveCount(1)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->sole()->status)->toBe(RunStatus::Failed)
+        ->and($novel->outlines()->count())->toBe(0);
+});
+
+test('outline workspace reports invalid default platform readiness without dispatching a job', function () {
+    Queue::fake();
+    config()->set('narrative.default_platform', 'unsupported-platform');
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+
+    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->callAction('generateOutlineCandidate', ['volume_count' => 1])
+        ->assertNotified('无法生成大纲候选');
+
+    Queue::assertNotPushed(GenerateNovelOutlineJob::class);
 });
 
 test('ai planning response schema contains only strict objects accepted by the provider', function () {

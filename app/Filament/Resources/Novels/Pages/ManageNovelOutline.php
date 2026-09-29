@@ -80,7 +80,19 @@ class ManageNovelOutline extends ViewRecord
                 ->schema([
                     TextInput::make('volume_count')->label('预计分卷数')->integer()->minValue(1)->maxValue(12)->default(5)->required(),
                 ])
-                ->action(function (array $data): void {
+                ->action(function (array $data, NovelOutlinePipeline $outlinePipeline): void {
+                    try {
+                        $outlinePipeline->assertTargetPlatformReady($this->getRecord(), (int) $data['volume_count']);
+                    } catch (ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法生成大纲候选')
+                            ->body(collect($exception->errors())->flatten()->first())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
                     GenerateNovelOutlineJob::dispatch(
                         $this->getRecord()->getKey(),
                         (int) $data['volume_count'],
