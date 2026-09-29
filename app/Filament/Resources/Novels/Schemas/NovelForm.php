@@ -6,15 +6,19 @@ use App\AI\AiSettingsResolver;
 use App\AI\AiSettingsService;
 use App\Enums\AiStage;
 use App\Models\Novel;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 
 class NovelForm
 {
+    public const CUSTOM_GENRE_OPTION = '__custom__';
+
     public static function configure(Schema $schema): Schema
     {
         return $schema
@@ -27,10 +31,30 @@ class NovelForm
                             ->required()
                             ->maxLength(255)
                             ->columnSpanFull(),
-                        TextInput::make('genre')
+                        Select::make('genre')
                             ->label('题材')
+                            ->options(self::genreOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->live()
+                            ->placeholder('请选择一级题材')
                             ->required()
-                            ->maxLength(255),
+                            ->validationMessages([
+                                'required' => '请选择题材。',
+                                'in' => '题材不是受支持的选项。',
+                            ]),
+                        TextInput::make('custom_genre')
+                            ->label('自定义题材')
+                            ->helperText('输入标准列表之外的一级题材。')
+                            ->placeholder('例如：民俗志怪')
+                            ->visible(fn (Get $get): bool => $get('genre') === self::CUSTOM_GENRE_OPTION)
+                            ->required(fn (Get $get): bool => $get('genre') === self::CUSTOM_GENRE_OPTION)
+                            ->dehydrateStateUsing(fn (mixed $state): mixed => is_string($state) ? trim($state) : $state)
+                            ->maxLength(255)
+                            ->validationMessages([
+                                'required' => '请输入自定义题材。',
+                                'max' => '自定义题材不能超过 255 个字符。',
+                            ]),
                         TextInput::make('target_words')
                             ->label('小说目标总字数')
                             ->helperText('整部小说的预计总字数，必须大于 0。')
@@ -86,6 +110,49 @@ class NovelForm
                             ->default(false),
                     ]),
             ]);
+    }
+
+    /** @return array<string, string> */
+    public static function genreOptions(): array
+    {
+        return collect(config('narrative.genres', []))
+            ->filter(fn (mixed $genre): bool => is_string($genre) && filled($genre))
+            ->mapWithKeys(fn (string $genre): array => $genre === '其他'
+                ? [self::CUSTOM_GENRE_OPTION => $genre]
+                : [$genre => $genre])
+            ->all();
+    }
+
+    /** @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function prepareGenreForFill(array $data): array
+    {
+        $genre = $data['genre'] ?? null;
+
+        if (! is_string($genre) || array_key_exists($genre, self::genreOptions())) {
+            return $data;
+        }
+
+        $data['genre'] = self::CUSTOM_GENRE_OPTION;
+        $data['custom_genre'] = $genre;
+
+        return $data;
+    }
+
+    /** @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function prepareGenreForPersistence(array $data): array
+    {
+        if (($data['genre'] ?? null) === self::CUSTOM_GENRE_OPTION) {
+            $customGenre = $data['custom_genre'] ?? null;
+            $data['genre'] = is_string($customGenre) ? trim($customGenre) : $customGenre;
+        }
+
+        unset($data['custom_genre']);
+
+        return $data;
     }
 
     /** @return array<int, TextInput|TextEntry> */

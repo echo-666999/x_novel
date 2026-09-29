@@ -20,7 +20,7 @@ class NovelFactory extends Factory
     {
         return [
             'title' => fake()->sentence(4),
-            'genre' => fake()->randomElement(['玄幻', '科幻', '悬疑', '都市']),
+            'genre' => fake()->randomElement(['玄幻奇幻', '科幻末世', '悬疑灵异', '都市']),
             'premise' => fake()->paragraph(),
             'target_words' => fake()->numberBetween(300_000, 2_000_000),
             'status' => NovelStatus::Draft,

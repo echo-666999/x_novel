@@ -12,6 +12,7 @@ use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Filament\Resources\Novels\Schemas\NovelForm;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
@@ -88,7 +89,7 @@ test('the owner can create a novel and enters its workbench', function () {
         ->assertDontSee('文风高级设置')
         ->fillForm([
             'title' => '长夜将明',
-            'genre' => '玄幻',
+            'genre' => '玄幻奇幻',
             'premise' => '失去故乡的少年踏上寻找真相的旅程。',
             'target_words' => 1_000_000,
             'generation_chapter_target_words' => 3_500,
@@ -100,6 +101,7 @@ test('the owner can create a novel and enters its workbench', function () {
     $component->assertRedirect(NovelResource::getUrl('outline', ['record' => $novel]));
 
     expect($novel->title)->toBe('长夜将明')
+        ->and($novel->genre)->toBe('玄幻奇幻')
         ->and($novel->status)->toBe(NovelStatus::Draft)
         ->and(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(3_500)
         ->and(data_get($novel->settings, 'editorial'))->toBeNull();
@@ -126,7 +128,7 @@ test('the owner can edit a novels basic information', function () {
         ->assertDontSee('文风高级设置')
         ->fillForm([
             'title' => '群星彼岸',
-            'genre' => '科幻',
+            'genre' => '科幻末世',
             'premise' => '远航者寻找失落文明。',
             'target_words' => 600_000,
             'generation_chapter_target_words' => 4_000,
@@ -136,12 +138,84 @@ test('the owner can edit a novels basic information', function () {
 
     expect($novel->refresh())
         ->title->toBe('群星彼岸')
-        ->genre->toBe('科幻')
+        ->genre->toBe('科幻末世')
         ->target_words->toBe(600_000)
         ->status->toBe(NovelStatus::Draft)
         ->current_chapter_sequence->toBeNull();
     expect(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(4_000)
         ->and(data_get($novel->settings, 'editorial'))->toBe($editorial);
+});
+
+test('the configured primary genres remain available without an external platform', function () {
+    expect(config('narrative.genres'))->toBe([
+        '玄幻奇幻',
+        '武侠仙侠',
+        '都市',
+        '历史',
+        '军事谍战',
+        '科幻末世',
+        '悬疑灵异',
+        '游戏竞技',
+        '体育',
+        '现实题材',
+        '现代言情',
+        '古代言情',
+        '幻想言情',
+        '青春校园',
+        'N次元/衍生',
+        '其他',
+    ])->and(NovelForm::genreOptions())->toHaveKey(NovelForm::CUSTOM_GENRE_OPTION, '其他');
+});
+
+test('the owner can create a novel with a custom genre', function () {
+    Livewire::test(CreateNovel::class)
+        ->fillForm([
+            'title' => '纸灯照夜',
+            'genre' => NovelForm::CUSTOM_GENRE_OPTION,
+            'custom_genre' => ' 民俗志怪 ',
+            'target_words' => 500_000,
+            'generation_chapter_target_words' => 3_000,
+        ])
+        ->call('create')
+        ->assertHasNoFormErrors();
+
+    expect(Novel::query()->sole()->genre)->toBe('民俗志怪');
+});
+
+test('the owner can see and edit an existing custom genre', function () {
+    $novel = Novel::factory()->create(['genre' => '蒸汽朋克探险']);
+
+    Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
+        ->assertFormSet([
+            'genre' => NovelForm::CUSTOM_GENRE_OPTION,
+            'custom_genre' => '蒸汽朋克探险',
+        ])
+        ->fillForm(['custom_genre' => '海洋文明探险'])
+        ->call('save')
+        ->assertHasNoFormErrors();
+
+    expect($novel->refresh()->genre)->toBe('海洋文明探险');
+});
+
+test('custom genre rejects blank and overlong values', function () {
+    $base = [
+        'title' => '边界测试',
+        'genre' => NovelForm::CUSTOM_GENRE_OPTION,
+        'target_words' => 500_000,
+        'generation_chapter_target_words' => 3_000,
+    ];
+
+    Livewire::test(CreateNovel::class)
+        ->fillForm([...$base, 'custom_genre' => '   '])
+        ->call('create')
+        ->assertHasFormErrors(['custom_genre' => 'required']);
+
+    Livewire::test(CreateNovel::class)
+        ->fillForm([...$base, 'custom_genre' => str_repeat('异', 256)])
+        ->call('create')
+        ->assertHasFormErrors(['custom_genre' => 'max']);
+
+    expect(Novel::query()->count())->toBe(0);
 });
 
 test('novel form validates required fields and positive target words', function () {

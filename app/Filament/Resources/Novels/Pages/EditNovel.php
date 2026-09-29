@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Filament\Resources\Novels\NovelResource;
+use App\Filament\Resources\Novels\Schemas\NovelForm;
 use Filament\Resources\Pages\EditRecord;
 use Illuminate\Support\Facades\Log;
 
@@ -20,6 +21,7 @@ class EditNovel extends EditRecord
     /** @param  array<string, mixed>  $data */
     protected function mutateFormDataBeforeFill(array $data): array
     {
+        $data = NovelForm::prepareGenreForFill($data);
         $data['ai_model_overrides'] = data_get($data, 'settings.ai.models', []);
         $data['budget_limits'] = data_get($data, 'settings.budget', []);
         $data['generation_chapter_target_words'] = (int) data_get($data, 'settings.generation.chapter_target_words', 3_000);
@@ -32,6 +34,7 @@ class EditNovel extends EditRecord
     /** @param  array<string, mixed>  $data */
     protected function mutateFormDataBeforeSave(array $data): array
     {
+        $data = NovelForm::prepareGenreForPersistence($data);
         $overrides = collect($data['ai_model_overrides'] ?? [])
             ->map(fn (mixed $model): string => is_string($model) ? trim($model) : '')
             ->filter()

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Novels\Pages;
 
 use App\Filament\Resources\Novels\NovelResource;
+use App\Filament\Resources\Novels\Schemas\NovelForm;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateNovel extends CreateRecord
@@ -17,6 +18,7 @@ class CreateNovel extends CreateRecord
     /** @param  array<string, mixed>  $data */
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        $data = NovelForm::prepareGenreForPersistence($data);
         $data['settings'] = [
             'generation' => [
                 'chapter_target_words' => (int) $data['generation_chapter_target_words'],
