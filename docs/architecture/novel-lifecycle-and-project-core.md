@@ -153,7 +153,7 @@ Filament 的小说表单当前收集：
 
 全书大纲页在 `queued/running` 时每 3 秒读取 PostgreSQL 进度投影，终态停止轮询。Structure 完成前只显示当前阶段，不能显示虚假总百分比；Structure 完成后显示 Arc Beats `x/y`，Skeleton Assembly 完成后显示 Main Beat Detail `x/y`。失败阶段、尝试次数、用户可读原因和恢复入口持久显示，Run/Artifact/Prompt/Provider/Model/耗时与技术错误在详情中查看。Redis、Horizon、`failed_jobs` 和 Worker Toast 只用于运行或诊断，不是页面进度事实源。
 
-OGR-002 已实现页面经领域 Action 先创建 queued Batch、Worker 激活、最终失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和数据库约束；OGR-004 已将新批次运行流程切换为 Foundation → Structure → 逐 Arc Beats → Skeleton Assembly → 逐 Main Beat Detail → Finalize，并保留旧 v2 Skeleton Job 的隔离兼容边界。恢复 Action 已存在，但页面上的持久化进度卡与“继续 AI 生成”入口属于 OGR-005～OGR-006，尚未展示。
+OGR-002 已实现页面经领域 Action 先创建 queued Batch、Worker 激活、最终失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和数据库约束；OGR-004 已将新批次运行流程切换为 Foundation → Structure → 逐 Arc Beats → Skeleton Assembly → 逐 Main Beat Detail → Finalize，并保留旧 v2 Skeleton Job 的隔离兼容边界；OGR-005 已实现只读 PostgreSQL 进度解析器与可追溯 DTO。恢复 Action 已存在，但页面上的持久化进度卡、轮询与“继续 AI 生成”入口仍属于 OGR-006，尚未展示。
 
 分阶段产物最终至少覆盖：
 

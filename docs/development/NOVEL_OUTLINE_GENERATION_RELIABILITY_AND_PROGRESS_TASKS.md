@@ -5,7 +5,7 @@
 > 上游基线：`docs/PRD.md`、`docs/architecture/generation-pipeline.md`、`docs/architecture/data-model.md`、`docs/architecture/novel-lifecycle-and-project-core.md`  
 > 关联历史任务：`NGC-002B` 已完成 Foundation、Skeleton、单 Main Beat Detail、Finalize 的首次分阶段实现；本任务集是后续可靠性与交互增强，不改写其历史完成状态  
 > 用途：把已确认的“进一步拆分 Skeleton + 页面持久化进度与恢复交互”方案拆成可逐项实施、测试、验收和回滚的任务  
-> 当前状态：`OGR-001`～`OGR-004` DONE；`OGR-005` READY；其余任务等待依赖完成
+> 当前状态：`OGR-001`～`OGR-005` DONE；`OGR-006` READY；其余任务等待依赖完成
 
 ## 1. 使用规则
 
@@ -189,8 +189,8 @@ flowchart TD
 | OGR-002 | 主批次 queued/running/failed 生命周期与错误闭环 | P0 | DONE | OGR-001 |
 | OGR-003 | Structure / Arc Beats Artifact、Schema 与数据库约束 | P0 | DONE | OGR-001 |
 | OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | DONE | OGR-002、OGR-003 |
-| OGR-005 | 全书大纲进度只读解析器 | P1 | READY | OGR-002、OGR-004 |
-| OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | TODO | OGR-005 |
+| OGR-005 | 全书大纲进度只读解析器 | P1 | DONE | OGR-002、OGR-004 |
+| OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | READY | OGR-005 |
 | OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | TODO | OGR-006 |
 
 ## 7. Task Cards
@@ -777,7 +777,7 @@ flowchart TD
 
 **Skills：** `generation-pipeline`, `filament-ui`  
 **优先级：** P1  
-**状态：** READY
+**状态：** DONE
 **依赖：** OGR-002、OGR-004
 
 ### 目标
@@ -848,11 +848,66 @@ flowchart TD
 
 - 纯读取能力，可删除 Resolver/DTO 和对应测试，不影响流水线数据。
 
+### 完成记录（2026-09-30）
+
+**Summary**
+
+- 新增 `NovelOutlineProgressResolver`、`NovelOutlineProgress` 与 `NovelOutlineStageProgress`，从 PostgreSQL 最新主批次、子 Run、Artifact 和 Usage 生成统一只读页面模型。
+- 页面状态覆盖 `not_started / queued / running / retrying / failed / succeeded / cancelled`；`retrying` 只在主批次仍为 running 且当前子 Run 为可重试失败时派生，不新增数据库状态。
+- Structure 成功前 Arc 总数为未知；Structure 成功后返回 Arc Beats `x/y`；Skeleton Assembly 成功后只统计 Main Beat Detail `x/y`，不输出混合阶段的虚假整体百分比。
+- 错误主提示按稳定 `error_code` 与 category 映射；原始 Provider/Guzzle 信息仅保留在技术详情。终态失败使用 Batch 的 `failed_scope`、discriminator 与 child Run 还原准确阶段和 Arc/Beat 标签。
+- 恢复资格与现有领域 Resume 门禁保持一致，包括 Novel 生命周期、当前 Outline/Chapter/Event、完整 Prompt 版本、冻结 Provider/Model/目标平台、其他活动 Batch 与活动子 Run。
+
+**Traceability / Query Boundary**
+
+- 只有成功 Run 上 Checksum 正确、Batch/Stage/Discriminator 正确且来源 Artifact ID、类型、Checksum 完整匹配的 Artifact 才计入完成度。
+- DTO 提供 Batch、当前 Run、全部相关 Run/Artifact 引用、尝试次数、时间、耗时、Usage 汇总、Provider、Model、Reasoning Effort 与 Prompt Versions，供 OGR-006 页面和 SlideOver 直接消费。
+- Resolver 固定执行 5 条查询加载 Novel 计数、Batch、Run、Artifact 与 Usage；1 个和 12 个 Arc 的测试查询数相同，不读取 Redis、Cache、Horizon 或 `failed_jobs`。
+- Resolver 不修改 Batch/Run/Artifact，不投递 Job，也不执行 Resume。
+
+**Files Changed**
+
+- `app/Data/NovelOutlineProgress.php`
+- `app/Data/NovelOutlineStageProgress.php`
+- `app/Services/NovelOutlineProgressResolver.php`
+- `tests/Feature/NovelOutlineProgressResolverTest.php`
+- `docs/PRD.md`
+- `docs/architecture/data-model.md`
+- `docs/architecture/generation-pipeline.md`
+- `docs/architecture/novel-lifecycle-and-project-core.md`
+- 本任务文件
+
+**Database / Business Data Changes**
+
+- 无 Migration、无表结构变更、无真实业务数据修改。
+- 测试使用 `RefreshDatabase` 隔离数据库；未修改开发环境中的真实 Batch、Run、Artifact、Outline 或 Canonical Story State。
+
+**Tests Actually Run**
+
+- `php artisan test tests/Feature/NovelOutlineProgressResolverTest.php`：10 tests，10 passed，74 assertions。
+- `php artisan test tests/Feature/NovelOutlineProgressResolverTest.php tests/Feature/NovelPlanningBootstrapTest.php tests/Feature/ChapterPipelineOrchestrationTest.php tests/Feature/GenerationFailurePolicyTest.php`：65 tests，65 passed，596 assertions。
+- `php artisan test`：1070 tests，1044 passed，26 skipped，6339 assertions，0 failures，2 warnings。
+- `vendor/bin/pint`、相关 PHP syntax checks 与 `git diff --check`：通过。
+
+**Browser / External Verification**
+
+- 未执行浏览器操作；OGR-005 是只读领域投影，不包含 OGR-006 的 Filament 进度卡、轮询、Toast、SlideOver 或 Resume 按钮。
+- 未调用真实 AI Provider，未启动、暂停或重启 Horizon Worker。
+
+**Known Limitations**
+
+- 全书大纲页面尚未消费该 DTO，因此当前页面仍不会显示持久进度或失败后的继续入口；由 OGR-006 实施。
+- 旧 v2 Batch 仅按其冻结阶段图提供只读兼容显示；旧批次发布处置仍由 OGR-007 完成。
+
+**Next Task**
+
+- `OGR-006`：Filament 进度、失败提示与继续生成交互。
+
 ## OGR-006 — Filament 进度、失败提示与继续生成交互
 
 **Skills：** `filament-ui`, `generation-pipeline`  
 **优先级：** P1  
-**状态：** TODO  
+**状态：** READY
 **依赖：** OGR-005
 
 ### 目标

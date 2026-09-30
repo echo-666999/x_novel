@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。OGR-002 已实现 Outline 主批次生命周期、失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验与 PostgreSQL 约束；OGR-004 已接通 Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize。页面进度投影与交互由 OGR-005～OGR-006 实施。
+> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。OGR-002 已实现 Outline 主批次生命周期、失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验与 PostgreSQL 约束；OGR-004 已接通 Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize；OGR-005 已实现 PostgreSQL 只读进度投影。页面进度与恢复交互由 OGR-006 实施。
 
 ## 1. 目标
 
@@ -47,7 +47,7 @@ Outline 主批次状态固定为 `queued / running / failed / succeeded / cancel
 
 PostgreSQL 中的主批次、子 Run、Artifact 和 Draft Outline 是 Outline 进度事实源。全书大纲页在活动批次期间每 3 秒轮询：Structure 完成前只显示当前阶段；Structure 完成后显示 Arc Beats `x/y`；Skeleton Assembly 完成后显示 Main Beat Detail `x/y`；终态停止轮询。失败信息持久显示，并通过领域 Resume Action 在事务内校验版本、暂停、活动 Run、输入指纹和来源链，从最早缺失的有效 Artifact 继续。Redis、Horizon、`failed_jobs` 和 Worker Toast 仅用于运行或诊断，不承担业务进度与恢复语义。
 
-当前已由 `StartNovelOutlineGenerationAction` 在 Web 请求中创建或复用 queued Batch，`GenerateNovelOutlineJob` 保持旧构造参数并激活 prepared Batch；各 Outline Job 的最终失败统一收口主批次，`ResumeNovelOutlineGenerationAction` 从最早缺失且输入指纹匹配的 Artifact 继续。Structure / Arc Beats Jobs 与 Skeleton Assembly 已实现；进度解析器和页面进度/恢复入口尚未实现，分别属于 OGR-005～OGR-006。
+当前已由 `StartNovelOutlineGenerationAction` 在 Web 请求中创建或复用 queued Batch，`GenerateNovelOutlineJob` 保持旧构造参数并激活 prepared Batch；各 Outline Job 的最终失败统一收口主批次，`ResumeNovelOutlineGenerationAction` 从最早缺失且输入指纹匹配的 Artifact 继续。Structure / Arc Beats Jobs 与 Skeleton Assembly 已实现；`NovelOutlineProgressResolver` 批量读取最新 Batch、子 Run、Artifact 与 Usage，校验成功 Artifact 的固定来源链后，返回阶段、已知分母、失败和恢复资格。页面进度卡、轮询与恢复入口仍属于 OGR-006。
 
 长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。
 

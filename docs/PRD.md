@@ -16,7 +16,7 @@
 | 技术栈 | Laravel + Filament + PostgreSQL/pgvector + Redis + Laravel Queue |
 | 核心目标 | 小而精、低运维成本、长期可维护 |
 | 非目标 | SaaS、多租户、多人协作、复杂审批、微服务化 |
-| 状态 | 已完成 NGC-001～NGC-012 产品基线；OGR-002 已实现 Outline 主批次生命周期与 Resume，OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和 PostgreSQL 约束，OGR-004 已接通 Structure → 逐 Arc Beats → 确定性 Skeleton Assembly 新链路与完整来源校验。进度投影与页面交互仍由 OGR-005～OGR-006 实施 |
+| 状态 | 已完成 NGC-001～NGC-012 产品基线；OGR-002 已实现 Outline 主批次生命周期与 Resume，OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和 PostgreSQL 约束，OGR-004 已接通 Structure → 逐 Arc Beats → 确定性 Skeleton Assembly 新链路与完整来源校验，OGR-005 已实现 PostgreSQL 只读进度投影。页面进度与恢复交互仍由 OGR-006 实施 |
 
 ---
 

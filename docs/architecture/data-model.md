@@ -1388,6 +1388,8 @@ Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Fi
 
 全书大纲进度只从 PostgreSQL 的 Run、Artifact 和 Draft Outline 投影。Redis、Horizon 与 `failed_jobs` 不保存权威业务进度。Structure 完成后才能确定 Arc Beats 分母；Skeleton Assembly 完成后才能确定 Main Beat Detail 分母。领域 Resume 从最早缺失且来源有效的 Artifact 继续，不直接重放 Queue payload。
 
+`NovelOutlineProgressResolver` 是该投影的只读入口：它一次批量加载最新主批次及其子 Run、Artifact、Usage，只有状态为 `succeeded`、Checksum 正确且来源链完整的 Artifact 才计入阶段完成度。Resolver 返回数据库状态与页面派生状态、当前 Arc/Beat 标签、已知阶段分母、冻结模型路由、用户错误文案、技术详情、恢复资格及 Run/Artifact 引用；它不写数据库、不投递 Job，也不读取 Redis 或 `failed_jobs`。
+
 正式进度继续复用 `story_events`：
 
 ```text
