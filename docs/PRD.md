@@ -16,7 +16,7 @@
 | 技术栈 | Laravel + Filament + PostgreSQL/pgvector + Redis + Laravel Queue |
 | 核心目标 | 小而精、低运维成本、长期可维护 |
 | 非目标 | SaaS、多租户、多人协作、复杂审批、微服务化 |
-| 状态 | 已完成 NGC-001～NGC-012 产品基线；关系化/分阶段 Outline、Canonical Milestone、Plan Admission、确定性 Assembly、Compact Review、Paragraph/Scene Rewrite、恢复门禁、安全删除、题材与目标平台配置均已实现并完成综合回归 |
+| 状态 | 已完成 NGC-001～NGC-012 产品基线；OGR-001 已批准 Outline 可靠性与页面进度的新产品合同，代码实施由 OGR-002～OGR-006 完成。在这些任务完成前，现有代码仍运行 NGC-002B 的 Foundation → Skeleton → Beat Detail → Finalize 流程 |
 
 ---
 
@@ -230,6 +230,10 @@ Chapter
 - 能从最近 Artifact / Run 恢复。
 
 恢复必须以 PostgreSQL 中的 Run、Artifact 和章节状态为依据。Current Bible 的叙事基线或完整 Style Profile 缺失时，生成前置检查必须以 `current_bible_incomplete` 停止；用户在“小说圣经”创建新的完整版本后才能重试，不得回退到旧 Editorial。Rewrite 达到上限后必须停在 NEEDS_ATTENTION，由用户人工修改后重新审校，或在没有 Hard Conflict 且满足 Override 条件时明确填写原因后人工通过。
+
+全书 Outline 生成必须具备持久化的可见进度和领域恢复入口。用户点击“AI 生成候选”时，Web 请求必须先在 PostgreSQL 创建或复用 `queued` 主批次，再在事务提交后投递协调 Job；Worker 激活批次时改为 `running`。任一子阶段最终失败必须把主批次收口为 `failed` 并保存可展示的错误码、用户文案、技术信息和可恢复性；Finalize 成功后才可变为 `succeeded`。页面不能依赖一次性 Toast、Redis、Horizon 或 `failed_jobs` 判断业务进度。
+
+全书大纲页面在批次为 `queued` 或 `running` 时轮询 PostgreSQL 中的 Run 与 Artifact 投影，并展示当前阶段、尝试次数和已知分母下的 `x/y` 进度；终态停止轮询。Structure 完成前不得伪造整体百分比，完成后可显示 Arc Beats 进度，Skeleton Assembly 完成后可显示 Main Beat Detail 进度。失败原因必须持久显示；可恢复失败提供“继续 AI 生成”，由领域 Resume Action 校验暂停、版本、活动 Run、输入指纹和 Artifact 来源链后，从最早缺失的有效 Artifact 继续。禁止把 `queue:retry` 作为产品恢复入口。
 
 若已启动章节必须立即采用新的 Bible 内容，恢复操作必须先 dry-run 并冻结 Expected Bible Version、Expected State Version、章节/Plan/Scene 来源链和 Artifact checksum；用户审核同一 plan hash 后才能显式执行。执行时创建新的不可变 Bible Version，保留旧 Run、Artifact、原始响应和 Usage 审计，并从最早受 Bible 变化影响的阶段重新生成。旧 Bible 的 Draft、Review 或 Rewrite Artifact 不得进入新来源链的 Canonical Commit。
 
@@ -607,12 +611,14 @@ Volume → Arc → Beat → Milestone → Chapter → Scene
 
 ```text
 Foundation（Bible / 初始人物 / 世界 / 伏笔）
-→ Skeleton（Volume / Arc / Beat 骨架）
-→ Beat Detail（一次只生成一个 Main Beat 的 Milestones / Handoff）
+→ Structure（一次生成 Volume / Arc，不生成 Beat）
+→ Arc Beats × Arc（一次只生成一个 Arc 的 Beat，严格串行）
+→ Skeleton Assembly（Laravel 确定性合并 Structure 与全部 Arc Beats）
+→ Beat Detail × Main Beat（一次只生成一个 Main Beat 的 Milestones / Handoff）
 → Finalize（Laravel 确定性合并、校验并事务写入）
 ```
 
-禁止一次 Provider 请求同时生成 Bible、完整 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。每个 Provider Job 最多一次模型请求，每阶段保存独立 Run、不可变 Artifact、输入指纹和恢复点；Finalize 不调用 Provider。
+禁止一次 Provider 请求同时生成 Bible、全书 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Foundation、Structure、每个 Arc Beats 和每个 Beat Detail 都保存独立 Run、不可变 Artifact、输入指纹和恢复点；每个 Provider Job 最多一次模型请求。Skeleton Assembly 与 Finalize 均由 Laravel 确定性执行，不调用 Provider。任何 Arc 失败只恢复该 Arc，已经成功且来源链匹配的 Artifact 不重复计费。
 
 ### volumes
 

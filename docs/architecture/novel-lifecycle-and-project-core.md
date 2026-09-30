@@ -2,7 +2,7 @@
 
 > 本文描述 XNovel 从新建小说、生成蓝图、逐章生产、正式提交、记忆更新，到收束和完本的完整流程。
 >
-> 文档依据当前代码、`docs/PRD.md` 与 `docs/architecture/` 编写。凡是架构目标与当前实现不完全一致的地方，会明确标注，避免把设计目标误写成已实现能力。
+> 文档依据当前代码、`docs/PRD.md` 与 `docs/architecture/` 编写。凡是架构目标与当前实现不完全一致的地方，会明确标注，避免把设计目标误写成已实现能力。OGR-001 已批准新版 Outline 生命周期合同；对应代码由 OGR-002～OGR-006 实施。
 
 ## 1. 项目定位
 
@@ -46,7 +46,7 @@ Completed Novel
 
 ```mermaid
 flowchart TD
-    A["新建 Novel<br/>状态 draft"] --> B["generation 队列<br/>Foundation → Skeleton → Beat Detail → Finalize"]
+    A["新建 Novel<br/>状态 draft"] --> B["generation 队列<br/>Foundation → Structure → Arc Beats<br/>→ Skeleton Assembly → Beat Detail → Finalize"]
     B --> C{"人工预览并采用蓝图?"}
     C -- "否" --> B
     C -- "是" --> D["落地 Bible / 角色 / 世界资料<br/>Volume / Story Arc / Foreshadowing"]
@@ -145,9 +145,15 @@ Filament 的小说表单当前收集：
 
 ### 4.2 生成结构化蓝图
 
-Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Job 创建或恢复同一 Novel 的规划批次，之后严格串行派发 Foundation、Skeleton、逐 Main Beat Detail 和 Finalize。Foundation 只生成 Bible、初始人物、世界实体和伏笔；Skeleton 只生成 Volume / Arc / Beat 骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestone 与 Handoff；Finalize 由 Laravel 合并不可变 Artifact、解析稳定 Key、执行完整结构校验并创建关系化 Draft Outline，不调用 Provider。
+目标生命周期中，Filament 调用领域启动 Action，在 Web 请求内先创建或复用同一 Novel、同一输入的 `queued` 规划批次；数据库事务提交后才投递 `GenerateNovelOutlineJob`。协调 Job 将批次激活为 `running`，再严格串行派发 Foundation、Structure、逐 Arc Beats、Skeleton Assembly、逐 Main Beat Detail 和 Finalize。Foundation 只生成 Bible、初始人物、世界实体和伏笔；Structure 只生成 Volume / Arc；每个 Arc Beats 只生成目标 Arc 的 Beat；Skeleton Assembly 由 Laravel 确定性合并完整骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestone 与 Handoff；Finalize 由 Laravel 沿固定 Artifact lineage 解析稳定 Key、执行完整结构校验并创建关系化 Draft Outline，不调用 Provider。
 
-每个 Provider Job 最多一次模型请求，并单独保存 Generation Run、不可变 Artifact、输入指纹和恢复点。单个 Beat Detail 失败只恢复该 Beat，已成功的 Foundation、Skeleton 和其他 Beat Detail 不重复计费；截断或 Schema 无效响应不能成为下游来源。规划批次冻结 Provider、Model、Reasoning Effort 和目标平台；目标平台优先取 Current Bible，没有 Bible 时取 `NARRATIVE_DEFAULT_TARGET_PLATFORM`。
+每个 Provider Job 最多一次模型请求，并单独保存 Generation Run、不可变 Artifact、输入指纹和恢复点。单个 Arc 或 Beat Detail 失败只恢复该 Arc 或 Beat，已成功且来源链匹配的 Foundation、Structure、其他 Arc、Skeleton 和其他 Beat Detail 不重复计费；截断或 Schema 无效响应不能成为下游来源。规划批次冻结 Provider、Model、Reasoning Effort 和目标平台；目标平台优先取 Current Bible，没有 Bible 时取 `NARRATIVE_DEFAULT_TARGET_PLATFORM`。
+
+子阶段最终失败或自动重试耗尽时，主批次必须持久化为 `failed`；旧失败回调不得覆盖已经 `succeeded` 或 `cancelled` 的批次。可恢复失败由页面上的“继续 AI 生成”调用领域 Resume Action：事务内锁定 Novel 与 Batch，校验暂停、合同版本、活动 Run、输入指纹和 Artifact 来源链，再把批次恢复为 `running`，并在提交后从最早缺失阶段继续。产品恢复入口不直接调用 `queue:retry`。
+
+全书大纲页在 `queued/running` 时每 3 秒读取 PostgreSQL 进度投影，终态停止轮询。Structure 完成前只显示当前阶段，不能显示虚假总百分比；Structure 完成后显示 Arc Beats `x/y`，Skeleton Assembly 完成后显示 Main Beat Detail `x/y`。失败阶段、尝试次数、用户可读原因和恢复入口持久显示，Run/Artifact/Prompt/Provider/Model/耗时与技术错误在详情中查看。Redis、Horizon、`failed_jobs` 和 Worker Toast 只用于运行或诊断，不是页面进度事实源。
+
+以上是 OGR-001 冻结的目标合同。当前代码仍由页面直接投递协调 Job，并运行 Foundation → Provider Skeleton → Beat Detail → Finalize；新启动 Action、批次失败闭环、Structure/Arc Beats Jobs、确定性 Skeleton Assembly、进度解析器和页面交互分别由 OGR-002～OGR-006 实现。
 
 分阶段产物最终至少覆盖：
 
@@ -156,7 +162,7 @@ Filament 只投递 `GenerateNovelOutlineJob` 并立即结束 Web 请求；该 Jo
 - 世界实体、世界规则、伏笔及其兑现窗口；
 - 关系化 Volume → Story Arc → Beat → Milestone，以及稳定 Key、Sequence、章节预算、验收条件和相邻 Main Beat Handoff。
 
-Foundation、Skeleton、Beat Detail 和 Blueprint Artifact 都只是候选，不会在 Provider 返回后直接写入正式 Bible、Volume、Story Arc、Character、World Entity 或 Canonical State。只有 Finalize 产生的完整关系化 Draft Outline 可以进入采用流程。手工入口直接创建 Draft Outline，不调用 Provider；人工编辑和局部重新生成均创建新版本，不覆盖 Artifact 或旧 Outline。
+Foundation、Structure、Arc Beats、Skeleton、Beat Detail 和 Blueprint Artifact 都只是候选，不会在 Provider 返回后直接写入正式 Bible、Volume、Story Arc、Character、World Entity 或 Canonical State。只有 Finalize 产生的完整关系化 Draft Outline 可以进入采用流程。手工入口直接创建 Draft Outline，不调用 Provider；人工编辑和局部重新生成均创建新版本，不覆盖 Artifact 或旧 Outline。
 
 ### 4.3 采用蓝图
 
@@ -614,7 +620,8 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 补充边界：
 
-- Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。局部 Outline 修订记录 `novel-outline-node-v3`。这些版本由 Outline 服务单独维护，不通过 `PromptVersionResolver`。
+- NGC-002B 当前实现的 Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。局部 Outline 修订记录 `novel-outline-node-v3`。这些历史版本必须继续可解释。
+- OGR 新合同要求 Structure、Arc Beats、确定性 Skeleton Assembly 与新版 Pipeline 使用新的、可冻结的版本标识。OGR-003 在完成 Strict Schema 与模型容量验证后确定具体字符串和输出预算；OGR-001 不虚构尚未实现的版本号。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。

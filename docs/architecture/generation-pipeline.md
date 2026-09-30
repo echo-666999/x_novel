@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。当前流水线包含关系化/分阶段 Outline、Canonical Milestone、Plan Admission、完成语义、确定性 Assembly、Compact Review、Paragraph/Scene Rewrite、统一阶段指纹/失败策略、下一章门禁、Beat Handoff、提交后恢复、安全删除、题材与目标平台配置。Assembly 按 Scene Sequence 固定拼接并从 Scene Artifact 聚合 Coverage，不调用 Provider；自动 Whole Chapter Rewrite 兼容路径已删除。
+> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。OGR-001 批准了新的 Outline 阶段、批次生命周期、页面进度和 Resume 合同；对应代码由 OGR-002～OGR-006 实施。在这些任务完成前，运行代码仍是 NGC-002B 的 Foundation → Provider Skeleton → Beat Detail → Finalize，且全书大纲页尚无持久化批次进度。本文把 OGR 合同作为目标架构，并在涉及现状时明确标注。
 
 ## 1. 目标
 
@@ -20,9 +20,12 @@ EasyPay 只作为阶段指纹、成功 Artifact 复用、局部恢复和确定�
 
 ```text
 Novel.status = draft
-→ GenerateNovelOutlineJob 创建或恢复规划批次
+→ StartNovelOutlineGenerationAction 同步创建或复用 queued 规划批次
+→ GenerateNovelOutlineJob 激活批次并派发下一阶段
 → GenerateNovelFoundationJob：Bible / 初始人物 / 世界 / 伏笔 Artifact
-→ GenerateNovelOutlineSkeletonJob：Volume / Arc / Beat 骨架 Artifact
+→ GenerateNovelOutlineStructureJob：Volume / Arc 结构 Artifact
+→ GenerateNovelArcBeatsJob × Arc：单个 Arc 的 Beat Artifact，严格串行
+→ AssembleNovelOutlineSkeletonJob：Laravel 确定性合并完整 Skeleton
 → GenerateNovelBeatDetailJob × Main Beat：Milestones / Handoff Artifact
 → FinalizeNovelOutlineJob：Laravel 确定性合并、解析 Key、完整校验
 → 事务写入 Outline Version 头及 Volume / Arc / Beat / Milestone 关系表
@@ -34,11 +37,17 @@ Novel.status = draft
 → Novel.status = generating
 ```
 
-Foundation、Skeleton 和 Beat Detail 在 Finalize 前都只能保存不可变 Artifact，不得修改正式规划或领域表；初始规划只能应用到尚无规划、章节和正式事件的小说。采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，关系化 Current Novel Outline 是顺序和主线权威。Laravel 选择 Current Beat/Milestone 并解析 Handoff；LLM 不拥有排序、主线切换、跳过、删除或宣告节点完成的权限。
+Foundation、Structure、Arc Beats、Skeleton 和 Beat Detail 在 Finalize 前都只能保存不可变 Artifact，不得修改正式规划或领域表。`outline_skeleton` 是 Laravel 按 Structure 和全部 Arc Beats 的稳定 Key、顺序与 checksum 确定性合并的结果，不是 Provider 输出。初始规划只能应用到尚无规划、章节和正式事件的小说。采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，关系化 Current Novel Outline 是顺序和主线权威。Laravel 选择 Current Beat/Milestone 并解析 Handoff；LLM 不拥有全局排序、主线切换、跳过、删除或宣告节点完成的权限。
 
 创建 Outline 批次时，Laravel 优先读取已有 Current Bible 明确选择的目标平台；没有 Current Bible 时读取 `config('narrative.default_platform')`，其环境来源默认为 `NARRATIVE_DEFAULT_TARGET_PLATFORM=fanqie`。解析结果的 code、label 和来源随 Batch Context 冻结并参与输入指纹，Foundation Prompt 与 Strict Schema 只允许返回该 code。配置值不属于 `narrative.platforms` 时，Filament 预检和领域入口都必须在派发或调用 Provider 前报告错误；首个手工 Bible 表单仍保留有效平台列表供用户修复。新建 Bible Version 始终继承 Current Bible 表单值，不受之后的环境变更影响。
 
-全书规划必须异步、有界、可恢复。每个调用 Provider 的 Job 最多发出一次模型请求，每阶段保存独立 Run、Artifact、`input_hash` 和幂等键；单个 Beat Detail 失败只恢复该 Beat。禁止一次请求生成 Bible、完整 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Finalize 不调用 Provider，也不信任模型返回的数据库 ID。
+全书规划必须异步、有界、可恢复。每个调用 Provider 的 Job 最多发出一次模型请求，每阶段保存独立 Run、Artifact、`input_hash` 和幂等键；单个 Arc Beats 或 Beat Detail 失败只恢复对应 Arc 或 Beat。禁止一次请求生成 Bible、全书 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Skeleton Assembly 与 Finalize 不调用 Provider，也不信任模型返回的数据库 ID。
+
+Outline 主批次状态固定为 `queued / running / failed / succeeded / cancelled`。页面入口先持久化 `queued` 批次，Worker 激活后改为 `running`；子阶段成功后继续保持 `running`，最终失败必须收口为 `failed`，Finalize 事务成功才改为 `succeeded`。`retrying` 只是页面根据主批次和最新子 Run 派生的展示状态，不增加数据库状态。投递失败必须把仍为 `queued` 的批次收口为 `failed`。
+
+PostgreSQL 中的主批次、子 Run、Artifact 和 Draft Outline 是 Outline 进度事实源。全书大纲页在活动批次期间每 3 秒轮询：Structure 完成前只显示当前阶段；Structure 完成后显示 Arc Beats `x/y`；Skeleton Assembly 完成后显示 Main Beat Detail `x/y`；终态停止轮询。失败信息持久显示，并通过领域 Resume Action 在事务内校验版本、暂停、活动 Run、输入指纹和来源链，从最早缺失的有效 Artifact 继续。Redis、Horizon、`failed_jobs` 和 Worker Toast 仅用于运行或诊断，不承担业务进度与恢复语义。
+
+OGR-001 只冻结上述目标合同。`StartNovelOutlineGenerationAction`、Structure/Arc Beats/Skeleton Assembly Jobs、批次失败闭环、进度解析器和页面交互由 OGR-002～OGR-006 实现；实施完成前不得把目标类名或页面行为当作当前代码事实。
 
 长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。
 
@@ -89,7 +98,9 @@ MVP 只使用两个 Queue。
 generation:
   GenerateNovelOutlineJob
   GenerateNovelFoundationJob
-  GenerateNovelOutlineSkeletonJob
+  GenerateNovelOutlineStructureJob
+  GenerateNovelArcBeatsJob
+  AssembleNovelOutlineSkeletonJob
   GenerateNovelBeatDetailJob
   FinalizeNovelOutlineJob
   PlanChapterJob
@@ -110,6 +121,8 @@ default:
 ```
 
 `ContextBuilder` 作为 Service，不单独 Queue。只有出现真实拥堵后才拆更多 Queue。
+
+`GenerateNovelOutlineSkeletonJob` 是 NGC-002B 的遗留 Provider Job，只服务旧合同与上线前批次处理；新版批次不得派发它。OGR-007 完成旧批次处置与发布收尾后，才能按实际引用情况删除兼容代码。
 
 ## 4. GenerateNextChapterAction
 
@@ -177,6 +190,12 @@ context_snapshot
 Artifact 不可变，类型：
 
 ```text
+outline_foundation
+outline_structure
+outline_arc_beats
+outline_skeleton
+outline_beat_detail
+outline_blueprint
 chapter_plan
 scene_draft
 chapter_draft
@@ -187,6 +206,8 @@ review_result
 summary
 context
 ```
+
+Outline 子 Run 的 `scope_id` 统一指向 `scope_type=novel_outline_batch` 的主批次 Run。Structure 为批次内单一 Artifact；Arc Beats 使用 `context_snapshot.discriminator.arc_key` 区分目标 Arc；Beat Detail 使用 `context_snapshot.discriminator.beat_key` 区分目标 Main Beat。`outline_skeleton` 和 `outline_blueprint` 分别由确定性 Skeleton Assembly 与 Finalize 产生，不创建 AI Request Log 或 Usage Record，并在 lineage 中固定全部上游 Artifact ID 与 checksum。
 
 `GenerationStageFingerprint` 负责所有章节 Stage 的 `input_hash`：只包含真正影响输出的业务输入、冻结 Prompt/Model/Route/State/Plan、上游 Artifact checksum 和算法版本；递归排序 Map 键、保留 List 顺序，并排除时间戳、Attempt、Queue/Job ID 和操作元数据。
 
@@ -207,7 +228,7 @@ context
 
 Queue Job 必须区分可重试的外部或数据库故障与不可重试的应用代码异常。`QueryException` 等临时基础设施错误可由 Queue 退避重试；`ErrorException`、`TypeError`、未定义数组键等本地代码故障必须立即终止当前 Job，进入失败与阻断流程，不得再次调用 AI Provider。
 
-Filament 发起生成任务时，必须在派发前写入带 TTL 的临时待执行标记，并在标记存在或数据库已有 `queued / running` Run 时禁用本章的生成操作。Queue Job 同时使用按阶段与业务对象定义的唯一键，防止页面刷新、多标签页或并发请求重复入队。Job 成功或最终失败后清除临时标记；Worker 异常退出时由 TTL 自动释放。该标记只用于弥补 Job 入队到 `GenerationRun` 创建之间的可见性窗口，业务恢复与执行进度仍以 PostgreSQL 中的 Run 和 Artifact 为准。
+Filament 发起章节生成任务时，必须在派发前写入带 TTL 的临时待执行标记，并在标记存在或数据库已有 `queued / running` Run 时禁用本章的生成操作。Queue Job 同时使用按阶段与业务对象定义的唯一键，防止页面刷新、多标签页或并发请求重复入队。Job 成功或最终失败后清除临时标记；Worker 异常退出时由 TTL 自动释放。该标记只用于弥补章节 Job 入队到 `GenerationRun` 创建之间的可见性窗口，业务恢复与执行进度仍以 PostgreSQL 中的 Run 和 Artifact 为准。Outline 不使用该可见性补丁：页面入口必须先同步写入 `queued` 主批次，再在事务提交后派发协调 Job。
 
 ## 6. PlanChapterJob
 
@@ -696,6 +717,12 @@ Pause 停止派发新 Stage；已发出的 Provider 调用可结束并保存 Art
 Resume 通过数据库状态和 Artifact 判断恢复点：
 
 ```text
+Outline：Foundation 已完成 → Structure
+Outline：Structure 已完成 → 第一个缺失的 Arc Beats
+Outline：全部 Arc Beats 已完成 → Skeleton Assembly
+Outline：Skeleton 已完成 → 第一个缺失的 Main Beat Detail
+Outline：全部 Beat Detail 已完成 → Finalize
+Outline：Finalize 已完成 → succeeded，不再派发
 Chapter canonical → Post-Commit / Next Action
 Review PASS、Commit 未完成、auto_commit=false → 停止并等待用户手动 Commit
 Review PASS、Commit 未完成、auto_commit=true → 校验来源链与 Pause 后派发 Commit
@@ -707,13 +734,17 @@ Plan 已完成 → Scene 1
 无 Plan → Plan
 ```
 
-恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。章节工作台同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
+Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。
+
+章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。章节工作台同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
 
 不要根据 Redis Queue 中是否还有 Job 判断业务进度。
 
 ## 19. Crash Recovery
 
 Worker Crash 可能留下 `generation_runs.status=running`。维护任务识别超时 Run，并标记 failed，例如 `error_code=worker_lost`。
+
+Outline 子阶段的不可重试错误或自动重试耗尽时，失败回调必须在行锁内把仍属于该活动尝试的主批次收口为 `failed`。延迟到达的旧 Job 或失败回调不得覆盖已成功或已取消的批次。Provider 请求失败、响应截断或 Schema/领域校验失败均表示当前阶段没有有效 Artifact；只有 Provider 响应已经通过全部校验而结果持久化是否成功无法确认时，才使用“结果不确定”错误分类。
 
 恢复时根据 Artifact + input_hash 决定 reuse 或 retry。若经过 Schema/业务校验的不可变 Artifact 已经持久化，但 Worker 在把 Run 标记为 succeeded 前崩溃，恢复流程复用该 Artifact 并从其后续合法阶段继续；没有 Artifact 的失败 Run 才重试当前阶段。Chapter Draft 恢复后仍必须依次完成 Event Candidate、State Patch 和 Review。
 
@@ -728,7 +759,7 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 ## 20. Timeout / Retry Budget
 
-统一配置 outline_foundation、outline_skeleton、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Deterministic Assembly 没有 Provider Timeout。
+统一配置 outline_foundation、outline_structure、outline_arc_beats、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Skeleton Assembly、Chapter Assembly 与 Outline Finalize 都是确定性阶段，没有 Provider Timeout。具体 Outline 输出 Token 上限由 OGR-003 在 Schema 和模型容量验证后确定，OGR-001 不冻结数字。
 
 默认超时链：
 
@@ -839,6 +870,7 @@ stage:{stage}
 | 停止状态或错误 | 已确认行为 | 操作入口 |
 |---|---|---|
 | `current_bible_incomplete` | 生成前置检查拒绝启动，不读取旧 `settings.editorial` 兜底 | 打开该小说的“小说圣经”，创建新的完整 Bible Version；明确填写 tone、POV、tense 和全部 Style Profile 后重新启动 |
+| Outline 批次失败 | 子阶段终止后主批次持久化为 `failed`；成功且来源匹配的 Foundation、Structure、Arc Beats、Skeleton 或 Beat Detail Artifact 保留 | 在全书大纲页查看阶段、错误和 Run 详情；可恢复时点击“继续 AI 生成”，由领域 Resume 从最早缺失阶段继续 |
 | 已启动章节必须立即采用新 Bible | 旧来源链保持不可变，不能把旧 Bible 的 Rewrite/Review 提交到新 Bible | 先执行 `novel:recover-bible-chapter` dry-run；审核完整差异、来源链、State 基线和 plan hash 后，使用相同 Expected Bible/State 与 hash 显式 `--execute`。系统创建新 Bible Version，并从 Chapter Planning 重新推进 |
 | Stage/Provider 失败 | 成功的 Run/Artifact 保留；不得靠重放全部流水线覆盖历史产物 | 在“Generation → 恢复中心”查看错误和可重试性；可重试失败使用“重试”，暂停小说使用“恢复”。章节工作台的分阶段按钮仅用于定位后的调试或恢复 |
 | Rewrite 耗尽 | 最后一次复审转为 `NEEDS_ATTENTION`，不再自动派发 Rewrite | 在章节工作台“审校”中“人工修改正文”并自动重走 Event/Patch/Review；无 Hard Conflict 且符合 Override 条件时可填写原因“人工通过（Override）” |
@@ -870,7 +902,7 @@ Workflow：
 
 ```text
 normal full chapter
-Foundation / Skeleton / Beat Detail / Finalize recovery
+Foundation / Structure / Arc Beats / Skeleton Assembly / Beat Detail / Finalize recovery
 Plan Admission rejects invalid Outline chain before Scene 1
 multiple scenes sequential
 deterministic Assembly preserves ordered Scene content and makes no Provider request

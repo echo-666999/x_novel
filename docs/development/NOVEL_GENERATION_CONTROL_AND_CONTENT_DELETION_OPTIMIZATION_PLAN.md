@@ -1406,6 +1406,13 @@ Known Limitations
 - 未执行真实 Provider 调用；Provider 请求次数、路由冻结、失败分流和严格 Schema 由 Fake Provider Feature Tests 验证。
 - Milestone/Beat 的 Canonical Completion Event 与进度投影仍属于 NGC-003～NGC-005。
 
+后续增强（OGR-001，2026-09-30）
+
+- NGC-002B 的 Foundation、Provider Skeleton、单 Main Beat Detail 与 Finalize 首次分阶段实现保持 `DONE`，本记录继续作为历史实施事实。
+- 后续真实运行中，单次全书 Skeleton 已发生超时和输出截断；全书大纲页同时缺少持久化批次进度、失败原因与领域恢复入口。这些问题不改变 NGC-002B 当时的完成范围。
+- 新目标合同记录在 `docs/development/NOVEL_OUTLINE_GENERATION_RELIABILITY_AND_PROGRESS_TASKS.md`：Foundation → Structure → Arc Beats × Arc → Laravel 确定性 Skeleton Assembly → Beat Detail × Main Beat → Finalize，并增加 queued/running/failed/succeeded/cancelled 主批次生命周期、PostgreSQL 进度投影和领域 Resume。
+- 实现属于 OGR-002～OGR-007；不得把 OGR-001 的文档合同误写为当前代码已经上线，也不把 NGC-002B 改回未完成。
+
 Next Task
 
 - NGC-003：Canonical Milestone Progress。

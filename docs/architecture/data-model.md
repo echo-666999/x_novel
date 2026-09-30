@@ -2,7 +2,7 @@
 
 # AI Long-Form Fiction Platform
 
-> NGC-005 实施基线。关系化 Outline、分阶段 Outline 生成、Chapter Plan 完整父链、Canonical Milestone Progress，以及 Review/Event/Commit 完成语义已经实现；不迁移、不 Backfill 旧数据。
+> NGC-005 实施基线。关系化 Outline、Chapter Plan 完整父链、Canonical Milestone Progress，以及 Review/Event/Commit 完成语义已经实现；不迁移、不 Backfill 旧数据。OGR-001 已批准新的 Outline Artifact、主批次生命周期和恢复合同，代码与数据库约束由 OGR-002～OGR-004 实施。在这些任务完成前，现有代码仍使用 NGC-002B 的 Provider Skeleton Artifact；本文 40.3 节描述 OGR 目标数据合同，不能据此推断新版 Job 已上线。
 
 本项目是一个由单人开发、单人使用、单人维护的 AI 长篇网络小说自动生成系统。
 
@@ -790,6 +790,12 @@ generation_artifacts
 保存：
 
 ```text
+outline_foundation
+outline_structure
+outline_arc_beats
+outline_skeleton
+outline_beat_detail
+outline_blueprint
 chapter_plan
 scene_draft
 chapter_draft
@@ -800,6 +806,19 @@ state_patch
 summary
 context
 ```
+
+Outline Artifact 语义：
+
+```text
+outline_foundation  Provider 生成的 Bible / 初始领域候选
+outline_structure   Provider 生成的 Volume / Arc 结构，不含 Beat
+outline_arc_beats   Provider 按单个 Arc 生成的 Beat 集合
+outline_skeleton    Laravel 按 Structure 与全部 Arc Beats 确定性合并
+outline_beat_detail Provider 按单个 Main Beat 生成 Milestones / Handoff
+outline_blueprint   Laravel Finalize 校验后的完整候选来源包
+```
+
+Artifact 均不可变。`outline_skeleton` 与 `outline_blueprint` 必须保存有序来源 ID、checksum 和算法版本，且不产生 AI Request Log 或 Usage Record。Structure、全部 Arc Beats、Skeleton 和全部 Beat Detail 必须属于同一 Novel、同一主批次；Finalize 不能按“最新 Artifact”猜测来源。
 
 Artifact 原则：
 
@@ -823,6 +842,13 @@ default
 ### generation
 
 ```text
+GenerateNovelOutlineJob
+GenerateNovelFoundationJob
+GenerateNovelOutlineStructureJob
+GenerateNovelArcBeatsJob
+AssembleNovelOutlineSkeletonJob
+GenerateNovelBeatDetailJob
+FinalizeNovelOutlineJob
 PlanChapterJob
 GenerateSceneJob
 AssembleChapterJob
@@ -1338,7 +1364,29 @@ Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Fi
 
 ### 40.3 Outline 生成与完成进度
 
-新建 Outline 使用 `Foundation → Skeleton → 单 Beat Detail → Finalize`。Foundation 生成 Bible/初始领域候选；Skeleton 生成 Volume/Arc/Beat 骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestones/Handoff；Finalize 不调用 Provider，只合并成功 Artifact、解析稳定 Key 并事务写入关系表。禁止一次 Provider 请求生成全部层级和明细。
+新建 Outline 的目标合同是 `Foundation → Structure → Arc Beats × Arc → Skeleton Assembly → Beat Detail × Main Beat → Finalize`：
+
+1. Foundation 生成 Bible、初始人物、世界实体和伏笔候选。
+2. Structure 只生成 Volume / Arc 稳定 Key、顺序、目标和预算，不生成 Beat。
+3. 每个 Arc Beats Provider 请求只生成目标 Arc 的 Beat；同一 Novel 严格串行。
+4. Skeleton Assembly 由 Laravel 按 Structure 和全部 Arc Beats 的稳定 Key、局部顺序与 checksum 确定性合并，统一校验全局 Key、主线顺序和预算，不调用 Provider。
+5. 每个 Beat Detail 只生成一个 Main Beat 的 Milestones / Handoff。
+6. Finalize 不调用 Provider；它沿固定 lineage 合并成功 Artifact、解析稳定 Key、执行完整校验并事务写入关系表与最终 `outline_blueprint`。
+
+主批次与子阶段继续复用现有 `generation_runs`、`generation_artifacts`，不新增工作流业务表。主批次使用 `scope_type=novel_outline_batch`；所有子 Run 的 `scope_id` 指向主批次 Run ID。子阶段 `scope_type` 与区分字段固定为：
+
+| 阶段 | `scope_type` | Artifact | 区分字段 |
+|---|---|---|---|
+| Foundation | `novel_outline_foundation` | `outline_foundation` | 无 |
+| Structure | `novel_outline_structure` | `outline_structure` | 无 |
+| Arc Beats | `novel_outline_arc_beats` | `outline_arc_beats` | `context_snapshot.discriminator.arc_key` |
+| Skeleton Assembly | `novel_outline_skeleton_assembly` | `outline_skeleton` | 无 |
+| Beat Detail | `novel_outline_beat_detail` | `outline_beat_detail` | `context_snapshot.discriminator.beat_key` |
+| Finalize | `novel_outline_finalize` | `outline_blueprint` | 无 |
+
+主批次持久化状态为 `queued / running / failed / succeeded / cancelled`。`retrying` 由页面根据主批次与最新子 Run 派生，不新增数据库枚举。页面启动生成时先创建或复用 `queued` 主批次；Worker 激活后改为 `running`；子阶段终止失败时收口为 `failed`；Finalize 事务成功才改为 `succeeded`。同输入重复执行必须复用校验通过的 Artifact，不得重复产生正式关系行或 Usage。
+
+全书大纲进度只从 PostgreSQL 的 Run、Artifact 和 Draft Outline 投影。Redis、Horizon 与 `failed_jobs` 不保存权威业务进度。Structure 完成后才能确定 Arc Beats 分母；Skeleton Assembly 完成后才能确定 Main Beat Detail 分母。领域 Resume 从最早缺失且来源有效的 Artifact 继续，不直接重放 Queue payload。
 
 正式进度继续复用 `story_events`：
 
