@@ -6,9 +6,11 @@ use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\ApplyNovelOutlineRevisionAction;
 use App\Actions\Novels\CreateNovelOutlineVersionAction;
+use App\Actions\Novels\ResumeNovelOutlineGenerationAction;
 use App\Actions\Novels\StartNovelOutlineGenerationAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Data\NormalizedNovelOutline;
+use App\Data\NovelOutlineProgress;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
@@ -19,9 +21,11 @@ use App\Enums\StoryArcType;
 use App\Enums\WorldEntityType;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\NovelOutline;
 use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlinePipeline;
+use App\Services\NovelOutlineProgressResolver;
 use App\Services\NovelPlanner;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Hidden;
@@ -41,6 +45,8 @@ use Throwable;
 
 class ManageNovelOutline extends ViewRecord
 {
+    protected ?NovelOutlineProgress $cachedOutlineGenerationProgress = null;
+
     protected static string $resource = NovelResource::class;
 
     protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-list-bullet';
@@ -61,13 +67,20 @@ class ManageNovelOutline extends ViewRecord
     {
         return $schema->components([
             View::make('filament.resources.novels.pages.outline-builder')
-                ->viewData(fn (): array => [
-                    'outline' => $this->displayedOutline(),
-                    'versions' => $this->getRecord()->outlines()->get(),
-                    'validation' => ($outline = $this->displayedOutline()) === null
+                ->key('outline-generation-workspace')
+                ->viewData(function (): array {
+                    $outline = $this->displayedOutline();
+
+                    return [
+                        'outline' => $outline,
+                        'versions' => $this->getRecord()->outlines()->get(),
+                        'validation' => $outline === null
                         ? null
                         : app(NormalizedNovelOutlineValidator::class)->validate(NormalizedNovelOutline::fromModel($outline)),
-                ]),
+                        'outlineGeneration' => $this->outlineGenerationProgress(),
+                        'outlineGenerationElapsed' => $this->outlineGenerationElapsed(),
+                    ];
+                }),
         ]);
     }
 
@@ -76,9 +89,20 @@ class ManageNovelOutline extends ViewRecord
         return [
             // 只生成可审阅的 Draft 候选；正式规划表要等用户点击“确认采用”后才写入。
             Action::make('generateOutlineCandidate')
-                ->label('AI 生成候选')
+                ->label(fn (): string => match ($this->outlineGenerationProgress()->pageStatus) {
+                    'queued', 'running' => '生成中',
+                    'retrying' => '等待重试',
+                    'cancelled' => '重新生成候选',
+                    default => 'AI 生成候选',
+                })
                 ->icon('heroicon-o-sparkles')
-                ->visible(fn (): bool => $this->getRecord()->current_outline_id === null && ! $this->hasFormalStructure())
+                ->visible(fn (): bool => $this->getRecord()->current_outline_id === null
+                    && ! $this->hasFormalStructure()
+                    && in_array($this->outlineGenerationProgress()->pageStatus, ['not_started', 'queued', 'running', 'retrying', 'cancelled'], true))
+                ->disabled(fn (): bool => $this->outlineGenerationProgress()->isActive())
+                ->tooltip(fn (): ?string => $this->outlineGenerationProgress()->isActive()
+                    ? '当前批次仍在处理，页面会自动刷新持久化进度。'
+                    : null)
                 ->schema([
                     TextInput::make('volume_count')->label('预计分卷数')->integer()->minValue(1)->maxValue(12)->default(5)->required(),
                 ])
@@ -86,6 +110,7 @@ class ManageNovelOutline extends ViewRecord
                     try {
                         $batch = $start->handle($this->getRecord(), (int) $data['volume_count']);
                     } catch (Throwable $exception) {
+                        $this->forgetOutlineGenerationProgress();
                         $message = match (true) {
                             $exception instanceof ValidationException => collect($exception->errors())->flatten()->first(),
                             $exception instanceof AiProviderException => $exception->getMessage(),
@@ -100,12 +125,69 @@ class ManageNovelOutline extends ViewRecord
                         return;
                     }
 
+                    $this->forgetOutlineGenerationProgress();
                     Notification::make()
                         ->title('AI 大纲候选已加入生成队列')
                         ->body("规划批次 #{$batch->getKey()} 已持久化，可安全等待后台处理。")
                         ->success()
                         ->send();
                 }),
+            Action::make('resumeOutlineGeneration')
+                ->label('继续 AI 生成')
+                ->icon('heroicon-o-play')
+                ->color('warning')
+                ->visible(fn (): bool => $this->getRecord()->current_outline_id === null
+                    && ! $this->hasFormalStructure()
+                    && $this->outlineGenerationProgress()->pageStatus === 'failed'
+                    && $this->outlineGenerationProgress()->canResume)
+                ->requiresConfirmation()
+                ->modalHeading('从最近成功阶段继续生成')
+                ->modalDescription('系统会复用来源链仍然有效的成功 Artifact，并从最早缺失的阶段继续。')
+                ->action(function (ResumeNovelOutlineGenerationAction $resume): void {
+                    $progress = $this->outlineGenerationProgress();
+                    $batch = $progress->batchId === null ? null : GenerationRun::query()->find($progress->batchId);
+
+                    if ($batch === null) {
+                        $this->forgetOutlineGenerationProgress();
+                        Notification::make()->title('无法继续生成')->body('未找到对应的 Outline 主批次。')->danger()->send();
+
+                        return;
+                    }
+
+                    try {
+                        $resumed = $resume->handle($this->getRecord(), $batch);
+                    } catch (Throwable $exception) {
+                        $this->forgetOutlineGenerationProgress();
+                        Notification::make()
+                            ->title('无法继续生成')
+                            ->body($this->outlineActionErrorMessage($exception))
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    $this->forgetOutlineGenerationProgress();
+                    Notification::make()
+                        ->title('AI 大纲生成已继续')
+                        ->body("规划批次 #{$resumed->getKey()} 已从持久化恢复点继续。")
+                        ->success()
+                        ->send();
+                }),
+            Action::make('viewOutlineGenerationRuns')
+                ->label('查看运行详情')
+                ->icon('heroicon-o-magnifying-glass')
+                ->color('gray')
+                ->visible(fn (): bool => $this->outlineGenerationProgress()->batchId !== null)
+                ->modalHeading('AI 大纲生成运行详情')
+                ->modalDescription(fn (): string => 'Batch #'.$this->outlineGenerationProgress()->batchId)
+                ->modalWidth('3xl')
+                ->slideOver()
+                ->modalSubmitAction(false)
+                ->modalCancelActionLabel('关闭')
+                ->modalContent(fn () => view('filament.resources.novels.pages.partials.outline-generation-runs', [
+                    'progress' => $this->outlineGenerationProgress(),
+                ])),
             Action::make('saveManualOutline')
                 ->label(fn (): string => $this->latestDraft() === null ? '手工创建' : '编辑为新版本')
                 ->icon('heroicon-o-pencil-square')
@@ -386,6 +468,41 @@ class ManageNovelOutline extends ViewRecord
             'must_not_include' => [],
             'volumes' => [],
         ];
+    }
+
+    private function outlineGenerationProgress(): NovelOutlineProgress
+    {
+        return $this->cachedOutlineGenerationProgress ??= app(NovelOutlineProgressResolver::class)->resolve($this->getRecord());
+    }
+
+    private function forgetOutlineGenerationProgress(): void
+    {
+        $this->cachedOutlineGenerationProgress = null;
+    }
+
+    private function outlineGenerationElapsed(): ?string
+    {
+        $progress = $this->outlineGenerationProgress();
+        $milliseconds = $progress->currentRunDurationMilliseconds;
+        if ($milliseconds === null && $progress->currentRunStartedAt !== null && $progress->isActive()) {
+            $milliseconds = (int) $progress->currentRunStartedAt->diffInMilliseconds(now());
+        }
+        if ($milliseconds === null) {
+            return null;
+        }
+
+        $seconds = intdiv(max(0, $milliseconds), 1000);
+
+        return sprintf('%02d:%02d', intdiv($seconds, 60), $seconds % 60);
+    }
+
+    private function outlineActionErrorMessage(Throwable $exception): string
+    {
+        return match (true) {
+            $exception instanceof ValidationException => (string) collect($exception->errors())->flatten()->first(),
+            $exception instanceof AiProviderException => $exception->getMessage(),
+            default => '恢复规划批次失败，请查看运行详情后重试。',
+        };
     }
 
     private function displayedOutline(): ?NovelOutline

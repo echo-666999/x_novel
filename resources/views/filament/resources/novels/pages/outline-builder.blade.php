@@ -1,4 +1,14 @@
-<div class="space-y-6">
+<div
+    class="space-y-6"
+    @if ($outlineGeneration->isActive())
+        wire:poll.3s="$refresh"
+    @endif
+>
+    @include('filament.resources.novels.pages.partials.outline-generation-progress', [
+        'progress' => $outlineGeneration,
+        'elapsed' => $outlineGenerationElapsed,
+    ])
+
     @if ($outline === null)
         <x-filament::section>
             <div class="space-y-2">

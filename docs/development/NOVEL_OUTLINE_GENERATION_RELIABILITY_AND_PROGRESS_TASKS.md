@@ -5,7 +5,7 @@
 > 上游基线：`docs/PRD.md`、`docs/architecture/generation-pipeline.md`、`docs/architecture/data-model.md`、`docs/architecture/novel-lifecycle-and-project-core.md`  
 > 关联历史任务：`NGC-002B` 已完成 Foundation、Skeleton、单 Main Beat Detail、Finalize 的首次分阶段实现；本任务集是后续可靠性与交互增强，不改写其历史完成状态  
 > 用途：把已确认的“进一步拆分 Skeleton + 页面持久化进度与恢复交互”方案拆成可逐项实施、测试、验收和回滚的任务  
-> 当前状态：`OGR-001`～`OGR-005` DONE；`OGR-006` READY；其余任务等待依赖完成
+> 当前状态：`OGR-001`～`OGR-006` DONE；`OGR-007` READY
 
 ## 1. 使用规则
 
@@ -190,8 +190,8 @@ flowchart TD
 | OGR-003 | Structure / Arc Beats Artifact、Schema 与数据库约束 | P0 | DONE | OGR-001 |
 | OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | DONE | OGR-002、OGR-003 |
 | OGR-005 | 全书大纲进度只读解析器 | P1 | DONE | OGR-002、OGR-004 |
-| OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | READY | OGR-005 |
-| OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | TODO | OGR-006 |
+| OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | DONE | OGR-005 |
+| OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | READY | OGR-006 |
 
 ## 7. Task Cards
 
@@ -907,7 +907,7 @@ flowchart TD
 
 **Skills：** `filament-ui`, `generation-pipeline`  
 **优先级：** P1  
-**状态：** READY
+**状态：** DONE
 **依赖：** OGR-005
 
 ### 目标
@@ -1004,11 +1004,79 @@ OpenAI · gpt-5.6-terra · reasoning: medium
 - 可以移除进度 Section 和 Resume Action 入口，后台 Batch/Artifact 不受影响。
 - 回滚 UI 后仍可通过 Generation 页面或数据库检查 Run；不得删除生成追踪数据。
 
+### 完成记录（2026-09-30）
+
+**Summary**
+
+- 全书大纲页面新增持久化“AI 大纲生成”Section，直接消费 OGR-005 的只读 DTO，展示 Batch 状态、六个阶段、当前 Arc/Beat、`x/y`、尝试次数、耗时及冻结的 Provider/Model/Reasoning。
+- 活动态使用 `wire:poll.3s="$refresh"` 刷新完整 Livewire 页面，终态移除轮询。真实浏览器验证确认 Filament Schema 的局部 `poll()` 只会更新进度 View、会让页头残留旧动作，因此改为完整页面刷新以同步 Header Action；同一轮渲染仍复用 Resolver 缓存结果。
+- Header Action 按持久状态切换：未开始可生成，queued/running/retrying 禁用重复启动，failed 且可恢复时显示“继续 AI 生成”；继续操作只调用 `ResumeNovelOutlineGenerationAction`。
+- 失败 Section 持久显示稳定错误码、用户文案、失败阶段/Arc/Beat、自动重试是否耗尽、Artifact 保留语义及推荐操作；原始技术错误仅在 SlideOver 展示。
+- 新增 Run 详情 SlideOver，展示安全的 Run、Usage、Prompt Version、Artifact 与技术错误引用，不读取或输出 Prompt、Context Snapshot、API Key 或凭据。
+
+**Problems Addressed**
+
+- Worker 未消费任务时，页面不再只依赖一次性 Toast；queued Batch 会立即成为页面可查询状态。
+- 页面现在可以回答当前阶段、完成数量、失败原因和下一步操作，刷新页面后状态仍然存在。
+- 轮询从活动态进入 failed 时会同时刷新页头与进度卡，避免“卡片已失败、页头仍显示禁用生成中”的不一致。
+- 重复启动在活动态被禁用；恢复经既有领域 Action 从最早缺失阶段继续，不直接操作 failed job 或 Run 状态。
+
+**Files Changed**
+
+- `app/Filament/Resources/Novels/Pages/ManageNovelOutline.php`
+- `resources/views/filament/resources/novels/pages/outline-builder.blade.php`
+- `resources/views/filament/resources/novels/pages/partials/outline-generation-progress.blade.php`
+- `resources/views/filament/resources/novels/pages/partials/outline-generation-runs.blade.php`
+- `tests/Feature/Filament/NovelOutlineProgressPageTest.php`
+- 本任务文件
+
+**Database / Business Data Changes**
+
+- 无 Migration、无表结构变更、无开发环境或生产环境真实业务数据修改。
+- Feature Test 使用 `RefreshDatabase`；真实浏览器验证使用 `/tmp/xnovel-ogr006-browser.sqlite` 隔离库及临时账号、Novel、Batch/Run，未调用真实 AI Provider。
+
+**Migrations Actually Run**
+
+- 对隔离浏览器库执行 `DB_CONNECTION=sqlite DB_DATABASE=/tmp/xnovel-ogr006-browser.sqlite php artisan migrate:fresh --force`：成功，仅重建该临时 SQLite 文件；未对项目配置的 PostgreSQL 执行 Migration。
+
+**Tests Actually Run**
+
+- `php artisan test tests/Feature/Filament/NovelOutlineProgressPageTest.php --compact`：6 tests，6 passed，66 assertions。
+- 相关回归（Outline Page、Resolver、Bootstrap、Novel Resource）：75 tests，75 passed，641 assertions。
+- `php artisan test --compact`：1076 tests，1050 passed，26 skipped，6405 assertions，0 failures，2 warnings。
+- `vendor/bin/pint --test ...`、相关 PHP syntax checks 与 `git diff --check`：通过。
+
+**Browser Verification**
+
+- 在本机 `127.0.0.1:8765`、隔离 SQLite、database Queue 且无 Worker 的 Chrome 会话中验证：点击“AI 生成候选”后立即出现 queued 状态、成功 Toast 与禁用的生成按钮。
+- 将隔离 Run 切换为 running 后，页面在 3 秒内自动更新为活动状态；切换为 failed 后，进度卡和页头在同一轮询中同步更新，页头显示“继续 AI 生成”，终态 DOM 不再包含轮询指令。
+- 已验证持久失败文案、`provider_timeout`、重试耗尽与 Artifact 保留提示；SlideOver 展示 Batch/子 Run/技术错误，注入到测试 Context 的敏感标记未出现在 DOM。
+- 点击“继续 AI 生成”并确认后，页面显示成功 Toast 和 `retrying` 活动态，隔离数据库只派发 Foundation 恢复任务；未启动真实 Worker、未发送真实 Provider 请求。
+
+**Known Limitations**
+
+- 活动态轮询刷新整个 Page，以保证 Header Action 与进度 Section 一致；单用户页面每 3 秒会执行一次 OGR-005 的固定查询投影，后续只有在实际性能证据出现时才需要优化。
+- 页面不主动处理旧 v2 Batch 的发布处置；旧批次清点、状态标记与 failed job 处理仍属于 OGR-007。
+- 终态转换未新增一次性 Toast；持久 Section 与同步更新的 Header Action 是可靠反馈。
+
+**Rollback / Recovery**
+
+- 删除新增进度/详情 partial，并移除 `ManageNovelOutline` 的 Resolver、Resume 与详情 Action 接入即可回滚 UI；现有 Batch、Run、Artifact 与领域 Resume 实现不受影响。
+- 若只需停止页面自动刷新，可移除 `outline-builder.blade.php` 的活动态 `wire:poll.3s="$refresh"`，不会修改后台状态或追踪数据。
+
+**Next Task**
+
+- `OGR-007`：旧批次版本处理、端到端回归与发布收尾。
+
+**Git**
+
+- 未提交；未 push；未创建 PR。
+
 ## OGR-007 — 旧批次版本处理、端到端回归与发布收尾
 
 **Skills：** `generation-pipeline`, `filament-ui`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** READY
 **依赖：** OGR-006
 
 ### 目标
