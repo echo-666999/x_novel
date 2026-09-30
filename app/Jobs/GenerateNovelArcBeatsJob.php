@@ -13,8 +13,8 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-/** 基于 Foundation 生成 Volume、Arc、Beat 骨架。 */
-class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
+/** 一次生成 Structure 中一个 Arc 的 Beats。 */
+class GenerateNovelArcBeatsJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, HandlesNovelOutlineStageFailures, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -25,34 +25,30 @@ class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
     /** @var array<int> */
     public array $backoff = [10, 30];
 
-    public function __construct(public readonly int $batchRunId)
+    public function __construct(public readonly int $batchRunId, public readonly string $arcKey)
     {
         $this->onQueue('generation');
     }
 
-    /** 同一主批次最多允许一个 Skeleton Job 在队列中。 */
     public function uniqueId(): string
     {
-        return "novel-outline:{$this->batchRunId}:skeleton";
+        return "novel-outline:{$this->batchRunId}:arc:{$this->arcKey}";
     }
 
     protected function outlineFailureScope(): string
     {
-        return NovelOutlinePipeline::SKELETON_SCOPE;
+        return NovelOutlinePipeline::ARC_BEATS_SCOPE;
     }
 
-    /** 成功后继续到最早缺失的 Main Beat Detail。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {
         $batch = GenerationRun::query()->find($this->batchRunId);
-
         if ($batch === null) {
             return;
         }
 
         try {
-            $pipeline->assertLegacyBatch($batch);
-            if ($pipeline->generateSkeleton($batch) !== null) {
+            if ($pipeline->generateArcBeats($batch, $this->arcKey) !== null) {
                 $pipeline->dispatchNext($batch);
             }
         } catch (Throwable $exception) {

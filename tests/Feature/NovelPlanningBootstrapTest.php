@@ -19,11 +19,14 @@ use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Jobs\AssembleNovelOutlineSkeletonJob;
 use App\Jobs\FinalizeNovelOutlineJob;
+use App\Jobs\GenerateNovelArcBeatsJob;
 use App\Jobs\GenerateNovelBeatDetailJob;
 use App\Jobs\GenerateNovelFoundationJob;
 use App\Jobs\GenerateNovelOutlineJob;
 use App\Jobs\GenerateNovelOutlineSkeletonJob;
+use App\Jobs\GenerateNovelOutlineStructureJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
@@ -32,6 +35,7 @@ use App\Models\StoryEvent;
 use App\Models\User;
 use App\Services\GenerationJobDispatcher;
 use App\Services\NovelOutlinePipeline;
+use App\Services\NovelOutlineStageContract;
 use App\Services\NovelPlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -40,6 +44,11 @@ use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
+
+beforeEach(function (): void {
+    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
+    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
+});
 
 function novelBlueprint(): array
 {
@@ -155,10 +164,17 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
     $blueprint ??= novelBlueprint();
     $foundation = collect($blueprint)->only(['bible', 'characters', 'world_entities', 'foreshadowings'])->all();
     $skeleton = $blueprint['outline'];
+    $structure = collect($skeleton)->only(['title', 'summary', 'must_include', 'must_not_include'])->all();
+    $structure['volumes'] = [];
+    $arcBeats = [];
     $details = [];
-    foreach ($skeleton['volumes'] as &$volume) {
-        foreach ($volume['arcs'] as &$arc) {
-            foreach ($arc['beats'] as &$beat) {
+    foreach ($skeleton['volumes'] as $volume) {
+        $structureVolume = collect($volume)->only(['key', 'title', 'goal', 'climax', 'target_words'])->all();
+        $structureVolume['arcs'] = [];
+        foreach ($volume['arcs'] as $arc) {
+            $structureVolume['arcs'][] = collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all();
+            $arcResponse = ['arc_key' => $arc['key'], 'beats' => []];
+            foreach ($arc['beats'] as $beat) {
                 if ($arc['type'] === 'main') {
                     $details[] = [
                         'beat_key' => $beat['key'],
@@ -166,17 +182,30 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
                         'handoff' => $beat['handoff'],
                     ];
                 }
-                unset($beat['milestones'], $beat['handoff']);
+                unset($beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
+                foreach ($beat['character_candidates'] as &$candidate) {
+                    unset($candidate['possible_duplicate_character_ids']);
+                }
+                unset($candidate);
+                foreach ($beat['world_entity_candidates'] as &$candidate) {
+                    unset($candidate['possible_duplicate_entity_ids']);
+                }
+                unset($candidate);
+                $arcResponse['beats'][] = $beat;
             }
-            unset($beat);
+            $arcBeats[] = $arcResponse;
         }
-        unset($arc);
+        $structure['volumes'][] = $structureVolume;
     }
-    unset($volume);
 
     return [
         outlineStageResponse($foundation, 'foundation-test'),
-        outlineStageResponse($skeleton, 'skeleton-test'),
+        outlineStageResponse($structure, 'structure-test'),
+        ...array_map(
+            fn (array $arc, int $index): AiResponse => outlineStageResponse($arc, 'arc-beats-'.($index + 1)),
+            $arcBeats,
+            array_keys($arcBeats),
+        ),
         ...array_map(
             fn (array $detail, int $index): AiResponse => outlineStageResponse($detail, 'beat-detail-'.($index + 1)),
             $details,
@@ -187,12 +216,40 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
 
 function stagedNovelBlueprintProvider(?array $blueprint = null): FakeAiProvider
 {
+    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
+    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
     $fake = new FakeAiProvider;
     foreach (stagedNovelBlueprintResponses($blueprint) as $response) {
         $fake->enqueue($response);
     }
 
     return $fake;
+}
+
+function novelBlueprintWithTwoArcs(): array
+{
+    $blueprint = novelBlueprint();
+    $arc = $blueprint['outline']['volumes'][0]['arcs'][0];
+    $arc['key'] = 'arc-02';
+    $arc['sequence'] = 2;
+    $arc['mainline_sequence'] = null;
+    $arc['type'] = 'subplot';
+    $arc['title'] = '城墙守卫';
+    $arc['goal'] = '取得守卫的有限信任';
+    $arc['beats'] = [
+        ...array_slice($arc['beats'], 0, 1),
+    ];
+    $arc['beats'][0]['key'] = 'beat-03';
+    $arc['beats'][0]['sequence'] = 1;
+    $arc['beats'][0]['mainline_sequence'] = null;
+    $arc['beats'][0]['milestones'] = [];
+    $arc['beats'][0]['handoff'] = [
+        'next_beat_key' => null, 'transition_mode' => null, 'exit_result' => null, 'next_trigger' => null,
+        'carried_states' => [], 'open_threads' => [], 'required_transition' => [], 'forbidden_jump' => [],
+    ];
+    $blueprint['outline']['volumes'][0]['arcs'][] = $arc;
+
+    return $blueprint;
 }
 
 test('ai planning creates a reusable blueprint without changing planning tables', function () {
@@ -209,10 +266,11 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($novel->outlines()->count())->toBe(1)
         ->and($novel->volumes()->count())->toBe(0)
         ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->status)->toBe(RunStatus::Succeeded)
-        ->and($fake->requests())->toHaveCount(4)
+        ->and($fake->requests())->toHaveCount(5)
         ->and($fake->requests()[0]->promptVersion)->toBe(NovelOutlinePipeline::FOUNDATION_PROMPT_VERSION)
-        ->and($fake->requests()[1]->promptVersion)->toBe(NovelOutlinePipeline::SKELETON_PROMPT_VERSION)
-        ->and($fake->requests()[2]->promptVersion)->toBe(NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION)
+        ->and($fake->requests()[1]->promptVersion)->toBe(NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION)
+        ->and($fake->requests()[2]->promptVersion)->toBe(NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION)
+        ->and($fake->requests()[3]->promptVersion)->toBe(NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION)
         ->and($fake->requests()[0]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化')
         ->and($fake->requests()[0]->maxTokens)->toBe(NovelOutlinePipeline::FOUNDATION_MAX_TOKENS)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
@@ -227,7 +285,8 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and(data_get($fake->requests()[0]->responseSchema, 'properties.bible.required'))->toContain('style_profile')
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.minItems'))->toBe(1)
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.maxItems'))->toBe(1)
-        ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.items.properties.arcs.items.properties.beats.items.required'))->toContain('chapter_budget');
+        ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
+        ->and(data_get($fake->requests()[2]->responseSchema, 'properties.beats.items.required'))->toContain('chapter_budget');
 });
 
 test('ai planning honors another valid configured default target platform', function () {
@@ -337,8 +396,9 @@ test('ai planning response schema contains only strict objects accepted by the p
     expect($invalidObjects)->toBe([])
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.key.pattern'))->toBe('^vol-[0-9]{2}$')
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties.key.pattern'))->toBe('^arc-[0-9]{2,}$')
-        ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties.beats.items.properties.key.pattern'))->toBe('^beat-[0-9]{2,}$')
-        ->and(data_get($schemas[2], 'properties.milestones.type'))->toBe('array');
+        ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
+        ->and(data_get($schemas[2], 'properties.beats.items.properties.key.pattern'))->toBe('^beat-[0-9]{2,}$')
+        ->and(data_get($schemas[3], 'properties.milestones.type'))->toBe('array');
 });
 
 test('ai planning derives sibling sequences from array order', function () {
@@ -444,7 +504,9 @@ test('the outline workspace guides a draft through ai planning and generation re
     expect($batch->fresh()->status)->toBe(RunStatus::Running)
         ->and($batch->fresh()->started_at)->not->toBeNull();
     (new GenerateNovelFoundationJob($batch->getKey()))->handle($pipeline);
-    (new GenerateNovelOutlineSkeletonJob($batch->getKey()))->handle($pipeline);
+    (new GenerateNovelOutlineStructureJob($batch->getKey()))->handle($pipeline);
+    (new GenerateNovelArcBeatsJob($batch->getKey(), 'arc-01'))->handle($pipeline);
+    (new AssembleNovelOutlineSkeletonJob($batch->getKey()))->handle($pipeline);
     (new GenerateNovelBeatDetailJob($batch->getKey(), 'beat-01'))->handle($pipeline);
     (new GenerateNovelBeatDetailJob($batch->getKey(), 'beat-02'))->handle($pipeline);
     (new FinalizeNovelOutlineJob($batch->getKey()))->handle($pipeline);
@@ -612,11 +674,11 @@ test('outline resume reuses successful artifacts and dispatches the earliest mis
         ->and(data_get($resumed->context_snapshot, 'recovery.previous_error_code'))->toBe('provider_timeout')
         ->and($foundation)->not->toBeNull()
         ->and($fake->requests())->toHaveCount(1);
-    Queue::assertPushed(GenerateNovelOutlineSkeletonJob::class, 1);
+    Queue::assertPushed(GenerateNovelOutlineStructureJob::class, 1);
 
     expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($novel, $resumed))
         ->toThrow(ValidationException::class, '只有 failed');
-    Queue::assertPushed(GenerateNovelOutlineSkeletonJob::class, 1);
+    Queue::assertPushed(GenerateNovelOutlineStructureJob::class, 1);
 });
 
 test('outline resume rejects paused cancelled succeeded and incompatible batches', function () {
@@ -761,11 +823,11 @@ test('editing an ai outline preserves its artifact and local regeneration create
         ->and($secondOutline->version)->toBe(2)
         ->and($secondOutline->based_on_outline_id)->toBe($firstOutline->getKey())
         ->and(data_get(NormalizedNovelOutline::fromModel($secondOutline)->toArray(), 'volumes.0.arcs.0.beats.0.summary'))->toContain('旧档案保管人')
-        ->and($fake->requests()[4]->prompt)->not->toContain('"volumes"')
-        ->and(data_get($fake->requests()[4]->responseSchema, 'required'))->toBe(['node'])
-        ->and(data_get($fake->requests()[4]->responseSchema, 'properties.node.properties.character_candidates.items.properties'))->not->toHaveKey('possible_duplicate_character_ids')
-        ->and($novel->generationRuns()->count())->toBe(7)
-        ->and($novel->generationRuns()->withCount('artifacts')->get()->sum('artifacts_count'))->toBe(6);
+        ->and($fake->requests()[5]->prompt)->not->toContain('"volumes"')
+        ->and(data_get($fake->requests()[5]->responseSchema, 'required'))->toBe(['node'])
+        ->and(data_get($fake->requests()[5]->responseSchema, 'properties.node.properties.character_candidates.items.properties'))->not->toHaveKey('possible_duplicate_character_ids')
+        ->and($novel->generationRuns()->count())->toBe(9)
+        ->and($novel->generationRuns()->withCount('artifacts')->get()->sum('artifacts_count'))->toBe(8);
 });
 
 test('applying the same current outline twice has exactly once planning effects', function () {
@@ -839,7 +901,9 @@ test('outline stages freeze the batch route and bind every child run to the batc
     config(['ai.provider' => 'changed-provider', 'ai.models.planner' => 'changed-model']);
     expect($pipeline->startOrResume($novel, 1)->is($batch))->toBeTrue();
     $pipeline->generateFoundation($batch);
-    $skeleton = $pipeline->generateSkeleton($batch);
+    $pipeline->generateStructure($batch);
+    $pipeline->generateArcBeats($batch, 'arc-01');
+    $skeleton = $pipeline->assembleSkeleton($batch);
     foreach (['beat-01', 'beat-02'] as $beatKey) {
         $pipeline->generateBeatDetail($batch, $beatKey);
     }
@@ -848,10 +912,148 @@ test('outline stages freeze the batch route and bind every child run to the batc
     expect($fake->requests())->each(
         fn ($request) => $request->provider->toBe($frozenProvider)->model->toBe($frozenModel)
     );
-    expect($novel->generationRuns()->where('id', '!=', $batch->getKey())->get())
+    expect($novel->generationRuns()->where('id', '!=', $batch->getKey())->where('scope_type', '!=', NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE)->get())
         ->each(fn ($run) => $run->scope_id->toBe($batch->getKey())->provider->toBe($frozenProvider)->model_policy->toBe($frozenModel));
+    $assemblyRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE)->sole();
     expect($skeleton)->not->toBeNull()
+        ->and($assemblyRun->provider)->toBeNull()
+        ->and($assemblyRun->model_policy)->toBeNull()
         ->and($novel->outlines()->count())->toBe(1);
+});
+
+test('arc two retries locally while arc one and its upstream artifacts are reused', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $responses = stagedNovelBlueprintResponses(novelBlueprintWithTwoArcs());
+    $fake = (new FakeAiProvider)
+        ->enqueue($responses[0])
+        ->enqueue($responses[1])
+        ->enqueue($responses[2])
+        ->enqueue(new AiProviderException('provider_timeout', 'arc two timeout', true))
+        ->enqueue($responses[3]);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $foundation = $pipeline->generateFoundation($batch);
+    $structure = $pipeline->generateStructure($batch);
+    $firstArc = $pipeline->generateArcBeats($batch, 'arc-01');
+
+    expect(fn () => $pipeline->generateArcBeats($batch, 'arc-02'))
+        ->toThrow(AiProviderException::class, 'arc two timeout');
+    $secondArc = $pipeline->generateArcBeats($batch, 'arc-02');
+
+    expect($foundation?->fresh()->checksum)->toBe($foundation?->checksum)
+        ->and($structure?->fresh()->checksum)->toBe($structure?->checksum)
+        ->and($firstArc?->fresh()->checksum)->toBe($firstArc?->checksum)
+        ->and($secondArc)->not->toBeNull()
+        ->and($fake->requests())->toHaveCount(5)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-01')->count())->toBe(1)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-02')->count())->toBe(2);
+});
+
+test('an arc response for the wrong key cannot create a skeleton', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $responses = stagedNovelBlueprintResponses();
+    $wrongArc = $responses[2]->structuredData;
+    $wrongArc['arc_key'] = 'arc-99';
+    $fake = (new FakeAiProvider)
+        ->enqueue($responses[0])
+        ->enqueue($responses[1])
+        ->enqueue(outlineStageResponse($wrongArc, 'wrong-arc'));
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+    $pipeline->generateStructure($batch);
+
+    expect(fn () => $pipeline->generateArcBeats($batch, 'arc-01'))
+        ->toThrow(ValidationException::class, 'arc-01');
+    expect(GenerationArtifact::query()->whereIn('type', [ArtifactType::OutlineArcBeats, ArtifactType::OutlineSkeleton])->whereHas('generationRun', fn ($query) => $query->where('novel_id', $novel->getKey()))->count())->toBe(0);
+});
+
+test('skeleton assembly requires every arc and is deterministic without a provider request or usage', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $responses = stagedNovelBlueprintResponses(novelBlueprintWithTwoArcs());
+    $fake = (new FakeAiProvider)
+        ->enqueue($responses[0])
+        ->enqueue($responses[1])
+        ->enqueue($responses[2])
+        ->enqueue($responses[3]);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+    $pipeline->generateStructure($batch);
+    $pipeline->generateArcBeats($batch, 'arc-01');
+
+    expect(fn () => $pipeline->assembleSkeleton($batch))
+        ->toThrow(ValidationException::class, 'arc-02');
+    expect(GenerationArtifact::query()->where('type', ArtifactType::OutlineSkeleton)->whereHas('generationRun', fn ($query) => $query->where('novel_id', $novel->getKey()))->count())->toBe(0);
+
+    $pipeline->generateArcBeats($batch, 'arc-02');
+    $requestCount = count($fake->requests());
+    $first = $pipeline->assembleSkeleton($batch);
+    $second = $pipeline->assembleSkeleton($batch);
+    $assemblyRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE)->sole();
+
+    expect($second?->is($first))->toBeTrue()
+        ->and($fake->requests())->toHaveCount($requestCount)
+        ->and($assemblyRun->usageRecords()->count())->toBe(0)
+        ->and($assemblyRun->provider)->toBeNull()
+        ->and($assemblyRun->artifacts()->where('type', ArtifactType::OutlineSkeleton)->count())->toBe(1)
+        ->and(data_get($first?->data, 'payload.volumes.0.arcs.0.mainline_sequence'))->toBe(1)
+        ->and(data_get($first?->data, 'payload.volumes.0.arcs.1.mainline_sequence'))->toBeNull()
+        ->and(data_get($first?->data, 'payload.volumes.0.arcs.0.beats.1.mainline_sequence'))->toBe(2);
+});
+
+test('legacy skeleton job cannot participate in a current outline batch', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = (new FakeAiProvider)->enqueue(stagedNovelBlueprintResponses()[0]);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+
+    (new GenerateNovelOutlineSkeletonJob($batch->getKey()))->handle($pipeline);
+
+    expect($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and(GenerationArtifact::query()->where('type', ArtifactType::OutlineSkeleton)->whereHas('generationRun', fn ($query) => $query->where('novel_id', $novel->getKey()))->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(1);
+    Queue::assertNotPushed(GenerateNovelOutlineSkeletonJob::class);
+});
+
+test('a deserialized legacy skeleton job can finish only a legacy batch', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $responses = stagedNovelBlueprintResponses();
+    $legacySkeleton = novelBlueprint()['outline'];
+    foreach ($legacySkeleton['volumes'] as &$volume) {
+        foreach ($volume['arcs'] as &$arc) {
+            foreach ($arc['beats'] as &$beat) {
+                unset($beat['milestones'], $beat['handoff']);
+            }
+            unset($beat);
+        }
+        unset($arc);
+    }
+    unset($volume);
+    $fake = (new FakeAiProvider)
+        ->enqueue($responses[0])
+        ->enqueue(outlineStageResponse($legacySkeleton, 'legacy-skeleton'));
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $batch->update(['prompt_version' => NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION]);
+    $pipeline->generateFoundation($batch);
+
+    (new GenerateNovelOutlineSkeletonJob($batch->getKey()))->handle($pipeline);
+
+    $legacyRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_SCOPE)->sole();
+    expect($legacyRun->status)->toBe(RunStatus::Succeeded)
+        ->and($legacyRun->artifacts()->where('type', ArtifactType::OutlineSkeleton)->count())->toBe(1)
+        ->and($fake->requests())->toHaveCount(2);
+    Queue::assertPushed(GenerateNovelBeatDetailJob::class, fn (GenerateNovelBeatDetailJob $job): bool => $job->beatKey === 'beat-01');
+    Queue::assertNotPushed(GenerateNovelOutlineStructureJob::class);
 });
 
 test('a failed beat detail resumes only that beat and reuses successful stage artifacts', function () {
@@ -861,13 +1063,16 @@ test('a failed beat detail resumes only that beat and reuses successful stage ar
         ->enqueue($responses[0])
         ->enqueue($responses[1])
         ->enqueue($responses[2])
+        ->enqueue($responses[3])
         ->enqueue(new AiProviderException('provider_timeout', 'temporary timeout', true))
-        ->enqueue($responses[3]);
+        ->enqueue($responses[4]);
     app()->instance(AiProvider::class, $fake);
     $pipeline = app(NovelOutlinePipeline::class);
     $batch = $pipeline->startOrResume($novel, 1);
     $foundation = $pipeline->generateFoundation($batch);
-    $skeleton = $pipeline->generateSkeleton($batch);
+    $pipeline->generateStructure($batch);
+    $pipeline->generateArcBeats($batch, 'arc-01');
+    $skeleton = $pipeline->assembleSkeleton($batch);
     $firstDetail = $pipeline->generateBeatDetail($batch, 'beat-01');
 
     expect(fn () => $pipeline->generateBeatDetail($batch, 'beat-02'))
@@ -882,7 +1087,7 @@ test('a failed beat detail resumes only that beat and reuses successful stage ar
     expect($foundation?->fresh()->checksum)->toBe($foundation?->checksum)
         ->and($skeleton?->fresh()->checksum)->toBe($skeleton?->checksum)
         ->and($firstDetail?->fresh()->checksum)->toBe($firstDetail?->checksum)
-        ->and($fake->requests())->toHaveCount(5)
+        ->and($fake->requests())->toHaveCount(6)
         ->and($novel->outlines()->count())->toBe(1);
 });
 
@@ -895,11 +1100,11 @@ test('pause prevents a new outline stage and resume continues from the last arti
     $pipeline->generateFoundation($batch);
     $novel->update(['status' => NovelStatus::Paused]);
 
-    expect(fn () => $pipeline->generateSkeleton($batch))->toThrow(AiProviderException::class, '小说已暂停');
+    expect(fn () => $pipeline->generateStructure($batch))->toThrow(AiProviderException::class, '小说已暂停');
     expect($fake->requests())->toHaveCount(1);
 
     $novel->update(['status' => NovelStatus::Planning]);
-    $pipeline->generateSkeleton($batch);
+    $pipeline->generateStructure($batch);
     expect($fake->requests())->toHaveCount(2)
         ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->count())->toBe(1);
 });
@@ -939,12 +1144,14 @@ test('a provider result that crashes before artifact persistence is recorded as 
 test('finalize rejects a missing beat detail without creating a partial outline', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $responses = stagedNovelBlueprintResponses();
-    $fake = (new FakeAiProvider)->enqueue($responses[0])->enqueue($responses[1])->enqueue($responses[2]);
+    $fake = (new FakeAiProvider)->enqueue($responses[0])->enqueue($responses[1])->enqueue($responses[2])->enqueue($responses[3]);
     app()->instance(AiProvider::class, $fake);
     $pipeline = app(NovelOutlinePipeline::class);
     $batch = $pipeline->startOrResume($novel, 1);
     $pipeline->generateFoundation($batch);
-    $pipeline->generateSkeleton($batch);
+    $pipeline->generateStructure($batch);
+    $pipeline->generateArcBeats($batch, 'arc-01');
+    $pipeline->assembleSkeleton($batch);
     $pipeline->generateBeatDetail($batch, 'beat-01');
 
     expect(fn () => $pipeline->finalize($batch))->toThrow(ValidationException::class, '缺少 Detail Artifact');
@@ -953,21 +1160,66 @@ test('finalize rejects a missing beat detail without creating a partial outline'
         ->and($novel->bibles()->count())->toBe(0);
 });
 
-test('apply rejects an incomplete final artifact lineage before any formal initialization write', function () {
+test('apply rejects a new blueprint missing its structure source before any formal initialization write', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $fake = stagedNovelBlueprintProvider();
     app()->instance(AiProvider::class, $fake);
     $artifact = app(NovelPlanner::class)->generate($novel, 1);
     $data = $artifact->data;
-    unset($data['lineage']['foundation']['checksum']);
-    DB::table('generation_artifacts')->where('id', $artifact->getKey())->update(['data' => json_encode($data, JSON_THROW_ON_ERROR)]);
+    unset($data['lineage']['structure']);
+    DB::table('generation_artifacts')->where('id', $artifact->getKey())->update([
+        'data' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+    ]);
     $outline = $novel->outlines()->sole();
 
     expect(fn () => app(ApplyNovelBlueprintAction::class)->handle($novel, $outline))
-        ->toThrow(ValidationException::class, 'Checksum');
+        ->toThrow(ValidationException::class, 'Structure');
     expect($novel->fresh()->current_outline_id)->toBeNull()
         ->and($novel->bibles()->count())->toBe(0)
         ->and($novel->characters()->count())->toBe(0)
         ->and($novel->worldEntities()->count())->toBe(0)
         ->and($novel->volumes()->count())->toBe(0);
+});
+
+test('apply rejects a new blueprint with a wrong source type or checksum', function (string $mutation) {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    app()->instance(AiProvider::class, stagedNovelBlueprintProvider());
+    $artifact = app(NovelPlanner::class)->generate($novel, 1);
+    $data = $artifact->data;
+    if ($mutation === 'type') {
+        $data['lineage']['structure']['type'] = ArtifactType::OutlineSkeleton->value;
+    } else {
+        $data['lineage']['structure']['checksum'] = str_repeat('0', 64);
+    }
+    DB::table('generation_artifacts')->where('id', $artifact->getKey())->update([
+        'data' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+    ]);
+
+    expect(fn () => app(ApplyNovelBlueprintAction::class)->handle($novel, $novel->outlines()->sole()))
+        ->toThrow(ValidationException::class);
+    expect($novel->fresh()->current_outline_id)->toBeNull()
+        ->and($novel->bibles()->count())->toBe(0);
+})->with(['type', 'checksum']);
+
+test('apply rejects a structure source from another novel and batch', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    app()->instance(AiProvider::class, stagedNovelBlueprintProvider());
+    $artifact = app(NovelPlanner::class)->generate($novel, 1);
+
+    $otherNovel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    app()->instance(AiProvider::class, stagedNovelBlueprintProvider());
+    $otherArtifact = app(NovelPlanner::class)->generate($otherNovel, 1);
+    $data = $artifact->data;
+    $data['lineage']['structure'] = data_get($otherArtifact->data, 'lineage.structure');
+    DB::table('generation_artifacts')->where('id', $artifact->getKey())->update([
+        'data' => json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        'checksum' => hash('sha256', json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+    ]);
+
+    expect(fn () => app(ApplyNovelBlueprintAction::class)->handle($novel, $novel->outlines()->sole()))
+        ->toThrow(ValidationException::class, '其他小说、其他批次');
+    expect($novel->fresh()->current_outline_id)->toBeNull()
+        ->and($novel->bibles()->count())->toBe(0);
 });

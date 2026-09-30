@@ -5,7 +5,7 @@
 > 上游基线：`docs/PRD.md`、`docs/architecture/generation-pipeline.md`、`docs/architecture/data-model.md`、`docs/architecture/novel-lifecycle-and-project-core.md`  
 > 关联历史任务：`NGC-002B` 已完成 Foundation、Skeleton、单 Main Beat Detail、Finalize 的首次分阶段实现；本任务集是后续可靠性与交互增强，不改写其历史完成状态  
 > 用途：把已确认的“进一步拆分 Skeleton + 页面持久化进度与恢复交互”方案拆成可逐项实施、测试、验收和回滚的任务  
-> 当前状态：`OGR-001`～`OGR-003` DONE；`OGR-004` READY；其余任务等待依赖完成
+> 当前状态：`OGR-001`～`OGR-004` DONE；`OGR-005` READY；其余任务等待依赖完成
 
 ## 1. 使用规则
 
@@ -188,8 +188,8 @@ flowchart TD
 | OGR-001 | Source of Truth 与新阶段合同 | P0 | DONE | 无 |
 | OGR-002 | 主批次 queued/running/failed 生命周期与错误闭环 | P0 | DONE | OGR-001 |
 | OGR-003 | Structure / Arc Beats Artifact、Schema 与数据库约束 | P0 | DONE | OGR-001 |
-| OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | READY | OGR-002、OGR-003 |
-| OGR-005 | 全书大纲进度只读解析器 | P1 | TODO | OGR-002、OGR-004 |
+| OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | DONE | OGR-002、OGR-003 |
+| OGR-005 | 全书大纲进度只读解析器 | P1 | READY | OGR-002、OGR-004 |
 | OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | TODO | OGR-005 |
 | OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | TODO | OGR-006 |
 
@@ -621,7 +621,7 @@ flowchart TD
 
 **Skills：** `generation-pipeline`  
 **优先级：** P0  
-**状态：** READY
+**状态：** DONE
 **依赖：** OGR-002、OGR-003
 
 ### 目标
@@ -710,11 +710,74 @@ flowchart TD
 - 新版 Batch 不得交给旧版 `dispatchNext()` 继续；必须保持失败/取消状态供诊断。
 - 不删除新 Artifact；如需恢复旧代码，先通过版本化批次策略阻止旧代码误读新来源链。
 
+### 完成记录（2026-09-30）
+
+**Summary**
+
+- 新增 Structure、单 Arc Beats 与确定性 Skeleton Assembly 三个 Job，新建 v3 批次严格串行执行 Foundation → Structure → 逐 Arc Beats → Skeleton Assembly → 逐 Main Beat Detail → Finalize。
+- 新版批次冻结为 `novel-outline-pipeline-v3`，Skeleton Assembly 算法冻结为 `novel-outline-skeleton-assembly-v1`；旧 v2 批次继续只走历史 Provider Skeleton 路径，旧 Job 对 v3 批次直接拒绝。
+- Structure、Arc Beats、Skeleton、Beat Detail 均按当前来源链和 `input_hash` 选择，来源变化时不会误读同批次旧 Artifact。
+- Finalize 写入 Structure、全部 Arc Beats、Skeleton 和全部 Beat Detail 的 ID、类型与 Checksum；Apply 在正式初始化前复核 Novel、Batch、Scope、类型、discriminator、状态和 Checksum。
+- Planner 批次冻结已核实模型容量；Structure 与 Arc Beats 调用前对完整请求执行上下文窗口和最大输出门禁。推荐环境配置与当前 `openai/gpt-5.6-terra` 路由一致。
+
+**Recovery / Idempotency**
+
+- 单 Arc 超时只新增该 Arc 的失败与重试 Run，已成功 Foundation、Structure 和其他 Arc Artifact 继续复用。
+- Skeleton Assembly 不调用 Provider、不产生 Usage Record；相同有序来源链重复执行时复用同一成功 Artifact。
+- 缺失、错误 Arc Key、跨小说、跨批次、类型或 Checksum 不匹配的来源不能进入 Skeleton 或 Apply。
+- Pause 仍阻止新阶段；Resume 与 Worker Crash 继续依赖 PostgreSQL Run Lease、最早缺失 Artifact 和当前输入指纹恢复。
+
+**Files Changed**
+
+- `app/Jobs/GenerateNovelOutlineStructureJob.php`
+- `app/Jobs/GenerateNovelArcBeatsJob.php`
+- `app/Jobs/AssembleNovelOutlineSkeletonJob.php`
+- `app/Jobs/GenerateNovelOutlineSkeletonJob.php`
+- `app/Jobs/Concerns/HandlesNovelOutlineStageFailures.php`
+- `app/Services/NovelOutlinePipeline.php`
+- `app/Actions/Novels/ApplyNovelBlueprintAction.php`
+- `config/generation.php`
+- `.env.example`
+- `tests/Feature/NovelPlanningBootstrapTest.php`
+- `tests/Feature/ChapterPipelineOrchestrationTest.php`
+- `docs/PRD.md`
+- `docs/architecture/data-model.md`
+- `docs/architecture/generation-pipeline.md`
+- `docs/architecture/novel-lifecycle-and-project-core.md`
+- 本任务文件
+
+**Database / Business Data Changes**
+
+- 本任务无 Migration、无表结构变更、无 Canonical Story State 或正式 Outline 写入。
+- 对当前开发 PostgreSQL 执行只读核对：`outline_structure=0`、`outline_arc_beats=0`、`novel_outline_skeleton_assembly` Run 为 `0`；未通过本任务测试向开发业务库保留新阶段数据。
+
+**Tests Actually Run**
+
+- `php artisan test tests/Feature/NovelPlanningBootstrapTest.php tests/Feature/ChapterPipelineOrchestrationTest.php`：46 tests，46 passed，492 assertions。
+- `php artisan test tests/Feature/NovelOutlineStageContractTest.php tests/Feature/NormalizedNovelOutlineTest.php tests/Feature/OpenAiStructuredOutputSchemaTest.php tests/Feature/DeleteNovelActionTest.php`：39 tests，38 passed，1 PostgreSQL-only skipped，169 assertions，1 warning。
+- `php artisan test`：1060 tests，1034 passed，26 skipped，6265 assertions，0 failures，2 warnings。
+- `vendor/bin/pint --dirty`、`git diff --check` 与相关 PHP syntax checks：通过。
+
+**Browser / External Verification**
+
+- 未执行浏览器操作；OGR-004 不包含 OGR-005/006 的进度解析器、轮询卡片或 Resume 页面入口。
+- 未调用真实 AI Provider、未启动或重启真实 Horizon Worker；Provider 次数、Queue 顺序、失败与恢复均由 Fake Provider 和 Feature Tests 验证。
+
+**Known Limitations**
+
+- 页面仍不会展示持久化阶段进度或失败后的“继续 AI 生成”；这是 OGR-005～OGR-006 的明确范围。
+- 旧 v2 批次只保留安全完成与反序列化边界；真实遗留 failed job 的发布处置仍由 OGR-007 完成。
+- Planner 路由变更时必须同步提供该 Provider/Model 的真实容量配置，否则新批次会在调用 Provider 前明确失败。
+
+**Next Task**
+
+- `OGR-005`：全书大纲进度只读解析器。
+
 ## OGR-005 — 全书大纲进度只读解析器
 
 **Skills：** `generation-pipeline`, `filament-ui`  
 **优先级：** P1  
-**状态：** TODO  
+**状态：** READY
 **依赖：** OGR-002、OGR-004
 
 ### 目标

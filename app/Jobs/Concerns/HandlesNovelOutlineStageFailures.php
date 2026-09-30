@@ -16,6 +16,10 @@ trait HandlesNovelOutlineStageFailures
 
     protected function outlineFailureDiscriminator(): ?string
     {
+        if (property_exists($this, 'arcKey')) {
+            return $this->arcKey;
+        }
+
         return property_exists($this, 'beatKey') ? $this->beatKey : null;
     }
 

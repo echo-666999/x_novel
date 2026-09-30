@@ -13,8 +13,8 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-/** 基于 Foundation 生成 Volume、Arc、Beat 骨架。 */
-class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
+/** 生成只包含 Volume 与 Arc 的全书 Structure。 */
+class GenerateNovelOutlineStructureJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, HandlesNovelOutlineStageFailures, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -30,29 +30,25 @@ class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
         $this->onQueue('generation');
     }
 
-    /** 同一主批次最多允许一个 Skeleton Job 在队列中。 */
     public function uniqueId(): string
     {
-        return "novel-outline:{$this->batchRunId}:skeleton";
+        return "novel-outline:{$this->batchRunId}:structure";
     }
 
     protected function outlineFailureScope(): string
     {
-        return NovelOutlinePipeline::SKELETON_SCOPE;
+        return NovelOutlinePipeline::STRUCTURE_SCOPE;
     }
 
-    /** 成功后继续到最早缺失的 Main Beat Detail。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {
         $batch = GenerationRun::query()->find($this->batchRunId);
-
         if ($batch === null) {
             return;
         }
 
         try {
-            $pipeline->assertLegacyBatch($batch);
-            if ($pipeline->generateSkeleton($batch) !== null) {
+            if ($pipeline->generateStructure($batch) !== null) {
                 $pipeline->dispatchNext($batch);
             }
         } catch (Throwable $exception) {

@@ -153,7 +153,7 @@ Filament 的小说表单当前收集：
 
 全书大纲页在 `queued/running` 时每 3 秒读取 PostgreSQL 进度投影，终态停止轮询。Structure 完成前只显示当前阶段，不能显示虚假总百分比；Structure 完成后显示 Arc Beats `x/y`，Skeleton Assembly 完成后显示 Main Beat Detail `x/y`。失败阶段、尝试次数、用户可读原因和恢复入口持久显示，Run/Artifact/Prompt/Provider/Model/耗时与技术错误在详情中查看。Redis、Horizon、`failed_jobs` 和 Worker Toast 只用于运行或诊断，不是页面进度事实源。
 
-OGR-002 已实现页面经领域 Action 先创建 queued Batch、Worker 激活、最终失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和数据库约束。恢复 Action 已存在，但页面上的持久化进度卡与“继续 AI 生成”入口属于 OGR-005～OGR-006，尚未展示。当前运行流程仍是 Foundation → Provider Skeleton → Beat Detail → Finalize；新版 Jobs 与确定性 Skeleton Assembly 属于 OGR-004。
+OGR-002 已实现页面经领域 Action 先创建 queued Batch、Worker 激活、最终失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和数据库约束；OGR-004 已将新批次运行流程切换为 Foundation → Structure → 逐 Arc Beats → Skeleton Assembly → 逐 Main Beat Detail → Finalize，并保留旧 v2 Skeleton Job 的隔离兼容边界。恢复 Action 已存在，但页面上的持久化进度卡与“继续 AI 生成”入口属于 OGR-005～OGR-006，尚未展示。
 
 分阶段产物最终至少覆盖：
 
@@ -621,7 +621,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 补充边界：
 
 - NGC-002B 当前实现的 Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。局部 Outline 修订记录 `novel-outline-node-v3`。这些历史版本必须继续可解释。
-- Structure 与 Arc Beats 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`；历史 `novel-outline-skeleton-v1` 保持不变。确定性 Skeleton Assembly 与新版 Pipeline 的版本标识由接线任务 OGR-004 冻结。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`。
+- Structure 与 Arc Beats 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`；确定性 Skeleton Assembly 冻结为 `novel-outline-skeleton-assembly-v1`，新版 Pipeline 冻结为 `novel-outline-pipeline-v3`。历史 `novel-outline-skeleton-v1` 与 v2 批次只用于兼容旧 Queue Payload。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。

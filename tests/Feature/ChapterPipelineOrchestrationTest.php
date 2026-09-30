@@ -66,6 +66,8 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Cache::flush();
+    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
+    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
     $this->actingAs(User::factory()->create());
 });
 
@@ -172,25 +174,32 @@ function completeNovelPipelineOutlineResponses(): array
     $blueprint = completeNovelPipelineBlueprint();
     $foundation = collect($blueprint)->only(['bible', 'characters', 'world_entities', 'foreshadowings'])->all();
     $skeleton = $blueprint['outline'];
+    $structure = collect($skeleton)->only(['title', 'summary', 'must_include', 'must_not_include'])->all();
+    $structure['volumes'] = [];
+    $arcBeats = [];
     $details = [];
 
-    foreach ($skeleton['volumes'] as &$volume) {
-        foreach ($volume['arcs'] as &$arc) {
-            foreach ($arc['beats'] as &$beat) {
+    foreach ($skeleton['volumes'] as $volume) {
+        $structureVolume = collect($volume)->only(['key', 'title', 'goal', 'climax', 'target_words'])->all();
+        $structureVolume['arcs'] = [];
+        foreach ($volume['arcs'] as $arc) {
+            $structureVolume['arcs'][] = collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all();
+            $arcResponse = ['arc_key' => $arc['key'], 'beats' => []];
+            foreach ($arc['beats'] as $beat) {
                 $details[] = [
                     'beat_key' => $beat['key'],
                     'milestones' => $beat['milestones'],
                     'handoff' => $beat['handoff'],
                 ];
-                unset($beat['milestones'], $beat['handoff']);
+                unset($beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
+                $arcResponse['beats'][] = $beat;
             }
-            unset($beat);
+            $arcBeats[] = $arcResponse;
         }
-        unset($arc);
+        $structure['volumes'][] = $structureVolume;
     }
-    unset($volume);
 
-    return [$foundation, $skeleton, ...$details];
+    return [$foundation, $structure, ...$arcBeats, ...$details];
 }
 
 /** @return array{novel: Novel, bible: NovelBible, character: Character, foreshadowing: Foreshadowing|null} */
@@ -427,7 +436,8 @@ test('a novel created from an empty database reaches the next beat handoff throu
         ->and($chapter->generationRuns()->where('stage', GenerationStage::ChapterAssembly)->count())->toBe(1)
         ->and($provider->outlineStages())->toBe([
             NovelOutlinePipeline::FOUNDATION_SCOPE,
-            NovelOutlinePipeline::SKELETON_SCOPE,
+            NovelOutlinePipeline::STRUCTURE_SCOPE,
+            NovelOutlinePipeline::ARC_BEATS_SCOPE,
             NovelOutlinePipeline::BEAT_DETAIL_SCOPE,
             NovelOutlinePipeline::BEAT_DETAIL_SCOPE,
         ])

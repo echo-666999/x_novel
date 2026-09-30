@@ -202,35 +202,83 @@ class ApplyNovelBlueprintAction
     {
         $lineage = data_get($blueprint->data, 'lineage');
         $batchRunId = is_array($lineage) ? ($lineage['batch_run_id'] ?? null) : null;
-        $beatReferences = is_array($lineage['beat_details'] ?? null) ? array_values($lineage['beat_details']) : [];
-        $references = is_array($lineage)
-            ? [$lineage['foundation'] ?? null, $lineage['skeleton'] ?? null, ...$beatReferences]
-            : [];
-
-        if (! is_int($batchRunId) || count($references) < 3) {
+        if (! is_int($batchRunId) || ! is_array($lineage)) {
             throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 缺少完整阶段来源。']);
         }
 
+        $expectedArcKeys = collect(data_get($blueprint->data, 'outline.volumes', []))
+            ->flatMap(fn (array $volume): array => $volume['arcs'] ?? [])
+            ->pluck('key')
+            ->values()
+            ->all();
         $expectedBeatKeys = collect(data_get($blueprint->data, 'outline.volumes', []))
             ->flatMap(fn (array $volume) => collect($volume['arcs'] ?? [])->where('type', 'main')->flatMap(fn (array $arc): array => $arc['beats'] ?? []))
             ->sortBy('mainline_sequence')
             ->pluck('key')
             ->values()
             ->all();
-        if (array_keys($lineage['beat_details']) !== $expectedBeatKeys
+        if (! is_array($lineage['beat_details'] ?? null)
+            || array_keys($lineage['beat_details']) !== $expectedBeatKeys
             || ! hash_equals($blueprint->checksum, hash('sha256', json_encode($blueprint->data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)))) {
             throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 的 Beat 来源集合或 Checksum 不完整。']);
         }
 
-        $expectedTypes = [ArtifactType::OutlineFoundation, ArtifactType::OutlineSkeleton];
-        $expectedScopes = [NovelOutlinePipeline::FOUNDATION_SCOPE, NovelOutlinePipeline::SKELETON_SCOPE];
-        foreach ($references as $index => $reference) {
-            if (! is_array($reference) || ! is_int($reference['id'] ?? null) || ! is_string($reference['checksum'] ?? null)) {
+        $isNewLineage = array_key_exists('structure', $lineage) || array_key_exists('arc_beats', $lineage);
+        if ($isNewLineage && (! is_array($lineage['structure'] ?? null)
+            || ! is_array($lineage['arc_beats'] ?? null)
+            || array_keys($lineage['arc_beats']) !== $expectedArcKeys)) {
+            throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 的 Structure 或 Arc Beats 来源集合不完整。']);
+        }
+
+        $references = [[
+            'reference' => $lineage['foundation'] ?? null,
+            'type' => ArtifactType::OutlineFoundation,
+            'scope' => NovelOutlinePipeline::FOUNDATION_SCOPE,
+            'discriminator' => null,
+        ]];
+        if ($isNewLineage) {
+            $references[] = [
+                'reference' => $lineage['structure'],
+                'type' => ArtifactType::OutlineStructure,
+                'scope' => NovelOutlinePipeline::STRUCTURE_SCOPE,
+                'discriminator' => null,
+            ];
+            foreach ($expectedArcKeys as $arcKey) {
+                $references[] = [
+                    'reference' => $lineage['arc_beats'][$arcKey],
+                    'type' => ArtifactType::OutlineArcBeats,
+                    'scope' => NovelOutlinePipeline::ARC_BEATS_SCOPE,
+                    'discriminator' => $arcKey,
+                ];
+            }
+        }
+        $references[] = [
+            'reference' => $lineage['skeleton'] ?? null,
+            'type' => ArtifactType::OutlineSkeleton,
+            'scope' => $isNewLineage ? NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE : NovelOutlinePipeline::SKELETON_SCOPE,
+            'discriminator' => null,
+        ];
+        foreach ($expectedBeatKeys as $beatKey) {
+            $references[] = [
+                'reference' => $lineage['beat_details'][$beatKey],
+                'type' => ArtifactType::OutlineBeatDetail,
+                'scope' => NovelOutlinePipeline::BEAT_DETAIL_SCOPE,
+                'discriminator' => $beatKey,
+            ];
+        }
+
+        foreach ($references as $descriptor) {
+            $reference = $descriptor['reference'];
+            $expected = $descriptor['type'];
+            $expectedScope = $descriptor['scope'];
+            $expectedDiscriminator = $descriptor['discriminator'];
+            if (! is_array($reference)
+                || ! is_int($reference['id'] ?? null)
+                || ! is_string($reference['checksum'] ?? null)
+                || ($reference['type'] ?? null) !== $expected->value) {
                 throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 缺少上游 Artifact ID 或 Checksum。']);
             }
             $upstream = GenerationArtifact::query()->with('generationRun')->find($reference['id']);
-            $expected = $expectedTypes[$index] ?? ArtifactType::OutlineBeatDetail;
-            $expectedScope = $expectedScopes[$index] ?? NovelOutlinePipeline::BEAT_DETAIL_SCOPE;
             if ($upstream === null
                 || $upstream->type !== $expected
                 || ! hash_equals($upstream->checksum, $reference['checksum'])
@@ -239,7 +287,9 @@ class ApplyNovelBlueprintAction
                 || $upstream->generationRun->scope_type !== $expectedScope
                 || $upstream->generationRun->scope_id !== $batchRunId
                 || $upstream->generationRun->status !== RunStatus::Succeeded
-                || data_get($upstream->data, 'batch_run_id') !== $batchRunId) {
+                || data_get($upstream->data, 'batch_run_id') !== $batchRunId
+                || data_get($upstream->data, 'stage') !== $expectedScope
+                || data_get($upstream->data, 'discriminator') !== $expectedDiscriminator) {
                 throw ValidationException::withMessages(['blueprint' => '最终 Outline Blueprint 引用了其他小说、其他批次或不匹配的阶段 Artifact。']);
             }
         }
