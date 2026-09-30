@@ -5,7 +5,7 @@
 > 上游基线：`docs/PRD.md`、`docs/architecture/generation-pipeline.md`、`docs/architecture/data-model.md`、`docs/architecture/novel-lifecycle-and-project-core.md`  
 > 关联历史任务：`NGC-002B` 已完成 Foundation、Skeleton、单 Main Beat Detail、Finalize 的首次分阶段实现；本任务集是后续可靠性与交互增强，不改写其历史完成状态  
 > 用途：把已确认的“进一步拆分 Skeleton + 页面持久化进度与恢复交互”方案拆成可逐项实施、测试、验收和回滚的任务  
-> 当前状态：`OGR-001` DONE；`OGR-002`、`OGR-003` READY；其余任务等待依赖完成
+> 当前状态：`OGR-001`～`OGR-003` DONE；`OGR-004` READY；其余任务等待依赖完成
 
 ## 1. 使用规则
 
@@ -186,9 +186,9 @@ flowchart TD
 | Task | 名称 | 优先级 | 状态 | 依赖 |
 |---|---|---:|---|---|
 | OGR-001 | Source of Truth 与新阶段合同 | P0 | DONE | 无 |
-| OGR-002 | 主批次 queued/running/failed 生命周期与错误闭环 | P0 | READY | OGR-001 |
-| OGR-003 | Structure / Arc Beats Artifact、Schema 与数据库约束 | P0 | READY | OGR-001 |
-| OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | TODO | OGR-002、OGR-003 |
+| OGR-002 | 主批次 queued/running/failed 生命周期与错误闭环 | P0 | DONE | OGR-001 |
+| OGR-003 | Structure / Arc Beats Artifact、Schema 与数据库约束 | P0 | DONE | OGR-001 |
+| OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | READY | OGR-002、OGR-003 |
 | OGR-005 | 全书大纲进度只读解析器 | P1 | TODO | OGR-002、OGR-004 |
 | OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | TODO | OGR-005 |
 | OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | TODO | OGR-006 |
@@ -199,7 +199,7 @@ flowchart TD
 
 **Skills：** `generation-pipeline`, `filament-ui`  
 **优先级：** P0  
-**状态：** DONE  
+**状态：** DONE
 **依赖：** 无
 
 ### 目标
@@ -310,7 +310,7 @@ flowchart TD
 
 **Skills：** `generation-pipeline`  
 **优先级：** P0  
-**状态：** READY  
+**状态：** DONE
 **依赖：** OGR-001
 
 ### 目标
@@ -399,11 +399,83 @@ flowchart TD
 - 已存在的 `queued/failed` Batch 保留，可由旧代码忽略，但不得删除其子 Run/Artifact。
 - 如果回滚后旧入口不识别 `queued`，先通过只读查询列出这些 Batch，再决定取消或继续，禁止批量静默改状态。
 
+### 完成记录（2026-09-30）
+
+**Summary**
+
+- 新增 `StartNovelOutlineGenerationAction`，在 Novel 行锁事务内创建或复用 queued Batch，并在提交后通过 `GenerationJobDispatcher` 投递保持旧构造参数的协调 Job。
+- `GenerateNovelOutlineJob` 激活 prepared Batch 为 running；旧序列化 Payload 仍只需要 Novel ID 与预计分卷数。
+- 新增 `ResumeNovelOutlineGenerationAction`，验证 failed、合同版本、生命周期、暂停与活动 Run 后，从最早缺失 Artifact 继续。
+- 四个现有 Outline 阶段 Job 统一在不可重试失败或 Queue 重试耗尽时关闭主批次；迟到回调不会覆盖成功、取消或更新成功 Artifact。
+- `providerStage()` 已把 Provider、Structured Output、Schema、领域校验和 Artifact 持久化错误分开；仅持久化阶段失败使用 `outline_stage_result_uncertain`。
+
+**Problems Addressed**
+
+- 点击“AI 生成候选”后无需等待 Worker 即存在可查询 queued Batch。
+- 子阶段终止失败不再让主批次永久停在伪 running。
+- Queue 投递失败、失败阶段、discriminator、子 Run、自动重试耗尽和错误分类均保存到主批次。
+- 恢复不依赖 `failed_jobs`，并复用同一批次内来源有效的成功 Artifact。
+
+**Files Changed**
+
+- `app/Actions/Novels/StartNovelOutlineGenerationAction.php`
+- `app/Actions/Novels/ResumeNovelOutlineGenerationAction.php`
+- `app/Services/NovelOutlinePipeline.php`
+- `app/Services/GenerationFailurePolicy.php`
+- `app/Jobs/GenerateNovelOutlineJob.php`
+- `app/Jobs/Concerns/HandlesNovelOutlineStageFailures.php`
+- `app/Jobs/GenerateNovelFoundationJob.php`
+- `app/Jobs/GenerateNovelOutlineSkeletonJob.php`
+- `app/Jobs/GenerateNovelBeatDetailJob.php`
+- `app/Jobs/FinalizeNovelOutlineJob.php`
+- `app/Filament/Resources/Novels/Pages/ManageNovelOutline.php`
+- `tests/Feature/NovelPlanningBootstrapTest.php`
+- `docs/PRD.md`
+- `docs/architecture/generation-pipeline.md`
+- `docs/architecture/data-model.md`
+- `docs/architecture/novel-lifecycle-and-project-core.md`
+- 本任务文件
+
+**Database / Business Data Changes**
+
+- 无生产或现有业务数据修改；继续复用 `generation_runs` 与 `generation_artifacts`，未新增表或枚举。
+
+**Migrations Actually Run**
+
+- 未手工执行 Migration。Feature Tests 使用 `RefreshDatabase` 初始化隔离测试数据库。
+
+**Tests Actually Run**
+
+- `php artisan test tests/Feature/NovelPlanningBootstrapTest.php`：35 tests，35 passed，275 assertions。
+- `php artisan test tests/Feature/NovelPlanningBootstrapTest.php tests/Feature/GenerationFailurePolicyTest.php tests/Feature/GenerationJobDispatcherTest.php tests/Feature/GenerationRunTest.php tests/Feature/Filament/NovelResourceTest.php`：68 tests，68 passed，514 assertions。
+- `php artisan test`：1029 tests，1005 passed，24 skipped，6165 assertions，0 failures，2 warnings。
+- `vendor/bin/pint --dirty`：通过并完成格式化。
+- `git diff --check`：通过。
+
+**Browser Verification**
+
+- 未执行浏览器操作。本任务的 Filament 入口由 Livewire Feature Test 验证；页面进度卡与 Resume 按钮不属于 OGR-002。
+
+**Known Limitations**
+
+- 当前内容阶段仍是 Foundation → Provider Skeleton → Beat Detail → Finalize；Structure/Arc Beats 与确定性 Skeleton Assembly 由 OGR-003、OGR-004 实施。
+- `ResumeNovelOutlineGenerationAction` 已可用，但全书大纲页面尚未展示进度、失败详情或“继续 AI 生成”按钮；由 OGR-005、OGR-006 实施。
+- 未调用真实 Provider、未运行真实 Horizon Worker、未处理现有旧批次；旧批次处置属于 OGR-007。
+
+**Rollback / Recovery**
+
+- 回滚代码前停止新的 Outline 启动操作；保留已生成的 queued/failed Batch、子 Run 与 Artifact，不做批量状态改写或删除。
+- 回滚后若旧代码不识别 queued Batch，先只读列出并逐个决定继续或取消。
+
+**Next Task**
+
+- `OGR-003`：Structure / Arc Beats Artifact、Schema 与数据库约束。
+
 ## OGR-003 — Structure / Arc Beats Artifact、Schema 与数据库约束
 
 **Skills：** `generation-pipeline`  
 **优先级：** P0  
-**状态：** READY  
+**状态：** DONE
 **依赖：** OGR-001
 
 ### 目标
@@ -474,11 +546,82 @@ flowchart TD
 - 无新类型数据时可回滚 Migration 与 Enum。
 - 已存在新类型数据时先停止新批次并评估保留/删除范围；禁止通过收窄约束让数据库进入不一致状态。
 
+### 完成记录（2026-09-30）
+
+**Summary**
+
+- `ArtifactType` 新增 `outline_structure` 与 `outline_arc_beats`，并通过独立 PostgreSQL Migration 扩展 `generation_artifacts_type_check`。
+- 新增纯合同服务 `NovelOutlineStageContract`，提供 Structure / Arc Beats Strict Schema、严格字段校验、稳定 Key 与预算校验、局部 sequence 归一化、Arc Beats 最小输入上下文和容量门禁。
+- Provider Schema 不包含数据库 ID、Beat 之外的层级、`sequence` 或 `mainline_sequence`；Laravel 只在校验成功后按数组顺序补同级 sequence，全局主线顺序留给 OGR-004 的 Skeleton Assembly。
+- Prompt Version 冻结为 `novel-outline-structure-v1` 与 `novel-outline-arc-beats-v1`，历史 `novel-outline-skeleton-v1` 保持不变。
+- Structure 与 Arc Beats 输出上限分别冻结为 12,000 与 8,000 Token；完整请求在调用前必须同时满足冻结模型的上下文窗口与最大合法输出。
+
+**Problems Addressed**
+
+- 单个新合同不再同时要求模型返回全书 Volume、Arc 和 Beat。
+- 额外字段、数据库 ID、模型自报排序、跨 Arc 数据、重复 Key 和无效章节预算会在 Provider 结果持久化前被拒绝。
+- Arc Beats 上下文只包含 Foundation 摘要、完整 Structure、目标 Arc 和相邻 Arc 摘要，不累积此前已生成 Beats。
+- Migration 回滚在存在新类型 Artifact 时明确失败，不会静默删除数据或留下不满足 CHECK 的记录。
+
+**Files Changed**
+
+- `app/Enums/ArtifactType.php`
+- `app/Services/NovelOutlineStageContract.php`
+- `database/migrations/2026_09_30_100000_add_outline_structure_and_arc_beats_artifact_types.php`
+- `tests/Feature/NovelOutlineStageContractTest.php`
+- `tests/Feature/OutlineArtifactTypeConstraintTest.php`
+- `tests/Feature/OpenAiStructuredOutputSchemaTest.php`
+- `docs/PRD.md`
+- `docs/architecture/data-model.md`
+- `docs/architecture/generation-pipeline.md`
+- `docs/architecture/novel-lifecycle-and-project-core.md`
+- 本任务文件
+
+**Database / Business Data Changes**
+
+- 当前开发 PostgreSQL `x_novel` 的 `generation_artifacts_type_check` 已加入 `outline_structure` 与 `outline_arc_beats`。
+- 未新增表、未修改正式 Outline 关系表、未创建或保留新类型 Artifact，现有小说与 Canonical 数据未修改。
+
+**Migrations Actually Run**
+
+- `php artisan migrate:status`：确认新 Migration 初始为 Pending。
+- `php artisan migrate --force`：首次应用成功。
+- 只读确认新类型 Artifact 数量为 0 后，执行 `php artisan migrate:rollback --path=database/migrations/2026_09_30_100000_add_outline_structure_and_arc_beats_artifact_types.php --force`：成功。
+- `php artisan migrate --path=database/migrations/2026_09_30_100000_add_outline_structure_and_arc_beats_artifact_types.php --force`：重新应用成功。
+- 最终只读核对 Migration 已记录，CHECK 同时包含两个新类型。
+
+**Tests Actually Run**
+
+- `php artisan test tests/Feature/NovelOutlineStageContractTest.php tests/Feature/OpenAiStructuredOutputSchemaTest.php tests/Feature/OutlineArtifactTypeConstraintTest.php`：24 tests，22 passed，2 PostgreSQL-only skipped，49 assertions。
+- `DB_CONNECTION=pgsql DB_DATABASE=x_novel php artisan test tests/Feature/OutlineArtifactTypeConstraintTest.php`：最终 2 tests，2 passed，4 assertions；前两次运行分别暴露测试数据库覆盖值和 Query Builder / Schema Grammar 测试辅助问题，修正后通过。
+- `php artisan test tests/Feature/NovelOutlineStageContractTest.php tests/Feature/OpenAiStructuredOutputSchemaTest.php tests/Feature/OutlineArtifactTypeConstraintTest.php tests/Feature/NovelPlanningBootstrapTest.php`：59 tests，57 passed，2 PostgreSQL-only skipped，324 assertions。
+- `php artisan test`：1052 tests，1026 passed，26 skipped，6213 assertions，0 failures，2 warnings。
+- `vendor/bin/pint --dirty`：通过并格式化本任务文件。
+
+**Browser Verification**
+
+- 未执行浏览器操作；OGR-003 不包含 Filament 页面或运行流程切换。
+
+**Known Limitations**
+
+- 当前运行流程仍是 Foundation → Provider Skeleton → Beat Detail → Finalize；Structure / Arc Beats Jobs、Artifact 持久化来源链和确定性 Skeleton Assembly 由 OGR-004 接线。
+- 容量验证使用当前 Planner 路由 `openai/gpt-5.6-terra` 的官方 1,050,000 Token 上下文与 128,000 Token 最大输出作为本次证据；路由更换后必须提供新模型的真实容量。
+- 未调用真实 Provider、未运行真实 Horizon Worker，也未处理旧批次。
+
+**Rollback / Recovery**
+
+- 新类型 Artifact 数量为 0 时，可先回滚本 Migration，再回退 Enum、合同服务和测试。
+- 已存在 `outline_structure` 或 `outline_arc_beats` 时，`down()` 会阻止回滚；必须先停止新批次并显式确定归档或清理范围。
+
+**Next Task**
+
+- `OGR-004`：Skeleton 细分 Job、确定性合并与局部恢复。
+
 ## OGR-004 — Skeleton 细分 Job、确定性合并与局部恢复
 
 **Skills：** `generation-pipeline`  
 **优先级：** P0  
-**状态：** TODO  
+**状态：** READY
 **依赖：** OGR-002、OGR-003
 
 ### 目标

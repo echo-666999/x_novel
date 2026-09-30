@@ -36,6 +36,11 @@ class FinalizeNovelOutlineJob implements ShouldBeUnique, ShouldQueue
         return "novel-outline:{$this->batchRunId}:finalize";
     }
 
+    protected function outlineFailureScope(): string
+    {
+        return NovelOutlinePipeline::FINALIZE_SCOPE;
+    }
+
     /** 仅执行来源校验、合并和事务写入。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {

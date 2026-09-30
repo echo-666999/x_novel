@@ -36,6 +36,11 @@ class GenerateNovelFoundationJob implements ShouldBeUnique, ShouldQueue
         return "novel-outline:{$this->batchRunId}:foundation";
     }
 
+    protected function outlineFailureScope(): string
+    {
+        return NovelOutlinePipeline::FOUNDATION_SCOPE;
+    }
+
     /** 成功后只派发下一个缺失阶段。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {

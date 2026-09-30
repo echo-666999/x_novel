@@ -166,7 +166,7 @@ final class GenerationFailurePolicy
         if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException) {
             return $exception instanceof QueryException ? 'infrastructure_temporary' : 'external_temporary';
         }
-        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json') || str_contains($code, 'output_budget_exhausted') || str_contains($code, 'evidence')) {
+        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'structured_output') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json') || str_contains($code, 'output_budget_exhausted') || str_contains($code, 'evidence')) {
             return 'structured_output';
         }
         if (str_contains($code, 'state_version') || str_starts_with($code, 'stale_') || str_contains($code, 'artifact_conflict')) {
@@ -196,7 +196,7 @@ final class GenerationFailurePolicy
         if (str_contains($code, 'output_budget_exhausted')) {
             return '调整模型路由或输出预算';
         }
-        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'truncated')) {
+        if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'structured_output') || str_contains($code, 'truncated')) {
             return '检查请求结构或输出预算';
         }
         if (str_contains($code, 'state_version') || str_starts_with($code, 'stale_') || str_contains($code, 'artifact_conflict')) {

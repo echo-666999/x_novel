@@ -7,6 +7,7 @@ use App\Services\ChapterPlanPayload;
 use App\Services\ChapterReviewer;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
 use App\Services\NovelOutlinePipeline;
+use App\Services\NovelOutlineStageContract;
 use App\Services\NovelPlanner;
 use App\Services\PlanCoverage;
 use App\Services\ReviewDimensionAuditRepairer;
@@ -34,6 +35,8 @@ test('every ai response schema used by the generation pipeline satisfies openai 
         'outline_foundation' => app(NovelOutlinePipeline::class)->foundationSchema(),
         'outline_skeleton' => app(NovelOutlinePipeline::class)->skeletonSchema(1),
         'outline_beat_detail' => app(NovelOutlinePipeline::class)->beatDetailSchema(),
+        'outline_structure' => app(NovelOutlineStageContract::class)->structureSchema(2),
+        'outline_arc_beats' => app(NovelOutlineStageContract::class)->arcBeatsSchema(),
         'outline_regeneration_volume' => app(NovelPlanner::class)->regenerationSchema('volume'),
         'outline_regeneration_arc' => app(NovelPlanner::class)->regenerationSchema('arc'),
         'outline_regeneration_beat' => app(NovelPlanner::class)->regenerationSchema('beat'),

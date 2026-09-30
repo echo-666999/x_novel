@@ -15,6 +15,8 @@ enum ArtifactType: string
     case Context = 'context';
     case EndingAudit = 'ending_audit';
     case OutlineFoundation = 'outline_foundation';
+    case OutlineStructure = 'outline_structure';
+    case OutlineArcBeats = 'outline_arc_beats';
     case OutlineSkeleton = 'outline_skeleton';
     case OutlineBeatDetail = 'outline_beat_detail';
     case OutlineBlueprint = 'outline_blueprint';

@@ -36,6 +36,11 @@ class GenerateNovelBeatDetailJob implements ShouldBeUnique, ShouldQueue
         return "novel-outline:{$this->batchRunId}:beat:{$this->beatKey}";
     }
 
+    protected function outlineFailureScope(): string
+    {
+        return NovelOutlinePipeline::BEAT_DETAIL_SCOPE;
+    }
+
     /** 当前 Beat 成功后再选择下一个缺失阶段。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {

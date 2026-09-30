@@ -70,9 +70,9 @@ class NovelOutlinePipeline
     ) {}
 
     /**
-     * 创建或恢复一个规划批次，并冻结整批使用的模型路由和 Prompt 版本。
+     * 在 Web 请求内先持久化 queued 批次，使队列启动前也能查询真实进度。
      */
-    public function startOrResume(Novel $novel, int $volumeCount): GenerationRun
+    public function prepareBatch(Novel $novel, int $volumeCount): GenerationRun
     {
         if ($volumeCount < 1 || $volumeCount > 12) {
             throw ValidationException::withMessages(['volume_count' => '预计分卷数必须在 1 至 12 之间。']);
@@ -85,7 +85,7 @@ class NovelOutlinePipeline
                 ->whereNull('chapter_id')
                 ->where('scope_type', self::BATCH_SCOPE)
                 ->where('scope_id', $locked->getKey())
-                ->whereIn('status', [RunStatus::Running, RunStatus::Succeeded])
+                ->whereIn('status', [RunStatus::Queued, RunStatus::Running, RunStatus::Succeeded])
                 ->latest('id')
                 ->get();
             $sameBatch = $batches->first(fn (GenerationRun $run): bool => (int) data_get($run->context_snapshot, 'requested_volume_count') === $volumeCount);
@@ -93,18 +93,10 @@ class NovelOutlinePipeline
                 // 重复投递与后台路由变化都必须回到已冻结的原批次，不能创建另一套半完成来源链。
                 return $sameBatch;
             }
-            if ($batches->contains(fn (GenerationRun $run): bool => $run->status === RunStatus::Running)) {
+            if ($batches->contains(fn (GenerationRun $run): bool => in_array($run->status, [RunStatus::Queued, RunStatus::Running], true))) {
                 throw new AiProviderException('outline_batch_conflict', '当前小说已有不同参数的 Outline 规划批次正在执行。', false);
             }
-            if ($locked->status === NovelStatus::Paused) {
-                throw new AiProviderException('novel_paused', '小说已暂停，不能创建新的 Outline 规划批次。', false);
-            }
-            if (! in_array($locked->status, [NovelStatus::Draft, NovelStatus::Planning], true)) {
-                throw new AiProviderException('novel_planning_unavailable', '只有草稿或规划中的小说可以生成初始规划。', false);
-            }
-            if ($locked->current_outline_id !== null || $locked->chapters()->exists() || $locked->storyEvents()->exists()) {
-                throw new AiProviderException('novel_planning_unavailable', '小说已经进入正式生命周期，不能创建新的初始规划批次。', false);
-            }
+            $this->assertNovelPlanningAvailable($locked);
 
             $settings = $this->settingsResolver->resolve(AiStage::Planner, $locked);
             $targetPlatform = $this->targetPlatformResolver->forNovel($locked);
@@ -131,7 +123,7 @@ class NovelOutlinePipeline
                 ->where('scope_type', self::BATCH_SCOPE)
                 ->where('scope_id', $locked->getKey())
                 ->where('input_hash', $inputHash)
-                ->whereIn('status', [RunStatus::Running, RunStatus::Succeeded])
+                ->whereIn('status', [RunStatus::Queued, RunStatus::Running, RunStatus::Succeeded])
                 ->latest('id')
                 ->first();
             if ($existing !== null) {
@@ -149,7 +141,7 @@ class NovelOutlinePipeline
                 'scope_type' => self::BATCH_SCOPE,
                 'scope_id' => $locked->getKey(),
                 'stage' => GenerationStage::ChapterPlanning,
-                'status' => RunStatus::Running,
+                'status' => RunStatus::Queued,
                 'attempt' => $attempt,
                 'idempotency_key' => "novel-outline-batch:{$locked->getKey()}:{$inputHash}:{$attempt}",
                 'input_hash' => $inputHash,
@@ -157,9 +149,50 @@ class NovelOutlinePipeline
                 'provider' => $settings->provider,
                 'model_policy' => $settings->model,
                 'context_snapshot' => $context,
-                'started_at' => now(),
             ]);
         });
+    }
+
+    /**
+     * 激活页面已经准备好的批次；独立方法保证旧 Queue Payload 无需增加 batchRunId。
+     */
+    public function activateBatch(GenerationRun $batch): GenerationRun
+    {
+        return DB::transaction(function () use ($batch): GenerationRun {
+            $locked = GenerationRun::query()->lockForUpdate()->findOrFail($batch->getKey());
+            $this->assertBatch($locked);
+            if ($locked->status === RunStatus::Succeeded) {
+                return $locked;
+            }
+            if ($locked->status === RunStatus::Running) {
+                return $locked;
+            }
+            if ($locked->status !== RunStatus::Queued) {
+                throw ValidationException::withMessages(['run' => '只有 queued Outline 主批次可以由 Worker 激活。']);
+            }
+
+            $novel = Novel::query()->lockForUpdate()->findOrFail($locked->novel_id);
+            $this->assertNovelPlanningAvailable($novel);
+            $locked->update([
+                'status' => RunStatus::Running,
+                'started_at' => $locked->started_at ?? now(),
+                'finished_at' => null,
+                'error_code' => null,
+                'error_message' => null,
+                'error_retryable' => null,
+                'error_metadata' => null,
+            ]);
+
+            return $locked->refresh();
+        }, 3);
+    }
+
+    /**
+     * 保留同步调用与旧入口兼容：准备批次后立即激活，但不自动恢复 failed 批次。
+     */
+    public function startOrResume(Novel $novel, int $volumeCount): GenerationRun
+    {
+        return $this->activateBatch($this->prepareBatch($novel, $volumeCount));
     }
 
     /**
@@ -170,7 +203,7 @@ class NovelOutlinePipeline
         $batch->refresh();
         $this->assertBatch($batch);
         $novelStatus = $batch->novel()->value('status');
-        if ($batch->status === RunStatus::Succeeded || $novelStatus === NovelStatus::Paused || $novelStatus === NovelStatus::Paused->value) {
+        if ($batch->status !== RunStatus::Running || $novelStatus === NovelStatus::Paused || $novelStatus === NovelStatus::Paused->value) {
             return;
         }
 
@@ -228,7 +261,7 @@ class NovelOutlinePipeline
             ->whereNull('chapter_id')
             ->where('scope_type', self::BATCH_SCOPE)
             ->where('scope_id', $novel->getKey())
-            ->whereIn('status', [RunStatus::Running, RunStatus::Succeeded])
+            ->whereIn('status', [RunStatus::Queued, RunStatus::Running, RunStatus::Succeeded])
             ->latest('id')
             ->get()
             ->first(fn (GenerationRun $run): bool => (int) data_get($run->context_snapshot, 'requested_volume_count') === $volumeCount);
@@ -240,6 +273,110 @@ class NovelOutlinePipeline
         }
 
         $this->targetPlatformResolver->forNovel($novel);
+    }
+
+    /** Resume 只接受当前 Pipeline 合同创建且冻结信息完整的主批次。 */
+    public function assertResumeCompatible(GenerationRun $batch): void
+    {
+        $this->assertBatch($batch);
+        if ($batch->prompt_version !== self::BATCH_PROMPT_VERSION
+            || data_get($batch->context_snapshot, 'generation_preferences.prompt_versions') !== $this->promptVersions()) {
+            throw ValidationException::withMessages(['run' => 'Outline 主批次版本与当前 Pipeline 合同不兼容。']);
+        }
+        if (blank($batch->provider) || blank($batch->model_policy)) {
+            throw ValidationException::withMessages(['run' => 'Outline 主批次缺少冻结的 Provider 或 Model。']);
+        }
+        $volumeCount = data_get($batch->context_snapshot, 'requested_volume_count');
+        if (! is_int($volumeCount) || $volumeCount < 1 || $volumeCount > 12) {
+            throw ValidationException::withMessages(['run' => 'Outline 主批次缺少有效的预计分卷数。']);
+        }
+
+        $this->frozenTargetPlatform($batch);
+    }
+
+    /** Queue 投递异常必须关闭刚准备的批次，不能让它永久停在 queued。 */
+    public function markQueueDispatchFailed(GenerationRun $batch, Throwable $exception): void
+    {
+        DB::transaction(function () use ($batch, $exception): void {
+            $locked = GenerationRun::query()->lockForUpdate()->find($batch->getKey());
+            if ($locked === null || $locked->status !== RunStatus::Queued) {
+                return;
+            }
+
+            $locked->update([
+                'status' => RunStatus::Failed,
+                'error_code' => 'queue_dispatch_failed',
+                'error_message' => $exception->getMessage(),
+                'error_retryable' => true,
+                'error_metadata' => [
+                    'category' => 'infrastructure_temporary',
+                    'failed_scope' => self::BATCH_SCOPE,
+                    'auto_retry_exhausted' => false,
+                ],
+                'finished_at' => now(),
+            ]);
+        }, 3);
+    }
+
+    /**
+     * 子 Job 终止时聚合失败到主批次；旧回调不能覆盖更新的成功结果。
+     */
+    public function markBatchFailed(
+        int $batchRunId,
+        Throwable $exception,
+        string $failedScope,
+        ?string $discriminator,
+        bool $autoRetryExhausted,
+    ): bool {
+        return DB::transaction(function () use ($batchRunId, $exception, $failedScope, $discriminator, $autoRetryExhausted): bool {
+            $batch = GenerationRun::query()->lockForUpdate()->find($batchRunId);
+            if ($batch === null || ! in_array($batch->status, [RunStatus::Queued, RunStatus::Running], true)) {
+                return false;
+            }
+            $this->assertBatch($batch);
+
+            $childRun = null;
+            if ($failedScope !== self::BATCH_SCOPE) {
+                $children = GenerationRun::query()
+                    ->where('novel_id', $batch->novel_id)
+                    ->where('scope_type', $failedScope)
+                    ->where('scope_id', $batch->getKey())
+                    ->where('stage', GenerationStage::ChapterPlanning);
+                if ($discriminator !== null) {
+                    $children->where('context_snapshot->discriminator', $discriminator);
+                }
+                $childRun = $children->latest('id')->first();
+
+                // 已有更新的成功尝试时，迟到的旧 Job 失败回调只能保留历史，不能回退批次。
+                if ($childRun?->status === RunStatus::Succeeded) {
+                    return false;
+                }
+            }
+
+            $failure = $childRun?->status === RunStatus::Failed
+                ? $this->failurePolicy->forRun($childRun)
+                : $this->failurePolicy->fromException(
+                    $exception,
+                    $failedScope === self::BATCH_SCOPE ? 'outline_batch_failed' : 'outline_stage_failed',
+                );
+            $metadata = array_filter([
+                'failed_scope' => $failedScope,
+                'discriminator' => $discriminator,
+                'child_run_id' => $childRun?->getKey(),
+                'auto_retry_exhausted' => $autoRetryExhausted,
+            ], static fn (mixed $value): bool => $value !== null) + $failure->metadata;
+
+            $batch->update([
+                'status' => RunStatus::Failed,
+                'error_code' => $failure->code,
+                'error_message' => $failure->message,
+                'error_retryable' => $failure->retryable,
+                'error_metadata' => $metadata,
+                'finished_at' => now(),
+            ]);
+
+            return true;
+        }, 3);
     }
 
     public function generateFoundation(GenerationRun $batch): ?GenerationArtifact
@@ -622,7 +759,7 @@ class NovelOutlinePipeline
             'started_at' => now(),
         ]);
 
-        $response = null;
+        $failureCode = 'outline_stage_failed';
         try {
             $response = $this->provider->generate(new AiRequest(
                 model: (string) $batch->model_policy,
@@ -642,8 +779,11 @@ class NovelOutlinePipeline
                     'stage' => AiStage::Planner->value,
                 ],
             ));
+            $failureCode = 'outline_stage_structured_output_invalid';
             $payload = StructuredOutput::require($response, $outputName, '小说 Outline 分阶段规划');
+            $failureCode = 'outline_stage_schema_invalid';
             $this->assertSchemaShape($payload, $schema);
+            $failureCode = 'outline_stage_domain_validation_failed';
             $payload = $validate($payload);
             $data = [
                 'batch_run_id' => $batch->getKey(),
@@ -652,7 +792,14 @@ class NovelOutlinePipeline
                 'source_artifacts' => array_map(fn (GenerationArtifact $item): array => $this->artifactReference($item), $sourceArtifacts),
                 'payload' => $payload,
             ];
+        } catch (Throwable $exception) {
+            // Provider、解析、Strict Schema 与领域校验都保留原始错误语义，不能伪装成持久化不确定。
+            $this->failurePolicy->record($run, $exception, $failureCode);
 
+            throw $exception;
+        }
+
+        try {
             return DB::transaction(function () use ($run, $artifactType, $response, $data): GenerationArtifact {
                 $artifact = $run->artifacts()->create([
                     'type' => $artifactType,
@@ -666,22 +813,19 @@ class NovelOutlinePipeline
                 return $artifact;
             });
         } catch (Throwable $exception) {
-            if ($response !== null) {
-                $run->update([
-                    'status' => RunStatus::Failed,
-                    'error_code' => 'outline_stage_result_uncertain',
-                    'error_message' => $exception->getMessage(),
-                    'error_retryable' => false,
-                    'error_metadata' => array_filter([
-                        'category' => 'infrastructure_temporary',
-                        'result_uncertain' => true,
-                        'provider_request_id' => $response->providerRequestId,
-                    ]),
-                    'finished_at' => now(),
-                ]);
-            } else {
-                $this->failurePolicy->record($run, $exception, 'outline_stage_failed');
-            }
+            // 只有完整验证后的结果在 Artifact 事务中失败，才表示持久化结果无法确认。
+            $run->update([
+                'status' => RunStatus::Failed,
+                'error_code' => 'outline_stage_result_uncertain',
+                'error_message' => $exception->getMessage(),
+                'error_retryable' => false,
+                'error_metadata' => array_filter([
+                    'category' => 'infrastructure_temporary',
+                    'result_uncertain' => true,
+                    'provider_request_id' => $response->providerRequestId,
+                ]),
+                'finished_at' => now(),
+            ]);
 
             throw $exception;
         }
@@ -919,6 +1063,20 @@ class NovelOutlinePipeline
     {
         if ($batch->scope_type !== self::BATCH_SCOPE || $batch->stage !== GenerationStage::ChapterPlanning) {
             throw ValidationException::withMessages(['run' => '指定 Run 不是 Novel Outline 主批次。']);
+        }
+    }
+
+    /** 初始规划只能发生在尚未进入正式故事生命周期的 Novel。 */
+    public function assertNovelPlanningAvailable(Novel $novel): void
+    {
+        if ($novel->status === NovelStatus::Paused) {
+            throw new AiProviderException('novel_paused', '小说已暂停，不能创建或激活 Outline 规划批次。', false);
+        }
+        if (! in_array($novel->status, [NovelStatus::Draft, NovelStatus::Planning], true)) {
+            throw new AiProviderException('novel_planning_unavailable', '只有草稿或规划中的小说可以生成初始规划。', false);
+        }
+        if ($novel->current_outline_id !== null || $novel->chapters()->exists() || $novel->storyEvents()->exists()) {
+            throw new AiProviderException('novel_planning_unavailable', '小说已经进入正式生命周期，不能创建新的初始规划批次。', false);
         }
     }
 

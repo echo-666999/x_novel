@@ -36,6 +36,11 @@ class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
         return "novel-outline:{$this->batchRunId}:skeleton";
     }
 
+    protected function outlineFailureScope(): string
+    {
+        return NovelOutlinePipeline::SKELETON_SCOPE;
+    }
+
     /** 成功后继续到最早缺失的 Main Beat Detail。 */
     public function handle(NovelOutlinePipeline $pipeline): void
     {

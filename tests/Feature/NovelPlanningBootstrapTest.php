@@ -3,7 +3,9 @@
 use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\CreateBibleVersionAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
+use App\Actions\Novels\ResumeNovelOutlineGenerationAction;
 use App\Actions\Novels\StartNovelGenerationAction;
+use App\Actions\Novels\StartNovelOutlineGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
@@ -28,6 +30,7 @@ use App\Models\Novel;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\User;
+use App\Services\GenerationJobDispatcher;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelPlanner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -431,11 +434,15 @@ test('the outline workspace guides a draft through ai planning and generation re
     Queue::assertPushed(GenerateNovelOutlineJob::class, fn (GenerateNovelOutlineJob $job): bool => $job->novelId === $novel->getKey()
         && $job->volumeCount === 1
         && $job->queue === 'generation');
-    expect($fake->requests())->toHaveCount(0);
+    $batch = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole();
+    expect($fake->requests())->toHaveCount(0)
+        ->and($batch->status)->toBe(RunStatus::Queued)
+        ->and($batch->started_at)->toBeNull();
 
     $pipeline = app(NovelOutlinePipeline::class);
     (new GenerateNovelOutlineJob($novel->getKey(), 1))->handle($pipeline);
-    $batch = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole();
+    expect($batch->fresh()->status)->toBe(RunStatus::Running)
+        ->and($batch->fresh()->started_at)->not->toBeNull();
     (new GenerateNovelFoundationJob($batch->getKey()))->handle($pipeline);
     (new GenerateNovelOutlineSkeletonJob($batch->getKey()))->handle($pipeline);
     (new GenerateNovelBeatDetailJob($batch->getKey(), 'beat-01'))->handle($pipeline);
@@ -453,6 +460,216 @@ test('the outline workspace guides a draft through ai planning and generation re
         ->callAction('startNovelGeneration')
         ->assertNotified('小说已进入生成阶段')
         ->assertActionVisible('generateNextChapter');
+});
+
+test('duplicate outline starts reuse the queued batch and dispatch one coordinator job', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $action = app(StartNovelOutlineGenerationAction::class);
+
+    $first = $action->handle($novel, 1);
+    $second = $action->handle($novel, 1);
+
+    expect($second->is($first))->toBeTrue()
+        ->and($first->status)->toBe(RunStatus::Queued)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->count())->toBe(1);
+    Queue::assertPushed(GenerateNovelOutlineJob::class, 1);
+
+    app(GenerationJobDispatcher::class)->release(new GenerateNovelOutlineJob($novel->getKey(), 1));
+});
+
+test('outline start records queue dispatch failure on the prepared batch', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $dispatcher = Mockery::mock(GenerationJobDispatcher::class);
+    $dispatcher->shouldReceive('dispatch')->once()->andThrow(new RuntimeException('forced queue dispatch failure'));
+    $action = new StartNovelOutlineGenerationAction(app(NovelOutlinePipeline::class), $dispatcher);
+
+    expect(fn () => $action->handle($novel, 1))
+        ->toThrow(RuntimeException::class, 'forced queue dispatch failure');
+
+    $batch = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole();
+    expect($batch->status)->toBe(RunStatus::Failed)
+        ->and($batch->error_code)->toBe('queue_dispatch_failed')
+        ->and(data_get($batch->error_metadata, 'failed_scope'))->toBe(NovelOutlinePipeline::BATCH_SCOPE)
+        ->and($batch->finished_at)->not->toBeNull();
+});
+
+test('a freshly unserialized coordinator failure still closes its prepared batch', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $batch = app(NovelOutlinePipeline::class)->prepareBatch($novel, 1);
+
+    (new GenerateNovelOutlineJob($novel->getKey(), 1))->failed(new RuntimeException('coordinator crashed'));
+
+    expect($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($batch->fresh()->error_code)->toBe('outline_batch_failed')
+        ->and($batch->fresh()->finished_at)->not->toBeNull();
+});
+
+test('retryable outline stage failure keeps the batch running until queue retries are exhausted', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $exception = new AiProviderException('provider_timeout', 'temporary timeout', true);
+    $fake = (new FakeAiProvider)->enqueue($exception);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $job = new GenerateNovelFoundationJob($batch->getKey());
+
+    expect(fn () => $job->handle($pipeline))->toThrow(AiProviderException::class, 'temporary timeout');
+    expect($batch->fresh()->status)->toBe(RunStatus::Running);
+
+    $job->failed($exception);
+    $batch->refresh();
+    $child = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->sole();
+    expect($batch->status)->toBe(RunStatus::Failed)
+        ->and($batch->error_code)->toBe('provider_timeout')
+        ->and(data_get($batch->error_metadata, 'failed_scope'))->toBe(NovelOutlinePipeline::FOUNDATION_SCOPE)
+        ->and(data_get($batch->error_metadata, 'child_run_id'))->toBe($child->getKey())
+        ->and(data_get($batch->error_metadata, 'auto_retry_exhausted'))->toBeTrue()
+        ->and($batch->finished_at)->not->toBeNull();
+});
+
+test('domain validation failure keeps its error meaning and closes the outline batch immediately', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $blueprint = novelBlueprint();
+    data_set($blueprint, 'bible.style_profile.target_platform', 'qidian');
+    $fake = stagedNovelBlueprintProvider($blueprint);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+
+    (new GenerateNovelFoundationJob($batch->getKey()))->handle($pipeline);
+
+    $child = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->sole();
+    expect($child->error_code)->toBe('outline_stage_domain_validation_failed')
+        ->and($child->error_code)->not->toBe('outline_stage_result_uncertain')
+        ->and($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($batch->fresh()->error_code)->toBe('outline_stage_domain_validation_failed');
+});
+
+test('truncated outline output closes the batch without repeating the same request', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $exception = new AiProviderException('outline_output_truncated', 'output was truncated', true);
+    $fake = (new FakeAiProvider)->enqueue($exception);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+
+    (new GenerateNovelFoundationJob($batch->getKey()))->handle($pipeline);
+
+    expect($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($batch->fresh()->error_code)->toBe('outline_output_truncated')
+        ->and(data_get($batch->fresh()->error_metadata, 'auto_retry_exhausted'))->toBeFalse()
+        ->and($fake->requests())->toHaveCount(1);
+});
+
+test('artifact persistence failure is the only outline result uncertainty and closes the batch', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = (new FakeAiProvider)->enqueue(stagedNovelBlueprintResponses()[0]);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $failPersistence = true;
+    GenerationArtifact::creating(function (GenerationArtifact $artifact) use (&$failPersistence): void {
+        if ($failPersistence && $artifact->type === ArtifactType::OutlineFoundation) {
+            throw new RuntimeException('forced artifact persistence crash');
+        }
+    });
+
+    try {
+        (new GenerateNovelFoundationJob($batch->getKey()))->handle($pipeline);
+    } finally {
+        $failPersistence = false;
+    }
+
+    $child = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->sole();
+    expect($child->error_code)->toBe('outline_stage_result_uncertain')
+        ->and(data_get($child->error_metadata, 'result_uncertain'))->toBeTrue()
+        ->and($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($batch->fresh()->error_code)->toBe('outline_stage_result_uncertain');
+});
+
+test('outline resume reuses successful artifacts and dispatches the earliest missing stage once', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = (new FakeAiProvider)->enqueue(stagedNovelBlueprintResponses()[0]);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $foundation = $pipeline->generateFoundation($batch);
+    $batch->update([
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_timeout',
+        'error_message' => 'temporary timeout',
+        'error_retryable' => true,
+        'error_metadata' => ['category' => 'external_temporary'],
+        'finished_at' => now(),
+    ]);
+
+    $resumed = app(ResumeNovelOutlineGenerationAction::class)->handle($novel, $batch);
+
+    expect($resumed->status)->toBe(RunStatus::Running)
+        ->and($resumed->error_code)->toBeNull()
+        ->and(data_get($resumed->context_snapshot, 'recovery.previous_error_code'))->toBe('provider_timeout')
+        ->and($foundation)->not->toBeNull()
+        ->and($fake->requests())->toHaveCount(1);
+    Queue::assertPushed(GenerateNovelOutlineSkeletonJob::class, 1);
+
+    expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($novel, $resumed))
+        ->toThrow(ValidationException::class, '只有 failed');
+    Queue::assertPushed(GenerateNovelOutlineSkeletonJob::class, 1);
+});
+
+test('outline resume rejects paused cancelled succeeded and incompatible batches', function () {
+    $pipeline = app(NovelOutlinePipeline::class);
+
+    $pausedNovel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+    $pausedBatch = $pipeline->startOrResume($pausedNovel, 1);
+    $pausedBatch->update(['status' => RunStatus::Failed, 'finished_at' => now()]);
+    $pausedNovel->update(['status' => NovelStatus::Paused]);
+    expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($pausedNovel, $pausedBatch))
+        ->toThrow(AiProviderException::class, '小说已暂停');
+
+    $cancelledNovel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+    $cancelledBatch = $pipeline->startOrResume($cancelledNovel, 1);
+    $cancelledBatch->update(['status' => RunStatus::Cancelled, 'finished_at' => now()]);
+    expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($cancelledNovel, $cancelledBatch))
+        ->toThrow(ValidationException::class, '只有 failed');
+
+    $succeededNovel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+    $succeededBatch = $pipeline->startOrResume($succeededNovel, 1);
+    $succeededBatch->update(['status' => RunStatus::Succeeded, 'finished_at' => now()]);
+    expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($succeededNovel, $succeededBatch))
+        ->toThrow(ValidationException::class, '只有 failed');
+
+    $legacyNovel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+    $legacyBatch = $pipeline->startOrResume($legacyNovel, 1);
+    $legacyBatch->update([
+        'status' => RunStatus::Failed,
+        'prompt_version' => 'novel-outline-pipeline-v1',
+        'finished_at' => now(),
+    ]);
+    expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($legacyNovel, $legacyBatch))
+        ->toThrow(ValidationException::class, '版本');
+});
+
+test('delayed outline failure callback cannot overwrite a newer successful stage', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $exception = new AiProviderException('provider_timeout', 'temporary timeout', true);
+    $fake = (new FakeAiProvider)
+        ->enqueue($exception)
+        ->enqueue(stagedNovelBlueprintResponses()[0]);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $oldJob = new GenerateNovelFoundationJob($batch->getKey());
+
+    expect(fn () => $oldJob->handle($pipeline))->toThrow(AiProviderException::class);
+    expect($pipeline->generateFoundation($batch))->not->toBeNull();
+
+    $oldJob->failed($exception);
+
+    expect($batch->fresh()->status)->toBe(RunStatus::Running)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->where('status', RunStatus::Succeeded)->count())->toBe(1);
 });
 
 test('manual outline creation calls no provider and editing creates a new immutable version', function () {

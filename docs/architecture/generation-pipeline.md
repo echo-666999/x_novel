@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。OGR-001 批准了新的 Outline 阶段、批次生命周期、页面进度和 Resume 合同；对应代码由 OGR-002～OGR-006 实施。在这些任务完成前，运行代码仍是 NGC-002B 的 Foundation → Provider Skeleton → Beat Detail → Finalize，且全书大纲页尚无持久化批次进度。本文把 OGR 合同作为目标架构，并在涉及现状时明确标注。
+> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。OGR-002 已实现 Outline 主批次生命周期、失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验与 PostgreSQL 约束。内容阶段仍是 NGC-002B 的 Foundation → Provider Skeleton → Beat Detail → Finalize；新版 Job、Skeleton Assembly 与页面进度卡由 OGR-004～OGR-006 实施。
 
 ## 1. 目标
 
@@ -47,7 +47,7 @@ Outline 主批次状态固定为 `queued / running / failed / succeeded / cancel
 
 PostgreSQL 中的主批次、子 Run、Artifact 和 Draft Outline 是 Outline 进度事实源。全书大纲页在活动批次期间每 3 秒轮询：Structure 完成前只显示当前阶段；Structure 完成后显示 Arc Beats `x/y`；Skeleton Assembly 完成后显示 Main Beat Detail `x/y`；终态停止轮询。失败信息持久显示，并通过领域 Resume Action 在事务内校验版本、暂停、活动 Run、输入指纹和来源链，从最早缺失的有效 Artifact 继续。Redis、Horizon、`failed_jobs` 和 Worker Toast 仅用于运行或诊断，不承担业务进度与恢复语义。
 
-OGR-001 只冻结上述目标合同。`StartNovelOutlineGenerationAction`、Structure/Arc Beats/Skeleton Assembly Jobs、批次失败闭环、进度解析器和页面交互由 OGR-002～OGR-006 实现；实施完成前不得把目标类名或页面行为当作当前代码事实。
+当前已由 `StartNovelOutlineGenerationAction` 在 Web 请求中创建或复用 queued Batch，`GenerateNovelOutlineJob` 保持旧构造参数并激活 prepared Batch；各 Outline Job 的最终失败统一收口主批次，`ResumeNovelOutlineGenerationAction` 从最早缺失 Artifact 继续。Structure / Arc Beats 合同已经存在；对应 Jobs、Skeleton Assembly、进度解析器和页面进度/恢复入口尚未实现，分别属于 OGR-004～OGR-006。
 
 长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。
 
@@ -759,7 +759,9 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 ## 20. Timeout / Retry Budget
 
-统一配置 outline_foundation、outline_structure、outline_arc_beats、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Skeleton Assembly、Chapter Assembly 与 Outline Finalize 都是确定性阶段，没有 Provider Timeout。具体 Outline 输出 Token 上限由 OGR-003 在 Schema 和模型容量验证后确定，OGR-001 不冻结数字。
+统一配置 outline_foundation、outline_structure、outline_arc_beats、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Skeleton Assembly、Chapter Assembly 与 Outline Finalize 都是确定性阶段，没有 Provider Timeout。
+
+OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema，并冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 
 默认超时链：
 

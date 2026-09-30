@@ -6,6 +6,8 @@ use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Novels\ApplyNovelBlueprintAction;
 use App\Actions\Novels\ApplyNovelOutlineRevisionAction;
 use App\Actions\Novels\CreateNovelOutlineVersionAction;
+use App\Actions\Novels\StartNovelOutlineGenerationAction;
+use App\AI\Exceptions\AiProviderException;
 use App\Data\NormalizedNovelOutline;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -16,7 +18,6 @@ use App\Enums\RunStatus;
 use App\Enums\StoryArcType;
 use App\Enums\WorldEntityType;
 use App\Filament\Resources\Novels\NovelResource;
-use App\Jobs\GenerateNovelOutlineJob;
 use App\Models\GenerationArtifact;
 use App\Models\NovelOutline;
 use App\Services\NormalizedNovelOutlineValidator;
@@ -36,6 +37,7 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class ManageNovelOutline extends ViewRecord
 {
@@ -80,27 +82,27 @@ class ManageNovelOutline extends ViewRecord
                 ->schema([
                     TextInput::make('volume_count')->label('预计分卷数')->integer()->minValue(1)->maxValue(12)->default(5)->required(),
                 ])
-                ->action(function (array $data, NovelOutlinePipeline $outlinePipeline): void {
+                ->action(function (array $data, StartNovelOutlineGenerationAction $start): void {
                     try {
-                        $outlinePipeline->assertTargetPlatformReady($this->getRecord(), (int) $data['volume_count']);
-                    } catch (ValidationException $exception) {
+                        $batch = $start->handle($this->getRecord(), (int) $data['volume_count']);
+                    } catch (Throwable $exception) {
+                        $message = match (true) {
+                            $exception instanceof ValidationException => collect($exception->errors())->flatten()->first(),
+                            $exception instanceof AiProviderException => $exception->getMessage(),
+                            default => '创建或投递规划批次失败，请查看日志后重试。',
+                        };
                         Notification::make()
                             ->title('无法生成大纲候选')
-                            ->body(collect($exception->errors())->flatten()->first())
+                            ->body($message)
                             ->danger()
                             ->send();
 
                         return;
                     }
 
-                    GenerateNovelOutlineJob::dispatch(
-                        $this->getRecord()->getKey(),
-                        (int) $data['volume_count'],
-                    );
-
                     Notification::make()
                         ->title('AI 大纲候选已加入生成队列')
-                        ->body('生成完成后刷新本页面即可查看 Draft Version。')
+                        ->body("规划批次 #{$batch->getKey()} 已持久化，可安全等待后台处理。")
                         ->success()
                         ->send();
                 }),
@@ -155,7 +157,7 @@ class ManageNovelOutline extends ViewRecord
                             $data['node_key'],
                             $data['instruction'],
                         );
-                    } catch (\Throwable $exception) {
+                    } catch (Throwable $exception) {
                         Notification::make()->title('局部重新生成失败')->body($exception->getMessage())->danger()->send();
 
                         return;

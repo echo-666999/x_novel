@@ -2,7 +2,7 @@
 
 # AI Long-Form Fiction Platform
 
-> NGC-005 实施基线。关系化 Outline、Chapter Plan 完整父链、Canonical Milestone Progress，以及 Review/Event/Commit 完成语义已经实现；不迁移、不 Backfill 旧数据。OGR-001 已批准新的 Outline Artifact、主批次生命周期和恢复合同，代码与数据库约束由 OGR-002～OGR-004 实施。在这些任务完成前，现有代码仍使用 NGC-002B 的 Provider Skeleton Artifact；本文 40.3 节描述 OGR 目标数据合同，不能据此推断新版 Job 已上线。
+> NGC-005 实施基线。关系化 Outline、Chapter Plan 完整父链、Canonical Milestone Progress，以及 Review/Event/Commit 完成语义已经实现；不迁移、不 Backfill 旧数据。OGR-002 已实现 Outline 主批次生命周期与 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 枚举、Strict Schema、校验与 PostgreSQL CHECK。新版 Job 和确定性 Skeleton Assembly 由 OGR-004 实施；当前运行流程仍使用 NGC-002B 的 Provider Skeleton Artifact。
 
 本项目是一个由单人开发、单人使用、单人维护的 AI 长篇网络小说自动生成系统。
 
