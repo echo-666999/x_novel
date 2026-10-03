@@ -4,7 +4,7 @@
 >
 > 基线：`AGENTS.md`、`docs/PRD.md`、`docs/architecture/data-model.md`、`docs/architecture/story-engine.md`
 >
-> 实施状态：NGC-002A～NGC-011 已实现，NGC-012 已完成综合回归与发布数据核对。OGR-002 已实现 Outline 主批次生命周期、失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验与 PostgreSQL 约束；OGR-004 已接通 Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize；OGR-005 已实现 PostgreSQL 只读进度投影。页面进度与恢复交互由 OGR-006 实施。
+> 实施状态：NGC-002A～NGC-012 与 OGR-001～OGR-007 已完成。Outline 当前使用 Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize，并具备 queued 主批次、失败收口、PostgreSQL 只读进度投影、Filament 持久反馈和领域 Resume；遗留 v2 未完成批次已显式退役。
 
 ## 1. 目标
 
@@ -47,7 +47,7 @@ Outline 主批次状态固定为 `queued / running / failed / succeeded / cancel
 
 PostgreSQL 中的主批次、子 Run、Artifact 和 Draft Outline 是 Outline 进度事实源。全书大纲页在活动批次期间每 3 秒轮询：Structure 完成前只显示当前阶段；Structure 完成后显示 Arc Beats `x/y`；Skeleton Assembly 完成后显示 Main Beat Detail `x/y`；终态停止轮询。失败信息持久显示，并通过领域 Resume Action 在事务内校验版本、暂停、活动 Run、输入指纹和来源链，从最早缺失的有效 Artifact 继续。Redis、Horizon、`failed_jobs` 和 Worker Toast 仅用于运行或诊断，不承担业务进度与恢复语义。
 
-当前已由 `StartNovelOutlineGenerationAction` 在 Web 请求中创建或复用 queued Batch，`GenerateNovelOutlineJob` 保持旧构造参数并激活 prepared Batch；各 Outline Job 的最终失败统一收口主批次，`ResumeNovelOutlineGenerationAction` 从最早缺失且输入指纹匹配的 Artifact 继续。Structure / Arc Beats Jobs 与 Skeleton Assembly 已实现；`NovelOutlineProgressResolver` 批量读取最新 Batch、子 Run、Artifact 与 Usage，校验成功 Artifact 的固定来源链后，返回阶段、已知分母、失败和恢复资格。页面进度卡、轮询与恢复入口仍属于 OGR-006。
+`StartNovelOutlineGenerationAction` 在 Web 请求中创建或复用 queued Batch，`GenerateNovelOutlineJob` 保持稳定构造参数并激活 prepared Batch；各 Outline Job 的最终失败统一收口主批次，`ResumeNovelOutlineGenerationAction` 从最早缺失且输入指纹匹配的 Artifact 继续。`NovelOutlineProgressResolver` 批量读取最新 Batch、子 Run、Artifact 与 Usage，校验成功 Artifact 的固定来源链后返回阶段、已知分母、失败和恢复资格；全书大纲页只在活动态每 3 秒刷新，终态停止，并通过领域 Action 恢复。
 
 长篇结构化输出采用分层超时：Provider 请求最多 300 秒，AI Job 330 秒，Horizon Worker 360 秒，Redis `retry_after` 420 秒，停滞 Run 判定 480 秒。外层必须晚于内层终止，避免仍在生成的请求被误判为 Worker 丢失或重复投递。
 
@@ -122,7 +122,7 @@ default:
 
 `ContextBuilder` 作为 Service，不单独 Queue。只有出现真实拥堵后才拆更多 Queue。
 
-`GenerateNovelOutlineSkeletonJob` 是 NGC-002B 的遗留 Provider Job，只服务旧合同与上线前批次处理；新版批次不得派发它。OGR-007 完成旧批次处置与发布收尾后，才能按实际引用情况删除兼容代码。
+`GenerateNovelOutlineSkeletonJob` 是 NGC-002B 的遗留 Provider Job。新版批次不会派发它；类暂时保留用于安全反序列化历史 failed job，批次不为 `running` 时直接空操作。不得通过 `queue:retry` 重放旧 UUID，也不得让 v2 Artifact 进入 v3 来源链。
 
 ## 4. GenerateNextChapterAction
 

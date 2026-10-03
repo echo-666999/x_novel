@@ -14,7 +14,7 @@ return [
         'ending_audit' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => []],
     ],
     'acceptance_tools_enabled' => (bool) env('GENERATION_ACCEPTANCE_TOOLS_ENABLED', false),
-    'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 300),
+    'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 480),
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),
     'planner_max_output_tokens' => (int) env('PLANNER_MAX_OUTPUT_TOKENS', 12_000),
     'planner_retry_max_output_tokens' => (int) env('PLANNER_RETRY_MAX_OUTPUT_TOKENS', 16_000),

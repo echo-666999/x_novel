@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\RunStatus;
 use App\Jobs\Concerns\HandlesNovelOutlineStageFailures;
 use App\Models\GenerationRun;
 use App\Services\NovelOutlinePipeline;
@@ -47,6 +48,11 @@ class GenerateNovelOutlineSkeletonJob implements ShouldBeUnique, ShouldQueue
         $batch = GenerationRun::query()->find($this->batchRunId);
 
         if ($batch === null) {
+            return;
+        }
+
+        // OGR-007 退役后仍保留旧 Queue Payload 的类边界，但终态批次绝不能被误重放。
+        if ($batch->status !== RunStatus::Running) {
             return;
         }
 

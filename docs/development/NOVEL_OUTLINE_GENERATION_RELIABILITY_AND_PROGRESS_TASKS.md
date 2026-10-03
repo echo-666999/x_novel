@@ -5,7 +5,7 @@
 > 上游基线：`docs/PRD.md`、`docs/architecture/generation-pipeline.md`、`docs/architecture/data-model.md`、`docs/architecture/novel-lifecycle-and-project-core.md`  
 > 关联历史任务：`NGC-002B` 已完成 Foundation、Skeleton、单 Main Beat Detail、Finalize 的首次分阶段实现；本任务集是后续可靠性与交互增强，不改写其历史完成状态  
 > 用途：把已确认的“进一步拆分 Skeleton + 页面持久化进度与恢复交互”方案拆成可逐项实施、测试、验收和回滚的任务  
-> 当前状态：`OGR-001`～`OGR-006` DONE；`OGR-007` READY
+> 当前状态：`OGR-001`～`OGR-007` DONE
 
 ## 1. 使用规则
 
@@ -191,7 +191,7 @@ flowchart TD
 | OGR-004 | Skeleton 细分 Job、确定性合并与局部恢复 | P0 | DONE | OGR-002、OGR-003 |
 | OGR-005 | 全书大纲进度只读解析器 | P1 | DONE | OGR-002、OGR-004 |
 | OGR-006 | Filament 进度、失败提示与继续生成交互 | P1 | DONE | OGR-005 |
-| OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | READY | OGR-006 |
+| OGR-007 | 旧批次版本处理、端到端回归与发布收尾 | P0 | DONE | OGR-006 |
 
 ## 7. Task Cards
 
@@ -1076,7 +1076,7 @@ OpenAI · gpt-5.6-terra · reasoning: medium
 
 **Skills：** `generation-pipeline`, `filament-ui`  
 **优先级：** P0  
-**状态：** READY
+**状态：** DONE
 **依赖：** OGR-006
 
 ### 目标
@@ -1158,6 +1158,88 @@ OpenAI · gpt-5.6-terra · reasoning: medium
 ### 完成定义
 
 新版 Outline 生成、持久化进度、失败反馈和领域 Resume 已通过目标测试、完整回归及真实浏览器验收；旧 Batch 已按记录处理；文档与实现一致；未自动提交 Git。
+
+### OGR-007 完成记录（2026-10-01）
+
+**Summary**
+
+- 新增默认 dry-run 的 `novel:outline-retire-legacy-batch` 命令和事务领域 Action，仅允许显式退役未完成 `novel-outline-pipeline-v2` 主批次。
+- 退役记录 `cancelled / pipeline_contract_upgraded`、原状态、原因和保留记录数量；不删除历史 Run、Artifact、Usage、AI Request Log 或 failed job。
+- 遗留 `GenerateNovelOutlineSkeletonJob` 在非 running 批次上直接返回，保留反序列化边界而不允许终态旧任务改变历史状态。
+- `STALLED_RUN_AFTER_SECONDS` 代码默认值由 300 秒修正为 480 秒，使实际顺序保持 Provider 150 < Job 330 < Worker 360 < Redis retry_after 420 < Stalled 480。
+- PRD、Generation Pipeline、Lifecycle 和独立发布记录已同步到 OGR-007 当前状态。
+
+**Problems Addressed**
+
+- 真实 Batch #1 在旧 Skeleton 请求耗尽后仍伪装为 `running`，阻止 Novel #2 创建新版 v3 批次。
+- 旧 failed job UUID 若被误重放，缺少面向已退役终态的明确空操作边界。
+- 真实环境未设置 `STALLED_RUN_AFTER_SECONDS` 时使用 300 秒代码默认值，早于 330 秒 Outline Job Timeout，存在误判活动 Run 的风险。
+- 发布前权威文档仍把 OGR-006 页面交互写成未实施状态。
+
+**Files Changed**
+
+- `app/Actions/Novels/RetireLegacyNovelOutlineBatchAction.php`
+- `app/Console/Commands/RetireLegacyNovelOutlineBatch.php`
+- `app/Jobs/GenerateNovelOutlineSkeletonJob.php`
+- `config/generation.php`
+- `tests/Feature/RetireLegacyNovelOutlineBatchTest.php`
+- `docs/PRD.md`
+- `docs/architecture/generation-pipeline.md`
+- `docs/architecture/novel-lifecycle-and-project-core.md`
+- `docs/development/NOVEL_OUTLINE_GENERATION_RELEASE_RECORD.md`
+- `docs/development/NOVEL_OUTLINE_GENERATION_RELIABILITY_AND_PROGRESS_TASKS.md`
+
+**Database / Business Data Changes**
+
+- 目标：PostgreSQL `x_novel`，Batch #1，Novel #2。
+- 执行前：Batch `running / novel-outline-pipeline-v2`；子 Run #2～#7；成功 Artifact #1 `outline_foundation`；失败 Skeleton Run #4～#7；无 Current/Draft Outline、Chapter 或 Story Event；Redis generation pending/reserved/delayed 均为空。
+- 执行：`php artisan novel:outline-retire-legacy-batch 1 --execute --reason='OGR-007 pipeline contract upgrade after verified empty queues'`。
+- 执行后：Batch #1 为 `cancelled / pipeline_contract_upgraded`，`error_retryable=false`；6 个子 Run、1 个 Artifact 和 failed job `a5827bdf-d462-498d-a15c-7879a23072a3` 均保留；未完成旧批次数为 0。
+- 未创建真实新版 Batch，未调用真实 AI Provider，未修改 Novel #2 的 Outline、Bible、Chapter、Story Event 或 Canonical 数据。
+
+**Migrations Actually Run**
+
+- 数据库：PostgreSQL `x_novel`；禁止并且未执行 `migrate:fresh`。
+- Horizon 暂停后执行 `php artisan migrate:rollback --path=database/migrations/2026_09_30_100000_add_outline_structure_and_arc_beats_artifact_types.php --force`：成功。
+- 随即执行 `php artisan migrate --path=database/migrations/2026_09_30_100000_add_outline_structure_and_arc_beats_artifact_types.php --force`：成功，迁移恢复为 Batch 2 / Ran。
+- 回滚前数据库不存在 `outline_structure` 或 `outline_arc_beats` Artifact；只改变并恢复 PostgreSQL Artifact Type CHECK，没有删除业务行。
+- Horizon 已执行 continue 并复核为 running，监听 `redis:generation (1), redis:default (1)`。
+
+**Tests Actually Run**
+
+- `php artisan test tests/Feature/RetireLegacyNovelOutlineBatchTest.php --compact`：6 tests，6 passed，26 assertions。
+- OGR-007 要求的四组目标测试加退役测试：66 tests，66 passed，494 assertions。
+- Outline、Queue Recovery、AI Settings、Filament、超时配置与 Chapter Pipeline 受影响回归：126 tests，124 passed，2 skipped，846 assertions。
+- `php artisan test --compact`：1082 tests，1056 passed，26 skipped，6431 assertions，0 failures，2 warnings（测试输出未提供 warning details）。
+- `vendor/bin/pint --test`、相关 PHP syntax checks 与 `git diff --check`：通过。
+
+**Browser Verification**
+
+- 使用 `127.0.0.1:8766`、隔离 SQLite、database Queue、AI Emergency Stop 且无 Worker 的 Chrome 会话；未访问或修改真实 Novel #2。
+- 从页面启动后立即显示 queued、Batch #1、禁用的“生成中”和成功 Toast；刷新/恢复全过程只有一个主批次。
+- 以隔离持久记录模拟 Worker 结果后，页面自动显示 Foundation、Structure、Arc Beats `1/2`、`provider_timeout`、重试耗尽和“继续 AI 生成”。
+- 点击 Resume 后只新增 `GenerateNovelArcBeatsJob(batchRunId=1, arcKey=arc-02)`；已有 Foundation、Structure 和 arc-01 Artifact 均保留。
+- 补齐隔离成功来源链后，页面显示六阶段全部完成、Arc Beats `2/2`、Beat Detail `2/2` 和 Draft Outline；终态 DOM 的 `wire:poll` 数量为 0。
+- 浏览器阶段数据为隔离验收 Fixture；新版 Pipeline 的真实阶段执行、Provider 调用次数和 Artifact 幂等由 Fake Provider Feature Tests 验证。未执行真实 Provider 调用。
+
+**Known Limitations**
+
+- failed job UUID 作为诊断证据继续保留；不得对其执行 `queue:retry`。兼容 Job 类在该历史记录保留期间不能删除。
+- 本次未用真实模型生成新全书大纲，因此不提供真实模型质量、Token、成本或端到端耗时结论。
+
+**Rollback / Recovery**
+
+- Batch #1 的退役是审计状态，不自动恢复为 active；如需恢复旧历史，必须新增明确领域操作并记录原因，不能直接改状态或重试旧 failed job。
+- 新版批次从 Foundation 重新生成；不得复制 Artifact、修改 `scope_id` 或跨 Batch 复用旧 Foundation。
+- 代码可按本次 diff 回退；数据库迁移已恢复到应用后状态，业务退役记录与 Git 回退分开处理。
+
+**Next Task**
+
+- 无；OGR-001～OGR-007 已完成。后续如要移除旧 Skeleton Job，须先处理 retained failed job 的长期归档策略。
+
+**Git**
+
+- 未提交；未 push；未创建 PR。
 
 ## 8. 总体验收标准
 
