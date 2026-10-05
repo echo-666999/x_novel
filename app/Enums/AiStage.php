@@ -4,11 +4,11 @@ namespace App\Enums;
 
 enum AiStage: string
 {
-    case Planner = 'planner';
     case OutlineFoundation = 'outline_foundation';
     case OutlineStructure = 'outline_structure';
     case OutlineArcBeats = 'outline_arc_beats';
     case OutlineBeatDetail = 'outline_beat_detail';
+    case Planner = 'planner';
     case Writer = 'writer';
     case Extractor = 'extractor';
     case Reviewer = 'reviewer';
@@ -19,11 +19,11 @@ enum AiStage: string
     public function getLabel(): string
     {
         return match ($this) {
-            self::Planner => '章节规划',
             self::OutlineFoundation => '全书大纲 · Foundation',
             self::OutlineStructure => '全书大纲 · Structure',
             self::OutlineArcBeats => '全书大纲 · Arc Beats',
             self::OutlineBeatDetail => '全书大纲 · Beat Detail',
+            self::Planner => '章节规划',
             self::Writer => '场景写作',
             self::Extractor => '事件提取',
             self::Reviewer => '叙事审校',
