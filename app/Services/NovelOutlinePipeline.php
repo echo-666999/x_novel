@@ -54,7 +54,9 @@ class NovelOutlinePipeline
 
     public const LEGACY_BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v2';
 
-    public const BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v3';
+    public const SINGLE_ROUTE_BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v3';
+
+    public const BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v4';
 
     public const FOUNDATION_PROMPT_VERSION = 'novel-outline-foundation-v2';
 
@@ -112,19 +114,15 @@ class NovelOutlinePipeline
             }
             $this->assertNovelPlanningAvailable($locked);
 
-            $settings = $this->settingsResolver->resolve(AiStage::Planner, $locked);
             $targetPlatform = $this->targetPlatformResolver->forNovel($locked);
-            $capacity = $this->configuredPlannerCapacity($settings->provider, $settings->model);
+            $outlineRoutes = $this->resolveOutlineRoutes($locked);
             $context = [
                 'novel' => $locked->only(['id', 'title', 'genre', 'premise', 'target_words']),
                 'requested_volume_count' => $volumeCount,
                 'target_platform' => $targetPlatform,
                 'generation_preferences' => [
                     'chapter_target_words' => (int) data_get($locked->settings, 'generation.chapter_target_words', 3_000),
-                    'provider' => $settings->provider,
-                    'model' => $settings->model,
-                    'reasoning_effort' => $settings->reasoningEffort,
-                    'model_capacity' => $capacity,
+                    'outline_routes' => $outlineRoutes,
                     'prompt_versions' => $this->promptVersions(),
                 ],
             ];
@@ -162,8 +160,8 @@ class NovelOutlinePipeline
                 'idempotency_key' => "novel-outline-batch:{$locked->getKey()}:{$inputHash}:{$attempt}",
                 'input_hash' => $inputHash,
                 'prompt_version' => self::BATCH_PROMPT_VERSION,
-                'provider' => $settings->provider,
-                'model_policy' => $settings->model,
+                'provider' => null,
+                'model_policy' => null,
                 'context_snapshot' => $context,
             ]);
         });
@@ -324,15 +322,54 @@ class NovelOutlinePipeline
         $this->targetPlatformResolver->forNovel($novel);
     }
 
+    /** @return array<string, array<string, mixed>> */
+    public function outlineRoutePreview(Novel $novel): array
+    {
+        $preview = [];
+        foreach ($this->outlineRouteStages() as $stage) {
+            try {
+                $preview[$stage->value] = [
+                    'stage' => $stage->value,
+                    'label' => $stage->getLabel(),
+                    'ready' => true,
+                    ...$this->resolveOutlineRoute($novel, $stage),
+                    'error' => null,
+                ];
+            } catch (Throwable $exception) {
+                $message = $exception instanceof ValidationException
+                    ? (string) collect($exception->errors())->flatten()->first()
+                    : $exception->getMessage();
+                $preview[$stage->value] = [
+                    'stage' => $stage->value,
+                    'label' => $stage->getLabel(),
+                    'ready' => false,
+                    'provider' => null,
+                    'model' => null,
+                    'reasoning_effort' => null,
+                    'source' => null,
+                    'prompt_version' => $this->promptVersionForRoute($stage),
+                    'model_capacity' => null,
+                    'error' => $message,
+                ];
+            }
+        }
+
+        return $preview;
+    }
+
     /** Resume 只接受当前 Pipeline 合同创建且冻结信息完整的主批次。 */
     public function assertResumeCompatible(GenerationRun $batch): void
     {
         $this->assertBatch($batch);
-        if ($batch->prompt_version !== self::BATCH_PROMPT_VERSION
+        if (! in_array($batch->prompt_version, [self::SINGLE_ROUTE_BATCH_PROMPT_VERSION, self::BATCH_PROMPT_VERSION], true)
             || data_get($batch->context_snapshot, 'generation_preferences.prompt_versions') !== $this->promptVersions()) {
             throw ValidationException::withMessages(['run' => 'Outline 主批次版本与当前 Pipeline 合同不兼容。']);
         }
-        if (blank($batch->provider) || blank($batch->model_policy)) {
+        if ($batch->prompt_version === self::BATCH_PROMPT_VERSION) {
+            foreach ($this->outlineRouteStages() as $stage) {
+                $this->frozenRoute($batch, $stage);
+            }
+        } elseif (blank($batch->provider) || blank($batch->model_policy)) {
             throw ValidationException::withMessages(['run' => 'Outline 主批次缺少冻结的 Provider 或 Model。']);
         }
         $volumeCount = data_get($batch->context_snapshot, 'requested_volume_count');
@@ -440,6 +477,7 @@ class NovelOutlinePipeline
 
         return $this->providerStage(
             batch: $batch,
+            routeStage: AiStage::OutlineFoundation,
             scopeType: self::FOUNDATION_SCOPE,
             artifactType: ArtifactType::OutlineFoundation,
             promptVersion: self::FOUNDATION_PROMPT_VERSION,
@@ -470,6 +508,7 @@ class NovelOutlinePipeline
 
         return $this->providerStage(
             batch: $batch,
+            routeStage: AiStage::Planner,
             scopeType: self::SKELETON_SCOPE,
             artifactType: ArtifactType::OutlineSkeleton,
             promptVersion: self::SKELETON_PROMPT_VERSION,
@@ -500,10 +539,11 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->structureSchema($volumeCount);
         $systemPrompt = '你是 XNovel 全书 Structure 规划器。只返回严格 JSON。只生成全书、Volume 与 Arc 结构，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。稳定 Key 必须全局唯一。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS);
+        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineStructure, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS);
 
         return $this->providerStage(
             batch: $batch,
+            routeStage: AiStage::OutlineStructure,
             scopeType: self::STRUCTURE_SCOPE,
             artifactType: ArtifactType::OutlineStructure,
             promptVersion: NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
@@ -532,10 +572,11 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS);
+        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineArcBeats, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS);
 
         return $this->providerStage(
             batch: $batch,
+            routeStage: AiStage::OutlineArcBeats,
             scopeType: self::ARC_BEATS_SCOPE,
             artifactType: ArtifactType::OutlineArcBeats,
             promptVersion: NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
@@ -665,6 +706,7 @@ class NovelOutlinePipeline
 
         return $this->providerStage(
             batch: $batch,
+            routeStage: AiStage::OutlineBeatDetail,
             scopeType: self::BEAT_DETAIL_SCOPE,
             artifactType: ArtifactType::OutlineBeatDetail,
             promptVersion: self::BEAT_DETAIL_PROMPT_VERSION,
@@ -775,8 +817,8 @@ class NovelOutlinePipeline
             'idempotency_key' => "outline-finalize:{$batch->getKey()}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
             'prompt_version' => self::FINALIZE_PROMPT_VERSION,
-            'provider' => $batch->provider,
-            'model_policy' => $batch->model_policy,
+            'provider' => null,
+            'model_policy' => null,
             'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'lineage' => $blueprint['lineage']],
             'started_at' => now(),
         ]);
@@ -926,6 +968,7 @@ class NovelOutlinePipeline
      */
     private function providerStage(
         GenerationRun $batch,
+        AiStage $routeStage,
         string $scopeType,
         ArtifactType $artifactType,
         string $promptVersion,
@@ -939,8 +982,11 @@ class NovelOutlinePipeline
         array $sourceArtifacts = [],
         ?string $discriminator = null,
     ): ?GenerationArtifact {
-        $this->assertFrozenRoute($batch);
-        $inputHash = $this->providerInputHash($batch, $context, $promptVersion);
+        $route = $this->frozenRoute($batch, $routeStage);
+        if ($route['prompt_version'] !== $promptVersion) {
+            throw new AiProviderException('provider_run_route_missing', "Outline 路由 {$routeStage->value} 的 Prompt 版本与阶段合同不一致。", false);
+        }
+        $inputHash = $this->providerInputHash($route, $context, $promptVersion);
         $runs = $this->stageRuns($batch, $scopeType);
         $reusable = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first();
         $artifact = $reusable?->artifacts()->where('type', $artifactType)->first();
@@ -975,15 +1021,20 @@ class NovelOutlinePipeline
             'idempotency_key' => "{$scopeType}:{$batch->getKey()}{$suffix}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
             'prompt_version' => $promptVersion,
-            'provider' => $batch->provider,
-            'model_policy' => $batch->model_policy,
+            'provider' => $route['provider'],
+            'model_policy' => $route['model'],
             'context_snapshot' => [
                 'batch_run_id' => $batch->getKey(),
                 'discriminator' => $discriminator,
                 'source_artifacts' => array_map(fn (GenerationArtifact $item): array => $this->artifactReference($item), $sourceArtifacts),
                 'input' => $context,
-                'reasoning_effort' => data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
+                'reasoning_effort' => $route['reasoning_effort'],
                 'max_completion_tokens' => $maxTokens,
+                'generation_preferences' => [
+                    'substage_routes' => [
+                        $routeStage->value => $route,
+                    ],
+                ],
             ],
             'started_at' => now(),
         ]);
@@ -991,9 +1042,9 @@ class NovelOutlinePipeline
         $failureCode = 'outline_stage_failed';
         try {
             $response = $this->provider->generate(new AiRequest(
-                model: (string) $batch->model_policy,
-                provider: (string) $batch->provider,
-                reasoningEffort: data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
+                model: $route['model'],
+                provider: $route['provider'],
+                reasoningEffort: $route['reasoning_effort'],
                 systemPrompt: $systemPrompt,
                 prompt: $prompt,
                 temperature: 0.5,
@@ -1005,7 +1056,8 @@ class NovelOutlinePipeline
                     'novel_id' => $batch->novel_id,
                     'batch_run_id' => $batch->getKey(),
                     'outline_stage' => $scopeType,
-                    'stage' => AiStage::Planner->value,
+                    'stage' => $routeStage->value,
+                    'route_key' => $routeStage->value,
                 ],
             ));
             $failureCode = 'outline_stage_structured_output_invalid';
@@ -1348,7 +1400,7 @@ class NovelOutlinePipeline
 
     private function assertCurrentBatch(GenerationRun $batch): void
     {
-        if ($batch->prompt_version !== self::BATCH_PROMPT_VERSION) {
+        if (! in_array($batch->prompt_version, [self::SINGLE_ROUTE_BATCH_PROMPT_VERSION, self::BATCH_PROMPT_VERSION], true)) {
             throw ValidationException::withMessages(['run' => 'Outline 主批次版本与新版阶段图不兼容。']);
         }
     }
@@ -1376,14 +1428,6 @@ class NovelOutlinePipeline
         }
         if ($this->artifact($batch, ArtifactType::OutlineBlueprint) === null) {
             FinalizeNovelOutlineJob::dispatch($batch->getKey());
-        }
-    }
-
-    /** 子阶段只能使用主 Run 已冻结的 Provider 与 Model。 */
-    private function assertFrozenRoute(GenerationRun $batch): void
-    {
-        if (blank($batch->provider) || blank($batch->model_policy)) {
-            throw new AiProviderException('provider_run_route_missing', 'Outline 主批次缺少冻结的 Provider 或 Model。', false);
         }
     }
 
@@ -1571,7 +1615,11 @@ class NovelOutlinePipeline
     ): string {
         [$context] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
 
-        return $this->providerInputHash($batch, $context, self::BEAT_DETAIL_PROMPT_VERSION);
+        return $this->providerInputHash(
+            $this->frozenRoute($batch, AiStage::OutlineBeatDetail),
+            $context,
+            self::BEAT_DETAIL_PROMPT_VERSION,
+        );
     }
 
     /** 统一限定子 Run 的小说、固定 Scope、主 Run ID 与阶段枚举。 */
@@ -1704,19 +1752,68 @@ class NovelOutlinePipeline
         ]);
     }
 
+    /** @return array<int, AiStage> */
+    private function outlineRouteStages(): array
+    {
+        return [
+            AiStage::OutlineFoundation,
+            AiStage::OutlineStructure,
+            AiStage::OutlineArcBeats,
+            AiStage::OutlineBeatDetail,
+        ];
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function resolveOutlineRoutes(Novel $novel): array
+    {
+        $routes = [];
+        foreach ($this->outlineRouteStages() as $stage) {
+            $routes[$stage->value] = $this->resolveOutlineRoute($novel, $stage);
+        }
+
+        return $routes;
+    }
+
+    /** @return array<string, mixed> */
+    private function resolveOutlineRoute(Novel $novel, AiStage $stage): array
+    {
+        $settings = $this->settingsResolver->resolve($stage, $novel);
+
+        return [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $this->promptVersionForRoute($stage),
+            'model_capacity' => $this->configuredOutlineCapacity($stage, $settings->provider, $settings->model),
+        ];
+    }
+
+    private function promptVersionForRoute(AiStage $stage): string
+    {
+        return match ($stage) {
+            AiStage::OutlineFoundation => self::FOUNDATION_PROMPT_VERSION,
+            AiStage::OutlineStructure => NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
+            AiStage::OutlineArcBeats => NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
+            AiStage::OutlineBeatDetail => self::BEAT_DETAIL_PROMPT_VERSION,
+            AiStage::Planner => self::SKELETON_PROMPT_VERSION,
+            default => throw new AiProviderException('provider_run_route_missing', "AI 阶段 {$stage->value} 不是 Outline Provider 任务。", false),
+        };
+    }
+
     /** @return array{provider: string, model: string, context_window_tokens: int, max_output_tokens: int} */
-    private function configuredPlannerCapacity(string $provider, string $model): array
+    private function configuredOutlineCapacity(AiStage $stage, string $provider, string $model): array
     {
         $capacity = config('generation.outline_planner_capacity', []);
         if (($capacity['provider'] ?? null) !== $provider || ($capacity['model'] ?? null) !== $model) {
             throw ValidationException::withMessages([
-                'capacity' => "Planner 路由 {$provider}/{$model} 缺少匹配的已核实模型容量配置。",
+                'capacity' => "Outline 任务 {$stage->value} 的路由 {$provider}/{$model} 缺少匹配的已核实模型容量配置。",
             ]);
         }
         $contextWindow = (int) ($capacity['context_window_tokens'] ?? 0);
         $maxOutput = (int) ($capacity['max_output_tokens'] ?? 0);
         if ($contextWindow < 1 || $maxOutput < 1) {
-            throw ValidationException::withMessages(['capacity' => 'Planner 模型容量配置必须为正整数。']);
+            throw ValidationException::withMessages(['capacity' => "Outline 任务 {$stage->value} 的模型容量配置必须为正整数。"]);
         }
 
         return [
@@ -1727,13 +1824,61 @@ class NovelOutlinePipeline
         ];
     }
 
-    /** @return array<string, int> */
-    private function capacitySnapshot(GenerationRun $batch, array $requestInput, int $requestedOutputTokens): array
+    /**
+     * @return array{provider: string, model: string, reasoning_effort: string|null, source: string, prompt_version: string, model_capacity: array<string, mixed>}
+     */
+    private function frozenRoute(GenerationRun $batch, AiStage $stage): array
     {
+        if ($batch->prompt_version === self::BATCH_PROMPT_VERSION) {
+            $route = data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$stage->value}");
+            if (! is_array($route)
+                || blank($route['provider'] ?? null)
+                || blank($route['model'] ?? null)
+                || ($route['prompt_version'] ?? null) !== $this->promptVersionForRoute($stage)
+                || ! is_array($route['model_capacity'] ?? null)) {
+                throw new AiProviderException('provider_run_route_missing', "Outline 主批次缺少任务 {$stage->value} 的完整冻结路由。", false);
+            }
+            $capacity = $route['model_capacity'];
+            if (($capacity['provider'] ?? null) !== $route['provider']
+                || ($capacity['model'] ?? null) !== $route['model']
+                || (int) ($capacity['context_window_tokens'] ?? 0) < 1
+                || (int) ($capacity['max_output_tokens'] ?? 0) < 1) {
+                throw new AiProviderException('provider_run_route_missing', "Outline 任务 {$stage->value} 的冻结容量与路由不匹配。", false);
+            }
+
+            return [
+                'provider' => strtolower(trim((string) $route['provider'])),
+                'model' => trim((string) $route['model']),
+                'reasoning_effort' => filled($route['reasoning_effort'] ?? null) ? trim((string) $route['reasoning_effort']) : null,
+                'source' => trim((string) ($route['source'] ?? 'frozen_batch')),
+                'prompt_version' => (string) $route['prompt_version'],
+                'model_capacity' => $capacity,
+            ];
+        }
+
+        if (blank($batch->provider) || blank($batch->model_policy)) {
+            throw new AiProviderException('provider_run_route_missing', 'Outline 主批次缺少冻结的 Provider 或 Model。', false);
+        }
         $capacity = data_get($batch->context_snapshot, 'generation_preferences.model_capacity');
+
+        return [
+            'provider' => strtolower(trim((string) $batch->provider)),
+            'model' => trim((string) $batch->model_policy),
+            'reasoning_effort' => data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
+            'source' => 'legacy_batch',
+            'prompt_version' => $this->promptVersionForRoute($stage),
+            'model_capacity' => is_array($capacity) ? $capacity : [],
+        ];
+    }
+
+    /** @return array<string, int> */
+    private function capacitySnapshot(GenerationRun $batch, AiStage $stage, array $requestInput, int $requestedOutputTokens): array
+    {
+        $route = $this->frozenRoute($batch, $stage);
+        $capacity = $route['model_capacity'];
         if (! is_array($capacity)
-            || ($capacity['provider'] ?? null) !== $batch->provider
-            || ($capacity['model'] ?? null) !== $batch->model_policy) {
+            || ($capacity['provider'] ?? null) !== $route['provider']
+            || ($capacity['model'] ?? null) !== $route['model']) {
             throw ValidationException::withMessages(['capacity' => 'Outline 主批次缺少与冻结路由匹配的模型容量。']);
         }
 
@@ -1745,13 +1890,14 @@ class NovelOutlinePipeline
         );
     }
 
-    private function providerInputHash(GenerationRun $batch, array $context, string $promptVersion): string
+    /** @param array{provider: string, model: string, reasoning_effort: string|null} $route */
+    private function providerInputHash(array $route, array $context, string $promptVersion): string
     {
         return $this->hash([
             'context' => $context,
-            'provider' => $batch->provider,
-            'model' => $batch->model_policy,
-            'reasoning_effort' => data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
+            'provider' => $route['provider'],
+            'model' => $route['model'],
+            'reasoning_effort' => $route['reasoning_effort'],
             'prompt_version' => $promptVersion,
         ]);
     }
@@ -1768,9 +1914,9 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->structureSchema($volumeCount);
         $systemPrompt = '你是 XNovel 全书 Structure 规划器。只返回严格 JSON。只生成全书、Volume 与 Arc 结构，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。稳定 Key 必须全局唯一。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS);
+        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineStructure, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS);
 
-        return $this->providerInputHash($batch, [...$context, 'capacity_snapshot' => $capacity], NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION);
+        return $this->providerInputHash($this->frozenRoute($batch, AiStage::OutlineStructure), [...$context, 'capacity_snapshot' => $capacity], NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION);
     }
 
     private function arcBeatsInputHash(
@@ -1785,9 +1931,9 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS);
+        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineArcBeats, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS);
 
-        return $this->providerInputHash($batch, [...$context, 'capacity_snapshot' => $capacity], NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION);
+        return $this->providerInputHash($this->frozenRoute($batch, AiStage::OutlineArcBeats), [...$context, 'capacity_snapshot' => $capacity], NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION);
     }
 
     /** @return array{code: string, label: string, source: string} */

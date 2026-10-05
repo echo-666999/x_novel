@@ -115,6 +115,7 @@ final class NovelOutlineProgressResolver
             ? []
             : (is_array($batch->error_metadata) ? $batch->error_metadata : []) + $failure->metadata;
         $stages = $this->stageProgress($children, $chain, $currentStage, $pageStatus);
+        $displayRoute = $this->displayRoute($batch, $currentRun, $currentStage);
 
         return new NovelOutlineProgress(
             batchId: $batch->getKey(),
@@ -133,9 +134,9 @@ final class NovelOutlineProgressResolver
             currentRunStartedAt: $this->immutable($currentRun?->started_at),
             currentRunFinishedAt: $this->immutable($currentRun?->finished_at),
             currentRunDurationMilliseconds: $currentRun?->durationMilliseconds(),
-            provider: $batch->provider,
-            model: $batch->model_policy,
-            reasoningEffort: data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
+            provider: $displayRoute['provider'],
+            model: $displayRoute['model'],
+            reasoningEffort: $displayRoute['reasoning_effort'],
             batchPromptVersion: $batch->prompt_version,
             promptVersion: $currentRun?->prompt_version,
             promptVersions: $this->promptVersions($batch),
@@ -629,15 +630,20 @@ final class NovelOutlineProgressResolver
     {
         if ($batch->status !== RunStatus::Failed
             || $batch->stage !== GenerationStage::ChapterPlanning
-            || $batch->prompt_version !== NovelOutlinePipeline::BATCH_PROMPT_VERSION
+            || ! in_array($batch->prompt_version, [NovelOutlinePipeline::SINGLE_ROUTE_BATCH_PROMPT_VERSION, NovelOutlinePipeline::BATCH_PROMPT_VERSION], true)
             || ! in_array($novel->status, [NovelStatus::Draft, NovelStatus::Planning], true)
             || $novel->current_outline_id !== null
             || $novel->chapters_count > 0
             || $novel->story_events_count > 0
-            || blank($batch->provider)
-            || blank($batch->model_policy)
             || $hasOtherActiveBatch
             || $children->contains(fn (GenerationRun $run): bool => in_array($run->status, [RunStatus::Queued, RunStatus::Running], true))) {
+            return false;
+        }
+        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_PROMPT_VERSION) {
+            if (! $this->hasCompleteFrozenRoutes($batch)) {
+                return false;
+            }
+        } elseif (blank($batch->provider) || blank($batch->model_policy)) {
             return false;
         }
         $promptVersions = data_get($batch->context_snapshot, 'generation_preferences.prompt_versions');
@@ -647,6 +653,64 @@ final class NovelOutlineProgressResolver
         return $promptVersions === $this->currentPromptVersions()
             && is_int($volumeCount) && $volumeCount >= 1 && $volumeCount <= 12
             && is_string($targetPlatform) && array_key_exists($targetPlatform, config('narrative.platforms', []));
+    }
+
+    /** @return array{provider: string|null, model: string|null, reasoning_effort: string|null} */
+    private function displayRoute(GenerationRun $batch, ?GenerationRun $currentRun, ?string $currentStage): array
+    {
+        if ($currentRun !== null && filled($currentRun->provider) && filled($currentRun->model_policy)) {
+            return [
+                'provider' => $currentRun->provider,
+                'model' => $currentRun->model_policy,
+                'reasoning_effort' => data_get($currentRun->context_snapshot, 'reasoning_effort'),
+            ];
+        }
+
+        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_PROMPT_VERSION) {
+            $routeKey = match ($currentStage) {
+                'foundation' => 'outline_foundation',
+                'structure' => 'outline_structure',
+                'arc_beats' => 'outline_arc_beats',
+                'beat_detail' => 'outline_beat_detail',
+                default => null,
+            };
+            $route = $routeKey === null
+                ? null
+                : data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$routeKey}");
+
+            return [
+                'provider' => is_array($route) && filled($route['provider'] ?? null) ? (string) $route['provider'] : null,
+                'model' => is_array($route) && filled($route['model'] ?? null) ? (string) $route['model'] : null,
+                'reasoning_effort' => is_array($route) && filled($route['reasoning_effort'] ?? null) ? (string) $route['reasoning_effort'] : null,
+            ];
+        }
+
+        return [
+            'provider' => $batch->provider,
+            'model' => $batch->model_policy,
+            'reasoning_effort' => data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
+        ];
+    }
+
+    private function hasCompleteFrozenRoutes(GenerationRun $batch): bool
+    {
+        foreach (['outline_foundation', 'outline_structure', 'outline_arc_beats', 'outline_beat_detail'] as $routeKey) {
+            $route = data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$routeKey}");
+            $capacity = is_array($route) ? ($route['model_capacity'] ?? null) : null;
+            if (! is_array($route)
+                || blank($route['provider'] ?? null)
+                || blank($route['model'] ?? null)
+                || blank($route['prompt_version'] ?? null)
+                || ! is_array($capacity)
+                || ($capacity['provider'] ?? null) !== $route['provider']
+                || ($capacity['model'] ?? null) !== $route['model']
+                || (int) ($capacity['context_window_tokens'] ?? 0) < 1
+                || (int) ($capacity['max_output_tokens'] ?? 0) < 1) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** @return array<string, string> */

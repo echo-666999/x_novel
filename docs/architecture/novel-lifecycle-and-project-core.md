@@ -2,7 +2,7 @@
 
 > 本文描述 XNovel 从新建小说、生成蓝图、逐章生产、正式提交、记忆更新，到收束和完本的完整流程。
 >
-> 文档依据当前代码、`docs/PRD.md` 与 `docs/architecture/` 编写。凡是架构目标与当前实现不完全一致的地方，会明确标注，避免把设计目标误写成已实现能力。OGR-001 已批准新版 Outline 生命周期合同；对应代码由 OGR-002～OGR-006 实施。
+> 文档依据当前代码、`docs/PRD.md` 与 `docs/architecture/` 编写。凡是架构目标与当前实现不完全一致的地方，会明确标注，避免把设计目标误写成已实现能力。OGR-001～OGR-007 已完成；当前 Outline 使用新版阶段合同、持久化进度、领域 Resume 与旧批次退役边界。
 
 ## 1. 项目定位
 
@@ -147,13 +147,13 @@ Filament 的小说表单当前收集：
 
 目标生命周期中，Filament 调用领域启动 Action，在 Web 请求内先创建或复用同一 Novel、同一输入的 `queued` 规划批次；数据库事务提交后才投递 `GenerateNovelOutlineJob`。协调 Job 将批次激活为 `running`，再严格串行派发 Foundation、Structure、逐 Arc Beats、Skeleton Assembly、逐 Main Beat Detail 和 Finalize。Foundation 只生成 Bible、初始人物、世界实体和伏笔；Structure 只生成 Volume / Arc；每个 Arc Beats 只生成目标 Arc 的 Beat；Skeleton Assembly 由 Laravel 确定性合并完整骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestone 与 Handoff；Finalize 由 Laravel 沿固定 Artifact lineage 解析稳定 Key、执行完整结构校验并创建关系化 Draft Outline，不调用 Provider。
 
-每个 Provider Job 最多一次模型请求，并单独保存 Generation Run、不可变 Artifact、输入指纹和恢复点。单个 Arc 或 Beat Detail 失败只恢复该 Arc 或 Beat，已成功且来源链匹配的 Foundation、Structure、其他 Arc、Skeleton 和其他 Beat Detail 不重复计费；截断或 Schema 无效响应不能成为下游来源。规划批次冻结 Provider、Model、Reasoning Effort 和目标平台；目标平台优先取 Current Bible，没有 Bible 时取 `NARRATIVE_DEFAULT_TARGET_PLATFORM`。
+每个 Provider Job 最多一次模型请求，并单独保存 Generation Run、不可变 Artifact、输入指纹和恢复点。单个 Arc 或 Beat Detail 失败只恢复该 Arc 或 Beat，已成功且来源链匹配的 Foundation、Structure、其他 Arc、Skeleton 和其他 Beat Detail 不重复计费；截断或 Schema 无效响应不能成为下游来源。v4 规划批次分别冻结 Foundation、Structure、Arc Beats、Beat Detail 的 Provider、Model、Reasoning Effort、Prompt Version、已核实容量及目标平台；目标平台优先取 Current Bible，没有 Bible 时取 `NARRATIVE_DEFAULT_TARGET_PLATFORM`。
 
 子阶段最终失败或自动重试耗尽时，主批次必须持久化为 `failed`；旧失败回调不得覆盖已经 `succeeded` 或 `cancelled` 的批次。可恢复失败由页面上的“继续 AI 生成”调用领域 Resume Action：事务内锁定 Novel 与 Batch，校验暂停、合同版本、活动 Run、输入指纹和 Artifact 来源链，再把批次恢复为 `running`，并在提交后从最早缺失阶段继续。产品恢复入口不直接调用 `queue:retry`。
 
-全书大纲页在 `queued/running` 时每 3 秒读取 PostgreSQL 进度投影，终态停止轮询。Structure 完成前只显示当前阶段，不能显示虚假总百分比；Structure 完成后显示 Arc Beats `x/y`，Skeleton Assembly 完成后显示 Main Beat Detail `x/y`。失败阶段、尝试次数、用户可读原因和恢复入口持久显示，Run/Artifact/Prompt/Provider/Model/耗时与技术错误在详情中查看。Redis、Horizon、`failed_jobs` 和 Worker Toast 只用于运行或诊断，不是页面进度事实源。
+全书大纲页在启动 Action 中先用领域 Pipeline 的同一路由解析路径预览 Foundation、Structure、Arc Beats、Beat Detail 的 Provider、Model、Reasoning Effort、来源、Prompt Version、容量与配置错误；提交时仍必须重新执行服务端校验。页面在 `queued/running` 时每 3 秒读取 PostgreSQL 进度投影，终态停止轮询。Structure 完成前只显示当前阶段，不能显示虚假总百分比；Structure 完成后显示 Arc Beats `x/y`，Skeleton Assembly 完成后显示 Main Beat Detail `x/y`。失败阶段、尝试次数、用户可读原因和恢复入口持久显示，Run/Artifact/Prompt/Provider/Model/耗时与技术错误在详情中查看。Redis、Horizon、`failed_jobs` 和 Worker Toast 只用于运行或诊断，不是页面进度事实源。
 
-OGR-002 已实现页面经领域 Action 先创建 queued Batch、Worker 激活、最终失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和数据库约束；OGR-004 已将新批次运行流程切换为 Foundation → Structure → 逐 Arc Beats → Skeleton Assembly → 逐 Main Beat Detail → Finalize，并保留旧 v2 Skeleton Job 的隔离兼容边界；OGR-005 已实现只读 PostgreSQL 进度解析器与可追溯 DTO。恢复 Action 已存在，但页面上的持久化进度卡、轮询与“继续 AI 生成”入口仍属于 OGR-006，尚未展示。
+OGR-002 已实现页面经领域 Action 先创建 queued Batch、Worker 激活、最终失败收口和领域 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 类型、Strict Schema、校验和数据库约束；OGR-004 已将新批次运行流程切换为 Foundation → Structure → 逐 Arc Beats → Skeleton Assembly → 逐 Main Beat Detail → Finalize，并保留旧 v2 Skeleton Job 的隔离兼容边界；OGR-005 已实现只读 PostgreSQL 进度解析器与可追溯 DTO；OGR-006 已实现持久化进度卡、活动态轮询、失败详情和“继续 AI 生成”；OGR-007 已完成旧批次退役与综合回归。
 
 分阶段产物最终至少覆盖：
 
@@ -621,7 +621,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 补充边界：
 
 - NGC-002B 历史 Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。这些历史版本继续可解释，但未完成 v2 批次必须显式标记 `cancelled / pipeline_contract_upgraded`，不得在新版 Pipeline 中继续。
-- Structure 与 Arc Beats 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`；确定性 Skeleton Assembly 冻结为 `novel-outline-skeleton-assembly-v1`，当前 Pipeline 冻结为 `novel-outline-pipeline-v3`。历史 Skeleton Job 类只为 failed job 安全反序列化保留，终态批次重放为空操作。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`；局部 Outline 修订继续记录 `novel-outline-node-v3`。
+- Structure 与 Arc Beats 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`；确定性 Skeleton Assembly 冻结为 `novel-outline-skeleton-assembly-v1`。当前 `novel-outline-pipeline-v4` 主批次逐任务冻结 Foundation、Structure、Arc Beats、Beat Detail 路由，v3 批次保留原单路由执行语义。历史 Skeleton Job 类只为 failed job 安全反序列化保留，终态批次重放为空操作。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`；局部 Outline 修订继续记录 `novel-outline-node-v3`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。

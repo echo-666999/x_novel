@@ -59,6 +59,10 @@ class AiSettingsService
         $stages = [];
         foreach ($this->stages() as $stage) {
             $configuredModel = config("ai.models.{$stage->value}");
+            $fallbackStage = $stage->fallbackStage();
+            if ((! is_string($configuredModel) || trim($configuredModel) === '') && $fallbackStage !== null) {
+                $configuredModel = config("ai.models.{$fallbackStage->value}");
+            }
             $stages[$stage->value] = [
                 'provider' => $defaultProvider,
                 'model' => is_string($configuredModel) && trim($configuredModel) !== '' ? trim($configuredModel) : $defaultModel,

@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
+use App\AI\AiModelRouteService;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
 use Filament\Resources\Pages\EditRecord;
@@ -22,7 +23,7 @@ class EditNovel extends EditRecord
     protected function mutateFormDataBeforeFill(array $data): array
     {
         $data = NovelForm::prepareGenreForFill($data);
-        $data['ai_model_overrides'] = data_get($data, 'settings.ai.models', []);
+        $data['ai_model_overrides'] = app(AiModelRouteService::class)->novelOverrideFormState($this->getRecord());
         $data['budget_limits'] = data_get($data, 'settings.budget', []);
         $data['generation_chapter_target_words'] = (int) data_get($data, 'settings.generation.chapter_target_words', 3_000);
         $data['workflow_auto_commit'] = data_get($data, 'settings.auto_commit_configured') === true
@@ -35,10 +36,6 @@ class EditNovel extends EditRecord
     protected function mutateFormDataBeforeSave(array $data): array
     {
         $data = NovelForm::prepareGenreForPersistence($data);
-        $overrides = collect($data['ai_model_overrides'] ?? [])
-            ->map(fn (mixed $model): string => is_string($model) ? trim($model) : '')
-            ->filter()
-            ->all();
         $settings = $this->getRecord()->settings ?? [];
         $this->autoCommitBeforeSave = data_get($settings, 'auto_commit_configured') === true
             && data_get($settings, 'auto_commit') === true;
@@ -48,8 +45,11 @@ class EditNovel extends EditRecord
         if (array_key_exists('generation', $settings) || $chapterTargetWords !== 3_000) {
             $settings['generation']['chapter_target_words'] = $chapterTargetWords;
         }
-        $settings['ai'] ??= [];
-        $settings['ai']['models'] = $overrides;
+        $settings = app(AiModelRouteService::class)->applyNovelOverrides(
+            $settings,
+            (array) ($data['ai_model_overrides'] ?? []),
+            $this->getRecord(),
+        );
         $budgetLimits = collect($data['budget_limits'] ?? [])
             ->filter(fn (mixed $limit): bool => filled($limit))
             ->map(fn (mixed $limit): float => (float) $limit)

@@ -11,6 +11,7 @@ use App\Actions\Novels\StartNovelOutlineGenerationAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Data\NormalizedNovelOutline;
 use App\Data\NovelOutlineProgress;
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
@@ -35,6 +36,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TagsInput;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Filament\Schemas\Components\Section;
@@ -46,6 +48,9 @@ use Throwable;
 class ManageNovelOutline extends ViewRecord
 {
     protected ?NovelOutlineProgress $cachedOutlineGenerationProgress = null;
+
+    /** @var array<string, array<string, mixed>>|null */
+    protected ?array $cachedOutlineRoutePreview = null;
 
     protected static string $resource = NovelResource::class;
 
@@ -105,6 +110,13 @@ class ManageNovelOutline extends ViewRecord
                     : null)
                 ->schema([
                     TextInput::make('volume_count')->label('预计分卷数')->integer()->minValue(1)->maxValue(12)->default(5)->required(),
+                    Section::make('启动前路由预览')
+                        ->description('以下结果按当前小说 Override、全局模型路由和环境回退实时解析；创建批次后会逐任务冻结。')
+                        ->schema(collect($this->outlineAiStages())->map(fn (AiStage $stage): TextEntry => TextEntry::make("outline_route_preview.{$stage->value}")
+                            ->label($stage->getLabel())
+                            ->state(fn (): string => $this->outlineRoutePreviewText($stage))
+                            ->color(fn (): string => data_get($this->outlineRoutePreview(), "{$stage->value}.ready") === true ? 'success' : 'danger')
+                            ->columnSpanFull())->all()),
                 ])
                 ->action(function (array $data, StartNovelOutlineGenerationAction $start): void {
                     try {
@@ -358,6 +370,53 @@ class ManageNovelOutline extends ViewRecord
                         ->send();
                 }),
         ];
+    }
+
+    /** @return array<int, AiStage> */
+    private function outlineAiStages(): array
+    {
+        return [
+            AiStage::OutlineFoundation,
+            AiStage::OutlineStructure,
+            AiStage::OutlineArcBeats,
+            AiStage::OutlineBeatDetail,
+        ];
+    }
+
+    /** @return array<string, array<string, mixed>> */
+    private function outlineRoutePreview(): array
+    {
+        return $this->cachedOutlineRoutePreview ??= app(NovelOutlinePipeline::class)
+            ->outlineRoutePreview($this->getRecord());
+    }
+
+    private function outlineRoutePreviewText(AiStage $stage): string
+    {
+        $route = $this->outlineRoutePreview()[$stage->value];
+        if (($route['ready'] ?? false) !== true) {
+            return '不可启动 · '.($route['error'] ?? '路由配置无效。');
+        }
+
+        $source = match ($route['source'] ?? null) {
+            'novel' => '小说 Override',
+            'database' => '数据库路由',
+            default => '环境回退',
+        };
+        $reasoning = filled($route['reasoning_effort'] ?? null)
+            ? (string) $route['reasoning_effort']
+            : 'Provider 默认';
+        $capacity = (array) ($route['model_capacity'] ?? []);
+
+        return sprintf(
+            '可启动 · %s / %s · 推理 %s · %s · Prompt %s · 容量 %s / %s',
+            strtoupper((string) $route['provider']),
+            $route['model'],
+            $reasoning,
+            $source,
+            $route['prompt_version'],
+            number_format((int) ($capacity['context_window_tokens'] ?? 0)),
+            number_format((int) ($capacity['max_output_tokens'] ?? 0)),
+        );
     }
 
     /** @return array<int, mixed> */

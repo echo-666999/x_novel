@@ -76,6 +76,70 @@ test('database model routes are normalized before provider requests', function (
         ->source->toBe('database');
 });
 
+test('outline stages fall back to planner routes until a dedicated route exists', function () {
+    AIModelRoute::query()->create([
+        'role' => AiStage::Planner,
+        'provider' => 'openai',
+        'model' => 'planner-fallback-model',
+        'reasoning_effort' => 'high',
+    ]);
+
+    $resolver = app(AiSettingsResolver::class);
+
+    foreach ([
+        AiStage::OutlineFoundation,
+        AiStage::OutlineStructure,
+        AiStage::OutlineArcBeats,
+        AiStage::OutlineBeatDetail,
+    ] as $stage) {
+        $resolved = $resolver->resolve($stage);
+
+        expect($resolved->stage)->toBe($stage)
+            ->and($resolved->provider)->toBe('openai')
+            ->and($resolved->model)->toBe('planner-fallback-model')
+            ->and($resolved->reasoningEffort)->toBe('high')
+            ->and($resolved->source)->toBe('database');
+    }
+
+    AIModelRoute::query()->create([
+        'role' => AiStage::OutlineStructure,
+        'provider' => 'openai',
+        'model' => 'dedicated-structure-model',
+        'reasoning_effort' => 'low',
+    ]);
+
+    expect($resolver->resolve(AiStage::OutlineStructure))
+        ->model->toBe('dedicated-structure-model')
+        ->reasoningEffort->toBe('low')
+        ->and($resolver->resolve(AiStage::OutlineFoundation)->model)->toBe('planner-fallback-model');
+});
+
+test('outline stages fall back through novel and environment planner models', function () {
+    config()->set('ai.models.outline_foundation', null);
+    config()->set('ai.models.outline_structure', null);
+    config()->set('ai.models.planner', 'environment-planner-fallback');
+
+    $novel = Novel::factory()->create([
+        'settings' => ['ai' => ['models' => [
+            'planner' => 'novel-planner-fallback',
+            'outline_foundation' => 'novel-foundation-model',
+        ]]],
+    ]);
+    $resolver = app(AiSettingsResolver::class);
+
+    expect($resolver->resolve(AiStage::OutlineFoundation, $novel))
+        ->model->toBe('novel-foundation-model')
+        ->source->toBe('novel')
+        ->and($resolver->resolve(AiStage::OutlineStructure, $novel)->model)
+        ->toBe('novel-planner-fallback')
+        ->and($resolver->resolve(AiStage::OutlineStructure, $novel)->source)
+        ->toBe('novel')
+        ->and($resolver->resolve(AiStage::OutlineStructure)->model)
+        ->toBe('environment-planner-fallback')
+        ->and($resolver->resolve(AiStage::OutlineStructure)->source)
+        ->toBe('environment');
+});
+
 test('novel stage overrides affect only that novel and stage', function () {
     $settings = app(AiSettingsService::class)->defaults();
     $settings['stages']['writer']['model'] = 'database-writer-model';

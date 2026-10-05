@@ -2155,7 +2155,11 @@ rewrite_max_attempts
 auto_commit（小说级，默认 false）
 ```
 
-Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个导航入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位及输入、缓存输入、输出价格。“模型价格”页面同时维护各 AI Stage 的 Provider + Model + 可选推理程度路由，并写入独立的 `ai_model_routes` 表。推理程度按 `planner`、`writer`、`assembler`、`extractor`、`reviewer`、`rewrite`、`summary` 分别配置；留空时使用 Provider 默认行为，向量生成不使用该配置。页面不得回显 API Key，日志不得记录密钥明文或密文。环境模型配置只作为数据库路由缺失时的兼容回退，成本硬限制继续由全局 config 和小说设置控制。
+Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个导航入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位及输入、缓存输入、输出价格。“模型价格”页面同时维护各 AI Stage 的 Provider + Model + 可选推理程度路由，并写入独立的 `ai_model_routes` 表。小说创建与编辑页的 Stage Override 必须从已启用的模型价格中选择，并把 Provider + Model 保存到 `novels.settings.ai.stages`；旧 `ai.models` 值继续兼容读取，在用户保存时迁移，未录入价格表的旧值必须可见且不能因无关编辑被静默丢弃。
+
+推理程度按 `planner`、`outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail`、`writer`、`extractor`、`reviewer`、`rewrite`、`summary` 分别配置；四个 Outline 专用数据库路由、小说级 Override 或环境变量缺失时回退 `planner`，留空推理程度时使用 Provider 默认行为，向量生成不使用该配置。环境回退键分别为 `AI_MODEL_OUTLINE_FOUNDATION`、`AI_MODEL_OUTLINE_STRUCTURE`、`AI_MODEL_OUTLINE_ARC_BEATS`、`AI_MODEL_OUTLINE_BEAT_DETAIL`，每个键缺失时回退 `AI_MODEL_PLANNER`。
+
+启动 AI Outline 前，页面必须预览四个 Provider 任务的有效 Provider、Model、推理程度、配置来源、Prompt Version、已核实容量及配置错误。新建 v4 Outline 主批次在开始时分别解析并冻结 Foundation、Structure、Arc Beats、Beat Detail 的 Provider、Model、推理程度、Prompt Version 与已核实容量；子 Run 和重试只能读取该任务的冻结值。v3 批次继续按原单路由快照执行。当前只维护一组由 `OUTLINE_PLANNER_CAPACITY_PROVIDER`、`OUTLINE_PLANNER_CAPACITY_MODEL`、`OUTLINE_PLANNER_CONTEXT_WINDOW_TOKENS`、`OUTLINE_PLANNER_MAX_OUTPUT_TOKENS` 定义的已核实容量，因此四个 Outline 有效路由必须与该 Provider/Model 一致；不匹配时预览必须标记不可启动，服务端不得创建批次。确定性的 Skeleton Assembly、Chapter Assembly 与 Outline Finalize 不配置模型。页面不得回显 API Key，日志不得记录密钥明文或密文。环境模型配置只作为数据库路由缺失时的兼容回退，成本硬限制继续由全局 config 和小说设置控制。
 
 达到 hard limit：
 

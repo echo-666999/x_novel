@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\Novels\Schemas;
 
+use App\AI\AiModelRouteService;
 use App\AI\AiSettingsResolver;
 use App\AI\AiSettingsService;
 use App\Enums\AiStage;
@@ -78,7 +79,7 @@ class NovelForm
                             ->columnSpanFull(),
                     ]),
                 Section::make('AI Model Overrides')
-                    ->description('留空时继承 Global Default。这里只覆盖各 Stage 的模型，不保存 Provider 凭据。')
+                    ->description('从已启用的模型价格中选择小说级 Provider + Model；留空继承全局路由，不保存 Provider 凭据。')
                     ->icon('heroicon-o-cpu-chip')
                     ->columns(['default' => 1, 'lg' => 2])
                     ->schema(self::aiModelOverrideFields()),
@@ -155,17 +156,19 @@ class NovelForm
         return $data;
     }
 
-    /** @return array<int, TextInput|TextEntry> */
+    /** @return array<int, Select|TextEntry> */
     private static function aiModelOverrideFields(): array
     {
-        return collect(AiStage::cases())
+        return collect(app(AiSettingsService::class)->stages())
             ->flatMap(function (AiStage $stage): array {
                 return [
-                    TextInput::make("ai_model_overrides.{$stage->value}")
+                    Select::make("ai_model_overrides.{$stage->value}")
                         ->label($stage->getLabel().' Override')
-                        ->placeholder(fn (): string => app(AiSettingsResolver::class)->modelFor($stage))
-                        ->helperText('留空继承全局设置。')
-                        ->maxLength(255),
+                        ->options(fn (?Novel $record): array => app(AiModelRouteService::class)->novelOverrideOptions($record, $stage))
+                        ->searchable()
+                        ->native(false)
+                        ->placeholder(fn (): string => '继承 · '.app(AiSettingsResolver::class)->modelFor($stage))
+                        ->helperText('只列出“模型价格”中已启用的模型；留空继承全局路由。'),
                     TextEntry::make("resolved_ai_models.{$stage->value}")
                         ->label($stage->getLabel().' Resolved Model')
                         ->state(function (?Novel $record) use ($stage): string {

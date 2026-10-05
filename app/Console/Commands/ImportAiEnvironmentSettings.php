@@ -112,6 +112,10 @@ class ImportAiEnvironmentSettings extends Command
             $configuredModel = $stage === AiStage::Embedding
                 ? config('ai.embedding.model')
                 : config("ai.models.{$stage->value}");
+            $fallbackStage = $stage->fallbackStage();
+            if ((! is_string($configuredModel) || trim($configuredModel) === '') && $fallbackStage !== null) {
+                $configuredModel = config("ai.models.{$fallbackStage->value}");
+            }
             $model = is_string($configuredModel) && trim($configuredModel) !== ''
                 ? trim($configuredModel)
                 : $defaultModel;

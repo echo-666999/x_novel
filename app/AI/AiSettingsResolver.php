@@ -58,11 +58,11 @@ class AiSettingsResolver
         $baseSource = $route !== null || str_starts_with($current['source'], 'database') ? 'database' : 'environment';
 
         // 小说级配置只覆盖当前小说，是最终优先级；旧 ai.models.* 结构保留兼容读取。
-        $novelStage = data_get($novel?->settings, "ai.stages.{$stage->value}");
+        $novelStage = $this->novelStageSettings($novel, $stage);
         $providerOverride = is_array($novelStage) ? ($novelStage['provider'] ?? null) : null;
         $modelOverride = is_array($novelStage)
             ? ($novelStage['model'] ?? null)
-            : data_get($novel?->settings, "ai.models.{$stage->value}");
+            : $this->novelModelOverride($novel, $stage);
 
         $hasProviderOverride = is_string($providerOverride) && trim($providerOverride) !== '';
         $hasModelOverride = is_string($modelOverride) && trim($modelOverride) !== '';
@@ -109,6 +109,10 @@ class AiSettingsResolver
         $stageModel = $stage === AiStage::Embedding
             ? config('ai.embedding.model')
             : config("ai.models.{$stage->value}");
+        $fallbackStage = $stage->fallbackStage();
+        if ((! is_string($stageModel) || trim($stageModel) === '') && $fallbackStage !== null) {
+            $stageModel = config("ai.models.{$fallbackStage->value}");
+        }
         $model = is_string($stageModel) && trim($stageModel) !== ''
             ? trim($stageModel)
             : trim((string) config('ai.model'));
@@ -124,6 +128,36 @@ class AiSettingsResolver
             reasoningEffort: null,
             source: 'environment',
         );
+    }
+
+    /** @return array<string, mixed>|null */
+    private function novelStageSettings(?Novel $novel, AiStage $stage): ?array
+    {
+        $settings = data_get($novel?->settings, "ai.stages.{$stage->value}");
+        if (is_array($settings)) {
+            return $settings;
+        }
+
+        $fallbackStage = $stage->fallbackStage();
+        $fallback = $fallbackStage === null
+            ? null
+            : data_get($novel?->settings, "ai.stages.{$fallbackStage->value}");
+
+        return is_array($fallback) ? $fallback : null;
+    }
+
+    private function novelModelOverride(?Novel $novel, AiStage $stage): mixed
+    {
+        $model = data_get($novel?->settings, "ai.models.{$stage->value}");
+        if (is_string($model) && trim($model) !== '') {
+            return $model;
+        }
+
+        $fallbackStage = $stage->fallbackStage();
+
+        return $fallbackStage === null
+            ? $model
+            : data_get($novel?->settings, "ai.models.{$fallbackStage->value}");
     }
 
     private function assertProviderIsUsable(string $provider, bool $requireCredential = true): void

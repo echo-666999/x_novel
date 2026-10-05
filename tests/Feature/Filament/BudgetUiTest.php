@@ -78,7 +78,6 @@ test('novel budget overrides can be saved without replacing other settings', fun
         'temperature' => 0.5,
         'auto_commit' => false,
         'auto_commit_configured' => true,
-        'ai' => ['models' => []],
         'budget' => [
             'novel_total_limit' => 12.5,
             'chapter_max_cost' => 1.25,

@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -36,6 +37,31 @@ function outlineUiPromptVersions(): array
     ];
 }
 
+/** @return array<string, array<string, mixed>> */
+function outlineUiRoutes(): array
+{
+    $prompts = outlineUiPromptVersions();
+
+    return collect([
+        'outline_foundation' => $prompts['foundation'],
+        'outline_structure' => $prompts['structure'],
+        'outline_arc_beats' => $prompts['arc_beats'],
+        'outline_beat_detail' => $prompts['beat_detail'],
+    ])->mapWithKeys(fn (string $prompt, string $stage): array => [$stage => [
+        'provider' => 'openai',
+        'model' => 'gpt-5.6-terra',
+        'reasoning_effort' => 'medium',
+        'source' => 'database',
+        'prompt_version' => $prompt,
+        'model_capacity' => [
+            'provider' => 'openai',
+            'model' => 'gpt-5.6-terra',
+            'context_window_tokens' => 1050000,
+            'max_output_tokens' => 128000,
+        ],
+    ]])->all();
+}
+
 function outlineUiBatch(Novel $novel, RunStatus $status = RunStatus::Running, array $overrides = []): GenerationRun
 {
     return GenerationRun::factory()->create([
@@ -47,15 +73,13 @@ function outlineUiBatch(Novel $novel, RunStatus $status = RunStatus::Running, ar
         'status' => $status,
         'attempt' => 1,
         'prompt_version' => NovelOutlinePipeline::BATCH_PROMPT_VERSION,
-        'provider' => 'openai',
-        'model_policy' => 'gpt-5.6-terra',
+        'provider' => null,
+        'model_policy' => null,
         'context_snapshot' => [
             'requested_volume_count' => 1,
             'target_platform' => ['code' => 'fanqie'],
             'generation_preferences' => [
-                'provider' => 'openai',
-                'model' => 'gpt-5.6-terra',
-                'reasoning_effort' => 'medium',
+                'outline_routes' => outlineUiRoutes(),
                 'prompt_versions' => outlineUiPromptVersions(),
             ],
         ],
@@ -91,8 +115,8 @@ function outlineUiRun(
         'status' => $status,
         'attempt' => 1,
         'prompt_version' => outlineUiPromptVersions()[$promptKey],
-        'provider' => $scope === NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE ? null : 'openai',
-        'model_policy' => $scope === NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE ? null : 'gpt-5.6-terra',
+        'provider' => in_array($scope, [NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE, NovelOutlinePipeline::FINALIZE_SCOPE], true) ? null : 'openai',
+        'model_policy' => in_array($scope, [NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE, NovelOutlinePipeline::FINALIZE_SCOPE], true) ? null : 'gpt-5.6-terra',
         'context_snapshot' => array_filter([
             'batch_run_id' => $batch->getKey(),
             'discriminator' => $discriminator,
@@ -288,6 +312,53 @@ test('outline page starts a persisted queued batch and polls only while active',
         ->assertDontSeeHtml('wire:poll.3s="$refresh"');
 
     Queue::assertPushed(GenerateNovelOutlineJob::class, 1);
+});
+
+test('outline generation action previews every resolved task route before start', function () {
+    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
+    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+
+    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('generateOutlineCandidate')
+        ->assertActionMounted('generateOutlineCandidate')
+        ->assertMountedActionModalSee([
+            '启动前路由预览',
+            AiStage::OutlineFoundation->getLabel(),
+            AiStage::OutlineStructure->getLabel(),
+            AiStage::OutlineArcBeats->getLabel(),
+            AiStage::OutlineBeatDetail->getLabel(),
+            '可启动 · OPENAI / '.config('ai.models.planner'),
+            '容量 1,050,000 / 128,000',
+        ]);
+});
+
+test('outline route preview exposes a capacity mismatch and start still rejects it', function () {
+    Queue::fake();
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
+    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Draft,
+        'settings' => ['ai' => ['stages' => [
+            'outline_structure' => [
+                'provider' => 'openai',
+                'model' => 'unverified-structure-model',
+            ],
+        ]]],
+    ]);
+    $component = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('generateOutlineCandidate')
+        ->assertActionMounted('generateOutlineCandidate')
+        ->assertMountedActionModalSee(['不可启动', 'unverified-structure-model']);
+
+    $component
+        ->setActionData(['volume_count' => 1])
+        ->callMountedAction()
+        ->assertNotified('无法生成大纲候选');
+
+    Queue::assertNotPushed(GenerateNovelOutlineJob::class);
+    expect($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->count())->toBe(0);
 });
 
 test('outline page shows arc and main beat progress without a synthetic overall percentage', function () {

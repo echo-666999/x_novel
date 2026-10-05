@@ -31,6 +31,31 @@ function ogrProgressPromptVersions(): array
     ];
 }
 
+/** @return array<string, array<string, mixed>> */
+function ogrProgressRoutes(): array
+{
+    $prompts = ogrProgressPromptVersions();
+
+    return collect([
+        'outline_foundation' => $prompts['foundation'],
+        'outline_structure' => $prompts['structure'],
+        'outline_arc_beats' => $prompts['arc_beats'],
+        'outline_beat_detail' => $prompts['beat_detail'],
+    ])->mapWithKeys(fn (string $prompt, string $stage): array => [$stage => [
+        'provider' => 'openai',
+        'model' => 'gpt-test',
+        'reasoning_effort' => 'medium',
+        'source' => 'database',
+        'prompt_version' => $prompt,
+        'model_capacity' => [
+            'provider' => 'openai',
+            'model' => 'gpt-test',
+            'context_window_tokens' => 100000,
+            'max_output_tokens' => 10000,
+        ],
+    ]])->all();
+}
+
 function ogrProgressBatch(Novel $novel, RunStatus $status = RunStatus::Running, array $overrides = []): GenerationRun
 {
     return GenerationRun::factory()->create([
@@ -42,15 +67,13 @@ function ogrProgressBatch(Novel $novel, RunStatus $status = RunStatus::Running, 
         'status' => $status,
         'attempt' => 1,
         'prompt_version' => NovelOutlinePipeline::BATCH_PROMPT_VERSION,
-        'provider' => 'openai',
-        'model_policy' => 'gpt-test',
+        'provider' => null,
+        'model_policy' => null,
         'context_snapshot' => [
             'requested_volume_count' => 1,
             'target_platform' => ['code' => 'fanqie'],
             'generation_preferences' => [
-                'provider' => 'openai',
-                'model' => 'gpt-test',
-                'reasoning_effort' => 'medium',
+                'outline_routes' => ogrProgressRoutes(),
                 'prompt_versions' => ogrProgressPromptVersions(),
             ],
         ],
@@ -85,8 +108,8 @@ function ogrProgressRun(
             NovelOutlinePipeline::FINALIZE_SCOPE => 'finalize',
             default => 'foundation',
         }],
-        'provider' => $scope === NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE ? null : 'openai',
-        'model_policy' => $scope === NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE ? null : 'gpt-test',
+        'provider' => in_array($scope, [NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE, NovelOutlinePipeline::FINALIZE_SCOPE], true) ? null : 'openai',
+        'model_policy' => in_array($scope, [NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE, NovelOutlinePipeline::FINALIZE_SCOPE], true) ? null : 'gpt-test',
         'context_snapshot' => array_filter([
             'batch_run_id' => $batch->getKey(),
             'discriminator' => $discriminator,
@@ -485,9 +508,9 @@ test('a completed source chain exposes successful stage and trace references', f
         ->and($progress->currentStage)->toBe('finalize')
         ->and($progress->stages['finalize']->status)->toBe('succeeded')
         ->and($progress->stages['finalize']->artifactIds)->toBe([$blueprint->getKey()])
-        ->and($progress->provider)->toBe('openai')
-        ->and($progress->model)->toBe('gpt-test')
-        ->and($progress->reasoningEffort)->toBe('medium')
+        ->and($progress->provider)->toBeNull()
+        ->and($progress->model)->toBeNull()
+        ->and($progress->reasoningEffort)->toBeNull()
         ->and($progress->promptVersions)->toBe(ogrProgressPromptVersions())
         ->and(collect($progress->runs)->pluck('id'))->toContain($batch->getKey())
         ->and(collect($progress->artifacts)->pluck('id'))->toContain($blueprint->getKey());

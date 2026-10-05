@@ -211,6 +211,36 @@ test('model routes are maintained from the model price page and override environ
         ->toBe('database-routed-model');
 });
 
+test('outline route fields are prefilled from the planner route', function () {
+    $price = AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'planner-fallback-model',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'is_enabled' => true,
+    ]);
+    AIModelRoute::query()->create([
+        'role' => AiStage::Planner,
+        'provider' => 'openai',
+        'model' => 'planner-fallback-model',
+        'reasoning_effort' => 'high',
+    ]);
+
+    $state = app(AiModelRouteService::class)->formState();
+
+    foreach ([
+        AiStage::OutlineFoundation,
+        AiStage::OutlineStructure,
+        AiStage::OutlineArcBeats,
+        AiStage::OutlineBeatDetail,
+    ] as $stage) {
+        expect($state[$stage->value])->toBe([
+            'model_price_id' => $price->getKey(),
+            'reasoning_effort' => 'high',
+        ]);
+    }
+});
+
 test('model route rejects an unsupported reasoning effort', function () {
     AIProviderConnection::query()->create([
         'provider' => 'openai',

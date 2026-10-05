@@ -2,7 +2,7 @@
 
 # AI Long-Form Fiction Platform
 
-> NGC-005 实施基线。关系化 Outline、Chapter Plan 完整父链、Canonical Milestone Progress，以及 Review/Event/Commit 完成语义已经实现；不迁移、不 Backfill 旧数据。OGR-002 已实现 Outline 主批次生命周期与 Resume；OGR-003 已实现 Structure / Arc Beats Artifact 枚举、Strict Schema、校验与 PostgreSQL CHECK；OGR-004 已接通新版 Job、确定性 Skeleton Assembly 与完整 Blueprint lineage。旧 Provider Skeleton 只保留给 v2 批次兼容。
+> NGC-005 实施基线。关系化 Outline、Chapter Plan 完整父链、Canonical Milestone Progress，以及 Review/Event/Commit 完成语义已经实现；不迁移、不 Backfill 旧数据。OGR-002～OGR-007 已实现 Outline 主批次生命周期、分阶段 Artifact、确定性 Skeleton Assembly、完整 Blueprint lineage、PostgreSQL 进度投影、Filament Resume 和旧批次退役边界。旧 Provider Skeleton 只保留给 v2 批次兼容。
 
 本项目是一个由单人开发、单人使用、单人维护的 AI 长篇网络小说自动生成系统。
 
@@ -1385,6 +1385,8 @@ Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Fi
 | Finalize | `novel_outline_finalize` | `outline_blueprint` | 无 |
 
 主批次持久化状态为 `queued / running / failed / succeeded / cancelled`。`retrying` 由页面根据主批次与最新子 Run 派生，不新增数据库枚举。页面启动生成时先创建或复用 `queued` 主批次；Worker 激活后改为 `running`；子阶段终止失败时收口为 `failed`；Finalize 事务成功才改为 `succeeded`。同输入重复执行必须复用校验通过的 Artifact，不得重复产生正式关系行或 Usage。
+
+`novel-outline-pipeline-v4` 主批次本身是协调器，因此 `provider` 与 `model_policy` 为空。它在 `context_snapshot.generation_preferences.outline_routes` 下按 `outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 分别保存 Provider、Model、Reasoning Effort、来源、Prompt Version 和已核实容量；每个 Provider 子 Run 只复制自己任务的冻结路由。Retry、Resume 和后台配置变化不得改写这些快照。`novel-outline-pipeline-v3` 历史批次继续读取原单路由快照，不回填 v4 结构。
 
 全书大纲进度只从 PostgreSQL 的 Run、Artifact 和 Draft Outline 投影。Redis、Horizon 与 `failed_jobs` 不保存权威业务进度。Structure 完成后才能确定 Arc Beats 分母；Skeleton Assembly 完成后才能确定 Main Beat Detail 分母。领域 Resume 从最早缺失且来源有效的 Artifact 继续，不直接重放 Queue payload。
 
