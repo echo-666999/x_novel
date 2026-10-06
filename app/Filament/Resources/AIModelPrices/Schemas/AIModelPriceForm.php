@@ -55,7 +55,8 @@ class AIModelPriceForm
                         ->minValue(0)
                         ->step('0.000001'),
                     Toggle::make('is_enabled')
-                        ->label('启用')
+                        ->label('状态')
+                        ->inline(false)
                         ->default(true),
                 ])
                 ->columns(2)
