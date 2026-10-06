@@ -178,19 +178,25 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
             $arcResponse = ['arc_key' => $arc['key'], 'beats' => []];
             foreach ($arc['beats'] as $beat) {
                 if ($arc['type'] === 'main') {
+                    $milestones = $beat['milestones'];
+                    foreach ($milestones as &$milestone) {
+                        unset($milestone['key'], $milestone['sequence']);
+                    }
+                    unset($milestone);
+                    $handoff = $beat['handoff'];
+                    unset($handoff['next_beat_key']);
                     $details[] = [
-                        'beat_key' => $beat['key'],
-                        'milestones' => $beat['milestones'],
-                        'handoff' => $beat['handoff'],
+                        'milestones' => $milestones,
+                        'handoff' => $handoff,
                     ];
                 }
-                unset($beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
+                unset($beat['key'], $beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
                 foreach ($beat['character_candidates'] as &$candidate) {
-                    unset($candidate['possible_duplicate_character_ids']);
+                    unset($candidate['candidate_key'], $candidate['possible_duplicate_character_ids']);
                 }
                 unset($candidate);
                 foreach ($beat['world_entity_candidates'] as &$candidate) {
-                    unset($candidate['possible_duplicate_entity_ids']);
+                    unset($candidate['candidate_key'], $candidate['possible_duplicate_entity_ids']);
                 }
                 unset($candidate);
                 $arcResponse['beats'][] = $beat;
@@ -438,8 +444,11 @@ test('ai planning response schema contains only strict objects accepted by the p
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.key.pattern'))->toBe('^vol-[0-9]{2}$')
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties.key.pattern'))->toBe('^arc-[0-9]{2,}$')
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
-        ->and(data_get($schemas[2], 'properties.beats.items.properties.key.pattern'))->toBe('^beat-[0-9]{2,}$')
-        ->and(data_get($schemas[3], 'properties.milestones.type'))->toBe('array');
+        ->and(data_get($schemas[2], 'properties.beats.items.properties'))->not->toHaveKey('key')
+        ->and(data_get($schemas[2], 'properties.beats.items.properties.character_candidates.items.properties'))->not->toHaveKey('candidate_key')
+        ->and(data_get($schemas[3], 'properties'))->not->toHaveKey('beat_key')
+        ->and(data_get($schemas[3], 'properties.milestones.items.properties'))->not->toHaveKeys(['key', 'sequence'])
+        ->and(data_get($schemas[3], 'properties.handoff.properties'))->not->toHaveKey('next_beat_key');
 });
 
 test('ai planning derives sibling sequences from array order', function () {
@@ -456,8 +465,10 @@ test('ai planning derives sibling sequences from array order', function () {
 
     expect(data_get($artifact->data, 'outline.volumes.0.sequence'))->toBe(1)
         ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.sequence'))->toBe(1)
+        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.0.key'))->toBe('beat-01')
         ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.0.sequence'))->toBe(1)
-        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.1.sequence'))->toBe(2);
+        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.1.sequence'))->toBe(2)
+        ->and(data_get($artifact->data, 'outline.volumes.0.arcs.0.beats.0.milestones.0.key'))->toBe('beat-01-milestone-01');
 });
 
 test('adopting a blueprint creates coherent planning data and refreshes an early initial state', function () {
@@ -1369,7 +1380,23 @@ test('an arc response for the wrong key cannot create a skeleton', function () {
 
 test('skeleton assembly requires every arc and is deterministic without a provider request or usage', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
-    $responses = stagedNovelBlueprintResponses(novelBlueprintWithTwoArcs());
+    $blueprint = novelBlueprintWithTwoArcs();
+    $candidate = [
+        'candidate_key' => 'provider-repeated-key',
+        'name' => '巡墙人',
+        'deduplication_basis' => 'Foundation 中无同名角色',
+        'introduction_reason' => '承担环墙线索',
+        'target_scene_sequence' => 1,
+        'role' => '配角',
+        'motivation' => '守住环墙',
+        'profile' => ['巡墙人'],
+        'personality' => ['谨慎'],
+        'abilities' => ['熟悉城墙'],
+        'knowledge' => ['知道暗门'],
+    ];
+    $blueprint['outline']['volumes'][0]['arcs'][0]['beats'][0]['character_candidates'] = [$candidate];
+    $blueprint['outline']['volumes'][0]['arcs'][1]['beats'][0]['character_candidates'] = [$candidate];
+    $responses = stagedNovelBlueprintResponses($blueprint);
     $fake = (new FakeAiProvider)
         ->enqueue($responses[0])
         ->enqueue($responses[1])
@@ -1399,7 +1426,12 @@ test('skeleton assembly requires every arc and is deterministic without a provid
         ->and($assemblyRun->artifacts()->where('type', ArtifactType::OutlineSkeleton)->count())->toBe(1)
         ->and(data_get($first?->data, 'payload.volumes.0.arcs.0.mainline_sequence'))->toBe(1)
         ->and(data_get($first?->data, 'payload.volumes.0.arcs.1.mainline_sequence'))->toBeNull()
-        ->and(data_get($first?->data, 'payload.volumes.0.arcs.0.beats.1.mainline_sequence'))->toBe(2);
+        ->and(data_get($first?->data, 'payload.volumes.0.arcs.0.beats.1.mainline_sequence'))->toBe(2)
+        ->and(collect(data_get($first?->data, 'payload.volumes'))->flatMap(
+            fn (array $volume) => collect($volume['arcs'])->flatMap(fn (array $arc): array => $arc['beats'])
+        )->pluck('key')->all())->toBe(['beat-01', 'beat-02', 'beat-03'])
+        ->and(data_get($first?->data, 'payload.volumes.0.arcs.0.beats.0.character_candidates.0.candidate_key'))->toBe('beat-01-character-01')
+        ->and(data_get($first?->data, 'payload.volumes.0.arcs.1.beats.0.character_candidates.0.candidate_key'))->toBe('beat-03-character-01');
 });
 
 test('legacy skeleton job cannot participate in a current outline batch', function () {

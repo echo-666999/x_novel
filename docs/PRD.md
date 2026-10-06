@@ -599,7 +599,7 @@ must_not_include JSONB
 Volume → Arc → Beat → Milestone → Chapter → Scene
 ```
 
-四层定义必须通过非空外键和组合外键归属于同一 Outline Version。Volume、Arc、Beat、Milestone 的稳定 Key 和同级 Sequence 在各自作用域内唯一；每个 Main Beat 至少一个 Milestone；除最后一个 Main Beat 外必须有且只有一个指向相邻下一 Main Beat 的 Handoff。Provider 只返回稳定 Key，`FinalizeNovelOutlineJob` 由 Laravel 解析数据库 ID；无法唯一解析时整批失败。
+四层定义必须通过非空外键和组合外键归属于同一 Outline Version。Volume、Arc、Beat、Milestone 的稳定 Key 在各自类型内对整个 Outline Version 唯一，同级 Sequence 在父节点作用域内唯一；每个 Main Beat 至少一个 Milestone；除最后一个 Main Beat 外必须有且只有一个指向相邻下一 Main Beat 的 Handoff。Structure Provider 只返回 Volume / Arc 稳定 Key；相互隔离的 Arc Beats 与 Beat Detail Provider 不得生成全书级 Beat、Candidate、Milestone Key 或 Handoff 目标 Key。Laravel 必须在确定性 Skeleton Assembly 和 Beat Detail 校验中按冻结结构与响应数组顺序分配这些 Key，并在 `FinalizeNovelOutlineJob` 中解析数据库 ID；无法唯一解析时整批失败。
 
 首版 Milestone/Handoff 只控制按 `mainline_sequence` 排列的 Main Beat。Subplot 继续通过 Arc Completion Conditions 和 Chapter Plan Secondary Contribution 推进，不建立第二套独立进度游标。
 

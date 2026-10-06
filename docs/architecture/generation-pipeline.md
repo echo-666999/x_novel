@@ -37,7 +37,7 @@ Novel.status = draft
 → Novel.status = generating
 ```
 
-Foundation、Structure、Arc Beats、Skeleton 和 Beat Detail 在 Finalize 前都只能保存不可变 Artifact，不得修改正式规划或领域表。`outline_skeleton` 是 Laravel 按 Structure 和全部 Arc Beats 的稳定 Key、顺序与 checksum 确定性合并的结果，不是 Provider 输出。初始规划只能应用到尚无规划、章节和正式事件的小说。采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，关系化 Current Novel Outline 是顺序和主线权威。Laravel 选择 Current Beat/Milestone 并解析 Handoff；LLM 不拥有全局排序、主线切换、跳过、删除或宣告节点完成的权限。
+Foundation、Structure、Arc Beats、Skeleton 和 Beat Detail 在 Finalize 前都只能保存不可变 Artifact，不得修改正式规划或领域表。`outline_skeleton` 是 Laravel 按 Structure 和全部 Arc Beats 的数组顺序与 checksum 确定性合并的结果，不是 Provider 输出。Structure Provider 负责一次响应内可校验的 Volume / Arc Key；隔离执行的 Arc Beats 不返回 Beat / Candidate Key，Skeleton Assembly 按全书冻结顺序分配 `beat-NN`，并按 Beat 与候选类型、局部顺序分配 Candidate Key。Beat Detail 不返回 Beat / Milestone / Handoff 目标 Key，Laravel 从目标 Beat 和相邻 Main Beat 分配。初始规划只能应用到尚无规划、章节和正式事件的小说。采用后创建的 Current Bible 是后续章节叙事与文风的唯一权威来源，关系化 Current Novel Outline 是顺序和主线权威。Laravel 选择 Current Beat/Milestone 并解析 Handoff；LLM 不拥有全局身份、全局排序、主线切换、跳过、删除或宣告节点完成的权限。
 
 创建 Outline 批次时，Laravel 优先读取已有 Current Bible 明确选择的目标平台；没有 Current Bible 时读取 `config('narrative.default_platform')`，其环境来源默认为 `NARRATIVE_DEFAULT_TARGET_PLATFORM=fanqie`。解析结果的 code、label 和来源随 Batch Context 冻结并参与输入指纹，Foundation Prompt 与 Strict Schema 只允许返回该 code。配置值不属于 `narrative.platforms` 时，Filament 预检和领域入口都必须在派发或调用 Provider 前报告错误；首个手工 Bible 表单仍保留有效平台列表供用户修复。新建 Bible Version 始终继承 Current Bible 表单值，不受之后的环境变更影响。
 
@@ -761,7 +761,7 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 统一配置 outline_foundation、outline_structure、outline_arc_beats、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Skeleton Assembly、Chapter Assembly 与 Outline Finalize 都是确定性阶段，没有 Provider Timeout。
 
-OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema，并冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
+OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema。当前版本冻结为 `novel-outline-structure-v1`、`novel-outline-arc-beats-v2`、`novel-outline-beat-detail-v2` 和 `novel-outline-skeleton-assembly-v2`；v2 Arc Beats / Beat Detail Schema 移除隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key，改由 Laravel 确定性分配。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 
 默认超时链：
 

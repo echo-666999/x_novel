@@ -1368,9 +1368,9 @@ Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Fi
 
 1. Foundation 生成 Bible、初始人物、世界实体和伏笔候选。
 2. Structure 只生成 Volume / Arc 稳定 Key、顺序、目标和预算，不生成 Beat。
-3. 每个 Arc Beats Provider 请求只生成目标 Arc 的 Beat；同一 Novel 严格串行。
-4. Skeleton Assembly 由 Laravel 按 Structure 和全部 Arc Beats 的稳定 Key、局部顺序与 checksum 确定性合并，统一校验全局 Key、主线顺序和预算，不调用 Provider。
-5. 每个 Beat Detail 只生成一个 Main Beat 的 Milestones / Handoff。
+3. 每个 Arc Beats Provider 请求只生成目标 Arc 的 Beat 内容与 Candidate 内容，不生成 Beat / Candidate Key；同一 Novel 严格串行。
+4. Skeleton Assembly 由 Laravel 按 Structure 和全部 Arc Beats 的局部数组顺序与 checksum 确定性合并，统一分配全书唯一 Beat / Candidate Key，并校验主线顺序和预算，不调用 Provider。
+5. 每个 Beat Detail 只生成一个 Main Beat 的 Milestone / Handoff 内容，不生成 Beat / Milestone / Handoff 目标 Key；Laravel 从冻结 Skeleton 确定性补齐。
 6. Finalize 不调用 Provider；它沿固定 lineage 合并成功 Artifact、解析稳定 Key、执行完整校验并事务写入关系表与最终 `outline_blueprint`。
 
 主批次与子阶段继续复用现有 `generation_runs`、`generation_artifacts`，不新增工作流业务表。主批次使用 `scope_type=novel_outline_batch`；所有子 Run 的 `scope_id` 指向主批次 Run ID。子阶段 `scope_type` 与区分字段固定为：

@@ -185,12 +185,18 @@ function completeNovelPipelineOutlineResponses(): array
             $structureVolume['arcs'][] = collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all();
             $arcResponse = ['arc_key' => $arc['key'], 'beats' => []];
             foreach ($arc['beats'] as $beat) {
+                $milestones = $beat['milestones'];
+                foreach ($milestones as &$milestone) {
+                    unset($milestone['key'], $milestone['sequence']);
+                }
+                unset($milestone);
+                $handoff = $beat['handoff'];
+                unset($handoff['next_beat_key']);
                 $details[] = [
-                    'beat_key' => $beat['key'],
-                    'milestones' => $beat['milestones'],
-                    'handoff' => $beat['handoff'],
+                    'milestones' => $milestones,
+                    'handoff' => $handoff,
                 ];
-                unset($beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
+                unset($beat['key'], $beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
                 $arcResponse['beats'][] = $beat;
             }
             $arcBeats[] = $arcResponse;

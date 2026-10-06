@@ -563,6 +563,8 @@ flowchart TD
 - Arc Beats 上下文只包含 Foundation 摘要、完整 Structure、目标 Arc 和相邻 Arc 摘要，不累积此前已生成 Beats。
 - Migration 回滚在存在新类型 Artifact 时明确失败，不会静默删除数据或留下不满足 CHECK 的记录。
 
+> 2026-10-06 修正：上述 OGR-003 完成记录保留当时的 v1 合同事实。当前合同已升级为 `novel-outline-arc-beats-v2`、`novel-outline-beat-detail-v2` 与 `novel-outline-skeleton-assembly-v2`；隔离的 Provider 请求不再生成全书级 Beat、Candidate、Milestone 或 Handoff 目标 Key，统一由 Laravel 确定性分配。
+
 **Files Changed**
 
 - `app/Enums/ArtifactType.php`

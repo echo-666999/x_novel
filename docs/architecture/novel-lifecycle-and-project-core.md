@@ -145,7 +145,7 @@ Filament 的小说表单当前收集：
 
 ### 4.2 生成结构化蓝图
 
-目标生命周期中，Filament 调用领域启动 Action，在 Web 请求内先创建或复用同一 Novel、同一输入的 `queued` 规划批次；数据库事务提交后才投递 `GenerateNovelOutlineJob`。协调 Job 将批次激活为 `running`，再严格串行派发 Foundation、Structure、逐 Arc Beats、Skeleton Assembly、逐 Main Beat Detail 和 Finalize。Foundation 只生成 Bible、初始人物、世界实体和伏笔；Structure 只生成 Volume / Arc；每个 Arc Beats 只生成目标 Arc 的 Beat；Skeleton Assembly 由 Laravel 确定性合并完整骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestone 与 Handoff；Finalize 由 Laravel 沿固定 Artifact lineage 解析稳定 Key、执行完整结构校验并创建关系化 Draft Outline，不调用 Provider。
+目标生命周期中，Filament 调用领域启动 Action，在 Web 请求内先创建或复用同一 Novel、同一输入的 `queued` 规划批次；数据库事务提交后才投递 `GenerateNovelOutlineJob`。协调 Job 将批次激活为 `running`，再严格串行派发 Foundation、Structure、逐 Arc Beats、Skeleton Assembly、逐 Main Beat Detail 和 Finalize。Foundation 只生成 Bible、初始人物、世界实体和伏笔；Structure 只生成 Volume / Arc；每个 Arc Beats 只生成目标 Arc 的 Beat 与 Candidate 内容；Skeleton Assembly 由 Laravel 确定性分配 Beat / Candidate Key 并合并完整骨架；每个 Beat Detail 只生成一个 Main Beat 的 Milestone 与 Handoff 内容，Laravel 分配 Milestone 和 Handoff 目标 Key；Finalize 由 Laravel 沿固定 Artifact lineage 解析稳定 Key、执行完整结构校验并创建关系化 Draft Outline，不调用 Provider。
 
 每个 Provider Job 最多一次模型请求，并单独保存 Generation Run、不可变 Artifact、输入指纹和恢复点。单个 Arc 或 Beat Detail 失败只恢复该 Arc 或 Beat，已成功且来源链匹配的 Foundation、Structure、其他 Arc、Skeleton 和其他 Beat Detail 不重复计费；截断或 Schema 无效响应不能成为下游来源。v4 规划批次分别冻结 Foundation、Structure、Arc Beats、Beat Detail 的 Provider、Model、Reasoning Effort、Prompt Version、已核实容量及目标平台；目标平台优先取 Current Bible，没有 Bible 时取 `NARRATIVE_DEFAULT_TARGET_PLATFORM`。
 
@@ -621,7 +621,7 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 补充边界：
 
 - NGC-002B 历史 Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。这些历史版本继续可解释，但未完成 v2 批次必须显式标记 `cancelled / pipeline_contract_upgraded`，不得在新版 Pipeline 中继续。
-- Structure 与 Arc Beats 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v1`；确定性 Skeleton Assembly 冻结为 `novel-outline-skeleton-assembly-v1`。当前 `novel-outline-pipeline-v4` 主批次逐任务冻结 Foundation、Structure、Arc Beats、Beat Detail 路由，v3 批次保留原单路由执行语义。历史 Skeleton Job 类只为 failed job 安全反序列化保留，终态批次重放为空操作。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`；局部 Outline 修订继续记录 `novel-outline-node-v3`。
+- Structure、Arc Beats 与 Beat Detail 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v2`、`novel-outline-beat-detail-v2`；确定性 Skeleton Assembly 冻结为 `novel-outline-skeleton-assembly-v2`。v2 合同由 Laravel 分配隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key。当前 `novel-outline-pipeline-v4` 主批次逐任务冻结 Foundation、Structure、Arc Beats、Beat Detail 路由；冻结旧 Prompt Version 的失败 v4 批次不得 Resume，必须 Restart 创建新批次，旧 Artifact 保持不可变。v3 批次保留原单路由执行语义。历史 Skeleton Job 类只为 failed job 安全反序列化保留，终态批次重放为空操作。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`；局部 Outline 修订继续记录 `novel-outline-node-v3`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。

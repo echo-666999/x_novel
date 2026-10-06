@@ -16,7 +16,7 @@ final class NovelOutlineStageContract
 {
     public const STRUCTURE_PROMPT_VERSION = 'novel-outline-structure-v1';
 
-    public const ARC_BEATS_PROMPT_VERSION = 'novel-outline-arc-beats-v1';
+    public const ARC_BEATS_PROMPT_VERSION = 'novel-outline-arc-beats-v2';
 
     public const MAX_VOLUME_COUNT = 12;
 
@@ -85,9 +85,7 @@ final class NovelOutlineStageContract
     public function arcBeatsSchema(): array
     {
         $strings = $this->stringList();
-        $stableKey = ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$', 'maxLength' => 64];
         $candidateBase = [
-            'candidate_key' => $stableKey,
             'name' => $this->shortText(),
             'deduplication_basis' => $this->text(),
             'introduction_reason' => $this->text(),
@@ -106,7 +104,6 @@ final class NovelOutlineStageContract
             'description' => $this->text(),
         ]);
         $beat = $this->object([
-            'key' => ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$', 'maxLength' => 64],
             'title' => $this->shortText(),
             'summary' => $this->text(),
             'chapter_budget' => $this->object([
@@ -180,6 +177,9 @@ final class NovelOutlineStageContract
     /**
      * 校验单个目标 Arc 的 Beats，并按响应数组顺序补局部 sequence。
      *
+     * Beat 与 Candidate 的全书稳定 Key 由 Skeleton Assembly 统一分配；隔离的 Provider
+     * 请求没有其他 Arc 的输出，不能安全地产生全书唯一标识。
+     *
      * @param  array<string, mixed>  $structure  已通过 validateStructure() 的完整 Structure
      * @return array<string, mixed>
      */
@@ -194,8 +194,7 @@ final class NovelOutlineStageContract
         $valid = Validator::make($data, [
             'arc_key' => ['required', 'string', 'max:64', 'regex:/^arc-[0-9]{2,}$/'],
             'beats' => ['required', 'array', 'min:1', 'max:'.self::MAX_BEATS_PER_ARC],
-            'beats.*' => ['array:key,title,summary,chapter_budget,acceptance_criteria,must_include,must_not_include,character_candidates,world_entity_candidates'],
-            'beats.*.key' => ['required', 'string', 'max:64', 'regex:/^beat-[0-9]{2,}$/'],
+            'beats.*' => ['array:title,summary,chapter_budget,acceptance_criteria,must_include,must_not_include,character_candidates,world_entity_candidates'],
             'beats.*.title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'beats.*.summary' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.chapter_budget' => ['required', 'array:min,max'],
@@ -208,8 +207,7 @@ final class NovelOutlineStageContract
             'beats.*.must_not_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
             'beats.*.must_not_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
             'beats.*.character_candidates' => ['present', 'array', 'max:'.self::MAX_CANDIDATES_PER_BEAT],
-            'beats.*.character_candidates.*' => ['array:candidate_key,name,deduplication_basis,introduction_reason,target_scene_sequence,role,motivation,profile,personality,abilities,knowledge'],
-            'beats.*.character_candidates.*.candidate_key' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
+            'beats.*.character_candidates.*' => ['array:name,deduplication_basis,introduction_reason,target_scene_sequence,role,motivation,profile,personality,abilities,knowledge'],
             'beats.*.character_candidates.*.name' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'beats.*.character_candidates.*.deduplication_basis' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.character_candidates.*.introduction_reason' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
@@ -225,8 +223,7 @@ final class NovelOutlineStageContract
             'beats.*.character_candidates.*.knowledge' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
             'beats.*.character_candidates.*.knowledge.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
             'beats.*.world_entity_candidates' => ['present', 'array', 'max:'.self::MAX_CANDIDATES_PER_BEAT],
-            'beats.*.world_entity_candidates.*' => ['array:candidate_key,name,deduplication_basis,introduction_reason,target_scene_sequence,type,description'],
-            'beats.*.world_entity_candidates.*.candidate_key' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
+            'beats.*.world_entity_candidates.*' => ['array:name,deduplication_basis,introduction_reason,target_scene_sequence,type,description'],
             'beats.*.world_entity_candidates.*.name' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'beats.*.world_entity_candidates.*.deduplication_basis' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.world_entity_candidates.*.introduction_reason' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
@@ -239,20 +236,13 @@ final class NovelOutlineStageContract
             throw ValidationException::withMessages(['arc_key' => "Arc Beats 必须只返回目标 Arc {$targetArcKey}。"]);
         }
 
-        $beatKeys = [];
-        $candidateKeys = [];
         foreach ($valid['beats'] as $beatIndex => &$beat) {
-            $this->assertUniqueKey((string) $beat['key'], $beatKeys, 'Beat');
             $beat['sequence'] = $beatIndex + 1;
 
             $minimum = (int) $beat['chapter_budget']['min'];
             $maximum = $beat['chapter_budget']['max'];
             if ($maximum !== null && (int) $maximum < $minimum) {
                 throw ValidationException::withMessages(['beats' => 'Beat chapter_budget.max 不能小于 min。']);
-            }
-
-            foreach ([...$beat['character_candidates'], ...$beat['world_entity_candidates']] as $candidate) {
-                $this->assertUniqueKey((string) $candidate['candidate_key'], $candidateKeys, 'Candidate');
             }
         }
         unset($beat);

@@ -64,11 +64,11 @@ class NovelOutlinePipeline
 
     public const SKELETON_PROMPT_VERSION = 'novel-outline-skeleton-v1';
 
-    public const BEAT_DETAIL_PROMPT_VERSION = 'novel-outline-beat-detail-v1';
+    public const BEAT_DETAIL_PROMPT_VERSION = 'novel-outline-beat-detail-v2';
 
     public const FINALIZE_PROMPT_VERSION = 'novel-outline-finalize-v1';
 
-    public const SKELETON_ASSEMBLY_VERSION = 'novel-outline-skeleton-assembly-v1';
+    public const SKELETON_ASSEMBLY_VERSION = 'novel-outline-skeleton-assembly-v2';
 
     public const SKELETON_MAX_TOKENS = 12_000;
 
@@ -583,7 +583,7 @@ class NovelOutlinePipeline
             'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($structure)],
         ];
         $schema = $this->stageContract->arcBeatsSchema();
-        $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、Beat Key、Candidate Key、sequence、mainline_sequence 或数据库 ID。Beat 与 Candidate 的稳定 Key 由 Laravel 在合并时统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
 
         return $this->providerStage(
@@ -722,7 +722,7 @@ class NovelOutlinePipeline
             artifactType: ArtifactType::OutlineBeatDetail,
             promptVersion: self::BEAT_DETAIL_PROMPT_VERSION,
             context: $context,
-            systemPrompt: '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的稳定 beat_key、Milestones 和出站 Handoff。不得返回其他 Beat、完整 Outline 或任何数据库 ID。Handoff 只能指向给定的相邻下一 Main Beat；最终 Beat 必须返回 null。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
+            systemPrompt: '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的 Milestones 和出站 Handoff 内容；不得返回 Beat Key、Milestone Key、next_beat_key、sequence、其他 Beat、完整 Outline 或任何数据库 ID。稳定 Key、顺序和相邻下一 Main Beat 由 Laravel 统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
             prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->beatDetailSchema(),
             outputName: 'novel_outline_beat_detail',
@@ -954,16 +954,14 @@ class NovelOutlinePipeline
     {
         $strings = $this->boundedStringList();
         $milestone = $this->object([
-            'key' => ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$', 'maxLength' => 64], 'sequence' => ['type' => 'integer', 'minimum' => 1],
             'title' => $this->boundedShortText(), 'objective' => $this->boundedText(),
             'acceptance_criteria' => $this->boundedStringList(minItems: 1), 'must_include' => $strings, 'must_not_include' => $strings,
         ]);
 
         return $this->object([
-            'beat_key' => ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$', 'maxLength' => 64],
             'milestones' => ['type' => 'array', 'minItems' => 1, 'maxItems' => NovelOutlineStageContract::MAX_MILESTONES_PER_BEAT, 'items' => $milestone],
             'handoff' => $this->object([
-                'next_beat_key' => ['type' => ['string', 'null'], 'maxLength' => 64], 'transition_mode' => $this->nullableShortText(),
+                'transition_mode' => $this->nullableShortText(),
                 'exit_result' => $this->nullableText(), 'next_trigger' => $this->nullableText(),
                 'carried_states' => $strings, 'open_threads' => $strings, 'required_transition' => $strings, 'forbidden_jump' => $strings,
             ]),
@@ -1284,15 +1282,15 @@ class NovelOutlinePipeline
     /** 验证 Detail 只属于目标 Beat，并且 Handoff 精确指向相邻 Main Beat。 */
     private function validateBeatDetail(array $data, string $beatKey, ?string $nextBeatKey): array
     {
+        // Provider 不再拥有任何跨请求稳定标识，先按 Strict Schema 拒绝旧 Key 或额外字段。
+        $this->assertSchemaShape($data, $this->beatDetailSchema());
         Validator::make($data, [
-            'beat_key' => ['required', 'string', 'max:64', 'regex:/^beat-[0-9]{2,}$/'],
             'milestones' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_MILESTONES_PER_BEAT],
-            'milestones.*.key' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/', 'distinct:strict'],
             'milestones.*.title' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'milestones.*.objective' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
             'milestones.*.acceptance_criteria' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'milestones.*.acceptance_criteria.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
             'milestones.*.must_include' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'milestones.*.must_include.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
             'milestones.*.must_not_include' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'milestones.*.must_not_include.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
-            'handoff' => ['required', 'array'], 'handoff.next_beat_key' => ['present', 'nullable', 'string', 'max:64'],
+            'handoff' => ['required', 'array'],
             'handoff.transition_mode' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'handoff.exit_result' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
             'handoff.next_trigger' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH], 'handoff.carried_states' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
             'handoff.carried_states.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
@@ -1300,18 +1298,14 @@ class NovelOutlinePipeline
             'handoff.required_transition' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'handoff.required_transition.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
             'handoff.forbidden_jump' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'handoff.forbidden_jump.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
         ])->validate();
-        if (($data['beat_key'] ?? null) !== $beatKey) {
-            throw ValidationException::withMessages(['beat_key' => 'Beat Detail 返回了非目标 Beat。']);
-        }
+        // 独立 Beat Detail 请求看不到其他 Detail，稳定标识必须由 Laravel 从目标 Beat 派生。
+        $data['beat_key'] = $beatKey;
         foreach ($data['milestones'] as $index => &$milestone) {
+            $milestone['key'] = $beatKey.'-milestone-'.sprintf('%02d', $index + 1);
             $milestone['sequence'] = $index + 1;
         }
         unset($milestone);
-        if (($data['handoff']['next_beat_key'] ?? null) !== $nextBeatKey) {
-            throw ValidationException::withMessages(['handoff' => $nextBeatKey === null
-                ? '最后一个 Main Beat 不能指向下一 Beat。'
-                : "Handoff 必须指向相邻 Main Beat {$nextBeatKey}。"]);
-        }
+        $data['handoff']['next_beat_key'] = $nextBeatKey;
         if ($nextBeatKey !== null) {
             foreach (['transition_mode', 'exit_result', 'next_trigger'] as $field) {
                 if (blank($data['handoff'][$field] ?? null)) {
@@ -1656,7 +1650,7 @@ class NovelOutlinePipeline
     ): string {
         [$context] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
         $schema = $this->beatDetailSchema();
-        $systemPrompt = '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的稳定 beat_key、Milestones 和出站 Handoff。不得返回其他 Beat、完整 Outline 或任何数据库 ID。Handoff 只能指向给定的相邻下一 Main Beat；最终 Beat 必须返回 null。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的 Milestones 和出站 Handoff 内容；不得返回 Beat Key、Milestone Key、next_beat_key、sequence、其他 Beat、完整 Outline 或任何数据库 ID。稳定 Key、顺序和相邻下一 Main Beat 由 Laravel 统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineBeatDetail);
 
@@ -1721,11 +1715,12 @@ class NovelOutlinePipeline
             ->all();
     }
 
-    /** Laravel 从数组顺序重建同级 Sequence，模型不拥有排序权。 */
+    /** Laravel 从冻结结构和数组顺序重建全书稳定 Key 与 Sequence，模型不拥有全局身份和排序权。 */
     private function normalizeSkeletonSequences(array $data): array
     {
         $mainArcSequence = 0;
         $mainBeatSequence = 0;
+        $beatSequence = 0;
         foreach ($data['volumes'] as $volumeIndex => &$volume) {
             $volume['sequence'] = $volumeIndex + 1;
             foreach ($volume['arcs'] as $arcIndex => &$arc) {
@@ -1733,8 +1728,18 @@ class NovelOutlinePipeline
                 $isMain = ($arc['type'] ?? null) === 'main';
                 $arc['mainline_sequence'] = $isMain ? ++$mainArcSequence : null;
                 foreach ($arc['beats'] as $beatIndex => &$beat) {
+                    // 各 Arc Provider 相互隔离，按全书冻结顺序统一编号才能从根源上避免重复 beat-01。
+                    $beat['key'] = 'beat-'.sprintf('%02d', ++$beatSequence);
                     $beat['sequence'] = $beatIndex + 1;
                     $beat['mainline_sequence'] = $isMain ? ++$mainBeatSequence : null;
+                    foreach ($beat['character_candidates'] as $candidateIndex => &$candidate) {
+                        $candidate['candidate_key'] = $beat['key'].'-character-'.sprintf('%02d', $candidateIndex + 1);
+                    }
+                    unset($candidate);
+                    foreach ($beat['world_entity_candidates'] as $candidateIndex => &$candidate) {
+                        $candidate['candidate_key'] = $beat['key'].'-world-'.sprintf('%02d', $candidateIndex + 1);
+                    }
+                    unset($candidate);
                 }
                 unset($beat);
             }
@@ -2142,7 +2147,7 @@ class NovelOutlinePipeline
             'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($structure)],
         ];
         $schema = $this->stageContract->arcBeatsSchema();
-        $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、Beat Key、Candidate Key、sequence、mainline_sequence 或数据库 ID。Beat 与 Candidate 的稳定 Key 由 Laravel 在合并时统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineArcBeats);
 
