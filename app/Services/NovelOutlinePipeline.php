@@ -212,6 +212,25 @@ class NovelOutlinePipeline
      */
     public function dispatchNext(GenerationRun $batch): void
     {
+        try {
+            $this->dispatchNextStage($batch);
+        } catch (Throwable $exception) {
+            // 上一阶段可能已经成功；交接失败必须直接收口主批次，不能被“成功子 Run”保护逻辑忽略后永久停在 running。
+            $this->markBatchFailed(
+                $batch->getKey(),
+                $exception,
+                self::BATCH_SCOPE,
+                null,
+                false,
+            );
+
+            throw $exception;
+        }
+    }
+
+    /** 执行一次阶段推进；异常由 dispatchNext() 统一写入主批次。 */
+    private function dispatchNextStage(GenerationRun $batch): void
+    {
         $batch->refresh();
         $this->assertBatch($batch);
         $novelStatus = $batch->novel()->value('status');
@@ -1010,6 +1029,10 @@ class NovelOutlinePipeline
         $maxTokens = $requestBudget['max_completion_tokens'];
         $inputHash = $requestContract['input_hash'];
         $runs = $this->stageRuns($batch, $scopeType);
+        if ($discriminator !== null) {
+            // Arc / Beat 是彼此独立的生成任务；复用、租约与尝试次数都必须限定到当前任务，不能把前面节点的 Run 当成本节点重试。
+            $runs->where('context_snapshot->discriminator', $discriminator);
+        }
         $reusable = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first();
         $artifact = $reusable?->artifacts()->where('type', $artifactType)->first();
         if ($artifact instanceof GenerationArtifact) {
@@ -1031,7 +1054,10 @@ class NovelOutlinePipeline
             ]);
         }
 
-        $attempt = ((int) $runs->clone()->max('attempt')) + 1;
+        // 历史批次曾把同一 Scope 的节点累计编号；按当前任务的 Run 数量计算可以兼容旧数据，并让真正的重试从 2 开始。
+        $attempt = $discriminator === null
+            ? ((int) $runs->clone()->max('attempt')) + 1
+            : $runs->clone()->count() + 1;
         $suffix = $discriminator === null ? '' : ':'.$discriminator;
         $run = GenerationRun::query()->create([
             'novel_id' => $batch->novel_id,
@@ -1957,10 +1983,19 @@ class NovelOutlinePipeline
             if (! is_array($route)
                 || blank($route['provider'] ?? null)
                 || blank($route['model'] ?? null)
-                || ($route['prompt_version'] ?? null) !== $this->promptVersionForRoute($stage)
+                || blank($route['prompt_version'] ?? null)
                 || ! is_array($route['request_budget'] ?? null)
                 || ! is_array($route['model_capacity'] ?? null)) {
                 throw new AiProviderException('provider_run_route_missing', "Outline 主批次缺少任务 {$stage->value} 的完整冻结路由。", false);
+            }
+            $workerPromptVersion = $this->promptVersionForRoute($stage);
+            if (($route['prompt_version'] ?? null) !== $workerPromptVersion) {
+                // 路由数据没有丢失；这是长驻 Worker 未加载新代码，必须重启 Worker 后继续原批次。
+                throw new AiProviderException(
+                    'outline_worker_contract_mismatch',
+                    "Outline 任务 {$stage->value} 的冻结 Prompt 版本 {$route['prompt_version']} 与当前 Worker 合同 {$workerPromptVersion} 不一致，请重启 Horizon 后继续该批次。",
+                    false,
+                );
             }
             $capacity = $route['model_capacity'];
             if (($capacity['provider'] ?? null) !== $route['provider']

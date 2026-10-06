@@ -52,7 +52,9 @@ php artisan horizon:terminate
 php artisan horizon:status
 ```
 
-`horizon:terminate` 依赖 Supervisor 或其他进程管理器自动重启 Horizon。确认 Horizon 同时监听 `generation` 和 `default` Queue。
+`horizon:terminate` 依赖 Supervisor 或其他进程管理器自动重启 Horizon。命令发出 TERM 后，旧 Master 会从 Horizon 状态中移除，但仍可能等待正在执行的长任务完成；此时短暂显示 `Horizon is inactive` 属于优雅退出过程。等待当前任务完成和新 Master 启动后，再确认 Horizon 同时监听 `generation` 和 `default` Queue。若 LaunchAgent 在旧进程完全退出后仍未恢复，执行 `launchctl kickstart -k "gui/$(id -u)/com.xnovel.horizon"`；不要在 Provider 请求仍执行时强制 kickstart。
+
+任何 `app/`、`config/`、Prompt 版本或 Structured Output Schema 变更后，都必须执行 `horizon:terminate`，并确认新的 Horizon Master 已启动后再创建或继续生成批次。长驻 Worker 不会因为 PHP 文件已经保存而自动加载新合同；跳过该步骤会造成“数据库已冻结新 Prompt 版本、Worker 仍按旧版本校验”的版本错配。此类失败使用 `outline_worker_contract_mismatch` 标识，重启 Horizon 后 Resume 原批次，不要修改冻结路由，也不要 Restart 产生新的 Provider 请求。
 
 macOS + Herd 本地环境使用项目内的 launchd 配置常驻 Horizon：
 

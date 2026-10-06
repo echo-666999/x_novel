@@ -277,6 +277,7 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($fake->requests()[1]->promptVersion)->toBe(NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION)
         ->and($fake->requests()[2]->promptVersion)->toBe(NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION)
         ->and($fake->requests()[3]->promptVersion)->toBe(NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BEAT_DETAIL_SCOPE)->orderBy('id')->pluck('attempt')->all())->toBe([1, 1])
         ->and($fake->requests()[0]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化')
         ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
@@ -1329,6 +1330,50 @@ test('all four outline stages reject insufficient frozen capacity before creatin
     'beat detail' => [AiStage::OutlineBeatDetail, NovelOutlinePipeline::BEAT_DETAIL_SCOPE],
 ]);
 
+test('a failure while dispatching the next outline stage closes the batch instead of leaving it running', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = stagedNovelBlueprintProvider();
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+    $pipeline->generateStructure($batch);
+
+    $context = $batch->context_snapshot;
+    data_forget($context, 'generation_preferences.outline_routes.outline_arc_beats');
+    $batch->update(['context_snapshot' => $context]);
+
+    expect(fn () => $pipeline->dispatchNext($batch->refresh()))
+        ->toThrow(AiProviderException::class, '完整冻结路由');
+
+    $batch->refresh();
+    expect($batch->status)->toBe(RunStatus::Failed)
+        ->and($batch->error_code)->toBe('provider_run_route_missing')
+        ->and(data_get($batch->error_metadata, 'failed_scope'))->toBe(NovelOutlinePipeline::BATCH_SCOPE)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(2);
+});
+
+test('a frozen prompt version mismatch is reported as a stale outline worker before any provider request', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = stagedNovelBlueprintProvider();
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+
+    $context = $batch->context_snapshot;
+    data_set($context, 'generation_preferences.outline_routes.outline_foundation.prompt_version', 'novel-outline-foundation-newer-than-worker');
+    $batch->update(['context_snapshot' => $context]);
+
+    expect(fn () => $pipeline->generateFoundation($batch->refresh()))
+        ->toThrow(AiProviderException::class, '请重启 Horizon 后继续该批次');
+
+    expect($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(0);
+});
+
 test('arc two retries locally while arc one and its upstream artifacts are reused', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $responses = stagedNovelBlueprintResponses(novelBlueprintWithTwoArcs());
@@ -1355,7 +1400,9 @@ test('arc two retries locally while arc one and its upstream artifacts are reuse
         ->and($secondArc)->not->toBeNull()
         ->and($fake->requests())->toHaveCount(5)
         ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-01')->count())->toBe(1)
-        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-02')->count())->toBe(2);
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-01')->sole()->attempt)->toBe(1)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-02')->count())->toBe(2)
+        ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)->where('context_snapshot->discriminator', 'arc-02')->orderBy('id')->pluck('attempt')->all())->toBe([1, 2]);
 });
 
 test('an arc response for the wrong key cannot create a skeleton', function () {

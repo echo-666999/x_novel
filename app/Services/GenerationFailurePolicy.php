@@ -166,6 +166,9 @@ final class GenerationFailurePolicy
 
     private function category(string $code, ?int $status = null, ?Throwable $exception = null): string
     {
+        if ($code === 'outline_worker_contract_mismatch') {
+            return 'worker_version_mismatch';
+        }
         if ($code === StalledRunRecoveryService::ERROR_CODE || $code === 'worker_interrupted') {
             return 'worker_lost';
         }
@@ -202,6 +205,9 @@ final class GenerationFailurePolicy
 
     private function recommendedAction(string $code, bool $retryable, ?int $status): string
     {
+        if ($code === 'outline_worker_contract_mismatch') {
+            return '重启 Horizon 后继续';
+        }
         if ($code === StalledRunRecoveryService::ERROR_CODE) {
             return '恢复';
         }

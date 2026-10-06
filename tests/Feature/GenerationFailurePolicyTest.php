@@ -65,6 +65,25 @@ test('frozen provider route drift is classified as provider configuration', func
     'model_run_mismatch',
 ]);
 
+test('outline worker contract mismatch requires a worker restart but keeps the frozen batch resumable', function () {
+    $failure = app(GenerationFailurePolicy::class)->fromException(
+        new AiProviderException('outline_worker_contract_mismatch', 'Worker contract mismatch.', false),
+        'outline_batch_failed',
+    );
+
+    $run = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => $failure->code,
+        'error_message' => $failure->message,
+        'error_retryable' => $failure->retryable,
+        'error_metadata' => $failure->metadata,
+    ]);
+
+    expect($failure->metadata['category'])->toBe('worker_version_mismatch')
+        ->and($failure->recommendedAction)->toBe('重启 Horizon 后继续')
+        ->and(app(GenerationFailurePolicy::class)->allowsFrozenResume($run))->toBeTrue();
+});
+
 test('exhausted structured output budget recommends changing the model route or budget', function () {
     $failure = app(GenerationFailurePolicy::class)->fromException(
         new AiProviderException('assembly_output_budget_exhausted', 'Budget exhausted.', false),

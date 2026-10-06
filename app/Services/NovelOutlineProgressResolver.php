@@ -127,7 +127,8 @@ final class NovelOutlineProgressResolver
             currentItemKey: $currentItemKey,
             currentItemLabel: $currentItemLabel,
             stages: $stages,
-            latestAttempt: $currentRun?->attempt ?? $batch->attempt,
+            // 阶段交接尚未创建子 Run 时不显示主批次 attempt，避免把“第几个批次”误报成当前节点重试次数。
+            latestAttempt: $currentRun->is($batch) ? null : $this->displayAttempt($currentRun, $children),
             startedAt: $this->immutable($batch->started_at),
             finishedAt: $this->immutable($batch->finished_at),
             durationMilliseconds: $batch->durationMilliseconds(),
@@ -153,7 +154,10 @@ final class NovelOutlineProgressResolver
                     && in_array($candidate->status, [RunStatus::Queued, RunStatus::Running], true)),
             ),
             currentRunId: $currentRun?->getKey(),
-            runs: $runs->map(fn (GenerationRun $run): array => $this->runReference($run))->all(),
+            runs: $runs->map(fn (GenerationRun $run): array => $this->runReference(
+                $run,
+                $run->is($batch) ? (int) $run->attempt : $this->displayAttempt($run, $children),
+            ))->all(),
             artifacts: $runs->flatMap->artifacts->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->values()->all(),
         );
     }
@@ -750,6 +754,7 @@ final class NovelOutlineProgressResolver
 
         return match ($code) {
             'queue_dispatch_failed' => '生成任务未能加入队列，请稍后继续。',
+            'outline_worker_contract_mismatch' => 'Horizon Worker 尚未加载当前 Outline 合同，请重启 Horizon 后继续原批次。',
             'provider_timeout' => 'AI 服务响应超时，系统未收到完整结果。',
             'provider_connection_failed' => '暂时无法连接 AI 服务。',
             'provider_rate_limited' => 'AI 服务当前请求过多，请稍后继续。',
@@ -766,6 +771,7 @@ final class NovelOutlineProgressResolver
                 'visible_output_truncated' => 'AI 的可见输出在完成前被截断。',
                 'completion_budget_exhausted' => 'AI 已耗尽完成预算，但响应未提供足够分类信息。',
                 'provider_configuration' => 'AI 服务配置不可用，请检查设置。',
+                'worker_version_mismatch' => 'Horizon Worker 代码版本与当前 Outline 合同不一致，请重启后继续。',
                 'worker_lost' => '生成 Worker 已中断，可从最近成功阶段继续。',
                 default => '大纲生成未完成，请查看运行详情。',
             },
@@ -781,7 +787,22 @@ final class NovelOutlineProgressResolver
     }
 
     /** @return array<string, mixed> */
-    private function runReference(GenerationRun $run): array
+    private function displayAttempt(GenerationRun $run, Collection $runs): int
+    {
+        $discriminator = data_get($run->context_snapshot, 'discriminator');
+        if (! is_string($discriminator) || $discriminator === '') {
+            return (int) $run->attempt;
+        }
+
+        // 旧批次的 attempt 是整个 Scope 的累计序号；展示时按相同 Arc / Beat 的 Run 顺序还原真实任务尝试次数。
+        return $runs
+            ->where('scope_type', $run->scope_type)
+            ->filter(fn (GenerationRun $candidate): bool => data_get($candidate->context_snapshot, 'discriminator') === $discriminator
+                && $candidate->getKey() <= $run->getKey())
+            ->count();
+    }
+
+    private function runReference(GenerationRun $run, int $displayAttempt): array
     {
         $substageRoutes = data_get($run->context_snapshot, 'generation_preferences.substage_routes');
         $outlineRoutes = data_get($run->context_snapshot, 'generation_preferences.outline_routes');
@@ -806,7 +827,7 @@ final class NovelOutlineProgressResolver
             'scope' => $run->scope_type,
             'discriminator' => data_get($run->context_snapshot, 'discriminator'),
             'status' => $run->status->value,
-            'attempt' => $run->attempt,
+            'attempt' => $displayAttempt,
             'started_at' => $run->started_at?->toISOString(),
             'finished_at' => $run->finished_at?->toISOString(),
             'duration_ms' => $run->durationMilliseconds(),

@@ -529,6 +529,7 @@ test('outline failure messages distinguish completion limit failures', function 
     'reasoning exhausted' => ['outline_reasoning_budget_exhausted', 'reasoning_budget_exhausted', 'AI 在产生可见大纲前已耗尽推理预算，未保存结果。请增加推理预留或降低推理程度。', false],
     'completion limit unknown' => ['outline_completion_budget_exhausted', 'completion_budget_exhausted', 'AI 未返回完整大纲，且响应信息不足以判断预算耗在推理还是可见输出。请检查 Usage。', false],
     'provider configuration' => ['provider_run_route_missing', 'provider_configuration', 'Outline 独立路由配置不完整，请检查对应 Stage 的 Provider、Model 与推理程度。', false],
+    'worker version mismatch' => ['outline_worker_contract_mismatch', 'worker_version_mismatch', 'Horizon Worker 尚未加载当前 Outline 合同，请重启 Horizon 后继续原批次。', true],
     'schema' => ['outline_stage_schema_invalid', 'structured_output', 'AI 返回的大纲格式不符合要求，未保存该结果。', true],
 ]);
 

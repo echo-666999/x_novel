@@ -370,8 +370,36 @@ test('outline progress counts only main beat details after deterministic skeleto
     expect($progress->currentStage)->toBe('beat_detail')
         ->and($progress->currentItemKey)->toBe('beat-02')
         ->and($progress->currentItemLabel)->toBe('第一卷 · 主线 · 转折')
+        ->and($progress->latestAttempt)->toBeNull()
         ->and($progress->stages['beat_detail']->completed)->toBe(1)
         ->and($progress->stages['beat_detail']->total)->toBe(2);
+});
+
+test('outline progress derives a discriminator-local attempt for legacy globally numbered runs', function () {
+    $novel = Novel::factory()->create();
+    $batch = ogrProgressBatch($novel);
+    $foundation = ogrProgressFoundation($novel, $batch);
+    $structure = ogrProgressStructure($novel, $batch, $foundation, [
+        ['key' => 'arc-01', 'title' => '主线'],
+    ]);
+    $arc = ogrProgressArc($novel, $batch, $foundation, $structure, 'arc-01', []);
+    $skeleton = ogrProgressSkeleton($novel, $batch, $foundation, $structure, ['arc-01' => $arc], [[
+        'key' => 'arc-01', 'title' => '主线', 'type' => 'main', 'beats' => [
+            ['key' => 'beat-01', 'title' => '起点'],
+            ['key' => 'beat-02', 'title' => '转折'],
+        ],
+    ]]);
+    ogrProgressDetail($novel, $batch, $foundation, $skeleton, 'beat-01');
+    $current = ogrProgressRun($novel, $batch, NovelOutlinePipeline::BEAT_DETAIL_SCOPE, RunStatus::Running, 'beat-02', [
+        'attempt' => 44,
+    ]);
+
+    $progress = app(NovelOutlineProgressResolver::class)->resolve($novel);
+    $currentReference = collect($progress->runs)->firstWhere('id', $current->getKey());
+
+    expect($progress->currentItemKey)->toBe('beat-02')
+        ->and($progress->latestAttempt)->toBe(1)
+        ->and(data_get($currentReference, 'attempt'))->toBe(1);
 });
 
 test('a retryable current child failure derives retrying and keeps raw provider detail technical', function () {
@@ -382,6 +410,12 @@ test('a retryable current child failure derives retrying and keeps raw provider 
         ['key' => 'arc-01', 'title' => '主线'],
     ]);
     $rawError = 'Guzzle timeout in /vendor/guzzlehttp/guzzle/src/Handler/CurlFactory.php:1425';
+    ogrProgressRun($novel, $batch, NovelOutlinePipeline::ARC_BEATS_SCOPE, RunStatus::Failed, 'arc-01', [
+        'attempt' => 1,
+        'error_code' => 'provider_timeout',
+        'error_message' => 'first timeout',
+        'error_retryable' => true,
+    ]);
     $failed = ogrProgressRun($novel, $batch, NovelOutlinePipeline::ARC_BEATS_SCOPE, RunStatus::Failed, 'arc-01', [
         'attempt' => 2,
         'error_code' => 'provider_timeout',
