@@ -16,7 +16,7 @@
 | 技术栈 | Laravel + Filament + PostgreSQL/pgvector + Redis + Laravel Queue |
 | 核心目标 | 小而精、低运维成本、长期可维护 |
 | 非目标 | SaaS、多租户、多人协作、复杂审批、微服务化 |
-| 状态 | 已完成 NGC-001～NGC-012 产品基线与 OGR-001～OGR-007 Outline 可靠性收尾；Outline 已具备 queued 主批次、Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize、PostgreSQL 进度投影、Filament 失败反馈与领域 Resume。遗留 v2 未完成批次已显式退役，新批次只使用 v3 合同 |
+| 状态 | 已完成 NGC-001～NGC-012 产品基线与 OGR-001～OGR-007 Outline 可靠性收尾；Outline 已具备 queued 主批次、Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize、PostgreSQL 进度投影、Filament 失败反馈与领域 Resume。遗留 v2 未完成批次已显式退役，新批次使用 v4 逐任务冻结路由合同，历史 v3 批次保留原执行语义 |
 
 ---
 
@@ -233,7 +233,7 @@ Chapter
 
 全书 Outline 生成必须具备持久化的可见进度和领域恢复入口。用户点击“AI 生成候选”时，Web 请求必须先在 PostgreSQL 创建或复用 `queued` 主批次，再在事务提交后投递协调 Job；Worker 激活批次时改为 `running`。任一子阶段最终失败必须把主批次收口为 `failed` 并保存可展示的错误码、用户文案、技术信息和可恢复性；Finalize 成功后才可变为 `succeeded`。页面不能依赖一次性 Toast、Redis、Horizon 或 `failed_jobs` 判断业务进度。
 
-全书大纲页面在批次为 `queued` 或 `running` 时轮询 PostgreSQL 中的 Run 与 Artifact 投影，并展示当前阶段、尝试次数和已知分母下的 `x/y` 进度；终态停止轮询。Structure 完成前不得伪造整体百分比，完成后可显示 Arc Beats 进度，Skeleton Assembly 完成后可显示 Main Beat Detail 进度。失败原因必须持久显示；可恢复失败提供“继续 AI 生成”，由领域 Resume Action 校验暂停、版本、活动 Run、输入指纹和 Artifact 来源链后，从最早缺失的有效 Artifact 继续。禁止把 `queue:retry` 作为产品恢复入口。
+全书大纲页面在批次为 `queued` 或 `running` 时轮询 PostgreSQL 中的 Run 与 Artifact 投影，并展示当前阶段、尝试次数和已知分母下的 `x/y` 进度；终态停止轮询。Structure 完成前不得伪造整体百分比，完成后可显示 Arc Beats 进度，Skeleton Assembly 完成后可显示 Main Beat Detail 进度。失败原因必须持久显示；仅临时 Provider 或基础设施故障提供“继续 AI 生成”，由领域 Resume Action 校验暂停、版本、活动 Run、输入指纹和 Artifact 来源链后，从最早缺失的有效 Artifact 继续，并保持原批次冻结路由和预算。Provider 配置、冻结路由、推理预算耗尽、可见输出截断或完成预算证据不足等必须修改配置或预算的失败不得 Resume；页面提供“重新生成候选”作为 Restart 入口，使用当前配置创建新的 v4 主批次，同时保留旧批次、子 Run、Artifact、Usage 和冻结快照，不得静默改写。禁止把 `queue:retry` 作为产品恢复入口。
 
 若已启动章节必须立即采用新的 Bible 内容，恢复操作必须先 dry-run 并冻结 Expected Bible Version、Expected State Version、章节/Plan/Scene 来源链和 Artifact checksum；用户审核同一 plan hash 后才能显式执行。执行时创建新的不可变 Bible Version，保留旧 Run、Artifact、原始响应和 Usage 审计，并从最早受 Bible 变化影响的阶段重新生成。旧 Bible 的 Draft、Review 或 Rewrite Artifact 不得进入新来源链的 Canonical Commit。
 
@@ -2099,7 +2099,7 @@ DeepSeek
 
 Laravel 按 Stage 已解析并冻结到 Generation Run 的 Provider 进行固定路由。不得实现动态选型、按价格自动路由或失败后跨 Provider 自动切换。Embedding 继续固定使用 OpenAI，不随文本生成 Provider 切换。
 
-OpenAI 严格结构化输出在发出请求前必须递归校验 Schema：根节点为 object、每个 object 设置 `additionalProperties=false`，且 `required` 完整覆盖 `properties`。Provider 成功响应仍按同一 Schema 本地复验；非法 JSON、Schema 不匹配、拒绝和 Token 截断必须使用不同错误码。HTTP 4xx 应保留经过脱敏和长度限制的 Provider 原始错误原因，便于从 Generation Run 直接定位参数或 Schema 问题。Embedding 响应必须验证向量为数值列表且维度与请求一致。
+OpenAI 严格结构化输出在发出请求前必须递归校验 Schema：根节点为 object、每个 object 设置 `additionalProperties=false`，且 `required` 完整覆盖 `properties`。Provider 成功响应仍按同一 Schema 本地复验；非法 JSON、Schema 不匹配、拒绝和 Token 截断必须使用不同错误码。`finish_reason=length` 不能单独证明可见输出被截断：有部分可见内容时分类为 `visible_output_truncated`，没有可见内容且 `reasoning_tokens>0` 时分类为 `reasoning_budget_exhausted`，证据不足时分类为 `completion_budget_exhausted`，不得猜测。HTTP 4xx 应保留经过脱敏和长度限制的 Provider 原始错误原因，便于从 Generation Run 直接定位参数或 Schema 问题。Embedding 响应必须验证向量为数值列表且维度与请求一致。
 
 ---
 
@@ -2155,11 +2155,11 @@ rewrite_max_attempts
 auto_commit（小说级，默认 false）
 ```
 
-Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个导航入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位及输入、缓存输入、输出价格。“模型价格”页面同时维护各 AI Stage 的 Provider + Model + 可选推理程度路由，并写入独立的 `ai_model_routes` 表。小说创建与编辑页的 Stage Override 必须从已启用的模型价格中选择，并把 Provider + Model 保存到 `novels.settings.ai.stages`；旧 `ai.models` 值继续兼容读取，在用户保存时迁移，未录入价格表的旧值必须可见且不能因无关编辑被静默丢弃。
+Filament “AI 与成本”只提供“供应商连接”和“模型价格”两个导航入口。连接保存 Provider、Base URL、加密 API Key、Timeout 与启用状态；价格按 Provider + Model + Currency 保存计费单位、输入/缓存输入/输出价格、上下文窗口、最大输出及结构化输出与推理程度能力。容量和能力必须按实际 Provider 文档及账户可用模型核实；未核实的字段保持空值或关闭，不得推断。“模型价格”页面同时维护各 AI Stage 的 Provider + Model + 可选推理程度路由，并写入独立的 `ai_model_routes` 表。小说创建与编辑页的 Stage Override 必须从已启用的模型价格中选择，实时显示当前表单将生效的 Provider、Model、推理策略和来源，并把 Provider + Model 保存到 `novels.settings.ai.stages`。已有同一 Provider + Model 的小说级可选推理程度在无关保存时必须保留；用户明确改选路由时重置为 Provider 默认。非 Outline 的旧 `ai.models` 值继续兼容读取，在用户保存时迁移；Outline 的旧 Model-only 值必须显示为不完整配置，无关保存时原样保留，只有用户重新选择完整 Provider + Model 后才能迁移。未录入价格表的旧值不得因无关编辑被静默丢弃；全局 Outline 路由缺失时创建或编辑表单仍必须可打开，以便用户选择小说级完整路由。
 
-推理程度按 `planner`、`outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail`、`writer`、`extractor`、`reviewer`、`rewrite`、`summary` 分别配置；四个 Outline 专用数据库路由、小说级 Override 或环境变量缺失时回退 `planner`，留空推理程度时使用 Provider 默认行为，向量生成不使用该配置。环境回退键分别为 `AI_MODEL_OUTLINE_FOUNDATION`、`AI_MODEL_OUTLINE_STRUCTURE`、`AI_MODEL_OUTLINE_ARC_BEATS`、`AI_MODEL_OUTLINE_BEAT_DETAIL`，每个键缺失时回退 `AI_MODEL_PLANNER`。
+推理程度按 `planner`、`outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail`、`writer`、`extractor`、`reviewer`、`rewrite`、`summary` 分别配置；留空推理程度表示明确使用 Provider 默认行为，向量生成不使用该配置。四个 Outline Provider 任务必须分别使用 `outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 的独立完整路由，任何配置层都不得回退或继承 `planner`、通用 `AI_MODEL` 或其他 Stage。每条路由的 Provider、Model 和推理程度按同一来源整体解析，固定优先级为：小说级该 Stage Override → `ai_model_routes` 中该 Stage 的精确记录 → 旧 `system_settings.ai` 中该 Stage 的精确兼容值 → 该 Stage 专用环境配置；小说级旧 `ai.models.<outline_stage>` 只有 Model、不能表达完整路由，遇到时必须拒绝并要求重新保存。四层均不存在完整路由时必须在创建 Run 和调用 Provider 前以 `outline_route_not_configured` 拒绝启动。专用环境键为 `AI_PROVIDER_OUTLINE_*`、`AI_MODEL_OUTLINE_*`、`AI_REASONING_EFFORT_OUTLINE_*`，其中推理程度可以留空，Provider 和 Model 不得缺失。
 
-启动 AI Outline 前，页面必须预览四个 Provider 任务的有效 Provider、Model、推理程度、配置来源、Prompt Version、已核实容量及配置错误。新建 v4 Outline 主批次在开始时分别解析并冻结 Foundation、Structure、Arc Beats、Beat Detail 的 Provider、Model、推理程度、Prompt Version 与已核实容量；子 Run 和重试只能读取该任务的冻结值。v3 批次继续按原单路由快照执行。当前只维护一组由 `OUTLINE_PLANNER_CAPACITY_PROVIDER`、`OUTLINE_PLANNER_CAPACITY_MODEL`、`OUTLINE_PLANNER_CONTEXT_WINDOW_TOKENS`、`OUTLINE_PLANNER_MAX_OUTPUT_TOKENS` 定义的已核实容量，因此四个 Outline 有效路由必须与该 Provider/Model 一致；不匹配时预览必须标记不可启动，服务端不得创建批次。确定性的 Skeleton Assembly、Chapter Assembly 与 Outline Finalize 不配置模型。页面不得回显 API Key，日志不得记录密钥明文或密文。环境模型配置只作为数据库路由缺失时的兼容回退，成本硬限制继续由全局 config 和小说设置控制。
+启动 AI Outline 前，页面必须预览四个 Provider 任务的有效 Provider、Model、推理程度、配置来源、Prompt Version、请求预算、推理预留、已核实容量及配置错误；错误必须同时显示稳定错误码和用户文案。缺少任一独立路由、已启用模型价格记录、正整数容量、有效请求预算或结构化输出能力时，预览必须标记不可启动；配置推理程度时还必须确认该模型支持 `reasoning_effort`。全局路由和小说级新选择在保存边界执行同一适用性校验，服务端不得创建 Batch、子 Run 或发出 Provider 请求。新建 v4 Outline 主批次在开始时按四条有效路由分别读取对应 `ai_model_prices` 记录，并冻结 Foundation、Structure、Arc Beats、Beat Detail 各自的 Provider、Model、推理程度、Prompt Version、模型价格记录 ID、容量、能力、结构化输出额度与推理 Token 预留；Batch 和 Stage 的 `input_hash` 都必须包含冻结请求预算，后台修改配置不得改变已存在批次或复用边界。内部统一的 `max_completion_tokens` 请求预算为结构化输出额度与推理预留之和，Provider 适配器再映射为对应 API 参数；四个阶段在创建子 Run 前统一校验该总额不超过模型最大输出和扣除估算输入后的剩余上下文。Schema 的集合和文本字段必须声明数量与长度上限，避免合法但无界的结构化响应耗尽输出预算。子 Run 和重试只能读取该任务的冻结值。后台修改价格记录、路由或小说设置不得改变已存在批次，v3 批次继续按原单路由快照及升级前请求上限执行。运行详情必须分别显示冻结路由、静态模型容量、实际请求预算、容量门禁快照、Provider 适配器实际发送的非敏感参数、`reasoning_tokens` 和完成预算分类，不能用计划值冒充已发送参数。确定性的 Skeleton Assembly、Chapter Assembly 与 Outline Finalize 不配置模型。页面不得回显 API Key，日志不得记录密钥明文或密文。专用环境路由只作为同名数据库路由缺失时的兼容来源，但仍必须匹配已启用且适用于 Outline 的模型价格记录；成本硬限制继续由全局 config 和小说设置控制。
 
 达到 hard limit：
 

@@ -89,7 +89,7 @@ function truncatedRewriteResponse(): AiResponse
         latencyMs: 100,
         providerRequestId: 'truncated-rewrite-request',
         model: 'rewrite-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 

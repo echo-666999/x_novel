@@ -5,6 +5,10 @@
         'succeeded' => 'success',
         default => 'gray',
     };
+    $prettyJson = fn (mixed $value): string => json_encode(
+        $value,
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+    ) ?: '{}';
 @endphp
 
 <div class="space-y-6">
@@ -43,7 +47,28 @@
                     <div>Provider / Model：{{ $run['provider'] ?? '—' }} / {{ $run['model'] ?? '—' }}</div>
                     <div>Prompt：<span class="font-mono">{{ $run['prompt_version'] ?? '—' }}</span></div>
                     <div>Tokens：<span class="tabular-nums">{{ number_format(($run['usage']['input_tokens'] ?? 0) + ($run['usage']['output_tokens'] ?? 0)) }}</span></div>
+                    <div>Reasoning Tokens：<span class="tabular-nums">{{ number_format($run['usage']['reasoning_tokens'] ?? 0) }}</span></div>
                     <div>Cost：<span class="tabular-nums">{{ number_format((float) ($run['usage']['estimated_cost'] ?? 0), 4) }}</span></div>
+                </div>
+                <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                    <div>
+                        <div class="text-xs font-medium text-gray-700 dark:text-gray-300">冻结路由与模型容量</div>
+                        <pre class="mt-1 max-h-64 overflow-auto rounded-md bg-gray-50 p-2 text-[11px] leading-5 text-gray-700 dark:bg-white/5 dark:text-gray-300">{{ $prettyJson([
+                            'route' => $run['frozen_route'] ?? null,
+                            'model_capacity' => $run['model_capacity'] ?? null,
+                        ]) }}</pre>
+                    </div>
+                    <div>
+                        <div class="text-xs font-medium text-gray-700 dark:text-gray-300">实际预算与容量门禁</div>
+                        <pre class="mt-1 max-h-64 overflow-auto rounded-md bg-gray-50 p-2 text-[11px] leading-5 text-gray-700 dark:bg-white/5 dark:text-gray-300">{{ $prettyJson([
+                            'request_budget' => $run['request_budget'] ?? null,
+                            'capacity_snapshot' => $run['capacity_snapshot'] ?? null,
+                        ]) }}</pre>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <div class="text-xs font-medium text-gray-700 dark:text-gray-300">Provider 实际发送参数与响应用量</div>
+                    <pre class="mt-1 max-h-64 overflow-auto rounded-md bg-gray-50 p-2 text-[11px] leading-5 text-gray-700 dark:bg-white/5 dark:text-gray-300">{{ $prettyJson($run['provider_calls'] ?? []) }}</pre>
                 </div>
                 @if ($run['error_code'])
                     <div class="mt-2 font-mono text-xs text-danger-600 dark:text-danger-400">{{ $run['error_code'] }}</div>

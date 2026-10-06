@@ -27,6 +27,7 @@ class CreateNovel extends CreateRecord
             'auto_commit' => (bool) ($data['workflow_auto_commit'] ?? false),
             'auto_commit_configured' => true,
         ];
+        // Select 提交的是价格记录 ID，必须在创建 Novel 前转换并持久化完整的 Provider + Model 路由。
         $data['settings'] = app(AiModelRouteService::class)->applyNovelOverrides(
             $settings,
             (array) ($data['ai_model_overrides'] ?? []),

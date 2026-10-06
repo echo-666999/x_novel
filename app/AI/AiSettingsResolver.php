@@ -3,6 +3,8 @@
 namespace App\AI;
 
 use App\AI\Data\ResolvedAiSettings;
+use App\AI\Exceptions\AiProviderException;
+use App\Enums\AiReasoningEffort;
 use App\Enums\AiStage;
 use App\Models\Novel;
 use InvalidArgumentException;
@@ -56,6 +58,9 @@ class AiSettingsResolver
             : trim((string) data_get($current['settings'], 'default_provider')));
         $baseModel = $routeModel ?? (is_array($databaseStage) ? trim((string) ($databaseStage['model'] ?? '')) : '');
         $baseSource = $route !== null || str_starts_with($current['source'], 'database') ? 'database' : 'environment';
+        $baseReasoningEffort = $route !== null
+            ? $routeReasoningEffort
+            : ($baseSource === 'environment' ? $this->environmentReasoningEffort($stage) : null);
 
         // 小说级配置只覆盖当前小说，是最终优先级；旧 ai.models.* 结构保留兼容读取。
         $novelStage = $this->novelStageSettings($novel, $stage);
@@ -67,9 +72,30 @@ class AiSettingsResolver
         $hasProviderOverride = is_string($providerOverride) && trim($providerOverride) !== '';
         $hasModelOverride = is_string($modelOverride) && trim($modelOverride) !== '';
 
+        if ($this->isOutlineStage($stage)
+            && is_array($novelStage)
+            && (! $hasProviderOverride || ! $hasModelOverride)) {
+            throw new AiProviderException(
+                'outline_route_not_configured',
+                "Outline 任务 {$stage->value} 的小说级路由必须同时配置 Provider 和 Model。",
+                false,
+            );
+        }
+
+        if ($this->isOutlineStage($stage)
+            && ! is_array($novelStage)
+            && $hasModelOverride) {
+            throw new AiProviderException(
+                'outline_route_not_configured',
+                "Outline 任务 {$stage->value} 的旧小说级 Model Override 缺少同来源 Provider，请重新保存该 Stage 的完整路由。",
+                false,
+            );
+        }
+
         if ($hasProviderOverride || $hasModelOverride) {
             $provider = $hasProviderOverride ? strtolower(trim($providerOverride)) : $baseProvider;
             $model = $hasModelOverride ? trim($modelOverride) : $baseModel;
+            $this->assertOutlineRouteConfigured($stage, $provider, $model);
             // 只覆盖模型时沿用基础供应商；显式覆盖供应商时必须验证该供应商凭据。
             $this->assertProviderIsUsable(
                 $provider,
@@ -81,11 +107,14 @@ class AiSettingsResolver
                 stage: $stage,
                 provider: $provider,
                 model: $model,
-                reasoningEffort: $routeReasoningEffort,
+                reasoningEffort: $this->isOutlineStage($stage)
+                    ? $this->novelReasoningEffort($novelStage, $stage)
+                    : $baseReasoningEffort,
                 source: 'novel',
             );
         }
 
+        $this->assertOutlineRouteConfigured($stage, $baseProvider, $baseModel);
         $this->assertProviderIsUsable($baseProvider, requireCredential: $baseSource === 'database');
         $this->assertModelIsConfigured($stage, $baseModel);
 
@@ -93,7 +122,7 @@ class AiSettingsResolver
             stage: $stage,
             provider: $baseProvider,
             model: $baseModel,
-            reasoningEffort: $routeReasoningEffort,
+            reasoningEffort: $baseReasoningEffort,
             source: $baseSource,
         );
     }
@@ -105,27 +134,25 @@ class AiSettingsResolver
 
     private function environmentSettings(AiStage $stage): ResolvedAiSettings
     {
-        // 环境配置是最后回退：先取阶段专用模型，再回退到全局 AI_MODEL。
+        // Outline 环境路由必须完整且精确；其他 Stage 保留通用 AI_MODEL 兼容回退。
         $stageModel = $stage === AiStage::Embedding
             ? config('ai.embedding.model')
             : config("ai.models.{$stage->value}");
-        $fallbackStage = $stage->fallbackStage();
-        if ((! is_string($stageModel) || trim($stageModel) === '') && $fallbackStage !== null) {
-            $stageModel = config("ai.models.{$fallbackStage->value}");
-        }
         $model = is_string($stageModel) && trim($stageModel) !== ''
             ? trim($stageModel)
-            : trim((string) config('ai.model'));
+            : ($this->isOutlineStage($stage) ? '' : trim((string) config('ai.model')));
+        $provider = $stage === AiStage::Embedding
+            ? (string) config('ai.embedding.provider', 'openai')
+            : (string) config("ai.stage_providers.{$stage->value}", config('ai.provider'));
 
-        if ($model === '') {
-            throw new InvalidArgumentException("AI model is not configured for stage [{$stage->value}].");
-        }
+        $this->assertOutlineRouteConfigured($stage, $provider, $model);
+        $this->assertModelIsConfigured($stage, $model);
 
         return new ResolvedAiSettings(
             stage: $stage,
-            provider: (string) ($stage === AiStage::Embedding ? config('ai.embedding.provider', 'openai') : config('ai.provider')),
+            provider: $provider,
             model: $model,
-            reasoningEffort: null,
+            reasoningEffort: $this->environmentReasoningEffort($stage),
             source: 'environment',
         );
     }
@@ -138,26 +165,12 @@ class AiSettingsResolver
             return $settings;
         }
 
-        $fallbackStage = $stage->fallbackStage();
-        $fallback = $fallbackStage === null
-            ? null
-            : data_get($novel?->settings, "ai.stages.{$fallbackStage->value}");
-
-        return is_array($fallback) ? $fallback : null;
+        return null;
     }
 
     private function novelModelOverride(?Novel $novel, AiStage $stage): mixed
     {
-        $model = data_get($novel?->settings, "ai.models.{$stage->value}");
-        if (is_string($model) && trim($model) !== '') {
-            return $model;
-        }
-
-        $fallbackStage = $stage->fallbackStage();
-
-        return $fallbackStage === null
-            ? $model
-            : data_get($novel?->settings, "ai.models.{$fallbackStage->value}");
+        return data_get($novel?->settings, "ai.models.{$stage->value}");
     }
 
     private function assertProviderIsUsable(string $provider, bool $requireCredential = true): void
@@ -181,5 +194,59 @@ class AiSettingsResolver
         if ($model === '') {
             throw new InvalidArgumentException("AI model is not configured for stage [{$stage->value}].");
         }
+    }
+
+    private function assertOutlineRouteConfigured(AiStage $stage, string $provider, string $model): void
+    {
+        if ($this->isOutlineStage($stage) && (trim($provider) === '' || trim($model) === '')) {
+            throw new AiProviderException(
+                'outline_route_not_configured',
+                "Outline 任务 {$stage->value} 未配置独立的 Provider 和 Model 路由。",
+                false,
+            );
+        }
+    }
+
+    /** @param array<string, mixed>|null $settings */
+    private function novelReasoningEffort(?array $settings, AiStage $stage): ?string
+    {
+        if (! is_array($settings) || ! array_key_exists('reasoning_effort', $settings)) {
+            return null;
+        }
+
+        return $this->normalizedReasoningEffort($settings['reasoning_effort'], $stage);
+    }
+
+    private function environmentReasoningEffort(AiStage $stage): ?string
+    {
+        return $this->normalizedReasoningEffort(config("ai.reasoning_efforts.{$stage->value}"), $stage);
+    }
+
+    private function normalizedReasoningEffort(mixed $value, AiStage $stage): ?string
+    {
+        if ($value === null || (is_string($value) && trim($value) === '')) {
+            return null;
+        }
+
+        $reasoningEffort = is_string($value) ? trim($value) : '';
+        if (AiReasoningEffort::tryFrom($reasoningEffort) === null) {
+            throw new AiProviderException(
+                'outline_route_not_configured',
+                "AI 任务 {$stage->value} 的推理程度必须是 low、medium、high 或留空。",
+                false,
+            );
+        }
+
+        return $reasoningEffort;
+    }
+
+    private function isOutlineStage(AiStage $stage): bool
+    {
+        return in_array($stage, [
+            AiStage::OutlineFoundation,
+            AiStage::OutlineStructure,
+            AiStage::OutlineArcBeats,
+            AiStage::OutlineBeatDetail,
+        ], true);
     }
 }

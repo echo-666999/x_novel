@@ -19,11 +19,23 @@ return [
     'planner_max_output_tokens' => (int) env('PLANNER_MAX_OUTPUT_TOKENS', 12_000),
     'planner_retry_max_output_tokens' => (int) env('PLANNER_RETRY_MAX_OUTPUT_TOKENS', 16_000),
     'planner_final_retry_max_output_tokens' => (int) env('PLANNER_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000),
-    'outline_planner_capacity' => [
-        'provider' => env('OUTLINE_PLANNER_CAPACITY_PROVIDER', 'openai'),
-        'model' => env('OUTLINE_PLANNER_CAPACITY_MODEL', 'gpt-5.6-terra'),
-        'context_window_tokens' => (int) env('OUTLINE_PLANNER_CONTEXT_WINDOW_TOKENS', 1_050_000),
-        'max_output_tokens' => (int) env('OUTLINE_PLANNER_MAX_OUTPUT_TOKENS', 128_000),
+    'outline_request_budgets' => [
+        'outline_foundation' => [
+            'output_tokens' => (int) env('OUTLINE_FOUNDATION_OUTPUT_TOKENS', 8_000),
+            'reasoning_reserve_tokens' => (int) env('OUTLINE_FOUNDATION_REASONING_RESERVE_TOKENS', 4_000),
+        ],
+        'outline_structure' => [
+            'output_tokens' => (int) env('OUTLINE_STRUCTURE_OUTPUT_TOKENS', 12_000),
+            'reasoning_reserve_tokens' => (int) env('OUTLINE_STRUCTURE_REASONING_RESERVE_TOKENS', 4_000),
+        ],
+        'outline_arc_beats' => [
+            'output_tokens' => (int) env('OUTLINE_ARC_BEATS_OUTPUT_TOKENS', 8_000),
+            'reasoning_reserve_tokens' => (int) env('OUTLINE_ARC_BEATS_REASONING_RESERVE_TOKENS', 4_000),
+        ],
+        'outline_beat_detail' => [
+            'output_tokens' => (int) env('OUTLINE_BEAT_DETAIL_OUTPUT_TOKENS', 5_000),
+            'reasoning_reserve_tokens' => (int) env('OUTLINE_BEAT_DETAIL_REASONING_RESERVE_TOKENS', 3_000),
+        ],
     ],
     'scene_context_token_budget' => (int) env('SCENE_CONTEXT_TOKEN_BUDGET', 12_000),
     'scene_max_output_tokens' => (int) env('SCENE_MAX_OUTPUT_TOKENS', 12_000),

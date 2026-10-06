@@ -28,6 +28,7 @@ use App\Jobs\GenerateNovelFoundationJob;
 use App\Jobs\GenerateNovelOutlineJob;
 use App\Jobs\GenerateNovelOutlineSkeletonJob;
 use App\Jobs\GenerateNovelOutlineStructureJob;
+use App\Models\AIModelPrice;
 use App\Models\AIModelRoute;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
@@ -48,8 +49,7 @@ use Livewire\Livewire;
 uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
-    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
-    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
+    seedVerifiedOutlineModelProfiles();
 });
 
 function novelBlueprint(): array
@@ -218,8 +218,6 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
 
 function stagedNovelBlueprintProvider(?array $blueprint = null): FakeAiProvider
 {
-    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
-    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
     $fake = new FakeAiProvider;
     foreach (stagedNovelBlueprintResponses($blueprint) as $response) {
         $fake->enqueue($response);
@@ -274,7 +272,7 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($fake->requests()[2]->promptVersion)->toBe(NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION)
         ->and($fake->requests()[3]->promptVersion)->toBe(NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION)
         ->and($fake->requests()[0]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化')
-        ->and($fake->requests()[0]->maxTokens)->toBe(NovelOutlinePipeline::FOUNDATION_MAX_TOKENS)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.reasoning_effort'))->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'target_platform'))->toBe([
@@ -337,6 +335,38 @@ test('invalid default target platform stops before creating a run or calling the
         ->and($novel->outlines()->count())->toBe(0);
 });
 
+test('missing dedicated outline routes stop before creating a run or calling the provider', function () {
+    foreach ([
+        AiStage::OutlineFoundation,
+        AiStage::OutlineStructure,
+        AiStage::OutlineArcBeats,
+        AiStage::OutlineBeatDetail,
+    ] as $stage) {
+        config()->set("ai.models.{$stage->value}", null);
+        config()->set("ai.stage_providers.{$stage->value}", null);
+    }
+    AIModelRoute::query()->create([
+        'role' => AiStage::Planner,
+        'provider' => 'openai',
+        'model' => 'planner-must-not-be-used',
+        'reasoning_effort' => 'high',
+    ]);
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+
+    try {
+        app(NovelOutlinePipeline::class)->startOrResume($novel, 1);
+        $this->fail('Expected missing dedicated Outline routes to be rejected.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('outline_route_not_configured')
+            ->and($exception->retryable)->toBeFalse();
+    }
+
+    expect($fake->requests())->toHaveCount(0)
+        ->and($novel->generationRuns()->count())->toBe(0);
+});
+
 test('foundation rejects a target platform different from the frozen selection', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $blueprint = novelBlueprint();
@@ -373,18 +403,26 @@ test('ai planning response schema contains only strict objects accepted by the p
 
     $schemas = collect($fake->requests())->pluck('responseSchema');
     $invalidObjects = [];
-    $inspect = function (mixed $node, string $path = '$') use (&$inspect, &$invalidObjects): void {
+    $missingBounds = [];
+    $inspect = function (mixed $node, string $path = '$') use (&$inspect, &$invalidObjects, &$missingBounds): void {
         if (! is_array($node)) {
             return;
         }
 
-        if (($node['type'] ?? null) === 'object') {
+        $type = $node['type'] ?? null;
+        if ($type === 'object') {
             $properties = array_keys($node['properties'] ?? []);
             $required = $node['required'] ?? [];
 
             if (($node['additionalProperties'] ?? null) !== false || $properties !== $required) {
                 $invalidObjects[] = $path;
             }
+        }
+        if ($type === 'array' && ! isset($node['maxItems'])) {
+            $missingBounds[] = $path.'.maxItems';
+        }
+        if (($type === 'string' || (is_array($type) && array_is_list($type) && in_array('string', $type, true))) && ! isset($node['maxLength'])) {
+            $missingBounds[] = $path.'.maxLength';
         }
 
         foreach ($node as $key => $value) {
@@ -396,6 +434,7 @@ test('ai planning response schema contains only strict objects accepted by the p
     $schemas->each(fn (array $schema) => $inspect($schema));
 
     expect($invalidObjects)->toBe([])
+        ->and($missingBounds)->toBe([])
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.key.pattern'))->toBe('^vol-[0-9]{2}$')
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties.key.pattern'))->toBe('^arc-[0-9]{2,}$')
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
@@ -626,6 +665,38 @@ test('truncated outline output closes the batch without repeating the same reque
         ->and($fake->requests())->toHaveCount(1);
 });
 
+test('outline reasoning exhaustion keeps a distinct terminal error and category', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = (new FakeAiProvider)->enqueue(new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 2_000,
+        outputTokens: 12_000,
+        cachedTokens: 0,
+        latencyMs: 500,
+        providerRequestId: 'outline-reasoning-exhausted',
+        model: 'gpt-5.6-terra',
+        metadata: [
+            'finish_reason' => 'length',
+            'completion_limit_reason' => 'reasoning_budget_exhausted',
+        ],
+        reasoningTokens: 12_000,
+    ));
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+
+    (new GenerateNovelFoundationJob($batch->getKey()))->handle($pipeline);
+
+    $child = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->sole();
+    expect($child->error_code)->toBe('novel_outline_foundation_reasoning_budget_exhausted')
+        ->and($child->error_retryable)->toBeFalse()
+        ->and(data_get($child->error_metadata, 'category'))->toBe('reasoning_budget_exhausted')
+        ->and($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($batch->fresh()->error_code)->toBe('novel_outline_foundation_reasoning_budget_exhausted')
+        ->and($fake->requests())->toHaveCount(1);
+});
+
 test('artifact persistence failure is the only outline result uncertainty and closes the batch', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $fake = (new FakeAiProvider)->enqueue(stagedNovelBlueprintResponses()[0]);
@@ -652,14 +723,31 @@ test('artifact persistence failure is the only outline result uncertainty and cl
         ->and($batch->fresh()->error_code)->toBe('outline_stage_result_uncertain');
 });
 
-test('outline resume reuses successful artifacts and dispatches the earliest missing stage once', function () {
+test('outline resume reuses successful artifacts and keeps the batch frozen routes', function () {
     Queue::fake();
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
-    $fake = (new FakeAiProvider)->enqueue(stagedNovelBlueprintResponses()[0]);
+    $responses = stagedNovelBlueprintResponses();
+    $fake = (new FakeAiProvider)
+        ->enqueue($responses[0])
+        ->enqueue($responses[1]);
     app()->instance(AiProvider::class, $fake);
     $pipeline = app(NovelOutlinePipeline::class);
     $batch = $pipeline->startOrResume($novel, 1);
     $foundation = $pipeline->generateFoundation($batch);
+    $frozenStructureRoute = data_get(
+        $batch->context_snapshot,
+        'generation_preferences.outline_routes.outline_structure',
+    );
+    AIModelRoute::query()->create([
+        'role' => AiStage::OutlineStructure,
+        'provider' => (string) config('ai.provider'),
+        'model' => 'changed-after-batch',
+        'reasoning_effort' => 'high',
+    ]);
+    $novel->update(['settings' => ['ai' => ['stages' => ['outline_structure' => [
+        'provider' => (string) config('ai.provider'),
+        'model' => 'changed-novel-override-after-batch',
+    ]]]]]);
     $batch->update([
         'status' => RunStatus::Failed,
         'error_code' => 'provider_timeout',
@@ -674,13 +762,111 @@ test('outline resume reuses successful artifacts and dispatches the earliest mis
     expect($resumed->status)->toBe(RunStatus::Running)
         ->and($resumed->error_code)->toBeNull()
         ->and(data_get($resumed->context_snapshot, 'recovery.previous_error_code'))->toBe('provider_timeout')
+        ->and(data_get($resumed->context_snapshot, 'generation_preferences.outline_routes.outline_structure'))->toBe($frozenStructureRoute)
         ->and($foundation)->not->toBeNull()
         ->and($fake->requests())->toHaveCount(1);
     Queue::assertPushed(GenerateNovelOutlineStructureJob::class, 1);
 
+    $structure = $pipeline->generateStructure($resumed);
+
+    expect($structure)->not->toBeNull()
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->provider)->toBe($frozenStructureRoute['provider'])
+        ->and($fake->requests()[1]->model)->toBe($frozenStructureRoute['model'])
+        ->and($fake->requests()[1]->reasoningEffort)->toBe($frozenStructureRoute['reasoning_effort'])
+        ->and($fake->requests()[1]->model)->not->toBe('changed-after-batch')
+        ->and($fake->requests()[1]->model)->not->toBe('changed-novel-override-after-batch');
+
     expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($novel, $resumed))
         ->toThrow(ValidationException::class, '只有 failed');
     Queue::assertPushed(GenerateNovelOutlineStructureJob::class, 1);
+});
+
+test('outline configuration failures cannot resume a frozen batch', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+    $batch = app(NovelOutlinePipeline::class)->startOrResume($novel, 1);
+    $frozenContext = $batch->context_snapshot;
+    $batch->update([
+        'status' => RunStatus::Failed,
+        'error_code' => 'outline_route_not_configured',
+        'error_message' => 'outline route is missing',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'provider_configuration'],
+        'finished_at' => now(),
+    ]);
+
+    expect(fn () => app(ResumeNovelOutlineGenerationAction::class)->handle($novel, $batch))
+        ->toThrow(ValidationException::class, '不能继续冻结批次');
+
+    expect($batch->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($batch->fresh()->context_snapshot)->toBe($frozenContext)
+        ->and($fake->requests())->toHaveCount(0);
+    Queue::assertNothingPushed();
+});
+
+test('outline restart creates a new batch from current routes without rewriting the failed v4 batch', function () {
+    Queue::fake();
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $oldBatch = $pipeline->startOrResume($novel, 1);
+    $oldContext = $oldBatch->context_snapshot;
+    $oldInputHash = $oldBatch->input_hash;
+    $oldFoundationRoute = data_get($oldContext, 'generation_preferences.outline_routes.outline_foundation');
+    $oldBatch->update([
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_run_route_missing',
+        'error_message' => 'frozen route is incomplete',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'provider_configuration'],
+        'finished_at' => now(),
+    ]);
+
+    AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'outline-foundation-restart-model',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'context_window_tokens' => 500_000,
+        'max_output_tokens' => 40_000,
+        'supports_structured_output' => true,
+        'supports_reasoning_effort' => true,
+        'input_price' => 1,
+        'output_price' => 2,
+        'is_enabled' => true,
+    ]);
+    AIModelRoute::query()->updateOrCreate([
+        'role' => AiStage::OutlineFoundation,
+    ], [
+        'provider' => 'openai',
+        'model' => 'outline-foundation-restart-model',
+        'reasoning_effort' => 'high',
+    ]);
+
+    $newBatch = app(StartNovelOutlineGenerationAction::class)->handle($novel, 1);
+
+    expect($newBatch->getKey())->not->toBe($oldBatch->getKey())
+        ->and($newBatch->status)->toBe(RunStatus::Queued)
+        ->and($newBatch->attempt)->toBe(2)
+        ->and($newBatch->prompt_version)->toBe(NovelOutlinePipeline::BATCH_PROMPT_VERSION)
+        ->and($newBatch->input_hash)->not->toBe($oldInputHash)
+        ->and(data_get($newBatch->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.model'))
+        ->toBe('outline-foundation-restart-model')
+        ->and(data_get($newBatch->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.reasoning_effort'))
+        ->toBe('high');
+
+    $unchangedOldBatch = $oldBatch->fresh();
+    expect($unchangedOldBatch->status)->toBe(RunStatus::Failed)
+        ->and($unchangedOldBatch->prompt_version)->toBe(NovelOutlinePipeline::BATCH_PROMPT_VERSION)
+        ->and($unchangedOldBatch->input_hash)->toBe($oldInputHash)
+        ->and($unchangedOldBatch->context_snapshot)->toBe($oldContext)
+        ->and(data_get($unchangedOldBatch->context_snapshot, 'generation_preferences.outline_routes.outline_foundation'))
+        ->toBe($oldFoundationRoute)
+        ->and($unchangedOldBatch->error_code)->toBe('provider_run_route_missing');
+    Queue::assertPushed(GenerateNovelOutlineJob::class, 1);
 });
 
 test('outline resume rejects paused cancelled succeeded and incompatible batches', function () {
@@ -894,18 +1080,33 @@ test('first outline apply rejects novels that already have a chapter or story ev
 test('outline stages freeze each task route and bind every child run to the batch', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     config()->set('ai.providers.openai.api_key', 'test-key');
-    $routeReasoning = [
-        AiStage::OutlineFoundation->value => 'low',
-        AiStage::OutlineStructure->value => 'medium',
-        AiStage::OutlineArcBeats->value => 'high',
-        AiStage::OutlineBeatDetail->value => null,
+    config()->set('ai.providers.deepseek.enabled', true);
+    config()->set('ai.providers.deepseek.api_key', 'deepseek-test-key');
+    $routeProfiles = [
+        AiStage::OutlineFoundation->value => ['provider' => 'openai', 'model' => 'outline-foundation-model', 'reasoning' => 'low', 'context' => 500_000, 'output' => 40_000],
+        AiStage::OutlineStructure->value => ['provider' => 'deepseek', 'model' => 'outline-structure-model', 'reasoning' => 'medium', 'context' => 600_000, 'output' => 50_000],
+        AiStage::OutlineArcBeats->value => ['provider' => 'openai', 'model' => 'outline-arc-beats-model', 'reasoning' => 'high', 'context' => 700_000, 'output' => 60_000],
+        AiStage::OutlineBeatDetail->value => ['provider' => 'deepseek', 'model' => 'outline-beat-detail-model', 'reasoning' => null, 'context' => 800_000, 'output' => 70_000],
     ];
-    foreach ($routeReasoning as $stage => $reasoningEffort) {
+    foreach ($routeProfiles as $stage => $profile) {
+        AIModelPrice::query()->create([
+            'provider' => $profile['provider'],
+            'model' => $profile['model'],
+            'currency' => 'USD',
+            'billing_unit' => 1_000_000,
+            'context_window_tokens' => $profile['context'],
+            'max_output_tokens' => $profile['output'],
+            'supports_structured_output' => true,
+            'supports_reasoning_effort' => true,
+            'input_price' => 1,
+            'output_price' => 2,
+            'is_enabled' => true,
+        ]);
         AIModelRoute::query()->create([
             'role' => $stage,
-            'provider' => config('ai.provider'),
-            'model' => config('ai.models.planner'),
-            'reasoning_effort' => $reasoningEffort,
+            'provider' => $profile['provider'],
+            'model' => $profile['model'],
+            'reasoning_effort' => $profile['reasoning'],
         ]);
     }
     $fake = stagedNovelBlueprintProvider();
@@ -918,10 +1119,12 @@ test('outline stages freeze each task route and bind every child run to the batc
     $pipeline->generateFoundation($batch);
     $pipeline->generateStructure($batch);
     $pipeline->generateArcBeats($batch, 'arc-01');
+    $requestCountBeforeAssembly = count($fake->requests());
     $skeleton = $pipeline->assembleSkeleton($batch);
     foreach (['beat-01', 'beat-02'] as $beatKey) {
         $pipeline->generateBeatDetail($batch, $beatKey);
     }
+    $requestCountBeforeFinalize = count($fake->requests());
     $pipeline->finalize($batch);
 
     $requestStages = [
@@ -934,27 +1137,50 @@ test('outline stages freeze each task route and bind every child run to the batc
     expect($batch->provider)->toBeNull()
         ->and($batch->model_policy)->toBeNull()
         ->and($fake->requests())->toHaveCount(5);
+    foreach ($routeProfiles as $stage => $profile) {
+        $frozen = data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$stage}");
+        $configuredBudget = config("generation.outline_request_budgets.{$stage}");
+        expect($frozen['model'])->toBe($profile['model'])
+            ->and($frozen['request_budget'])->toBe([
+                'output_tokens' => $configuredBudget['output_tokens'],
+                'reasoning_reserve_tokens' => $configuredBudget['reasoning_reserve_tokens'],
+                'max_completion_tokens' => $configuredBudget['output_tokens'] + $configuredBudget['reasoning_reserve_tokens'],
+            ])
+            ->and($frozen['model_capacity']['model_price_id'])->toBeInt()
+            ->and($frozen['model_capacity']['context_window_tokens'])->toBe($profile['context'])
+            ->and($frozen['model_capacity']['max_output_tokens'])->toBe($profile['output'])
+            ->and($frozen['model_capacity']['supports_structured_output'])->toBeTrue()
+            ->and($frozen['model_capacity']['supports_reasoning_effort'])->toBeTrue();
+    }
     foreach ($fake->requests() as $index => $request) {
         $stage = $requestStages[$index];
-        expect($request->provider)->toBe((string) config('ai.provider'))
-            ->and($request->model)->toBe((string) config('ai.models.planner'))
-            ->and($request->reasoningEffort)->toBe($routeReasoning[$stage])
+        $configuredBudget = config("generation.outline_request_budgets.{$stage}");
+        $childRun = $novel->generationRuns()->findOrFail($request->metadata['generation_run_id']);
+        expect($request->provider)->toBe($routeProfiles[$stage]['provider'])
+            ->and($request->model)->toBe($routeProfiles[$stage]['model'])
+            ->and($request->reasoningEffort)->toBe($routeProfiles[$stage]['reasoning'])
+            ->and($request->maxTokens)->toBe($configuredBudget['output_tokens'] + $configuredBudget['reasoning_reserve_tokens'])
             ->and($request->metadata['stage'])->toBe($stage)
-            ->and($request->metadata['route_key'])->toBe($stage);
+            ->and($request->metadata['route_key'])->toBe($stage)
+            ->and(data_get($childRun->context_snapshot, 'request_budget.max_completion_tokens'))->toBe($request->maxTokens)
+            ->and(data_get($childRun->context_snapshot, 'input.capacity_snapshot.max_completion_tokens'))->toBe($request->maxTokens);
     }
     expect($novel->generationRuns()
         ->where('id', '!=', $batch->getKey())
         ->whereNotIn('scope_type', [NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE, NovelOutlinePipeline::FINALIZE_SCOPE])
-        ->get())->each(fn ($run) => $run->scope_id->toBe($batch->getKey())
-        ->provider->toBe((string) config('ai.provider'))
-        ->model_policy->toBe((string) config('ai.models.planner')));
+        ->get())->each(fn ($run) => $run->scope_id->toBe($batch->getKey()));
     $assemblyRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE)->sole();
     $finalizeRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FINALIZE_SCOPE)->sole();
     expect($skeleton)->not->toBeNull()
+        ->and($requestCountBeforeAssembly)->toBe(3)
+        ->and($requestCountBeforeFinalize)->toBe(5)
+        ->and($fake->requests())->toHaveCount($requestCountBeforeFinalize)
         ->and($assemblyRun->provider)->toBeNull()
         ->and($assemblyRun->model_policy)->toBeNull()
+        ->and($assemblyRun->usageRecords()->count())->toBe(0)
         ->and($finalizeRun->provider)->toBeNull()
         ->and($finalizeRun->model_policy)->toBeNull()
+        ->and($finalizeRun->usageRecords()->count())->toBe(0)
         ->and($novel->outlines()->count())->toBe(1);
 });
 
@@ -1001,6 +1227,96 @@ test('a dedicated outline route without verified matching capacity is rejected b
         ->toThrow(ValidationException::class, 'outline_structure');
     expect($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->count())->toBe(0);
 });
+
+test('outline request budgets are frozen into the batch hash', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $first = $pipeline->prepareBatch($novel, 1);
+    $first->update(['status' => RunStatus::Cancelled]);
+
+    config()->set('generation.outline_request_budgets.outline_foundation.output_tokens', 9_000);
+    $second = $pipeline->prepareBatch($novel, 1);
+
+    expect($second->input_hash)->not->toBe($first->input_hash)
+        ->and(data_get($first->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(12_000)
+        ->and(data_get($second->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(13_000);
+});
+
+test('outline request budget exceeding model capacity is rejected before batch creation', function () {
+    config()->set('generation.outline_request_budgets.outline_foundation.output_tokens', 128_000);
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(NovelOutlinePipeline::class)->prepareBatch($novel, 1))
+        ->toThrow(ValidationException::class, '超过模型静态容量');
+    expect($novel->generationRuns()->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(0);
+});
+
+test('outline stage input hash includes its frozen request budget', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $foundationResponse = stagedNovelBlueprintResponses()[0];
+    $fake = (new FakeAiProvider)->enqueue($foundationResponse)->enqueue($foundationResponse);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+
+    $context = $batch->context_snapshot;
+    data_set($context, 'generation_preferences.outline_routes.outline_foundation.request_budget.output_tokens', 8_001);
+    data_set($context, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens', 12_001);
+    $batch->update(['context_snapshot' => $context]);
+    $pipeline->generateFoundation($batch->refresh());
+
+    $runs = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->orderBy('id')->get();
+    expect($runs)->toHaveCount(2)
+        ->and($runs[1]->input_hash)->not->toBe($runs[0]->input_hash)
+        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(12_001);
+});
+
+test('all four outline stages reject insufficient frozen capacity before creating a child run', function (AiStage $stage, string $scopeType) {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $fake = stagedNovelBlueprintProvider();
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+
+    if ($stage !== AiStage::OutlineFoundation) {
+        $pipeline->generateFoundation($batch);
+    }
+    if (in_array($stage, [AiStage::OutlineArcBeats, AiStage::OutlineBeatDetail], true)) {
+        $pipeline->generateStructure($batch);
+    }
+    if ($stage === AiStage::OutlineBeatDetail) {
+        $pipeline->generateArcBeats($batch, 'arc-01');
+        $pipeline->assembleSkeleton($batch);
+    }
+
+    $requestCount = count($fake->requests());
+    $context = $batch->context_snapshot;
+    data_set($context, "generation_preferences.outline_routes.{$stage->value}.model_capacity.max_output_tokens", 1);
+    $batch->update(['context_snapshot' => $context]);
+    $batch->refresh();
+
+    $invoke = match ($stage) {
+        AiStage::OutlineFoundation => fn () => $pipeline->generateFoundation($batch),
+        AiStage::OutlineStructure => fn () => $pipeline->generateStructure($batch),
+        AiStage::OutlineArcBeats => fn () => $pipeline->generateArcBeats($batch, 'arc-01'),
+        AiStage::OutlineBeatDetail => fn () => $pipeline->generateBeatDetail($batch, 'beat-01'),
+        default => throw new RuntimeException('Unexpected Outline stage.'),
+    };
+
+    expect($invoke)->toThrow(ValidationException::class, '请求完成预算');
+    expect($novel->generationRuns()->where('scope_type', $scopeType)->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount($requestCount);
+})->with([
+    'foundation' => [AiStage::OutlineFoundation, NovelOutlinePipeline::FOUNDATION_SCOPE],
+    'structure' => [AiStage::OutlineStructure, NovelOutlinePipeline::STRUCTURE_SCOPE],
+    'arc beats' => [AiStage::OutlineArcBeats, NovelOutlinePipeline::ARC_BEATS_SCOPE],
+    'beat detail' => [AiStage::OutlineBeatDetail, NovelOutlinePipeline::BEAT_DETAIL_SCOPE],
+]);
 
 test('arc two retries locally while arc one and its upstream artifacts are reused', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);

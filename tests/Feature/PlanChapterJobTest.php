@@ -131,7 +131,7 @@ function truncatedPlannerResponse(int $outputTokens): AiResponse
         latencyMs: 50,
         providerRequestId: 'truncated-plan-request',
         model: 'planner-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 

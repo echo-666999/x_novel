@@ -133,7 +133,7 @@ function truncatedReviewResponse(int $outputTokens): AiResponse
         latencyMs: 100,
         providerRequestId: 'truncated-review-request',
         model: 'review-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 
@@ -151,7 +151,7 @@ test('review truncation keeps the fixed legal cap and a repeat enters capacity h
     $reviewer = app(ChapterReviewer::class);
 
     expect(fn () => $reviewer->review($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, '输出 Token 用尽');
+        ->toThrow(AiProviderException::class, '可见输出');
     expect(Review::query()->count())->toBe(0)
         ->and(GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)->count())->toBe(0)
         ->and($fake->requests())->toHaveCount(1)

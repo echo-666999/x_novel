@@ -66,8 +66,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Cache::flush();
-    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
-    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
+    seedVerifiedOutlineModelProfiles();
     $this->actingAs(User::factory()->create());
 });
 

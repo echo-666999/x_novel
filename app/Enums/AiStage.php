@@ -32,15 +32,4 @@ enum AiStage: string
             self::Embedding => '向量生成',
         };
     }
-
-    public function fallbackStage(): ?self
-    {
-        return match ($this) {
-            self::OutlineFoundation,
-            self::OutlineStructure,
-            self::OutlineArcBeats,
-            self::OutlineBeatDetail => self::Planner,
-            default => null,
-        };
-    }
 }

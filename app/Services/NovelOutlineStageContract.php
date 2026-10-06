@@ -18,13 +18,29 @@ final class NovelOutlineStageContract
 
     public const ARC_BEATS_PROMPT_VERSION = 'novel-outline-arc-beats-v1';
 
-    /** Structure 最多覆盖 12 卷，沿用旧 Skeleton 的 12K 输出上限，但不再承担 Beat 输出。 */
-    public const STRUCTURE_MAX_OUTPUT_TOKENS = 12_000;
-
-    /** Arc Beats 单次只覆盖一个 Arc；8K 与现有 Foundation 上限一致并保留候选字段容量。 */
-    public const ARC_BEATS_MAX_OUTPUT_TOKENS = 8_000;
-
     public const MAX_VOLUME_COUNT = 12;
+
+    public const MAX_SHORT_TEXT_LENGTH = 255;
+
+    public const MAX_TEXT_LENGTH = 2_000;
+
+    public const MAX_LIST_ITEM_LENGTH = 1_000;
+
+    public const MAX_LIST_ITEMS = 24;
+
+    public const MAX_ARCS_PER_VOLUME = 24;
+
+    public const MAX_BEATS_PER_ARC = 48;
+
+    public const MAX_CANDIDATES_PER_BEAT = 16;
+
+    public const MAX_MILESTONES_PER_BEAT = 24;
+
+    public const MAX_FOUNDATION_CHARACTERS = 32;
+
+    public const MAX_FOUNDATION_WORLD_ENTITIES = 64;
+
+    public const MAX_FOUNDATION_FORESHADOWINGS = 64;
 
     public function __construct(private readonly TokenBudget $tokenBudget) {}
 
@@ -33,27 +49,27 @@ final class NovelOutlineStageContract
     {
         $this->assertVolumeCount($volumeCount);
 
-        $strings = ['type' => 'array', 'items' => ['type' => 'string']];
+        $strings = $this->stringList();
         $arc = $this->object([
-            'key' => ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$'],
-            'type' => ['type' => 'string', 'enum' => ['main', 'subplot']],
-            'title' => ['type' => 'string'],
-            'goal' => ['type' => 'string'],
-            'stakes' => ['type' => 'string'],
-            'completion_conditions' => ['type' => 'array', 'minItems' => 1, 'items' => ['type' => 'string']],
+            'key' => ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$', 'maxLength' => 64],
+            'type' => ['type' => 'string', 'enum' => ['main', 'subplot'], 'maxLength' => self::MAX_SHORT_TEXT_LENGTH],
+            'title' => $this->shortText(),
+            'goal' => $this->text(),
+            'stakes' => $this->text(),
+            'completion_conditions' => $this->stringList(minItems: 1),
         ]);
         $volume = $this->object([
-            'key' => ['type' => 'string', 'pattern' => '^vol-[0-9]{2}$'],
-            'title' => ['type' => 'string'],
-            'goal' => ['type' => 'string'],
-            'climax' => ['type' => 'string'],
+            'key' => ['type' => 'string', 'pattern' => '^vol-[0-9]{2}$', 'maxLength' => 16],
+            'title' => $this->shortText(),
+            'goal' => $this->text(),
+            'climax' => $this->text(),
             'target_words' => ['type' => 'integer', 'minimum' => 1],
-            'arcs' => ['type' => 'array', 'minItems' => 1, 'items' => $arc],
+            'arcs' => ['type' => 'array', 'minItems' => 1, 'maxItems' => self::MAX_ARCS_PER_VOLUME, 'items' => $arc],
         ]);
 
         return $this->object([
-            'title' => ['type' => 'string'],
-            'summary' => ['type' => 'string'],
+            'title' => $this->shortText(),
+            'summary' => $this->text(),
             'must_include' => $strings,
             'must_not_include' => $strings,
             'volumes' => [
@@ -68,45 +84,45 @@ final class NovelOutlineStageContract
     /** Arc Beats 只允许目标 Arc 的 Beat、预算、验收条件和候选。 */
     public function arcBeatsSchema(): array
     {
-        $strings = ['type' => 'array', 'items' => ['type' => 'string']];
-        $stableKey = ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$'];
+        $strings = $this->stringList();
+        $stableKey = ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$', 'maxLength' => 64];
         $candidateBase = [
             'candidate_key' => $stableKey,
-            'name' => ['type' => 'string'],
-            'deduplication_basis' => ['type' => 'string'],
-            'introduction_reason' => ['type' => 'string'],
+            'name' => $this->shortText(),
+            'deduplication_basis' => $this->text(),
+            'introduction_reason' => $this->text(),
             'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
         ];
         $characterCandidate = $this->object($candidateBase + [
-            'role' => ['type' => 'string'],
-            'motivation' => ['type' => 'string'],
+            'role' => $this->shortText(),
+            'motivation' => $this->text(),
             'profile' => $strings,
             'personality' => $strings,
             'abilities' => $strings,
             'knowledge' => $strings,
         ]);
         $worldCandidate = $this->object($candidateBase + [
-            'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']],
-            'description' => ['type' => 'string'],
+            'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept'], 'maxLength' => self::MAX_SHORT_TEXT_LENGTH],
+            'description' => $this->text(),
         ]);
         $beat = $this->object([
-            'key' => ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$'],
-            'title' => ['type' => 'string'],
-            'summary' => ['type' => 'string'],
+            'key' => ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$', 'maxLength' => 64],
+            'title' => $this->shortText(),
+            'summary' => $this->text(),
             'chapter_budget' => $this->object([
                 'min' => ['type' => 'integer', 'minimum' => 1],
                 'max' => ['type' => ['integer', 'null'], 'minimum' => 1],
             ]),
-            'acceptance_criteria' => ['type' => 'array', 'minItems' => 1, 'items' => ['type' => 'string']],
+            'acceptance_criteria' => $this->stringList(minItems: 1),
             'must_include' => $strings,
             'must_not_include' => $strings,
-            'character_candidates' => ['type' => 'array', 'items' => $characterCandidate],
-            'world_entity_candidates' => ['type' => 'array', 'items' => $worldCandidate],
+            'character_candidates' => ['type' => 'array', 'maxItems' => self::MAX_CANDIDATES_PER_BEAT, 'items' => $characterCandidate],
+            'world_entity_candidates' => ['type' => 'array', 'maxItems' => self::MAX_CANDIDATES_PER_BEAT, 'items' => $worldCandidate],
         ]);
 
         return $this->object([
-            'arc_key' => ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$'],
-            'beats' => ['type' => 'array', 'minItems' => 1, 'items' => $beat],
+            'arc_key' => ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$', 'maxLength' => 64],
+            'beats' => ['type' => 'array', 'minItems' => 1, 'maxItems' => self::MAX_BEATS_PER_ARC, 'items' => $beat],
         ]);
     }
 
@@ -121,28 +137,28 @@ final class NovelOutlineStageContract
         $this->assertSchemaShape($data, $this->structureSchema($volumeCount));
 
         $valid = Validator::make($data, [
-            'title' => ['required', 'string'],
-            'summary' => ['required', 'string'],
-            'must_include' => ['present', 'array'],
-            'must_include.*' => ['string'],
-            'must_not_include' => ['present', 'array'],
-            'must_not_include.*' => ['string'],
+            'title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'summary' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'must_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'must_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'must_not_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'must_not_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
             'volumes' => ['required', 'array', 'size:'.$volumeCount],
             'volumes.*' => ['array:key,title,goal,climax,target_words,arcs'],
-            'volumes.*.key' => ['required', 'string', 'regex:/^vol-[0-9]{2}$/'],
-            'volumes.*.title' => ['required', 'string'],
-            'volumes.*.goal' => ['required', 'string'],
-            'volumes.*.climax' => ['required', 'string'],
+            'volumes.*.key' => ['required', 'string', 'max:16', 'regex:/^vol-[0-9]{2}$/'],
+            'volumes.*.title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'volumes.*.goal' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'volumes.*.climax' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'volumes.*.target_words' => ['required', 'integer', 'min:1'],
-            'volumes.*.arcs' => ['required', 'array', 'min:1'],
+            'volumes.*.arcs' => ['required', 'array', 'min:1', 'max:'.self::MAX_ARCS_PER_VOLUME],
             'volumes.*.arcs.*' => ['array:key,type,title,goal,stakes,completion_conditions'],
-            'volumes.*.arcs.*.key' => ['required', 'string', 'regex:/^arc-[0-9]{2,}$/'],
+            'volumes.*.arcs.*.key' => ['required', 'string', 'max:64', 'regex:/^arc-[0-9]{2,}$/'],
             'volumes.*.arcs.*.type' => ['required', Rule::in(['main', 'subplot'])],
-            'volumes.*.arcs.*.title' => ['required', 'string'],
-            'volumes.*.arcs.*.goal' => ['required', 'string'],
-            'volumes.*.arcs.*.stakes' => ['required', 'string'],
-            'volumes.*.arcs.*.completion_conditions' => ['required', 'array', 'min:1'],
-            'volumes.*.arcs.*.completion_conditions.*' => ['string'],
+            'volumes.*.arcs.*.title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'volumes.*.arcs.*.goal' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'volumes.*.arcs.*.stakes' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'volumes.*.arcs.*.completion_conditions' => ['required', 'array', 'min:1', 'max:'.self::MAX_LIST_ITEMS],
+            'volumes.*.arcs.*.completion_conditions.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
         ])->validate();
 
         $volumeKeys = [];
@@ -176,47 +192,47 @@ final class NovelOutlineStageContract
         $this->assertSchemaShape($data, $this->arcBeatsSchema());
 
         $valid = Validator::make($data, [
-            'arc_key' => ['required', 'string', 'regex:/^arc-[0-9]{2,}$/'],
-            'beats' => ['required', 'array', 'min:1'],
+            'arc_key' => ['required', 'string', 'max:64', 'regex:/^arc-[0-9]{2,}$/'],
+            'beats' => ['required', 'array', 'min:1', 'max:'.self::MAX_BEATS_PER_ARC],
             'beats.*' => ['array:key,title,summary,chapter_budget,acceptance_criteria,must_include,must_not_include,character_candidates,world_entity_candidates'],
-            'beats.*.key' => ['required', 'string', 'regex:/^beat-[0-9]{2,}$/'],
-            'beats.*.title' => ['required', 'string'],
-            'beats.*.summary' => ['required', 'string'],
+            'beats.*.key' => ['required', 'string', 'max:64', 'regex:/^beat-[0-9]{2,}$/'],
+            'beats.*.title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'beats.*.summary' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.chapter_budget' => ['required', 'array:min,max'],
             'beats.*.chapter_budget.min' => ['required', 'integer', 'min:1'],
             'beats.*.chapter_budget.max' => ['present', 'nullable', 'integer', 'min:1'],
-            'beats.*.acceptance_criteria' => ['required', 'array', 'min:1'],
-            'beats.*.acceptance_criteria.*' => ['string'],
-            'beats.*.must_include' => ['present', 'array'],
-            'beats.*.must_include.*' => ['string'],
-            'beats.*.must_not_include' => ['present', 'array'],
-            'beats.*.must_not_include.*' => ['string'],
-            'beats.*.character_candidates' => ['present', 'array'],
+            'beats.*.acceptance_criteria' => ['required', 'array', 'min:1', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.acceptance_criteria.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.must_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.must_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.must_not_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.must_not_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.character_candidates' => ['present', 'array', 'max:'.self::MAX_CANDIDATES_PER_BEAT],
             'beats.*.character_candidates.*' => ['array:candidate_key,name,deduplication_basis,introduction_reason,target_scene_sequence,role,motivation,profile,personality,abilities,knowledge'],
-            'beats.*.character_candidates.*.candidate_key' => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
-            'beats.*.character_candidates.*.name' => ['required', 'string'],
-            'beats.*.character_candidates.*.deduplication_basis' => ['required', 'string'],
-            'beats.*.character_candidates.*.introduction_reason' => ['required', 'string'],
+            'beats.*.character_candidates.*.candidate_key' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
+            'beats.*.character_candidates.*.name' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'beats.*.character_candidates.*.deduplication_basis' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'beats.*.character_candidates.*.introduction_reason' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.character_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
-            'beats.*.character_candidates.*.role' => ['required', 'string'],
-            'beats.*.character_candidates.*.motivation' => ['required', 'string'],
-            'beats.*.character_candidates.*.profile' => ['present', 'array'],
-            'beats.*.character_candidates.*.profile.*' => ['string'],
-            'beats.*.character_candidates.*.personality' => ['present', 'array'],
-            'beats.*.character_candidates.*.personality.*' => ['string'],
-            'beats.*.character_candidates.*.abilities' => ['present', 'array'],
-            'beats.*.character_candidates.*.abilities.*' => ['string'],
-            'beats.*.character_candidates.*.knowledge' => ['present', 'array'],
-            'beats.*.character_candidates.*.knowledge.*' => ['string'],
-            'beats.*.world_entity_candidates' => ['present', 'array'],
+            'beats.*.character_candidates.*.role' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'beats.*.character_candidates.*.motivation' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'beats.*.character_candidates.*.profile' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.character_candidates.*.profile.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.character_candidates.*.personality' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.character_candidates.*.personality.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.character_candidates.*.abilities' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.character_candidates.*.abilities.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.character_candidates.*.knowledge' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
+            'beats.*.character_candidates.*.knowledge.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'beats.*.world_entity_candidates' => ['present', 'array', 'max:'.self::MAX_CANDIDATES_PER_BEAT],
             'beats.*.world_entity_candidates.*' => ['array:candidate_key,name,deduplication_basis,introduction_reason,target_scene_sequence,type,description'],
-            'beats.*.world_entity_candidates.*.candidate_key' => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
-            'beats.*.world_entity_candidates.*.name' => ['required', 'string'],
-            'beats.*.world_entity_candidates.*.deduplication_basis' => ['required', 'string'],
-            'beats.*.world_entity_candidates.*.introduction_reason' => ['required', 'string'],
+            'beats.*.world_entity_candidates.*.candidate_key' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
+            'beats.*.world_entity_candidates.*.name' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
+            'beats.*.world_entity_candidates.*.deduplication_basis' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
+            'beats.*.world_entity_candidates.*.introduction_reason' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.world_entity_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
             'beats.*.world_entity_candidates.*.type' => ['required', Rule::in(['location', 'item', 'faction', 'organization', 'rule', 'concept'])],
-            'beats.*.world_entity_candidates.*.description' => ['required', 'string'],
+            'beats.*.world_entity_candidates.*.description' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
         ])->validate();
 
         if ($valid['arc_key'] !== $targetArcKey) {
@@ -272,34 +288,61 @@ final class NovelOutlineStageContract
     /**
      * 以完整请求输入估算容量；调用方必须提供冻结模型的真实上下文窗口和最大合法输出。
      *
-     * @return array{estimated_input_tokens: int, requested_output_tokens: int, context_window_tokens: int, model_max_output_tokens: int, remaining_context_tokens: int}
+     * @return array{estimated_input_tokens: int, output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int, context_window_tokens: int, model_max_output_tokens: int, remaining_context_tokens: int}
      */
     public function capacitySnapshot(
         array $requestInput,
-        int $requestedOutputTokens,
+        int $outputTokens,
+        int $reasoningReserveTokens,
         int $contextWindowTokens,
         int $modelMaxOutputTokens,
     ): array {
-        if ($requestedOutputTokens < 1 || $contextWindowTokens < 1 || $modelMaxOutputTokens < 1) {
-            throw ValidationException::withMessages(['capacity' => '模型容量和请求输出 Token 必须为正整数。']);
+        if ($outputTokens < 1 || $reasoningReserveTokens < 0 || $contextWindowTokens < 1 || $modelMaxOutputTokens < 1) {
+            throw ValidationException::withMessages(['capacity' => '模型容量、输出 Token 和推理预留必须是有效整数。']);
         }
 
         $estimatedInput = $this->tokenBudget->estimate($requestInput);
         $remainingContext = max(0, $contextWindowTokens - $estimatedInput);
         $maxLegalOutput = min($modelMaxOutputTokens, $remainingContext);
-        if ($requestedOutputTokens > $maxLegalOutput) {
+        $maxCompletionTokens = $outputTokens + $reasoningReserveTokens;
+        if ($maxCompletionTokens > $maxLegalOutput) {
             throw ValidationException::withMessages([
-                'capacity' => "请求输出 {$requestedOutputTokens} Token 超过当前输入下的最大合法输出 {$maxLegalOutput} Token。",
+                'capacity' => "请求完成预算 {$maxCompletionTokens} Token（结构化输出 {$outputTokens} + 推理预留 {$reasoningReserveTokens}）超过当前输入下的最大合法输出 {$maxLegalOutput} Token。",
             ]);
         }
 
         return [
             'estimated_input_tokens' => $estimatedInput,
-            'requested_output_tokens' => $requestedOutputTokens,
+            'output_tokens' => $outputTokens,
+            'reasoning_reserve_tokens' => $reasoningReserveTokens,
+            'max_completion_tokens' => $maxCompletionTokens,
             'context_window_tokens' => $contextWindowTokens,
             'model_max_output_tokens' => $modelMaxOutputTokens,
             'remaining_context_tokens' => $remainingContext,
         ];
+    }
+
+    /** @return array{type: string, maxLength: int} */
+    private function shortText(): array
+    {
+        return ['type' => 'string', 'maxLength' => self::MAX_SHORT_TEXT_LENGTH];
+    }
+
+    /** @return array{type: string, maxLength: int} */
+    private function text(): array
+    {
+        return ['type' => 'string', 'maxLength' => self::MAX_TEXT_LENGTH];
+    }
+
+    /** @return array<string, mixed> */
+    private function stringList(int $minItems = 0): array
+    {
+        return array_filter([
+            'type' => 'array',
+            'minItems' => $minItems > 0 ? $minItems : null,
+            'maxItems' => self::MAX_LIST_ITEMS,
+            'items' => ['type' => 'string', 'maxLength' => self::MAX_LIST_ITEM_LENGTH],
+        ], static fn (mixed $value): bool => $value !== null);
     }
 
     /** @return array<string, mixed> */

@@ -5,6 +5,7 @@ namespace App\Actions\Novels;
 use App\Enums\RunStatus;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Services\GenerationFailurePolicy;
 use App\Services\NovelOutlinePipeline;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -12,7 +13,10 @@ use Throwable;
 
 class ResumeNovelOutlineGenerationAction
 {
-    public function __construct(private readonly NovelOutlinePipeline $pipeline) {}
+    public function __construct(
+        private readonly NovelOutlinePipeline $pipeline,
+        private readonly GenerationFailurePolicy $failurePolicy,
+    ) {}
 
     /** failed 批次只能经领域检查恢复，不能直接重放 failed_jobs。 */
     public function handle(Novel $novel, GenerationRun $batch): GenerationRun
@@ -26,6 +30,10 @@ class ResumeNovelOutlineGenerationAction
             }
             if ($lockedBatch->status !== RunStatus::Failed) {
                 throw ValidationException::withMessages(['run' => '只有 failed Outline 主批次可以继续生成。']);
+            }
+            if (! $this->failurePolicy->allowsFrozenResume($lockedBatch)) {
+                // Resume 必须复用冻结路由；配置或预算类失败要修复配置后创建新批次。
+                throw ValidationException::withMessages(['run' => '当前失败不能继续冻结批次，请修复配置后重新生成候选。']);
             }
 
             $this->pipeline->assertNovelPlanningAvailable($lockedNovel);

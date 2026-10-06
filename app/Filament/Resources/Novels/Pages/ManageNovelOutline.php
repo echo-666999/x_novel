@@ -98,12 +98,18 @@ class ManageNovelOutline extends ViewRecord
                     'queued', 'running' => '生成中',
                     'retrying' => '等待重试',
                     'cancelled' => '重新生成候选',
+                    'failed' => '重新生成候选',
                     default => 'AI 生成候选',
                 })
                 ->icon('heroicon-o-sparkles')
-                ->visible(fn (): bool => $this->getRecord()->current_outline_id === null
-                    && ! $this->hasFormalStructure()
-                    && in_array($this->outlineGenerationProgress()->pageStatus, ['not_started', 'queued', 'running', 'retrying', 'cancelled'], true))
+                ->visible(function (): bool {
+                    $progress = $this->outlineGenerationProgress();
+
+                    return $this->getRecord()->current_outline_id === null
+                        && ! $this->hasFormalStructure()
+                        && (in_array($progress->pageStatus, ['not_started', 'queued', 'running', 'retrying', 'cancelled'], true)
+                            || ($progress->pageStatus === 'failed' && ! $progress->canResume));
+                })
                 ->disabled(fn (): bool => $this->outlineGenerationProgress()->isActive())
                 ->tooltip(fn (): ?string => $this->outlineGenerationProgress()->isActive()
                     ? '当前批次仍在处理，页面会自动刷新持久化进度。'
@@ -392,9 +398,17 @@ class ManageNovelOutline extends ViewRecord
 
     private function outlineRoutePreviewText(AiStage $stage): string
     {
-        $route = $this->outlineRoutePreview()[$stage->value];
+        $route = $this->outlineRoutePreview()[$stage->value] ?? null;
+        if (! is_array($route)) {
+            return '不可启动 · [outline_route_preview_missing] 未返回该任务的路由预览。';
+        }
         if (($route['ready'] ?? false) !== true) {
-            return '不可启动 · '.($route['error'] ?? '路由配置无效。');
+            // 错误码与用户文案同时展示，便于从页面直接关联 Generation Run 和日志诊断。
+            $errorCode = filled($route['error_code'] ?? null)
+                ? '['.$route['error_code'].'] '
+                : '';
+
+            return '不可启动 · '.$errorCode.($route['error'] ?? '路由配置无效。');
         }
 
         $source = match ($route['source'] ?? null) {
@@ -406,14 +420,18 @@ class ManageNovelOutline extends ViewRecord
             ? (string) $route['reasoning_effort']
             : 'Provider 默认';
         $capacity = (array) ($route['model_capacity'] ?? []);
+        $requestBudget = (array) ($route['request_budget'] ?? []);
 
         return sprintf(
-            '可启动 · %s / %s · 推理 %s · %s · Prompt %s · 容量 %s / %s',
+            '可启动 · %s / %s · 推理 %s · %s · Prompt %s · 请求 %s + 推理预留 %s = %s · 容量 %s / %s',
             strtoupper((string) $route['provider']),
             $route['model'],
             $reasoning,
             $source,
             $route['prompt_version'],
+            number_format((int) ($requestBudget['output_tokens'] ?? 0)),
+            number_format((int) ($requestBudget['reasoning_reserve_tokens'] ?? 0)),
+            number_format((int) ($requestBudget['max_completion_tokens'] ?? 0)),
             number_format((int) ($capacity['context_window_tokens'] ?? 0)),
             number_format((int) ($capacity['max_output_tokens'] ?? 0)),
         );

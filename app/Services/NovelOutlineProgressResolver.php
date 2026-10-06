@@ -75,7 +75,7 @@ final class NovelOutlineProgressResolver
         $runs = GenerationRun::query()
             ->with([
                 'artifacts:id,generation_run_id,type,version,checksum,data,created_at',
-                'usageRecords:id,generation_run_id,input_tokens,output_tokens,cached_tokens,latency_ms,estimated_cost,request_id,created_at',
+                'usageRecords:id,generation_run_id,provider,model,input_tokens,output_tokens,reasoning_tokens,cached_tokens,latency_ms,estimated_cost,request_id,request_metadata,created_at',
             ])
             ->where('novel_id', $freshNovel->getKey())
             ->where(function ($query) use ($latestBatch): void {
@@ -639,6 +639,9 @@ final class NovelOutlineProgressResolver
             || $children->contains(fn (GenerationRun $run): bool => in_array($run->status, [RunStatus::Queued, RunStatus::Running], true))) {
             return false;
         }
+        if (! $this->failurePolicy->allowsFrozenResume($batch)) {
+            return false;
+        }
         if ($batch->prompt_version === NovelOutlinePipeline::BATCH_PROMPT_VERSION) {
             if (! $this->hasCompleteFrozenRoutes($batch)) {
                 return false;
@@ -697,10 +700,15 @@ final class NovelOutlineProgressResolver
         foreach (['outline_foundation', 'outline_structure', 'outline_arc_beats', 'outline_beat_detail'] as $routeKey) {
             $route = data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$routeKey}");
             $capacity = is_array($route) ? ($route['model_capacity'] ?? null) : null;
+            $requestBudget = is_array($route) ? ($route['request_budget'] ?? null) : null;
             if (! is_array($route)
                 || blank($route['provider'] ?? null)
                 || blank($route['model'] ?? null)
                 || blank($route['prompt_version'] ?? null)
+                || ! is_array($requestBudget)
+                || (int) ($requestBudget['output_tokens'] ?? 0) < 1
+                || (int) ($requestBudget['reasoning_reserve_tokens'] ?? -1) < 0
+                || (int) ($requestBudget['max_completion_tokens'] ?? 0) !== (int) ($requestBudget['output_tokens'] ?? 0) + (int) ($requestBudget['reasoning_reserve_tokens'] ?? 0)
                 || ! is_array($capacity)
                 || ($capacity['provider'] ?? null) !== $route['provider']
                 || ($capacity['model'] ?? null) !== $route['model']
@@ -728,13 +736,24 @@ final class NovelOutlineProgressResolver
 
     private function userErrorMessage(string $code, array $metadata): string
     {
+        if (str_contains($code, 'reasoning_budget_exhausted')) {
+            return 'AI 在产生可见大纲前已耗尽推理预算，未保存结果。请增加推理预留或降低推理程度。';
+        }
+
+        if (str_contains($code, 'output_truncated')) {
+            return 'AI 已开始返回大纲，但可见输出在完成前耗尽请求预算；未保存不完整结果。';
+        }
+
+        if (str_contains($code, 'completion_budget_exhausted')) {
+            return 'AI 未返回完整大纲，且响应信息不足以判断预算耗在推理还是可见输出。请检查 Usage。';
+        }
+
         return match ($code) {
             'queue_dispatch_failed' => '生成任务未能加入队列，请稍后继续。',
             'provider_timeout' => 'AI 服务响应超时，系统未收到完整结果。',
             'provider_connection_failed' => '暂时无法连接 AI 服务。',
             'provider_rate_limited' => 'AI 服务当前请求过多，请稍后继续。',
-            'provider_authentication_failed', 'provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'model_run_mismatch' => 'AI 服务配置不可用，请检查 Provider 与模型设置。',
-            'outline_output_truncated' => 'AI 返回的大纲内容被截断，未保存不完整结果。',
+            'provider_authentication_failed', 'provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'outline_route_not_configured', 'model_run_mismatch' => 'Outline 独立路由配置不完整，请检查对应 Stage 的 Provider、Model 与推理程度。',
             'outline_stage_structured_output_invalid', 'outline_stage_schema_invalid' => 'AI 返回的大纲格式不符合要求，未保存该结果。',
             'outline_stage_domain_validation_failed' => 'AI 返回的大纲内容未通过业务校验。',
             'outline_stage_result_uncertain' => 'AI 结果保存状态无法确认，需要检查运行详情后继续。',
@@ -743,6 +762,9 @@ final class NovelOutlineProgressResolver
                 'external_temporary' => 'AI 服务暂时不可用，请稍后继续。',
                 'infrastructure_temporary' => '生成基础设施暂时不可用，请稍后继续。',
                 'structured_output' => 'AI 返回内容不符合结构要求，未保存该结果。',
+                'reasoning_budget_exhausted' => 'AI 在产生可见结果前已耗尽推理预算。',
+                'visible_output_truncated' => 'AI 的可见输出在完成前被截断。',
+                'completion_budget_exhausted' => 'AI 已耗尽完成预算，但响应未提供足够分类信息。',
                 'provider_configuration' => 'AI 服务配置不可用，请检查设置。',
                 'worker_lost' => '生成 Worker 已中断，可从最近成功阶段继续。',
                 default => '大纲生成未完成，请查看运行详情。',
@@ -761,6 +783,24 @@ final class NovelOutlineProgressResolver
     /** @return array<string, mixed> */
     private function runReference(GenerationRun $run): array
     {
+        $substageRoutes = data_get($run->context_snapshot, 'generation_preferences.substage_routes');
+        $outlineRoutes = data_get($run->context_snapshot, 'generation_preferences.outline_routes');
+        $frozenRoute = is_array($substageRoutes) && $substageRoutes !== []
+            ? $substageRoutes
+            : (is_array($outlineRoutes) && $outlineRoutes !== [] ? $outlineRoutes : null);
+        $singleRoute = is_array($substageRoutes) && count($substageRoutes) === 1
+            ? reset($substageRoutes)
+            : null;
+        $providerCalls = $run->usageRecords->map(fn ($usage): array => [
+            'provider' => $usage->provider,
+            'model' => $usage->model,
+            'request_id' => $usage->request_id,
+            'reasoning_tokens' => $usage->reasoning_tokens,
+            'finish_reason' => data_get($usage->request_metadata, 'finish_reason'),
+            'completion_limit_reason' => data_get($usage->request_metadata, 'completion_limit_reason'),
+            'sent_parameters' => data_get($usage->request_metadata, 'sent_parameters'),
+        ])->values()->all();
+
         return [
             'id' => $run->getKey(),
             'scope' => $run->scope_type,
@@ -776,9 +816,16 @@ final class NovelOutlineProgressResolver
             'usage' => [
                 'input_tokens' => $run->usageRecords->sum('input_tokens'),
                 'output_tokens' => $run->usageRecords->sum('output_tokens'),
+                'reasoning_tokens' => $run->usageRecords->sum('reasoning_tokens'),
                 'cached_tokens' => $run->usageRecords->sum('cached_tokens'),
                 'estimated_cost' => (float) $run->usageRecords->sum('estimated_cost'),
             ],
+            // 路由、静态容量、门禁快照和真实发送参数必须分开显示，避免把计划值误认为请求事实。
+            'frozen_route' => $frozenRoute,
+            'model_capacity' => is_array($singleRoute) ? ($singleRoute['model_capacity'] ?? null) : null,
+            'request_budget' => data_get($run->context_snapshot, 'request_budget'),
+            'capacity_snapshot' => data_get($run->context_snapshot, 'input.capacity_snapshot'),
+            'provider_calls' => $providerCalls,
             'artifact_ids' => $run->artifacts->pluck('id')->all(),
             'error_code' => $run->error_code,
         ];

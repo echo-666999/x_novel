@@ -18,5 +18,6 @@ final readonly class AiResponse
         public ?string $providerRequestId,
         public string $model,
         public array $metadata = [],
+        public int $reasoningTokens = 0,
     ) {}
 }

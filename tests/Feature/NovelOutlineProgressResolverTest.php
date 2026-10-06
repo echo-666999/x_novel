@@ -47,6 +47,11 @@ function ogrProgressRoutes(): array
         'reasoning_effort' => 'medium',
         'source' => 'database',
         'prompt_version' => $prompt,
+        'request_budget' => [
+            'output_tokens' => 8_000,
+            'reasoning_reserve_tokens' => 4_000,
+            'max_completion_tokens' => 12_000,
+        ],
         'model_capacity' => [
             'provider' => 'openai',
             'model' => 'gpt-test',

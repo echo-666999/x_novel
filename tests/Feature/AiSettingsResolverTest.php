@@ -3,6 +3,7 @@
 use App\AI\AiSettingsResolver;
 use App\AI\AiSettingsService;
 use App\AI\Data\AiRequest;
+use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\OpenAiProvider;
 use App\Enums\AiStage;
 use App\Models\AIModelRoute;
@@ -76,7 +77,7 @@ test('database model routes are normalized before provider requests', function (
         ->source->toBe('database');
 });
 
-test('outline stages fall back to planner routes until a dedicated route exists', function () {
+test('outline stages never resolve through the planner route', function () {
     AIModelRoute::query()->create([
         'role' => AiStage::Planner,
         'provider' => 'openai',
@@ -96,9 +97,9 @@ test('outline stages fall back to planner routes until a dedicated route exists'
 
         expect($resolved->stage)->toBe($stage)
             ->and($resolved->provider)->toBe('openai')
-            ->and($resolved->model)->toBe('planner-fallback-model')
-            ->and($resolved->reasoningEffort)->toBe('high')
-            ->and($resolved->source)->toBe('database');
+            ->and($resolved->model)->toBe("environment-{$stage->value}-model")
+            ->and($resolved->reasoningEffort)->toBeNull()
+            ->and($resolved->source)->toBe('environment');
     }
 
     AIModelRoute::query()->create([
@@ -111,33 +112,79 @@ test('outline stages fall back to planner routes until a dedicated route exists'
     expect($resolver->resolve(AiStage::OutlineStructure))
         ->model->toBe('dedicated-structure-model')
         ->reasoningEffort->toBe('low')
-        ->and($resolver->resolve(AiStage::OutlineFoundation)->model)->toBe('planner-fallback-model');
+        ->source->toBe('database')
+        ->and($resolver->resolve(AiStage::OutlineFoundation)->model)->toBe('environment-outline_foundation-model');
 });
 
-test('outline stages fall back through novel and environment planner models', function () {
+test('missing outline routes do not fall back through novel or environment planner models', function () {
     config()->set('ai.models.outline_foundation', null);
     config()->set('ai.models.outline_structure', null);
+    config()->set('ai.stage_providers.outline_structure', null);
     config()->set('ai.models.planner', 'environment-planner-fallback');
 
     $novel = Novel::factory()->create([
-        'settings' => ['ai' => ['models' => [
-            'planner' => 'novel-planner-fallback',
-            'outline_foundation' => 'novel-foundation-model',
-        ]]],
+        'settings' => ['ai' => [
+            'models' => ['planner' => 'novel-planner-fallback'],
+            'stages' => ['outline_foundation' => [
+                'provider' => 'openai',
+                'model' => 'novel-foundation-model',
+            ]],
+        ]],
     ]);
     $resolver = app(AiSettingsResolver::class);
 
     expect($resolver->resolve(AiStage::OutlineFoundation, $novel))
         ->model->toBe('novel-foundation-model')
-        ->source->toBe('novel')
-        ->and($resolver->resolve(AiStage::OutlineStructure, $novel)->model)
-        ->toBe('novel-planner-fallback')
-        ->and($resolver->resolve(AiStage::OutlineStructure, $novel)->source)
-        ->toBe('novel')
-        ->and($resolver->resolve(AiStage::OutlineStructure)->model)
-        ->toBe('environment-planner-fallback')
-        ->and($resolver->resolve(AiStage::OutlineStructure)->source)
-        ->toBe('environment');
+        ->reasoningEffort->toBeNull()
+        ->source->toBe('novel');
+
+    foreach ([$novel, null] as $targetNovel) {
+        try {
+            $resolver->resolve(AiStage::OutlineStructure, $targetNovel);
+            $this->fail('Expected the missing dedicated Outline route to be rejected.');
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('outline_route_not_configured')
+                ->and($exception->retryable)->toBeFalse();
+        }
+    }
+});
+
+test('outline legacy model-only novel override is rejected instead of mixing route sources', function () {
+    $novel = Novel::factory()->create([
+        'settings' => ['ai' => ['models' => [
+            'outline_foundation' => 'legacy-model-only-override',
+        ]]],
+    ]);
+
+    try {
+        app(AiSettingsResolver::class)->resolve(AiStage::OutlineFoundation, $novel);
+        $this->fail('Expected the incomplete legacy Outline override to be rejected.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('outline_route_not_configured')
+            ->and($exception->retryable)->toBeFalse();
+    }
+});
+
+test('outline novel route resolves provider model and reasoning as one tuple', function () {
+    AIModelRoute::query()->create([
+        'role' => AiStage::OutlineFoundation,
+        'provider' => 'openai',
+        'model' => 'global-foundation-model',
+        'reasoning_effort' => 'high',
+    ]);
+    $novel = Novel::factory()->create([
+        'settings' => ['ai' => ['stages' => ['outline_foundation' => [
+            'provider' => 'openai',
+            'model' => 'novel-foundation-model',
+            'reasoning_effort' => 'low',
+        ]]]],
+    ]);
+
+    expect(app(AiSettingsResolver::class)->resolve(AiStage::OutlineFoundation, $novel))
+        ->provider->toBe('openai')
+        ->model->toBe('novel-foundation-model')
+        ->reasoningEffort->toBe('low')
+        ->source->toBe('novel');
 });
 
 test('novel stage overrides affect only that novel and stage', function () {
@@ -172,6 +219,49 @@ test('novel stage provider and model overrides use the structured stage path', f
         ->provider->toBe('openai')
         ->model->toBe('novel-stage-writer')
         ->source->toBe('novel');
+});
+
+test('stage route priority is novel then model route then database settings then environment', function () {
+    $settings = app(AiSettingsService::class)->defaults();
+    $settings['stages']['writer']['model'] = 'database-writer-model';
+    app(AiSettingsService::class)->save($settings, 7);
+
+    AIModelRoute::query()->create([
+        'role' => AiStage::Writer,
+        'provider' => 'openai',
+        'model' => 'route-writer-model',
+        'reasoning_effort' => 'high',
+    ]);
+    $novel = Novel::factory()->create([
+        'settings' => ['ai' => ['stages' => ['writer' => [
+            'provider' => 'openai',
+            'model' => 'novel-writer-model',
+        ]]]],
+    ]);
+    $resolver = app(AiSettingsResolver::class);
+
+    expect($resolver->resolve(AiStage::Writer, $novel))
+        ->model->toBe('novel-writer-model')
+        ->reasoningEffort->toBe('high')
+        ->source->toBe('novel')
+        ->and($resolver->resolve(AiStage::Writer))
+        ->model->toBe('route-writer-model')
+        ->reasoningEffort->toBe('high')
+        ->source->toBe('database');
+
+    AIModelRoute::query()->delete();
+
+    expect($resolver->resolve(AiStage::Writer))
+        ->model->toBe('database-writer-model')
+        ->reasoningEffort->toBeNull()
+        ->source->toBe('database');
+
+    SystemSetting::query()->whereKey(SystemSetting::AI)->delete();
+
+    expect($resolver->resolve(AiStage::Writer))
+        ->model->toBe('environment-writer-model')
+        ->reasoningEffort->toBeNull()
+        ->source->toBe('environment');
 });
 
 test('invalid stored ai settings fall back to environment defaults', function () {

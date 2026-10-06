@@ -3,6 +3,7 @@
 namespace App\AI\Providers;
 
 use App\AI\AiSettingsService;
+use App\AI\CompletionLimitClassifier;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
@@ -73,6 +74,7 @@ class DeepSeekProvider implements AiProvider
             'provider_request_id' => $response->header('x-request-id') ?: $response->json('id'),
             'input_tokens' => (int) $response->json('usage.prompt_tokens', 0),
             'output_tokens' => (int) $response->json('usage.completion_tokens', 0),
+            'reasoning_tokens' => (int) $response->json('usage.completion_tokens_details.reasoning_tokens', 0),
             'cached_tokens' => (int) $response->json('usage.prompt_cache_hit_tokens', $response->json('usage.prompt_tokens_details.cached_tokens', 0)),
             'body' => $this->sanitizedResponseBody($response),
         ]);
@@ -81,7 +83,7 @@ class DeepSeekProvider implements AiProvider
             throw $this->mapFailedResponse($response);
         }
 
-        return $this->mapResponse($response, $latencyMs, $request->responseSchema);
+        return $this->mapResponse($response, $latencyMs, $request->responseSchema, $payload);
     }
 
     /** @return array<string, mixed> */
@@ -120,13 +122,17 @@ class DeepSeekProvider implements AiProvider
             ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.deepseek.timeout', 150)));
     }
 
-    /** @param array<string, mixed>|null $schema */
-    private function mapResponse(Response $response, int $latencyMs, ?array $schema): AiResponse
+    /**
+     * @param  array<string, mixed>|null  $schema
+     * @param  array<string, mixed>  $sentPayload
+     */
+    private function mapResponse(Response $response, int $latencyMs, ?array $schema, array $sentPayload): AiResponse
     {
         $content = $response->json('choices.0.message.content');
         $model = $response->json('model');
         $refusal = $response->json('choices.0.message.refusal');
         $finishReason = $response->json('choices.0.finish_reason');
+        $reasoningTokens = (int) $response->json('usage.completion_tokens_details.reasoning_tokens', 0);
         $structuredOutputTruncated = $schema !== null && $finishReason === 'length';
 
         if (is_string($refusal) && trim($refusal) !== '') {
@@ -138,6 +144,7 @@ class DeepSeekProvider implements AiProvider
         }
 
         $content = is_string($content) ? $content : '';
+        $completionLimitReason = CompletionLimitClassifier::classify($finishReason, $content, $reasoningTokens);
 
         $structuredData = null;
         if ($schema !== null) {
@@ -176,8 +183,26 @@ class DeepSeekProvider implements AiProvider
             latencyMs: $latencyMs,
             providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
             model: $model,
-            metadata: ['finish_reason' => $finishReason, 'refusal' => $refusal],
+            metadata: [
+                'finish_reason' => $finishReason,
+                'refusal' => $refusal,
+                'completion_limit_reason' => $completionLimitReason,
+                // DeepSeek 不接收统一 reasoning_effort；这里只记录适配器真实发送的参数。
+                'sent_parameters' => $this->observableSentParameters($sentPayload),
+            ],
+            reasoningTokens: $reasoningTokens,
         );
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function observableSentParameters(array $payload): array
+    {
+        return array_filter([
+            'model' => $payload['model'] ?? null,
+            'max_tokens' => $payload['max_tokens'] ?? null,
+            'temperature' => $payload['temperature'] ?? null,
+            'response_format' => data_get($payload, 'response_format.type'),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     private function mapFailedResponse(Response $response): AiProviderException

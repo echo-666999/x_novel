@@ -18,6 +18,7 @@ class UsageRecordFactory extends Factory
             'model' => 'gpt-4.1-mini',
             'input_tokens' => fake()->numberBetween(100, 2_000),
             'output_tokens' => fake()->numberBetween(100, 2_000),
+            'reasoning_tokens' => 0,
             'cached_tokens' => 0,
             'latency_ms' => fake()->numberBetween(100, 5_000),
             'estimated_cost' => fake()->randomFloat(6, 0, 1),

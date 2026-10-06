@@ -59,13 +59,20 @@ class AiSettingsService
         $stages = [];
         foreach ($this->stages() as $stage) {
             $configuredModel = config("ai.models.{$stage->value}");
-            $fallbackStage = $stage->fallbackStage();
-            if ((! is_string($configuredModel) || trim($configuredModel) === '') && $fallbackStage !== null) {
-                $configuredModel = config("ai.models.{$fallbackStage->value}");
-            }
+            $configuredProvider = config("ai.stage_providers.{$stage->value}", $defaultProvider);
+            $isOutlineStage = in_array($stage, [
+                AiStage::OutlineFoundation,
+                AiStage::OutlineStructure,
+                AiStage::OutlineArcBeats,
+                AiStage::OutlineBeatDetail,
+            ], true);
             $stages[$stage->value] = [
-                'provider' => $defaultProvider,
-                'model' => is_string($configuredModel) && trim($configuredModel) !== '' ? trim($configuredModel) : $defaultModel,
+                'provider' => is_string($configuredProvider) && trim($configuredProvider) !== ''
+                    ? trim($configuredProvider)
+                    : ($isOutlineStage ? '' : $defaultProvider),
+                'model' => is_string($configuredModel) && trim($configuredModel) !== ''
+                    ? trim($configuredModel)
+                    : ($isOutlineStage ? '' : $defaultModel),
             ];
         }
 

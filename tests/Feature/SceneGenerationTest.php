@@ -208,7 +208,7 @@ function truncatedCoverageResponse(): AiResponse
         latencyMs: 100,
         providerRequestId: 'truncated-coverage-repair-request',
         model: 'writer-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 
@@ -223,7 +223,7 @@ function truncatedSceneResponse(int $outputTokens): AiResponse
         latencyMs: 350,
         providerRequestId: 'truncated-scene-request',
         model: 'writer-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 
@@ -1179,13 +1179,13 @@ test('truncated structured scene output is retried as a technical failure', func
         latencyMs: 350,
         providerRequestId: 'truncated-scene-request',
         model: 'writer-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     ));
     app()->instance(AiProvider::class, $fake);
     $job = new GenerateSceneJob($fixture['scenes']->first()->getKey());
 
     expect(fn () => $job->handle(app(SceneGenerator::class)))
-        ->toThrow(AiProviderException::class, '按技术故障重试');
+        ->toThrow(AiProviderException::class, '可见输出');
 
     $run = $fixture['scenes']->first()->generationRuns()->sole();
     expect($run->error_code)->toBe('scene_output_truncated')

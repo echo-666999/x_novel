@@ -13,6 +13,14 @@ use Throwable;
 
 final class GenerationFailurePolicy
 {
+    /** 冻结配置本身导致的失败，原批次 Resume 不可能读取修正后的新配置。 */
+    private const FROZEN_RESUME_BLOCKED_CATEGORIES = [
+        'provider_configuration',
+        'reasoning_budget_exhausted',
+        'visible_output_truncated',
+        'completion_budget_exhausted',
+    ];
+
     private const LEGACY_RETRYABLE_CODES = [
         'provider_timeout',
         'provider_connection_failed',
@@ -78,7 +86,7 @@ final class GenerationFailurePolicy
         $failure = $this->fromException($exception, "{$stage->value}_failed");
 
         return $failure->retryable
-            && in_array($failure->metadata['category'] ?? null, ['external_temporary', 'infrastructure_temporary'], true);
+            && in_array($failure->metadata['category'] ?? null, ['external_temporary', 'infrastructure_temporary', 'visible_output_truncated'], true);
     }
 
     public function shouldMarkTerminal(GenerationStage $stage, ?Throwable $exception): bool
@@ -147,6 +155,15 @@ final class GenerationFailurePolicy
             || ($code === 'provider_request_failed' && $status !== null && $status >= 500);
     }
 
+    public function allowsFrozenResume(GenerationRun $run): bool
+    {
+        $metadata = is_array($run->error_metadata) ? $run->error_metadata : [];
+        $status = is_numeric($metadata['http_status'] ?? null) ? (int) $metadata['http_status'] : null;
+        $category = $this->category((string) ($run->error_code ?: 'generation_failed'), $status);
+
+        return ! in_array($category, self::FROZEN_RESUME_BLOCKED_CATEGORIES, true);
+    }
+
     private function category(string $code, ?int $status = null, ?Throwable $exception = null): string
     {
         if ($code === StalledRunRecoveryService::ERROR_CODE || $code === 'worker_interrupted') {
@@ -155,12 +172,16 @@ final class GenerationFailurePolicy
         if (in_array($code, ['scene_stage_deferred', 'generation_stage_deferred'], true)) {
             return 'workflow_deferred';
         }
-        if ($exception instanceof AiProviderException
-            && $exception->retryable
-            && str_contains($code, 'truncated')) {
-            return 'external_temporary';
+        if (str_contains($code, 'reasoning_budget_exhausted')) {
+            return 'reasoning_budget_exhausted';
         }
-        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
+        if (str_contains($code, 'output_truncated')) {
+            return 'visible_output_truncated';
+        }
+        if (str_contains($code, 'completion_budget_exhausted')) {
+            return 'completion_budget_exhausted';
+        }
+        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'outline_route_not_configured', 'model_run_mismatch'], true)) {
             return 'provider_configuration';
         }
         if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException) {
@@ -187,10 +208,19 @@ final class GenerationFailurePolicy
         if ($code === 'worker_interrupted' || in_array($code, ['scene_stage_deferred', 'generation_stage_deferred'], true)) {
             return '继续执行';
         }
+        if (str_contains($code, 'reasoning_budget_exhausted')) {
+            return '增加推理预留或降低推理程度';
+        }
+        if (str_contains($code, 'output_truncated')) {
+            return '调整模型路由或输出预算';
+        }
+        if (str_contains($code, 'completion_budget_exhausted')) {
+            return '检查 Usage 并调整请求预算';
+        }
         if ($retryable) {
             return '重试';
         }
-        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'model_run_mismatch'], true)) {
+        if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'outline_route_not_configured', 'model_run_mismatch'], true)) {
             return '修复 AI 配置';
         }
         if (str_contains($code, 'output_budget_exhausted')) {

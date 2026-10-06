@@ -94,12 +94,17 @@ test('deepseek returns usage metadata for truncated structured output', function
         'id' => 'deepseek-truncated',
         'model' => 'deepseek-chat',
         'choices' => [['finish_reason' => 'length', 'message' => ['content' => '{"answer":"partial"}']]],
-        'usage' => ['prompt_tokens' => 2_000, 'completion_tokens' => 4_000],
+        'usage' => [
+            'prompt_tokens' => 2_000,
+            'completion_tokens' => 4_000,
+            'completion_tokens_details' => ['reasoning_tokens' => 1_000],
+        ],
     ])]);
 
     $response = app(DeepSeekProvider::class)->generate(new AiRequest(
         model: 'deepseek-chat',
         provider: 'deepseek',
+        maxTokens: 4_000,
         responseSchema: [
             'type' => 'object',
             'required' => ['answer'],
@@ -112,7 +117,40 @@ test('deepseek returns usage metadata for truncated structured output', function
         ->and($response->structuredData)->toBeNull()
         ->and($response->inputTokens)->toBe(2_000)
         ->and($response->outputTokens)->toBe(4_000)
-        ->and($response->metadata['finish_reason'])->toBe('length');
+        ->and($response->reasoningTokens)->toBe(1_000)
+        ->and($response->metadata['finish_reason'])->toBe('length')
+        ->and($response->metadata['completion_limit_reason'])->toBe('visible_output_truncated')
+        ->and($response->metadata['sent_parameters']['max_tokens'])->toBe(4_000)
+        ->and($response->metadata['sent_parameters'])->not->toHaveKey('reasoning_effort');
+});
+
+test('deepseek identifies reasoning exhaustion before visible output', function () {
+    Http::fake(['deepseek.example/*' => Http::response([
+        'id' => 'deepseek-reasoning-exhausted',
+        'model' => 'deepseek-reasoner',
+        'choices' => [['finish_reason' => 'length', 'message' => ['content' => null]]],
+        'usage' => [
+            'prompt_tokens' => 2_000,
+            'completion_tokens' => 8_000,
+            'completion_tokens_details' => ['reasoning_tokens' => 8_000],
+        ],
+    ])]);
+
+    $response = app(DeepSeekProvider::class)->generate(new AiRequest(
+        model: 'deepseek-reasoner',
+        provider: 'deepseek',
+        maxTokens: 8_000,
+        responseSchema: [
+            'type' => 'object',
+            'required' => ['answer'],
+            'properties' => ['answer' => ['type' => 'string']],
+            'additionalProperties' => false,
+        ],
+    ));
+
+    expect($response->content)->toBe('')
+        ->and($response->reasoningTokens)->toBe(8_000)
+        ->and($response->metadata['completion_limit_reason'])->toBe('reasoning_budget_exhausted');
 });
 
 test('deepseek exposes sanitized provider details for rejected requests', function () {

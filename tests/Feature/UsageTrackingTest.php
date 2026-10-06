@@ -56,10 +56,14 @@ test('tracking provider records tokens latency cost request id and run context',
         ->model->toBe('resolved-model')
         ->input_tokens->toBe(1_000)
         ->output_tokens->toBe(500)
+        ->reasoning_tokens->toBe(125)
         ->cached_tokens->toBe(200)
         ->latency_ms->toBe(345)
         ->estimated_cost->toBe('0.005700')
-        ->request_id->toBe('provider-request-1');
+        ->request_id->toBe('provider-request-1')
+        ->and(data_get($usage->request_metadata, 'finish_reason'))->toBe('length')
+        ->and(data_get($usage->request_metadata, 'completion_limit_reason'))->toBe('visible_output_truncated')
+        ->and(data_get($usage->request_metadata, 'sent_parameters.max_completion_tokens'))->toBe(500);
 });
 
 test('tracking provider calculates cost from database pricing', function () {
@@ -129,5 +133,11 @@ function usageResponse(): AiResponse
         latencyMs: 345,
         providerRequestId: 'provider-request-1',
         model: 'resolved-model',
+        metadata: [
+            'finish_reason' => 'length',
+            'completion_limit_reason' => 'visible_output_truncated',
+            'sent_parameters' => ['model' => 'resolved-model', 'max_completion_tokens' => 500],
+        ],
+        reasoningTokens: 125,
     );
 }

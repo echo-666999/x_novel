@@ -22,10 +22,12 @@ use App\Jobs\GenerateNovelBeatDetailJob;
 use App\Jobs\GenerateNovelFoundationJob;
 use App\Jobs\GenerateNovelOutlineSkeletonJob;
 use App\Jobs\GenerateNovelOutlineStructureJob;
+use App\Models\AIModelPrice;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -68,11 +70,7 @@ class NovelOutlinePipeline
 
     public const SKELETON_ASSEMBLY_VERSION = 'novel-outline-skeleton-assembly-v1';
 
-    public const FOUNDATION_MAX_TOKENS = 8_000;
-
     public const SKELETON_MAX_TOKENS = 12_000;
-
-    public const BEAT_DETAIL_MAX_TOKENS = 5_000;
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -328,17 +326,33 @@ class NovelOutlinePipeline
         $preview = [];
         foreach ($this->outlineRouteStages() as $stage) {
             try {
+                // 预览与创建 Batch 共用同一解析入口，并且每个 Stage 只解析一次，避免展示值前后漂移。
+                $route = $this->resolveOutlineRoute($novel, $stage);
                 $preview[$stage->value] = [
                     'stage' => $stage->value,
                     'label' => $stage->getLabel(),
                     'ready' => true,
-                    ...$this->resolveOutlineRoute($novel, $stage),
+                    ...$route,
+                    'error_code' => null,
                     'error' => null,
                 ];
             } catch (Throwable $exception) {
                 $message = $exception instanceof ValidationException
                     ? (string) collect($exception->errors())->flatten()->first()
-                    : $exception->getMessage();
+                    : ($exception instanceof AiProviderException
+                        ? $exception->getMessage()
+                        : '路由预检失败，请查看日志后重试。');
+                $errorCode = $exception instanceof AiProviderException
+                    ? $exception->errorCode
+                    : ($exception instanceof ValidationException ? 'outline_route_validation_failed' : 'outline_route_preview_failed');
+                if (! $exception instanceof ValidationException && ! $exception instanceof AiProviderException) {
+                    // 未知异常不能作为普通配置错误静默吞掉，同时日志不记录 Provider 凭据或完整请求内容。
+                    Log::warning('Outline route preview failed unexpectedly.', [
+                        'novel_id' => $novel->getKey(),
+                        'stage' => $stage->value,
+                        'exception' => $exception::class,
+                    ]);
+                }
                 $preview[$stage->value] = [
                     'stage' => $stage->value,
                     'label' => $stage->getLabel(),
@@ -348,7 +362,9 @@ class NovelOutlinePipeline
                     'reasoning_effort' => null,
                     'source' => null,
                     'prompt_version' => $this->promptVersionForRoute($stage),
+                    'request_budget' => null,
                     'model_capacity' => null,
+                    'error_code' => $errorCode,
                     'error' => $message,
                 ];
             }
@@ -482,7 +498,6 @@ class NovelOutlinePipeline
             artifactType: ArtifactType::OutlineFoundation,
             promptVersion: self::FOUNDATION_PROMPT_VERSION,
             context: $context,
-            maxTokens: self::FOUNDATION_MAX_TOKENS,
             systemPrompt: '你是 XNovel 小说 Foundation 规划器。只返回严格 JSON。只规划开篇即成立的小说圣经、初始人物、初始世界实体和伏笔候选；不得返回 Volume、Arc、Beat、Milestone、Handoff 或任何数据库 ID。bible.style_profile.target_platform 必须精确返回输入 target_platform.code，不得自行更换平台。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
             prompt: '请根据小说信息生成 Foundation 候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->foundationSchema($targetPlatform['code']),
@@ -513,13 +528,13 @@ class NovelOutlinePipeline
             artifactType: ArtifactType::OutlineSkeleton,
             promptVersion: self::SKELETON_PROMPT_VERSION,
             context: $context,
-            maxTokens: self::SKELETON_MAX_TOKENS,
             systemPrompt: '你是 XNovel 全书 Outline Skeleton 规划器。只返回严格 JSON。生成 Volume、Arc、Beat 骨架和 Beat 级约束，不得生成 Milestone、Handoff 或数据库 ID。稳定 Key 必须全局唯一；Laravel 决定顺序和后续引用。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
             prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->skeletonSchema($volumeCount),
             outputName: 'novel_outline_skeleton',
             validate: fn (array $data): array => $this->validateSkeleton($data, $volumeCount),
             sourceArtifacts: [$foundation],
+            legacyMaxTokens: self::SKELETON_MAX_TOKENS,
         );
     }
 
@@ -539,7 +554,6 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->structureSchema($volumeCount);
         $systemPrompt = '你是 XNovel 全书 Structure 规划器。只返回严格 JSON。只生成全书、Volume 与 Arc 结构，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。稳定 Key 必须全局唯一。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineStructure, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS);
 
         return $this->providerStage(
             batch: $batch,
@@ -547,8 +561,7 @@ class NovelOutlinePipeline
             scopeType: self::STRUCTURE_SCOPE,
             artifactType: ArtifactType::OutlineStructure,
             promptVersion: NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
-            context: [...$context, 'capacity_snapshot' => $capacity],
-            maxTokens: NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS,
+            context: $context,
             systemPrompt: $systemPrompt,
             prompt: $prompt,
             schema: $schema,
@@ -572,7 +585,6 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineArcBeats, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS);
 
         return $this->providerStage(
             batch: $batch,
@@ -580,8 +592,7 @@ class NovelOutlinePipeline
             scopeType: self::ARC_BEATS_SCOPE,
             artifactType: ArtifactType::OutlineArcBeats,
             promptVersion: NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
-            context: [...$context, 'capacity_snapshot' => $capacity],
-            maxTokens: NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS,
+            context: $context,
             systemPrompt: $systemPrompt,
             prompt: $prompt,
             schema: $schema,
@@ -711,7 +722,6 @@ class NovelOutlinePipeline
             artifactType: ArtifactType::OutlineBeatDetail,
             promptVersion: self::BEAT_DETAIL_PROMPT_VERSION,
             context: $context,
-            maxTokens: self::BEAT_DETAIL_MAX_TOKENS,
             systemPrompt: '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的稳定 beat_key、Milestones 和出站 Handoff。不得返回其他 Beat、完整 Outline 或任何数据库 ID。Handoff 只能指向给定的相邻下一 Main Beat；最终 Beat 必须返回 null。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
             prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->beatDetailSchema(),
@@ -868,31 +878,31 @@ class NovelOutlinePipeline
     /** Foundation 只允许 Bible 与初始领域候选，不包含 Outline 节点。 */
     public function foundationSchema(?string $targetPlatform = null): array
     {
-        $strings = ['type' => 'array', 'items' => ['type' => 'string']];
-        $currentState = $this->object(['location' => ['type' => ['string', 'null']], 'summary' => ['type' => 'string']]);
+        $strings = $this->boundedStringList();
+        $currentState = $this->object(['location' => $this->nullableShortText(), 'summary' => $this->boundedText()]);
 
         return $this->object([
             'bible' => $this->object([
-                'logline' => ['type' => 'string'], 'themes' => $strings, 'tone' => ['type' => 'string'], 'pov' => ['type' => 'string'], 'tense' => ['type' => 'string'],
+                'logline' => $this->boundedText(), 'themes' => $strings, 'tone' => $this->boundedShortText(), 'pov' => $this->boundedShortText(), 'tense' => $this->boundedShortText(),
                 'taboos' => $strings, 'hard_constraints' => $strings,
                 'ending_contract' => $this->object([
-                    'final_protagonist_state' => ['type' => 'string'], 'main_conflict_resolution' => ['type' => 'string'], 'theme_payoff' => ['type' => 'string'],
+                    'final_protagonist_state' => $this->boundedText(), 'main_conflict_resolution' => $this->boundedText(), 'theme_payoff' => $this->boundedText(),
                     'required_foreshadowing_payoff' => $strings, 'character_arc_requirements' => $strings, 'allowed_open_endings' => $strings,
                 ]),
                 'style_profile' => $this->styleProfileSchema($targetPlatform),
             ]),
-            'characters' => ['type' => 'array', 'items' => $this->object([
-                'name' => ['type' => 'string'], 'role' => ['type' => 'string', 'enum' => ['主角', '配角', '反派']], 'motivation' => ['type' => 'string'],
+            'characters' => ['type' => 'array', 'maxItems' => NovelOutlineStageContract::MAX_FOUNDATION_CHARACTERS, 'items' => $this->object([
+                'name' => $this->boundedShortText(), 'role' => ['type' => 'string', 'enum' => ['主角', '配角', '反派'], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'motivation' => $this->boundedText(),
                 'profile' => $strings, 'personality' => $strings, 'abilities' => $strings, 'knowledge' => $strings, 'current_state' => $currentState,
             ])],
-            'world_entities' => ['type' => 'array', 'items' => $this->object([
-                'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'],
-                'description' => ['type' => 'string'], 'attributes' => $strings, 'rules' => $strings, 'current_state' => $strings,
+            'world_entities' => ['type' => 'array', 'maxItems' => NovelOutlineStageContract::MAX_FOUNDATION_WORLD_ENTITIES, 'items' => $this->object([
+                'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept'], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'name' => $this->boundedShortText(),
+                'description' => $this->boundedText(), 'attributes' => $strings, 'rules' => $strings, 'current_state' => $strings,
             ])],
-            'foreshadowings' => ['type' => 'array', 'items' => $this->object([
-                'title' => ['type' => 'string'], 'description' => ['type' => 'string'], 'promised_payoff' => ['type' => 'string'],
+            'foreshadowings' => ['type' => 'array', 'maxItems' => NovelOutlineStageContract::MAX_FOUNDATION_FORESHADOWINGS, 'items' => $this->object([
+                'title' => $this->boundedShortText(), 'description' => $this->boundedText(), 'promised_payoff' => $this->boundedText(),
                 'due_from_chapter' => ['type' => 'integer', 'minimum' => 1], 'due_to_chapter' => ['type' => 'integer', 'minimum' => 1],
-                'importance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical']], 'owner_arc_key' => ['type' => ['string', 'null']],
+                'importance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical'], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'owner_arc_key' => ['type' => ['string', 'null'], 'maxLength' => 64],
             ])],
         ]);
     }
@@ -942,19 +952,19 @@ class NovelOutlinePipeline
     /** Beat Detail 只允许单个 Main Beat 的 Milestones 与一个 Handoff。 */
     public function beatDetailSchema(): array
     {
-        $strings = ['type' => 'array', 'items' => ['type' => 'string']];
+        $strings = $this->boundedStringList();
         $milestone = $this->object([
-            'key' => ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$'], 'sequence' => ['type' => 'integer', 'minimum' => 1],
-            'title' => ['type' => 'string'], 'objective' => ['type' => 'string'],
-            'acceptance_criteria' => ['type' => 'array', 'minItems' => 1, 'items' => ['type' => 'string']], 'must_include' => $strings, 'must_not_include' => $strings,
+            'key' => ['type' => 'string', 'pattern' => '^[a-z0-9][a-z0-9-]*$', 'maxLength' => 64], 'sequence' => ['type' => 'integer', 'minimum' => 1],
+            'title' => $this->boundedShortText(), 'objective' => $this->boundedText(),
+            'acceptance_criteria' => $this->boundedStringList(minItems: 1), 'must_include' => $strings, 'must_not_include' => $strings,
         ]);
 
         return $this->object([
-            'beat_key' => ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$'],
-            'milestones' => ['type' => 'array', 'minItems' => 1, 'items' => $milestone],
+            'beat_key' => ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$', 'maxLength' => 64],
+            'milestones' => ['type' => 'array', 'minItems' => 1, 'maxItems' => NovelOutlineStageContract::MAX_MILESTONES_PER_BEAT, 'items' => $milestone],
             'handoff' => $this->object([
-                'next_beat_key' => ['type' => ['string', 'null']], 'transition_mode' => ['type' => ['string', 'null']],
-                'exit_result' => ['type' => ['string', 'null']], 'next_trigger' => ['type' => ['string', 'null']],
+                'next_beat_key' => ['type' => ['string', 'null'], 'maxLength' => 64], 'transition_mode' => $this->nullableShortText(),
+                'exit_result' => $this->nullableText(), 'next_trigger' => $this->nullableText(),
                 'carried_states' => $strings, 'open_threads' => $strings, 'required_transition' => $strings, 'forbidden_jump' => $strings,
             ]),
         ]);
@@ -973,7 +983,6 @@ class NovelOutlinePipeline
         ArtifactType $artifactType,
         string $promptVersion,
         array $context,
-        int $maxTokens,
         string $systemPrompt,
         string $prompt,
         array $schema,
@@ -981,12 +990,27 @@ class NovelOutlinePipeline
         callable $validate,
         array $sourceArtifacts = [],
         ?string $discriminator = null,
+        ?int $legacyMaxTokens = null,
     ): ?GenerationArtifact {
         $route = $this->frozenRoute($batch, $routeStage);
         if ($route['prompt_version'] !== $promptVersion) {
             throw new AiProviderException('provider_run_route_missing', "Outline 路由 {$routeStage->value} 的 Prompt 版本与阶段合同不一致。", false);
         }
-        $inputHash = $this->providerInputHash($route, $context, $promptVersion);
+        $requestContract = $this->providerRequestContract(
+            $batch,
+            $routeStage,
+            $route,
+            $context,
+            $promptVersion,
+            $systemPrompt,
+            $prompt,
+            $schema,
+            $legacyMaxTokens,
+        );
+        $context = $requestContract['context'];
+        $requestBudget = $requestContract['request_budget'];
+        $maxTokens = $requestBudget['max_completion_tokens'];
+        $inputHash = $requestContract['input_hash'];
         $runs = $this->stageRuns($batch, $scopeType);
         $reusable = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first();
         $artifact = $reusable?->artifacts()->where('type', $artifactType)->first();
@@ -1029,6 +1053,7 @@ class NovelOutlinePipeline
                 'source_artifacts' => array_map(fn (GenerationArtifact $item): array => $this->artifactReference($item), $sourceArtifacts),
                 'input' => $context,
                 'reasoning_effort' => $route['reasoning_effort'],
+                'request_budget' => $requestBudget,
                 'max_completion_tokens' => $maxTokens,
                 'generation_preferences' => [
                     'substage_routes' => [
@@ -1116,35 +1141,49 @@ class NovelOutlinePipeline
     private function validateFoundation(array $data, string $targetPlatform): array
     {
         $rules = [
-            'bible' => ['required', 'array'], 'bible.logline' => ['required', 'string'], 'bible.themes' => ['required', 'array', 'min:1'],
-            'bible.themes.*' => ['string'],
-            'bible.tone' => ['required', 'string'], 'bible.pov' => ['required', 'string'], 'bible.tense' => ['required', 'string'],
-            'bible.taboos' => ['present', 'array'], 'bible.taboos.*' => ['string'],
-            'bible.hard_constraints' => ['present', 'array'], 'bible.hard_constraints.*' => ['string'],
+            'bible' => ['required', 'array'], 'bible.logline' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH], 'bible.themes' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
+            'bible.themes.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'bible.tone' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'bible.pov' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'bible.tense' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
+            'bible.taboos' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'bible.taboos.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'bible.hard_constraints' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'bible.hard_constraints.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
             'bible.ending_contract' => ['required', 'array'],
+            'bible.ending_contract.final_protagonist_state' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'bible.ending_contract.main_conflict_resolution' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'bible.ending_contract.theme_payoff' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'bible.ending_contract.required_foreshadowing_payoff' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
+            'bible.ending_contract.required_foreshadowing_payoff.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'bible.ending_contract.character_arc_requirements' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
+            'bible.ending_contract.character_arc_requirements.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'bible.ending_contract.allowed_open_endings' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
+            'bible.ending_contract.allowed_open_endings.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
             'bible.style_profile' => ['required', 'array'],
-            'bible.style_profile.subgenre' => ['present', 'nullable', 'string'],
+            'bible.style_profile.subgenre' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
             'bible.style_profile.target_platform' => ['required', Rule::in([$targetPlatform])],
             'bible.style_profile.primary_style' => ['required', Rule::in(array_keys(config('narrative.styles', [])))],
             'bible.style_profile.secondary_styles' => ['present', 'array', 'max:2'],
             'bible.style_profile.secondary_styles.*' => ['string', 'distinct:strict', Rule::in(array_keys(config('narrative.styles', [])))],
             'bible.style_profile.language_era' => ['required', Rule::in(array_keys(config('narrative.language_eras', [])))],
             'bible.style_profile.pacing' => ['required', Rule::in(array_keys(config('narrative.paces', [])))],
-            'characters' => ['required', 'array', 'min:1'],
-            'characters.*.name' => ['required', 'string'], 'characters.*.role' => ['required', Rule::in(['主角', '配角', '反派'])],
-            'characters.*.motivation' => ['required', 'string'], 'characters.*.profile' => ['required', 'array'],
-            'characters.*.personality' => ['required', 'array'], 'characters.*.abilities' => ['required', 'array'],
-            'characters.*.knowledge' => ['required', 'array'], 'characters.*.current_state' => ['required', 'array'],
-            'world_entities' => ['required', 'array', 'min:1'],
+            'characters' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_FOUNDATION_CHARACTERS],
+            'characters.*.name' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'characters.*.role' => ['required', Rule::in(['主角', '配角', '反派'])],
+            'characters.*.motivation' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH], 'characters.*.profile' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
+            'characters.*.profile.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'characters.*.personality' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'characters.*.personality.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'characters.*.abilities' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'characters.*.abilities.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'characters.*.knowledge' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'characters.*.knowledge.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'characters.*.current_state' => ['required', 'array'], 'characters.*.current_state.location' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
+            'characters.*.current_state.summary' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'world_entities' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_FOUNDATION_WORLD_ENTITIES],
             'world_entities.*.type' => ['required', Rule::in(['location', 'item', 'faction', 'organization', 'rule', 'concept'])],
-            'world_entities.*.name' => ['required', 'string'], 'world_entities.*.description' => ['required', 'string'],
-            'world_entities.*.attributes' => ['required', 'array'], 'world_entities.*.rules' => ['required', 'array'],
-            'world_entities.*.current_state' => ['required', 'array'],
-            'foreshadowings' => ['present', 'array'], 'foreshadowings.*.title' => ['required', 'string'],
-            'foreshadowings.*.description' => ['required', 'string'], 'foreshadowings.*.promised_payoff' => ['required', 'string'],
+            'world_entities.*.name' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'world_entities.*.description' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'world_entities.*.attributes' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'world_entities.*.attributes.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'world_entities.*.rules' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'world_entities.*.rules.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'world_entities.*.current_state' => ['required', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'world_entities.*.current_state.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'foreshadowings' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_FOUNDATION_FORESHADOWINGS], 'foreshadowings.*.title' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
+            'foreshadowings.*.description' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH], 'foreshadowings.*.promised_payoff' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
             'foreshadowings.*.due_from_chapter' => ['required', 'integer', 'min:1'], 'foreshadowings.*.due_to_chapter' => ['required', 'integer', 'min:1'],
             'foreshadowings.*.importance' => ['required', Rule::in(['low', 'medium', 'high', 'critical'])],
-            'foreshadowings.*.owner_arc_key' => ['present', 'nullable', 'string', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
+            'foreshadowings.*.owner_arc_key' => ['present', 'nullable', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
         ];
         foreach (config('narrative.parameter_keys', []) as $key) {
             $rules["bible.style_profile.parameters.{$key}"] = ['required', 'integer', 'between:1,5'];
@@ -1246,18 +1285,20 @@ class NovelOutlinePipeline
     private function validateBeatDetail(array $data, string $beatKey, ?string $nextBeatKey): array
     {
         Validator::make($data, [
-            'beat_key' => ['required', 'string', 'regex:/^beat-[0-9]{2,}$/'],
-            'milestones' => ['required', 'array', 'min:1'],
-            'milestones.*.key' => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9-]*$/', 'distinct:strict'],
-            'milestones.*.title' => ['required', 'string'], 'milestones.*.objective' => ['required', 'string'],
-            'milestones.*.acceptance_criteria' => ['required', 'array', 'min:1'], 'milestones.*.acceptance_criteria.*' => ['string'],
-            'milestones.*.must_include' => ['present', 'array'], 'milestones.*.must_include.*' => ['string'],
-            'milestones.*.must_not_include' => ['present', 'array'], 'milestones.*.must_not_include.*' => ['string'],
-            'handoff' => ['required', 'array'], 'handoff.next_beat_key' => ['present', 'nullable', 'string'],
-            'handoff.transition_mode' => ['present', 'nullable', 'string'], 'handoff.exit_result' => ['present', 'nullable', 'string'],
-            'handoff.next_trigger' => ['present', 'nullable', 'string'], 'handoff.carried_states' => ['present', 'array'],
-            'handoff.open_threads' => ['present', 'array'], 'handoff.required_transition' => ['present', 'array'],
-            'handoff.forbidden_jump' => ['present', 'array'],
+            'beat_key' => ['required', 'string', 'max:64', 'regex:/^beat-[0-9]{2,}$/'],
+            'milestones' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_MILESTONES_PER_BEAT],
+            'milestones.*.key' => ['required', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/', 'distinct:strict'],
+            'milestones.*.title' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'milestones.*.objective' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'milestones.*.acceptance_criteria' => ['required', 'array', 'min:1', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'milestones.*.acceptance_criteria.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'milestones.*.must_include' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'milestones.*.must_include.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'milestones.*.must_not_include' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'milestones.*.must_not_include.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'handoff' => ['required', 'array'], 'handoff.next_beat_key' => ['present', 'nullable', 'string', 'max:64'],
+            'handoff.transition_mode' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'handoff.exit_result' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
+            'handoff.next_trigger' => ['present', 'nullable', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH], 'handoff.carried_states' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS],
+            'handoff.carried_states.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'handoff.open_threads' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'handoff.open_threads.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'handoff.required_transition' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'handoff.required_transition.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+            'handoff.forbidden_jump' => ['present', 'array', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS], 'handoff.forbidden_jump.*' => ['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
         ])->validate();
         if (($data['beat_key'] ?? null) !== $beatKey) {
             throw ValidationException::withMessages(['beat_key' => 'Beat Detail 返回了非目标 Beat。']);
@@ -1614,12 +1655,21 @@ class NovelOutlinePipeline
         string $beatKey,
     ): string {
         [$context] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
+        $schema = $this->beatDetailSchema();
+        $systemPrompt = '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的稳定 beat_key、Milestones 和出站 Handoff。不得返回其他 Beat、完整 Outline 或任何数据库 ID。Handoff 只能指向给定的相邻下一 Main Beat；最终 Beat 必须返回 null。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $route = $this->frozenRoute($batch, AiStage::OutlineBeatDetail);
 
-        return $this->providerInputHash(
-            $this->frozenRoute($batch, AiStage::OutlineBeatDetail),
+        return $this->providerRequestContract(
+            $batch,
+            AiStage::OutlineBeatDetail,
+            $route,
             $context,
             self::BEAT_DETAIL_PROMPT_VERSION,
-        );
+            $systemPrompt,
+            $prompt,
+            $schema,
+        )['input_hash'];
     }
 
     /** 统一限定子 Run 的小说、固定 Scope、主 Run ID 与阶段枚举。 */
@@ -1734,6 +1784,41 @@ class NovelOutlinePipeline
         return ['type' => 'object', 'additionalProperties' => false, 'required' => array_keys($properties), 'properties' => $properties];
     }
 
+    /** @return array{type: string, maxLength: int} */
+    private function boundedShortText(): array
+    {
+        return ['type' => 'string', 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH];
+    }
+
+    /** @return array{type: string, maxLength: int} */
+    private function boundedText(): array
+    {
+        return ['type' => 'string', 'maxLength' => NovelOutlineStageContract::MAX_TEXT_LENGTH];
+    }
+
+    /** @return array{type: array<int, string>, maxLength: int} */
+    private function nullableShortText(): array
+    {
+        return ['type' => ['string', 'null'], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH];
+    }
+
+    /** @return array{type: array<int, string>, maxLength: int} */
+    private function nullableText(): array
+    {
+        return ['type' => ['string', 'null'], 'maxLength' => NovelOutlineStageContract::MAX_TEXT_LENGTH];
+    }
+
+    /** @return array<string, mixed> */
+    private function boundedStringList(int $minItems = 0): array
+    {
+        return array_filter([
+            'type' => 'array',
+            'minItems' => $minItems > 0 ? $minItems : null,
+            'maxItems' => NovelOutlineStageContract::MAX_LIST_ITEMS,
+            'items' => ['type' => 'string', 'maxLength' => NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH],
+        ], static fn (mixed $value): bool => $value !== null);
+    }
+
     /** 构造与当前叙事配置枚举一致的完整文风 Schema。 */
     private function styleProfileSchema(?string $targetPlatform = null): array
     {
@@ -1742,12 +1827,12 @@ class NovelOutlinePipeline
         ]])->all();
 
         return $this->object([
-            'subgenre' => ['type' => ['string', 'null']],
-            'target_platform' => ['type' => 'string', 'enum' => $targetPlatform === null ? array_keys(config('narrative.platforms', [])) : [$targetPlatform]],
-            'primary_style' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))],
-            'secondary_styles' => ['type' => 'array', 'maxItems' => 2, 'items' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', []))]],
-            'language_era' => ['type' => 'string', 'enum' => array_keys(config('narrative.language_eras', []))],
-            'pacing' => ['type' => 'string', 'enum' => array_keys(config('narrative.paces', []))],
+            'subgenre' => $this->nullableShortText(),
+            'target_platform' => ['type' => 'string', 'enum' => $targetPlatform === null ? array_keys(config('narrative.platforms', [])) : [$targetPlatform], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
+            'primary_style' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', [])), 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
+            'secondary_styles' => ['type' => 'array', 'maxItems' => 2, 'items' => ['type' => 'string', 'enum' => array_keys(config('narrative.styles', [])), 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH]],
+            'language_era' => ['type' => 'string', 'enum' => array_keys(config('narrative.language_eras', [])), 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
+            'pacing' => ['type' => 'string', 'enum' => array_keys(config('narrative.paces', [])), 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
             'parameters' => $this->object($parameters),
         ]);
     }
@@ -1778,6 +1863,22 @@ class NovelOutlinePipeline
     private function resolveOutlineRoute(Novel $novel, AiStage $stage): array
     {
         $settings = $this->settingsResolver->resolve($stage, $novel);
+        $requestBudget = $this->configuredOutlineRequestBudget($stage);
+        $modelCapacity = $this->configuredOutlineCapacity(
+            $stage,
+            $settings->provider,
+            $settings->model,
+            $settings->reasoningEffort,
+        );
+        $staticCompletionLimit = min(
+            (int) $modelCapacity['context_window_tokens'],
+            (int) $modelCapacity['max_output_tokens'],
+        );
+        if ($requestBudget['max_completion_tokens'] > $staticCompletionLimit) {
+            throw ValidationException::withMessages([
+                'request_budget' => "Outline 任务 {$stage->value} 的请求预算 {$requestBudget['max_completion_tokens']} Token 超过模型静态容量 {$staticCompletionLimit} Token。",
+            ]);
+        }
 
         return [
             'provider' => $settings->provider,
@@ -1785,7 +1886,8 @@ class NovelOutlinePipeline
             'reasoning_effort' => $settings->reasoningEffort,
             'source' => $settings->source,
             'prompt_version' => $this->promptVersionForRoute($stage),
-            'model_capacity' => $this->configuredOutlineCapacity($stage, $settings->provider, $settings->model),
+            'request_budget' => $requestBudget,
+            'model_capacity' => $modelCapacity,
         ];
     }
 
@@ -1801,31 +1903,47 @@ class NovelOutlinePipeline
         };
     }
 
-    /** @return array{provider: string, model: string, context_window_tokens: int, max_output_tokens: int} */
-    private function configuredOutlineCapacity(AiStage $stage, string $provider, string $model): array
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function configuredOutlineRequestBudget(AiStage $stage): array
     {
-        $capacity = config('generation.outline_planner_capacity', []);
-        if (($capacity['provider'] ?? null) !== $provider || ($capacity['model'] ?? null) !== $model) {
+        $configured = config("generation.outline_request_budgets.{$stage->value}");
+        $outputTokens = is_array($configured) ? (int) ($configured['output_tokens'] ?? 0) : 0;
+        $reasoningReserveTokens = is_array($configured) ? (int) ($configured['reasoning_reserve_tokens'] ?? -1) : -1;
+        if ($outputTokens < 1 || $reasoningReserveTokens < 0) {
             throw ValidationException::withMessages([
-                'capacity' => "Outline 任务 {$stage->value} 的路由 {$provider}/{$model} 缺少匹配的已核实模型容量配置。",
+                'request_budget' => "Outline 任务 {$stage->value} 缺少有效的输出 Token 或推理预留配置。",
             ]);
-        }
-        $contextWindow = (int) ($capacity['context_window_tokens'] ?? 0);
-        $maxOutput = (int) ($capacity['max_output_tokens'] ?? 0);
-        if ($contextWindow < 1 || $maxOutput < 1) {
-            throw ValidationException::withMessages(['capacity' => "Outline 任务 {$stage->value} 的模型容量配置必须为正整数。"]);
         }
 
         return [
-            'provider' => $provider,
-            'model' => $model,
-            'context_window_tokens' => $contextWindow,
-            'max_output_tokens' => $maxOutput,
+            'output_tokens' => $outputTokens,
+            'reasoning_reserve_tokens' => $reasoningReserveTokens,
+            'max_completion_tokens' => $outputTokens + $reasoningReserveTokens,
         ];
     }
 
+    /** @return array<string, int|string|bool> */
+    private function configuredOutlineCapacity(AiStage $stage, string $provider, string $model, ?string $reasoningEffort): array
+    {
+        $profile = AIModelPrice::findEnabledForRoute($provider, $model);
+        if ($profile === null) {
+            throw ValidationException::withMessages([
+                'capacity' => "Outline 任务 {$stage->value} 的路由 {$provider}/{$model} 缺少已启用的模型价格记录，无法取得容量与能力。",
+            ]);
+        }
+        $errors = $profile->outlineSuitabilityErrors($reasoningEffort);
+        if ($errors !== []) {
+            throw ValidationException::withMessages([
+                'capacity' => "Outline 任务 {$stage->value} 的模型 {$provider}/{$model} 不适用：".implode(' ', $errors),
+            ]);
+        }
+
+        // 新批次冻结当前模型记录的容量与能力，后续配置修改不能改变 Retry 或 Resume 行为。
+        return $profile->outlineCapacitySnapshot();
+    }
+
     /**
-     * @return array{provider: string, model: string, reasoning_effort: string|null, source: string, prompt_version: string, model_capacity: array<string, mixed>}
+     * @return array{provider: string, model: string, reasoning_effort: string|null, source: string, prompt_version: string, request_budget: array<string, int>, model_capacity: array<string, mixed>}
      */
     private function frozenRoute(GenerationRun $batch, AiStage $stage): array
     {
@@ -1835,6 +1953,7 @@ class NovelOutlinePipeline
                 || blank($route['provider'] ?? null)
                 || blank($route['model'] ?? null)
                 || ($route['prompt_version'] ?? null) !== $this->promptVersionForRoute($stage)
+                || ! is_array($route['request_budget'] ?? null)
                 || ! is_array($route['model_capacity'] ?? null)) {
                 throw new AiProviderException('provider_run_route_missing', "Outline 主批次缺少任务 {$stage->value} 的完整冻结路由。", false);
             }
@@ -1845,6 +1964,7 @@ class NovelOutlinePipeline
                 || (int) ($capacity['max_output_tokens'] ?? 0) < 1) {
                 throw new AiProviderException('provider_run_route_missing', "Outline 任务 {$stage->value} 的冻结容量与路由不匹配。", false);
             }
+            $requestBudget = $this->normalizeFrozenRequestBudget($route['request_budget'], $stage);
 
             return [
                 'provider' => strtolower(trim((string) $route['provider'])),
@@ -1852,6 +1972,7 @@ class NovelOutlinePipeline
                 'reasoning_effort' => filled($route['reasoning_effort'] ?? null) ? trim((string) $route['reasoning_effort']) : null,
                 'source' => trim((string) ($route['source'] ?? 'frozen_batch')),
                 'prompt_version' => (string) $route['prompt_version'],
+                'request_budget' => $requestBudget,
                 'model_capacity' => $capacity,
             ];
         }
@@ -1867,12 +1988,49 @@ class NovelOutlinePipeline
             'reasoning_effort' => data_get($batch->context_snapshot, 'generation_preferences.reasoning_effort'),
             'source' => 'legacy_batch',
             'prompt_version' => $this->promptVersionForRoute($stage),
+            'request_budget' => $this->legacyRequestBudget($stage),
             'model_capacity' => is_array($capacity) ? $capacity : [],
         ];
     }
 
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function normalizeFrozenRequestBudget(array $budget, AiStage $stage): array
+    {
+        $outputTokens = (int) ($budget['output_tokens'] ?? 0);
+        $reasoningReserveTokens = (int) ($budget['reasoning_reserve_tokens'] ?? -1);
+        $maxCompletionTokens = (int) ($budget['max_completion_tokens'] ?? 0);
+        if ($outputTokens < 1 || $reasoningReserveTokens < 0 || $maxCompletionTokens !== $outputTokens + $reasoningReserveTokens) {
+            throw new AiProviderException('provider_run_route_missing', "Outline 任务 {$stage->value} 缺少有效的冻结请求预算。", false);
+        }
+
+        return [
+            'output_tokens' => $outputTokens,
+            'reasoning_reserve_tokens' => $reasoningReserveTokens,
+            'max_completion_tokens' => $maxCompletionTokens,
+        ];
+    }
+
+    /** v3 历史批次没有冻结推理预留，继续使用升级前各阶段的原始请求上限。 */
+    private function legacyRequestBudget(AiStage $stage): array
+    {
+        $outputTokens = match ($stage) {
+            AiStage::OutlineFoundation => 8_000,
+            AiStage::OutlineStructure => 12_000,
+            AiStage::OutlineArcBeats => 8_000,
+            AiStage::OutlineBeatDetail => 5_000,
+            AiStage::Planner => self::SKELETON_MAX_TOKENS,
+            default => throw new AiProviderException('provider_run_route_missing', "AI 阶段 {$stage->value} 没有历史 Outline 请求预算。", false),
+        };
+
+        return [
+            'output_tokens' => $outputTokens,
+            'reasoning_reserve_tokens' => 0,
+            'max_completion_tokens' => $outputTokens,
+        ];
+    }
+
     /** @return array<string, int> */
-    private function capacitySnapshot(GenerationRun $batch, AiStage $stage, array $requestInput, int $requestedOutputTokens): array
+    private function capacitySnapshot(GenerationRun $batch, AiStage $stage, array $requestInput, array $requestBudget): array
     {
         $route = $this->frozenRoute($batch, $stage);
         $capacity = $route['model_capacity'];
@@ -1884,14 +2042,58 @@ class NovelOutlinePipeline
 
         return $this->stageContract->capacitySnapshot(
             $requestInput,
-            $requestedOutputTokens,
+            $requestBudget['output_tokens'],
+            $requestBudget['reasoning_reserve_tokens'],
             (int) ($capacity['context_window_tokens'] ?? 0),
             (int) ($capacity['max_output_tokens'] ?? 0),
         );
     }
 
+    /**
+     * 四个新版 Provider Stage 共用同一容量门禁；门禁在创建子 Run 和发出请求前完成。
+     *
+     * @return array{context: array<string, mixed>, request_budget: array<string, int>, input_hash: string}
+     */
+    private function providerRequestContract(
+        GenerationRun $batch,
+        AiStage $stage,
+        array $route,
+        array $context,
+        string $promptVersion,
+        string $systemPrompt,
+        string $prompt,
+        array $schema,
+        ?int $legacyMaxTokens = null,
+    ): array {
+        if (in_array($stage, $this->outlineRouteStages(), true)) {
+            $requestBudget = $route['request_budget'];
+            $capacity = $this->capacitySnapshot(
+                $batch,
+                $stage,
+                compact('systemPrompt', 'prompt', 'schema'),
+                $requestBudget,
+            );
+            $context = [...$context, 'capacity_snapshot' => $capacity];
+        } else {
+            if ($legacyMaxTokens === null || $legacyMaxTokens < 1) {
+                throw new AiProviderException('provider_run_route_missing', "历史 Outline 任务 {$stage->value} 缺少请求预算。", false);
+            }
+            $requestBudget = [
+                'output_tokens' => $legacyMaxTokens,
+                'reasoning_reserve_tokens' => 0,
+                'max_completion_tokens' => $legacyMaxTokens,
+            ];
+        }
+
+        return [
+            'context' => $context,
+            'request_budget' => $requestBudget,
+            'input_hash' => $this->providerInputHash($route, $context, $promptVersion, $requestBudget, $schema),
+        ];
+    }
+
     /** @param array{provider: string, model: string, reasoning_effort: string|null} $route */
-    private function providerInputHash(array $route, array $context, string $promptVersion): string
+    private function providerInputHash(array $route, array $context, string $promptVersion, array $requestBudget, array $schema): string
     {
         return $this->hash([
             'context' => $context,
@@ -1899,6 +2101,8 @@ class NovelOutlinePipeline
             'model' => $route['model'],
             'reasoning_effort' => $route['reasoning_effort'],
             'prompt_version' => $promptVersion,
+            'request_budget' => $requestBudget,
+            'response_schema_hash' => $this->hash($schema),
         ]);
     }
 
@@ -1914,9 +2118,18 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->structureSchema($volumeCount);
         $systemPrompt = '你是 XNovel 全书 Structure 规划器。只返回严格 JSON。只生成全书、Volume 与 Arc 结构，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。稳定 Key 必须全局唯一。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineStructure, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS);
+        $route = $this->frozenRoute($batch, AiStage::OutlineStructure);
 
-        return $this->providerInputHash($this->frozenRoute($batch, AiStage::OutlineStructure), [...$context, 'capacity_snapshot' => $capacity], NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION);
+        return $this->providerRequestContract(
+            $batch,
+            AiStage::OutlineStructure,
+            $route,
+            $context,
+            NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
+            $systemPrompt,
+            $prompt,
+            $schema,
+        )['input_hash'];
     }
 
     private function arcBeatsInputHash(
@@ -1931,9 +2144,18 @@ class NovelOutlinePipeline
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        $capacity = $this->capacitySnapshot($batch, AiStage::OutlineArcBeats, compact('systemPrompt', 'prompt', 'schema'), NovelOutlineStageContract::ARC_BEATS_MAX_OUTPUT_TOKENS);
+        $route = $this->frozenRoute($batch, AiStage::OutlineArcBeats);
 
-        return $this->providerInputHash($this->frozenRoute($batch, AiStage::OutlineArcBeats), [...$context, 'capacity_snapshot' => $capacity], NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION);
+        return $this->providerRequestContract(
+            $batch,
+            AiStage::OutlineArcBeats,
+            $route,
+            $context,
+            NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
+            $systemPrompt,
+            $prompt,
+            $schema,
+        )['input_hash'];
     }
 
     /** @return array{code: string, label: string, source: string} */

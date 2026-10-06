@@ -53,7 +53,7 @@ PostgreSQL 中的主批次、子 Run、Artifact 和 Draft Outline 是 Outline �
 
 进入 `generating` 后执行章节流水线：
 
-每个 Provider 阶段在调用前计算“输入 Token + 最大合法输出 + 推理余量”。当前模型无法容纳时，必须拆小任务或在请求前报告路由配置错误，不能用相同大 Schema 逐级增加 Token 反复碰运气。截断不保存半截 Artifact；只有已证明请求可容纳时允许按冻结输入重试一次技术故障。确定性 Assembly 没有 Provider、Token 预算、AI Request Log 或 Usage Record。
+每个 Outline Provider 阶段在调用前使用同一门禁计算“估算输入 Token + 结构化输出额度 + 推理 Token 预留”。内部统一的 `max_completion_tokens` 请求预算等于后两项之和，Provider 适配器再映射为对应 API 参数；该总额必须同时不超过冻结模型的最大输出与扣除估算输入后的剩余上下文。门禁失败时不得创建子 Run 或调用 Provider。当前模型无法容纳时，必须拆小任务或调整路由/预算，不能用相同大 Schema 逐级增加 Token 反复碰运气。截断不保存半截 Artifact；只有已证明请求可容纳时允许按冻结输入重试一次技术故障。确定性 Assembly 没有 Provider、Token 预算、AI Request Log 或 Usage Record。
 
 ```text
 GenerateNextChapterAction
@@ -220,7 +220,7 @@ Outline 子 Run 的 `scope_id` 统一指向 `scope_type=novel_outline_batch` 的
 → hash 不同：new attempt
 ```
 
-技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 且没有可解析结构化结果时，必须记录为对应阶段的 `*_output_truncated` 技术故障，不能把它误记为普通 Schema 内容错误。使用固定预算的全书大纲请求遇到截断时终止当前 Job，避免相同参数自动重试并重复计费；其他阶段只有在提高后续请求预算时才允许重试。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
+技术 Retry（timeout/429/5xx/network）与内容 Rewrite 必须分开。Provider 返回 `finish_reason=length` 时，Laravel 必须结合可见内容和 `completion_tokens_details.reasoning_tokens` 分类：已出现部分可见内容使用 `*_output_truncated / visible_output_truncated`；尚无可见内容且推理 Token 大于零使用 `*_reasoning_budget_exhausted / reasoning_budget_exhausted`；Provider 没有提供足够证据时使用 `*_completion_budget_exhausted / completion_budget_exhausted`。后两类不得伪装成可见输出截断或临时外部故障。使用固定预算的全书大纲请求遇到完成预算耗尽时终止当前 Job，避免相同参数自动重试并重复计费；其他阶段只有在提高后续请求预算时才允许重试。明确拒绝与未截断的 Schema 错误仍是终止错误，避免对确定性无效输出无脑重试。
 
 `GenerationRunCoordinator` 在行锁事务内统一处理有效 Lease、过期 Worker、同指纹成功 Run 和新 Attempt。Scene、Event Extraction、Rewrite 若在一次付费响应后仍需 Evidence/Length Repair，会先保存不可变 `context` Checkpoint；Checkpoint 带独立 `substage_fingerprint`，当前 Run 以 `generation_stage_deferred` 结束，再由 `AdvanceChapterPipelineAction` 派发新 Job 从 Checkpoint 继续。每个 Queue Job attempt 因此最多产生一次 Provider 请求。
 
@@ -734,7 +734,7 @@ Plan 已完成 → Scene 1
 无 Plan → Plan
 ```
 
-Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。
+Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v4 主批次，旧 v4 批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
 
 章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。章节工作台同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
 
@@ -827,13 +827,15 @@ summary-v2+natural-prose-v1
 
 每个 Provider Job 最多发出一次认知请求。Story Event 提取、Evidence/Schema 修复和 Coverage 判定若仍需 Provider，必须成为具有独立输入指纹、Run 和 Artifact 的子阶段；不得在 Planner、Writer、Reviewer 或 Rewriter 的同一 `handle()` 中循环请求。`AiDebugService` 原样执行用户输入，便于诊断 Provider，不注入小说文风。
 
-文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。小说创建与编辑表单的 Override 使用已启用 `ai_model_prices` 记录作为 Select 数据源，选中值解析后以 `{provider, model}` 写入 `novels.settings.ai.stages.{stage}`；Embedding 不属于小说级 Override。旧 `settings.ai.models.{stage}` 保持读取兼容，编辑表单能把匹配项映射回价格记录；无法匹配的旧配置使用只代表该原值的保留选项，保存时迁移为 Provider + Model，避免无关保存清空历史配置。配置层定义 `outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 四个 Outline 专用路由键；专用数据库路由、小说级覆盖或环境变量缺失时回退对应的 `planner`，已有小说和部署不会因新增键立即失去有效路由。AI Outline 启动 Action 在提交前用与 `prepareBatch()` 相同的解析路径展示四个 Provider 任务的 Provider、Model、Reasoning Effort、来源、Prompt Version、模型容量或确定性配置错误；预览不代替服务端校验。新建 v4 Outline 主批次一次性解析四个任务路由，并在 `generation_preferences.outline_routes` 中分别冻结 Provider、Model、Reasoning Effort、来源、Prompt Version 与模型容量；主批次是协调器，`provider/model_policy` 为空。每个 Provider 子 Run 只复制自己任务的冻结路由，`route_key`、请求 Stage、Input Hash 与 Usage 追踪保持一致；后台配置变化、自动重试和人工 Resume 都不得重新解析。v3 批次仍按其单路由快照执行，避免升级时改变未完成批次。当前容量配置仍只有一组已核实的 `outline_planner_capacity`，所以四个任务路由必须与该 Provider/Model 一致；配置其他模型会在预览中标记不可启动，并在创建批次、发出 Provider 请求前被拒绝，不能套用 Terra 的容量。`ai_model_routes` 同时保存各 Stage 的可选 `reasoning_effort`，允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。小说级 Provider/Model 覆盖仍继承同一 Stage 路由的推理程度。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。Provider、Model 或推理程度都参与 `input_hash`，避免错误复用采用不同推理策略生成的旧 Artifact。
+文本模型按 Stage 从 Novel Settings / `ai_model_routes` / config 解析，不在 Job 中写死。一般 Stage 的解析优先级固定为：小说级非空 Stage Override → 数据库模型路由 → 旧 `system_settings.ai` Stage 配置兼容值 → 环境默认配置。小说创建与编辑表单的 Override 使用已启用 `ai_model_prices` 记录作为 Select 数据源；Embedding 不属于小说级 Override。Select 提交价格记录 ID，保存边界把它转换为完整 Provider + Model，并在页面实时展示当前表单状态对应的路由。现有结构化 Override 的 Provider + Model 未变化时保留其可选 `reasoning_effort`；用户改选价格记录时删除旧推理值并明确采用 Provider 默认。非 Outline 的旧 `settings.ai.models.{stage}` 保持精确 Stage 读取兼容，编辑表单能把匹配项映射回价格记录；无法匹配的旧配置使用只代表该原值的保留选项，保存时迁移。Outline 的旧 Model-only 值不允许推断 Provider：表单使用警示保留选项，无关保存原样写回，用户明确重选已启用价格记录后才迁移为 `settings.ai.stages`。全局 Outline 路由解析失败只影响继承状态提示，不能阻止创建或编辑表单打开。
+
+Outline 使用更严格的精确路由合同：`outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 各自解析完整的 Provider、Model 与 Reasoning Effort，优先级为小说级同名 Stage Override → `ai_model_routes` 同名记录 → `system_settings.ai` 同名兼容值 → 同名专用环境路由。任何一层都不得读取或复制 `planner`、通用 `AI_MODEL` 或其他 Stage；推理程度留空表示 Provider 默认行为。小说级旧 `ai.models.<outline_stage>` 只有 Model、不能与下层 Provider 拼接，解析时按不完整路由拒绝。Provider 或 Model 缺失时抛出 `outline_route_not_configured`，AI Outline 启动预览标记不可启动，`prepareBatch()` 在创建 Batch、子 Run 和 Provider 请求前使用同一解析路径拒绝执行。新建 v4 Outline 主批次一次性解析四个任务路由，并在 `generation_preferences.outline_routes` 中分别冻结 Provider、Model、Reasoning Effort、来源、Prompt Version、请求输出额度、推理预留，以及所匹配模型价格记录的 ID、容量和能力；主批次是协调器，`provider/model_policy` 为空。四个请求预算由 `config/generation.php` 的 `outline_request_budgets` 配置，环境键分别为 `OUTLINE_*_OUTPUT_TOKENS` 与 `OUTLINE_*_REASONING_RESERVE_TOKENS`。请求预算进入 Batch `input_hash`；Stage `input_hash` 还包含本阶段冻结预算、容量快照与响应 Schema Hash。每个 Provider 子 Run 只复制自己任务的冻结路由，`route_key`、请求 Stage、Input Hash 与 Usage 追踪保持一致；后台配置变化、自动重试和人工 Resume 都不得重新解析。v3 批次仍按其单路由快照和升级前无推理预留的请求上限执行，避免升级时改变未完成批次。新批次的每个 Outline 路由必须匹配已启用的 `ai_model_prices` 记录，该记录必须包含正整数 `context_window_tokens`、`max_output_tokens` 并声明 `supports_structured_output`；路由配置推理程度时还必须声明 `supports_reasoning_effort`。全局路由保存、小说级新选择和启动预检共用这套适用性规则。`ai_model_routes` 的 `reasoning_effort` 允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。Embedding 同样优先读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。Provider、Model、推理程度、请求预算或 Schema 任一变化都会形成新的复用边界。
 
 文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。Base URL、API Key 和 Timeout 优先读取 `ai_provider_connections` 中对应的启用连接，API Key 使用 Eloquent `encrypted` cast，后台不回显；连接不存在时才兼容回退环境配置。成本按实际 Provider 和响应 Model 从 `ai_model_prices` 读取启用价格，按 `billing_unit` 计算并保存到 Usage；没有匹配价格时才回退旧全局环境单价。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema。Embedding 固定使用 OpenAI 配置，不随文本 Stage 切换。
 
 每个 Provider Run 在创建时冻结唯一 `route_key`、Provider、Model、Reasoning Effort、Prompt Version、Schema Version 和输出预算；Job 必须从 Run Snapshot 构造 Provider，不能重试时重新路由。证据修复、Schema 修复或字数修复使用独立 Run 和路由，因此不会与正文 Writer 的冻结值混淆。`provider_run_mismatch` 必须在请求前报告冻结值与解析值。
 
-代码在没有环境覆盖时将 `gpt-5.6-luna` 作为文本生成兜底模型；`.env.example` 提供均衡推荐：Planner 与四个 Outline 路由、Writer、Rewrite 使用 `gpt-5.6-terra`，Reviewer 使用 `gpt-5.6-sol`，Extractor、Summary 使用 `gpt-5.6-luna`，Embedding 使用 `text-embedding-3-small`。`AI_MODEL_OUTLINE_FOUNDATION`、`AI_MODEL_OUTLINE_STRUCTURE`、`AI_MODEL_OUTLINE_ARC_BEATS`、`AI_MODEL_OUTLINE_BEAT_DETAIL` 未设置时分别回退 `AI_MODEL_PLANNER`。`OUTLINE_PLANNER_CAPACITY_PROVIDER`、`OUTLINE_PLANNER_CAPACITY_MODEL`、`OUTLINE_PLANNER_CONTEXT_WINDOW_TOKENS`、`OUTLINE_PLANNER_MAX_OUTPUT_TOKENS` 是当前唯一的 Outline 容量证据，必须与四个任务的有效路由同时匹配。管理后台模型路由保存后优先于这些环境值。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
+代码在没有环境覆盖时仍为非 Outline 文本 Stage 保留 `gpt-5.6-luna` 通用兜底；四个 Outline Stage 没有通用或 Planner 兜底，必须分别配置 `AI_PROVIDER_OUTLINE_*` 与 `AI_MODEL_OUTLINE_*`，可选的 `AI_REASONING_EFFORT_OUTLINE_*` 留空时采用 Provider 默认行为。`.env.example` 提供均衡示例：Planner 与四个 Outline 路由、Writer、Rewrite 使用 `gpt-5.6-terra`，Reviewer 使用 `gpt-5.6-sol`，Extractor、Summary 使用 `gpt-5.6-luna`，Embedding 使用 `text-embedding-3-small`；同时为四个 Outline Stage 分别提供输出额度与推理预留示例。Outline 容量和必要能力只在后台 `ai_model_prices` 记录中维护，不再存在单一环境容量配置；四个 Stage 可以选择不同模型并分别冻结各自记录。管理后台同名模型路由保存后优先于专用环境值。环境导入命令不会推断模型容量或能力，导入 Outline 路由前必须已有经过人工核实的匹配价格记录。部署者必须按实际账户和端点核实模型可用性。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
 
 ## 23. Observability
 
@@ -852,6 +854,8 @@ Plan
 → State Version
 → Usage
 ```
+
+每次取得 Provider 响应后，`usage_records` 还必须保存 `reasoning_tokens`，并在 `request_metadata` 中保存 `finish_reason`、完成预算分类和适配器实际发送的非敏感参数。OpenAI 的 `max_completion_tokens` 与 DeepSeek 的 `max_tokens` 必须按实际字段名展示；不得持久化 Prompt、messages、完整响应 Schema 或凭据。Outline 运行详情同时展示冻结路由、静态模型容量、请求预算、容量门禁快照和逐次 Provider 调用，便于直接核对“配置值、门禁值、实际发送值、实际用量”四层事实。
 
 Horizon Tags：
 
@@ -872,7 +876,7 @@ stage:{stage}
 | 停止状态或错误 | 已确认行为 | 操作入口 |
 |---|---|---|
 | `current_bible_incomplete` | 生成前置检查拒绝启动，不读取旧 `settings.editorial` 兜底 | 打开该小说的“小说圣经”，创建新的完整 Bible Version；明确填写 tone、POV、tense 和全部 Style Profile 后重新启动 |
-| Outline 批次失败 | 子阶段终止后主批次持久化为 `failed`；成功且来源匹配的 Foundation、Structure、Arc Beats、Skeleton 或 Beat Detail Artifact 保留 | 在全书大纲页查看阶段、错误和 Run 详情；可恢复时点击“继续 AI 生成”，由领域 Resume 从最早缺失阶段继续 |
+| Outline 批次失败 | 子阶段终止后主批次持久化为 `failed`；成功且来源匹配的 Foundation、Structure、Arc Beats、Skeleton 或 Beat Detail Artifact 保留 | 临时故障点击“继续 AI 生成”并沿用冻结路由；配置、冻结路由或完成预算类失败修复设置后点击“重新生成候选”，由 Restart 使用当前配置创建新 v4 批次，旧批次保持不变 |
 | 已启动章节必须立即采用新 Bible | 旧来源链保持不可变，不能把旧 Bible 的 Rewrite/Review 提交到新 Bible | 先执行 `novel:recover-bible-chapter` dry-run；审核完整差异、来源链、State 基线和 plan hash 后，使用相同 Expected Bible/State 与 hash 显式 `--execute`。系统创建新 Bible Version，并从 Chapter Planning 重新推进 |
 | Stage/Provider 失败 | 成功的 Run/Artifact 保留；不得靠重放全部流水线覆盖历史产物 | 在“Generation → 恢复中心”查看错误和可重试性；可重试失败使用“重试”，暂停小说使用“恢复”。章节工作台的分阶段按钮仅用于定位后的调试或恢复 |
 | Rewrite 耗尽 | 最后一次复审转为 `NEEDS_ATTENTION`，不再自动派发 Rewrite | 在章节工作台“审校”中“人工修改正文”并自动重走 Event/Patch/Review；无 Hard Conflict 且符合 Override 条件时可填写原因“人工通过（Override）” |

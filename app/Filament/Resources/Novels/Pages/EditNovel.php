@@ -23,6 +23,7 @@ class EditNovel extends EditRecord
     protected function mutateFormDataBeforeFill(array $data): array
     {
         $data = NovelForm::prepareGenreForFill($data);
+        // 表单状态使用价格 ID 或受控保留 Token，避免把 Provider/Model 明文拆成两个可漂移字段。
         $data['ai_model_overrides'] = app(AiModelRouteService::class)->novelOverrideFormState($this->getRecord());
         $data['budget_limits'] = data_get($data, 'settings.budget', []);
         $data['generation_chapter_target_words'] = (int) data_get($data, 'settings.generation.chapter_target_words', 3_000);
@@ -45,6 +46,7 @@ class EditNovel extends EditRecord
         if (array_key_exists('generation', $settings) || $chapterTargetWords !== 3_000) {
             $settings['generation']['chapter_target_words'] = $chapterTargetWords;
         }
+        // 合并时保留无关 settings；旧 Outline Model-only 值只有用户重选完整路由后才允许迁移。
         $settings = app(AiModelRouteService::class)->applyNovelOverrides(
             $settings,
             (array) ($data['ai_model_overrides'] ?? []),

@@ -148,7 +148,7 @@ test('canonical summary increases frozen output budgets and stops before a fourt
         latencyMs: 100,
         providerRequestId: 'truncated-summary-request',
         model: 'summary-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
     $fake = (new FakeAiProvider)->enqueue($truncated)->enqueue($truncated)->enqueue($truncated);
     app()->instance(AiProvider::class, $fake);
@@ -156,7 +156,7 @@ test('canonical summary increases frozen output budgets and stops before a fourt
 
     foreach ([100, 200, 300] as $expectedBudget) {
         expect(fn () => $service->generate($chapter->getKey()))
-            ->toThrow(AiProviderException::class, '因输出 Token 用尽而被截断');
+            ->toThrow(AiProviderException::class, '可见输出');
         expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
     }
 

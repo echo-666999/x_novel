@@ -27,6 +27,7 @@ class UsageRecorder
             'model' => $response->model,
             'input_tokens' => $response->inputTokens,
             'output_tokens' => $response->outputTokens,
+            'reasoning_tokens' => $response->reasoningTokens,
             'cached_tokens' => $response->cachedTokens,
             'latency_ms' => $response->latencyMs,
             'estimated_cost' => $this->costCalculator->estimate($response, $request->provider),
@@ -38,6 +39,9 @@ class UsageRecorder
                 'prompt_version' => $request->promptVersion,
                 'reasoning_effort_sent' => $request->provider === 'deepseek' ? null : $request->reasoningEffort,
                 'max_output_tokens' => $request->maxTokens,
+                'finish_reason' => data_get($response->metadata, 'finish_reason'),
+                'completion_limit_reason' => data_get($response->metadata, 'completion_limit_reason'),
+                'sent_parameters' => data_get($response->metadata, 'sent_parameters'),
             ], static fn (mixed $value): bool => $value !== null && $value !== ''),
         ]);
     }
@@ -58,6 +62,7 @@ class UsageRecorder
             'model' => $response->model,
             'input_tokens' => $response->inputTokens,
             'output_tokens' => 0,
+            'reasoning_tokens' => 0,
             'cached_tokens' => 0,
             'latency_ms' => $response->latencyMs,
             'estimated_cost' => $estimatedCost,

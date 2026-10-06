@@ -75,9 +75,18 @@ test('openai provider maps a successful response to the provider dto', function 
         ->and($response->inputTokens)->toBe(11)
         ->and($response->outputTokens)->toBe(3)
         ->and($response->cachedTokens)->toBe(4)
+        ->and($response->reasoningTokens)->toBe(0)
         ->and($response->providerRequestId)->toBe('request-123')
         ->and($response->model)->toBe('current-model-2026-09-01')
-        ->and($response->metadata)->toBe(['finish_reason' => 'stop', 'refusal' => null]);
+        ->and($response->metadata['finish_reason'])->toBe('stop')
+        ->and($response->metadata['completion_limit_reason'])->toBeNull()
+        ->and($response->metadata['sent_parameters'])->toBe([
+            'model' => 'current-model',
+            'max_completion_tokens' => 8,
+            'reasoning_effort' => 'low',
+            'temperature' => 0.0,
+            'response_format' => 'json_schema',
+        ]);
 
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://llm.example/v1/chat/completions'
         && $request->hasHeader('Authorization', 'Bearer test-key')
@@ -527,12 +536,17 @@ test('openai provider returns usage metadata for truncated structured output', f
         'id' => 'structured-truncated',
         'model' => 'test-model',
         'choices' => [['finish_reason' => 'length', 'message' => ['content' => '{"answer":"partial"}', 'refusal' => null]]],
-        'usage' => ['prompt_tokens' => 8_898, 'completion_tokens' => 4_000],
+        'usage' => [
+            'prompt_tokens' => 8_898,
+            'completion_tokens' => 4_000,
+            'completion_tokens_details' => ['reasoning_tokens' => 750],
+        ],
     ])]);
 
     $response = app(OpenAiProvider::class)->generate(new AiRequest(
         model: 'test-model',
         prompt: 'Ping',
+        maxTokens: 4_000,
         responseSchema: [
             'type' => 'object',
             'additionalProperties' => false,
@@ -545,7 +559,40 @@ test('openai provider returns usage metadata for truncated structured output', f
         ->and($response->structuredData)->toBeNull()
         ->and($response->inputTokens)->toBe(8_898)
         ->and($response->outputTokens)->toBe(4_000)
-        ->and($response->metadata['finish_reason'])->toBe('length');
+        ->and($response->reasoningTokens)->toBe(750)
+        ->and($response->metadata['finish_reason'])->toBe('length')
+        ->and($response->metadata['completion_limit_reason'])->toBe('visible_output_truncated')
+        ->and($response->metadata['sent_parameters']['max_completion_tokens'])->toBe(4_000);
+});
+
+test('openai provider identifies completion spent on reasoning before visible output', function () {
+    config()->set('ai.providers.openai.api_key', 'test-key');
+    Http::fake(['*' => Http::response([
+        'id' => 'reasoning-exhausted',
+        'model' => 'test-model',
+        'choices' => [['finish_reason' => 'length', 'message' => ['content' => null, 'refusal' => null]]],
+        'usage' => [
+            'prompt_tokens' => 2_000,
+            'completion_tokens' => 12_000,
+            'completion_tokens_details' => ['reasoning_tokens' => 12_000],
+        ],
+    ])]);
+
+    $response = app(OpenAiProvider::class)->generate(new AiRequest(
+        model: 'test-model',
+        prompt: 'Ping',
+        maxTokens: 12_000,
+        responseSchema: [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['answer'],
+            'properties' => ['answer' => ['type' => 'string']],
+        ],
+    ));
+
+    expect($response->content)->toBe('')
+        ->and($response->reasoningTokens)->toBe(12_000)
+        ->and($response->metadata['completion_limit_reason'])->toBe('reasoning_budget_exhausted');
 });
 
 test('openai provider rejects missing credentials before sending a request', function () {

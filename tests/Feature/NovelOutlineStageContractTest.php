@@ -253,18 +253,21 @@ test('outline stage capacity is checked against frozen context and model output 
     ];
     $snapshot = $contract->capacitySnapshot(
         $request,
-        NovelOutlineStageContract::STRUCTURE_MAX_OUTPUT_TOKENS,
+        12_000,
+        4_000,
         1_050_000,
         128_000,
     );
 
-    expect($snapshot['requested_output_tokens'])->toBe(12_000)
+    expect($snapshot['output_tokens'])->toBe(12_000)
+        ->and($snapshot['reasoning_reserve_tokens'])->toBe(4_000)
+        ->and($snapshot['max_completion_tokens'])->toBe(16_000)
         ->and($snapshot['estimated_input_tokens'])->toBeGreaterThan(0)
-        ->and($snapshot['remaining_context_tokens'])->toBeGreaterThan(12_000);
+        ->and($snapshot['remaining_context_tokens'])->toBeGreaterThan(16_000);
 
-    expect(fn () => $contract->capacitySnapshot($request, 12_000, 20_000, 8_000))
+    expect(fn () => $contract->capacitySnapshot($request, 12_000, 4_000, 20_000, 8_000))
         ->toThrow(ValidationException::class)
-        ->and(fn () => $contract->capacitySnapshot($request, 12_000, 100, 128_000))
+        ->and(fn () => $contract->capacitySnapshot($request, 12_000, 4_000, 100, 128_000))
         ->toThrow(ValidationException::class);
 });
 

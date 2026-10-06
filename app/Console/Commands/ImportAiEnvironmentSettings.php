@@ -2,7 +2,9 @@
 
 namespace App\Console\Commands;
 
+use App\AI\AiModelRouteService;
 use App\AI\AiSettingsService;
+use App\Enums\AiReasoningEffort;
 use App\Enums\AiStage;
 use App\Models\AIModelPrice;
 use App\Models\AIModelRoute;
@@ -19,7 +21,7 @@ class ImportAiEnvironmentSettings extends Command
 
     protected $description = 'Import current AI environment settings into provider connections, model prices, and model routes';
 
-    public function handle(AiSettingsService $settingsService): int
+    public function handle(AiSettingsService $settingsService, AiModelRouteService $routeService): int
     {
         try {
             $hasData = AIProviderConnection::query()->exists()
@@ -31,7 +33,7 @@ class ImportAiEnvironmentSettings extends Command
                 return self::FAILURE;
             }
 
-            DB::transaction(function () use ($settingsService): void {
+            DB::transaction(function () use ($settingsService, $routeService): void {
                 foreach ($settingsService->registeredProviders() as $provider) {
                     $apiKey = config("ai.providers.{$provider}.api_key");
                     if (! is_string($apiKey) || trim($apiKey) === '') {
@@ -75,13 +77,22 @@ class ImportAiEnvironmentSettings extends Command
                         );
                     });
 
-                foreach ($routes as $role => $route) {
-                    ['provider' => $provider, 'model' => $model] = $route;
-                    AIModelRoute::query()->updateOrCreate(
-                        ['role' => $role],
-                        compact('provider', 'model'),
-                    );
-                }
+                $routeSelections = collect($routes)->mapWithKeys(function (array $route, string $role) use ($currency): array {
+                    $price = AIModelPrice::query()
+                        ->where('provider', $route['provider'])
+                        ->where('model', $route['model'])
+                        ->where('currency', $currency)
+                        ->where('is_enabled', true)
+                        ->first();
+
+                    return [$role => [
+                        'model_price_id' => $price?->getKey(),
+                        'reasoning_effort' => $route['reasoning_effort'],
+                    ]];
+                })->all();
+
+                // 环境导入与后台共用路由保存边界，避免导入出缺少容量或能力的 Outline 路由。
+                $routeService->save($routeSelections, null);
             });
         } catch (ValidationException $exception) {
             $fields = implode(', ', array_keys($exception->errors()));
@@ -99,7 +110,7 @@ class ImportAiEnvironmentSettings extends Command
         return self::SUCCESS;
     }
 
-    /** @return array<string, array{provider: string, model: string}> */
+    /** @return array<string, array{provider: string, model: string, reasoning_effort: string|null}> */
     private function stageRoutes(): array
     {
         $defaultProvider = strtolower(trim((string) config('ai.provider', 'openai')));
@@ -108,19 +119,50 @@ class ImportAiEnvironmentSettings extends Command
         return collect(AiStage::cases())->mapWithKeys(function (AiStage $stage) use ($defaultProvider, $defaultModel): array {
             $provider = $stage === AiStage::Embedding
                 ? strtolower(trim((string) config('ai.embedding.provider', 'openai')))
-                : $defaultProvider;
+                : strtolower(trim((string) config("ai.stage_providers.{$stage->value}", $defaultProvider)));
             $configuredModel = $stage === AiStage::Embedding
                 ? config('ai.embedding.model')
                 : config("ai.models.{$stage->value}");
-            $fallbackStage = $stage->fallbackStage();
-            if ((! is_string($configuredModel) || trim($configuredModel) === '') && $fallbackStage !== null) {
-                $configuredModel = config("ai.models.{$fallbackStage->value}");
-            }
+            $isOutlineStage = in_array($stage, [
+                AiStage::OutlineFoundation,
+                AiStage::OutlineStructure,
+                AiStage::OutlineArcBeats,
+                AiStage::OutlineBeatDetail,
+            ], true);
             $model = is_string($configuredModel) && trim($configuredModel) !== ''
                 ? trim($configuredModel)
-                : $defaultModel;
+                : ($isOutlineStage ? '' : $defaultModel);
+            if ($provider === '') {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}.provider" => $isOutlineStage
+                        ? "Outline 任务 {$stage->value} 缺少独立环境 Provider 配置。"
+                        : "AI 任务 {$stage->value} 缺少环境 Provider 配置。",
+                ]);
+            }
+            if ($model === '') {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}.model" => $isOutlineStage
+                        ? "Outline 任务 {$stage->value} 缺少独立环境模型配置。"
+                        : "AI 任务 {$stage->value} 缺少环境模型配置。",
+                ]);
+            }
+            $reasoningEffort = $stage === AiStage::Embedding
+                ? null
+                : config("ai.reasoning_efforts.{$stage->value}");
+            $reasoningEffort = is_string($reasoningEffort) && trim($reasoningEffort) !== ''
+                ? trim($reasoningEffort)
+                : null;
+            if ($reasoningEffort !== null && AiReasoningEffort::tryFrom($reasoningEffort) === null) {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}.reasoning_effort" => '推理程度必须是 low、medium、high 或留空。',
+                ]);
+            }
 
-            return [$stage->value => compact('provider', 'model')];
+            return [$stage->value => [
+                'provider' => $provider,
+                'model' => $model,
+                'reasoning_effort' => $reasoningEffort,
+            ]];
         })->all();
     }
 

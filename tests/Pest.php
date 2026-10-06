@@ -1,8 +1,10 @@
 <?php
 
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -68,4 +70,32 @@ function attachCanonicalArtifact(Novel $novel, Chapter $chapter): GenerationArti
     $chapter->update(['canonical_artifact_id' => $artifact->getKey()]);
 
     return $artifact;
+}
+
+function seedVerifiedOutlineModelProfiles(): void
+{
+    collect([
+        AiStage::OutlineFoundation,
+        AiStage::OutlineStructure,
+        AiStage::OutlineArcBeats,
+        AiStage::OutlineBeatDetail,
+    ])->map(fn (AiStage $stage): array => [
+        'provider' => strtolower((string) config("ai.stage_providers.{$stage->value}")),
+        'model' => (string) config("ai.models.{$stage->value}"),
+    ])->unique(fn (array $route): string => $route['provider'].'|'.$route['model'])
+        ->each(function (array $route): void {
+            AIModelPrice::query()->updateOrCreate([
+                ...$route,
+                'currency' => strtoupper((string) config('ai.cost.currency', 'USD')),
+            ], [
+                'billing_unit' => 1_000_000,
+                'context_window_tokens' => 1_050_000,
+                'max_output_tokens' => 128_000,
+                'supports_structured_output' => true,
+                'supports_reasoning_effort' => true,
+                'input_price' => 0,
+                'output_price' => 0,
+                'is_enabled' => true,
+            ]);
+        });
 }

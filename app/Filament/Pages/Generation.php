@@ -333,6 +333,7 @@ class Generation extends Page implements HasTable
                             ->columnSpanFull(),
                         TextEntry::make('input_tokens')->label('Input Tokens')->numeric(),
                         TextEntry::make('output_tokens')->label('Output Tokens')->numeric(),
+                        TextEntry::make('reasoning_tokens')->label('Reasoning Tokens')->numeric(),
                         TextEntry::make('cached_tokens')->label('Cached Tokens')->numeric(),
                         TextEntry::make('latency_ms')->label('Latency')->suffix(' ms')->numeric(),
                         TextEntry::make('estimated_cost')

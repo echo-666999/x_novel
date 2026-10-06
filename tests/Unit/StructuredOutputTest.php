@@ -27,7 +27,51 @@ test('structured output is returned unchanged', function () {
     ))->toBe(['ok' => true]);
 });
 
-test('truncated structured output is classified as retryable', function () {
+test('visible structured output truncation is classified separately from reasoning exhaustion', function () {
+    try {
+        StructuredOutput::require(
+            structuredOutputResponse(null, content: '{"partial":', metadata: [
+                'finish_reason' => 'length',
+                'completion_limit_reason' => 'visible_output_truncated',
+            ]),
+            'scene',
+            'Scene Draft',
+        );
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('scene_output_truncated')
+            ->and($exception->retryable)->toBeTrue()
+            ->and($exception->getMessage())->toContain('可见输出')
+            ->and($exception->getMessage())->not->toContain('将按技术故障重试');
+
+        return;
+    }
+
+    $this->fail('Expected a retryable truncation exception.');
+});
+
+test('reasoning budget exhaustion is terminal and does not claim visible output was truncated', function () {
+    try {
+        StructuredOutput::require(
+            structuredOutputResponse(null, metadata: [
+                'finish_reason' => 'length',
+                'completion_limit_reason' => 'reasoning_budget_exhausted',
+            ]),
+            'scene',
+            'Scene Draft',
+        );
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('scene_reasoning_budget_exhausted')
+            ->and($exception->retryable)->toBeFalse()
+            ->and($exception->getMessage())->toContain('生成可见')
+            ->and($exception->getMessage())->not->toContain('被截断');
+
+        return;
+    }
+
+    $this->fail('Expected reasoning budget exhaustion exception.');
+});
+
+test('completion limit without evidence remains explicitly unclassified', function () {
     try {
         StructuredOutput::require(
             structuredOutputResponse(null, metadata: ['finish_reason' => 'length']),
@@ -35,13 +79,14 @@ test('truncated structured output is classified as retryable', function () {
             'Scene Draft',
         );
     } catch (AiProviderException $exception) {
-        expect($exception->errorCode)->toBe('scene_output_truncated')
-            ->and($exception->retryable)->toBeTrue();
+        expect($exception->errorCode)->toBe('scene_completion_budget_exhausted')
+            ->and($exception->retryable)->toBeFalse()
+            ->and($exception->getMessage())->toContain('未提供足够信息');
 
         return;
     }
 
-    $this->fail('Expected a retryable truncation exception.');
+    $this->fail('Expected unclassified completion budget exception.');
 });
 
 test('schema invalid and refusal remain terminal with distinct codes', function () {
@@ -66,10 +111,13 @@ test('schema invalid and refusal remain terminal with distinct codes', function 
     }
 });
 
-test('truncated plain content is classified as retryable', function () {
+test('truncated plain content is rejected even when partial text exists', function () {
     try {
         StructuredOutput::requireContent(
-            structuredOutputResponse(null, metadata: ['finish_reason' => 'length']),
+            structuredOutputResponse(null, content: 'partial chapter', metadata: [
+                'finish_reason' => 'length',
+                'completion_limit_reason' => 'visible_output_truncated',
+            ]),
             'rewrite',
             'Chapter Rewrite',
         );

@@ -60,6 +60,28 @@ class AIModelPriceForm
                 ])
                 ->columns(2)
                 ->columnSpanFull(),
+            Section::make('模型容量与能力')
+                ->description('请按实际 Provider 文档和账户可用模型核实。容量未填写或能力未开启的模型不能用于新的 Outline 批次。')
+                ->schema([
+                    TextInput::make('context_window_tokens')
+                        ->label('上下文窗口 Token')
+                        ->integer()
+                        ->minValue(1)
+                        ->helperText('模型一次请求可接受的输入与输出 Token 总上限。'),
+                    TextInput::make('max_output_tokens')
+                        ->label('最大输出 Token')
+                        ->integer()
+                        ->minValue(1)
+                        ->helperText('模型单次响应允许的最大输出 Token。'),
+                    Toggle::make('supports_structured_output')
+                        ->label('支持结构化输出')
+                        ->helperText('Outline 必须使用响应 Schema 或等价的 JSON 结构化输出能力。'),
+                    Toggle::make('supports_reasoning_effort')
+                        ->label('支持推理程度')
+                        ->helperText('只有模型实际接受 reasoning_effort 时才开启。'),
+                ])
+                ->columns(2)
+                ->columnSpanFull(),
         ]);
     }
 }

@@ -3,6 +3,7 @@
 namespace App\AI\Providers;
 
 use App\AI\AiSettingsService;
+use App\AI\CompletionLimitClassifier;
 use App\AI\Contracts\AiProvider;
 use App\AI\Contracts\EmbeddingProvider;
 use App\AI\Data\AiRequest;
@@ -98,6 +99,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             'provider_request_id' => $response->header('x-request-id') ?: $response->json('id'),
             'input_tokens' => (int) $response->json('usage.prompt_tokens', 0),
             'output_tokens' => (int) $response->json('usage.completion_tokens', 0),
+            'reasoning_tokens' => (int) $response->json('usage.completion_tokens_details.reasoning_tokens', 0),
             'cached_tokens' => (int) $response->json('usage.prompt_tokens_details.cached_tokens', 0),
             'body' => $this->sanitizedResponseBody($response),
         ]);
@@ -106,7 +108,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             throw $this->mapFailedResponse($response);
         }
 
-        return $this->mapResponse($response, $latencyMs, $request->responseSchema);
+        return $this->mapResponse($response, $latencyMs, $request->responseSchema, $payload);
     }
 
     public function embed(EmbeddingRequest $request): EmbeddingResponse
@@ -296,13 +298,17 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         return $apiKey === '' ? $value : str_replace($apiKey, '[REDACTED]', $value);
     }
 
-    /** @param array<string, mixed>|null $schema */
-    private function mapResponse(Response $response, int $latencyMs, ?array $schema): AiResponse
+    /**
+     * @param  array<string, mixed>|null  $schema
+     * @param  array<string, mixed>  $sentPayload
+     */
+    private function mapResponse(Response $response, int $latencyMs, ?array $schema, array $sentPayload): AiResponse
     {
         $content = $response->json('choices.0.message.content');
         $model = $response->json('model');
         $refusal = $response->json('choices.0.message.refusal');
         $finishReason = $response->json('choices.0.finish_reason');
+        $reasoningTokens = (int) $response->json('usage.completion_tokens_details.reasoning_tokens', 0);
         $structuredOutputTruncated = $schema !== null && $finishReason === 'length';
 
         if (is_string($refusal) && trim($refusal) !== '') {
@@ -324,6 +330,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         }
 
         $content = is_string($content) ? $content : '';
+        $completionLimitReason = CompletionLimitClassifier::classify($finishReason, $content, $reasoningTokens);
 
         $structuredData = null;
 
@@ -367,8 +374,24 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
             metadata: [
                 'finish_reason' => $finishReason,
                 'refusal' => $refusal,
+                'completion_limit_reason' => $completionLimitReason,
+                // 只持久化可观测参数，不复制 messages、Prompt 或完整 Schema。
+                'sent_parameters' => $this->observableSentParameters($sentPayload),
             ],
+            reasoningTokens: $reasoningTokens,
         );
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function observableSentParameters(array $payload): array
+    {
+        return array_filter([
+            'model' => $payload['model'] ?? null,
+            'max_completion_tokens' => $payload['max_completion_tokens'] ?? null,
+            'reasoning_effort' => $payload['reasoning_effort'] ?? null,
+            'temperature' => $payload['temperature'] ?? null,
+            'response_format' => data_get($payload, 'response_format.type'),
+        ], static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     private function mapFailedResponse(Response $response): AiProviderException

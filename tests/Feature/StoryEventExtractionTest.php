@@ -139,7 +139,7 @@ function truncatedEventEvidenceResponse(): AiResponse
         latencyMs: 100,
         providerRequestId: 'truncated-event-evidence-repair-request',
         model: 'extractor-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 
@@ -154,7 +154,7 @@ function truncatedEventExtractionResponse(): AiResponse
         latencyMs: 100,
         providerRequestId: 'truncated-event-extraction-request',
         model: 'extractor-test',
-        metadata: ['finish_reason' => 'length', 'refusal' => null],
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'visible_output_truncated'],
     );
 }
 
@@ -904,7 +904,7 @@ test('event extraction increases frozen output budgets and stops before a fourth
 
     foreach ([100, 200, 300] as $expectedBudget) {
         expect(fn () => $extractor->extract($fixture['chapter']->getKey()))
-            ->toThrow(AiProviderException::class, '因输出 Token 用尽而被截断');
+            ->toThrow(AiProviderException::class, '可见输出');
         expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
     }
 

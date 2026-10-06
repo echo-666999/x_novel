@@ -131,6 +131,10 @@ test('model price can be maintained and drives cost calculation', function () {
             'model' => ' gpt-priced ',
             'currency' => 'USD',
             'billing_unit' => 1_000_000,
+            'context_window_tokens' => 200_000,
+            'max_output_tokens' => 32_000,
+            'supports_structured_output' => true,
+            'supports_reasoning_effort' => true,
             'input_price' => '2',
             'cached_input_price' => '0.5',
             'output_price' => '8',
@@ -156,6 +160,10 @@ test('model price can be maintained and drives cost calculation', function () {
 
     expect($price->input_price)->toBe('2.000000000000')
         ->and($price->model)->toBe('gpt-priced')
+        ->and($price->context_window_tokens)->toBe(200_000)
+        ->and($price->max_output_tokens)->toBe(32_000)
+        ->and($price->supports_structured_output)->toBeTrue()
+        ->and($price->supports_reasoning_effort)->toBeTrue()
         ->and($price->cached_input_price)->toBe('0.500000000000')
         ->and($price->output_price)->toBe('8.000000000000')
         ->and($cost)->toBe(0.0057);
@@ -176,6 +184,10 @@ test('model routes are maintained from the model price page and override environ
         'model' => 'database-routed-model',
         'currency' => 'USD',
         'billing_unit' => 1_000_000,
+        'context_window_tokens' => 1_050_000,
+        'max_output_tokens' => 128_000,
+        'supports_structured_output' => true,
+        'supports_reasoning_effort' => true,
         'input_price' => 1,
         'cached_input_price' => null,
         'output_price' => 2,
@@ -211,7 +223,123 @@ test('model routes are maintained from the model price page and override environ
         ->toBe('database-routed-model');
 });
 
-test('outline route fields are prefilled from the planner route', function () {
+test('saving the four outline fields creates four independent database route records', function () {
+    AIProviderConnection::query()->create([
+        'provider' => 'openai',
+        'name' => 'OpenAI',
+        'base_url' => 'https://api.openai.com/v1',
+        'api_key' => 'database-key',
+        'connect_timeout' => 10,
+        'timeout' => 60,
+        'is_enabled' => true,
+    ]);
+    $profiles = [
+        AiStage::OutlineFoundation->value => ['model' => 'outline-foundation-db', 'reasoning' => 'low'],
+        AiStage::OutlineStructure->value => ['model' => 'outline-structure-db', 'reasoning' => 'medium'],
+        AiStage::OutlineArcBeats->value => ['model' => 'outline-arc-beats-db', 'reasoning' => 'high'],
+        AiStage::OutlineBeatDetail->value => ['model' => 'outline-beat-detail-db', 'reasoning' => null],
+    ];
+    $defaultPrice = AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'non-outline-default-db',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'context_window_tokens' => 500_000,
+        'max_output_tokens' => 40_000,
+        'supports_structured_output' => true,
+        'supports_reasoning_effort' => true,
+        'input_price' => 1,
+        'output_price' => 2,
+        'is_enabled' => true,
+    ]);
+    $prices = collect($profiles)->mapWithKeys(function (array $profile, string $stage): array {
+        $price = AIModelPrice::query()->create([
+            'provider' => 'openai',
+            'model' => $profile['model'],
+            'currency' => 'USD',
+            'billing_unit' => 1_000_000,
+            'context_window_tokens' => 500_000,
+            'max_output_tokens' => 40_000,
+            'supports_structured_output' => true,
+            'supports_reasoning_effort' => true,
+            'input_price' => 1,
+            'output_price' => 2,
+            'is_enabled' => true,
+        ]);
+
+        return [$stage => $price];
+    });
+    $routes = collect(AiStage::cases())->mapWithKeys(
+        fn (AiStage $stage): array => [$stage->value => [
+            'model_price_id' => $defaultPrice->getKey(),
+            'reasoning_effort' => null,
+        ]],
+    )->all();
+    foreach ($profiles as $stage => $profile) {
+        $routes[$stage] = [
+            'model_price_id' => $prices[$stage]->getKey(),
+            'reasoning_effort' => $profile['reasoning'],
+        ];
+    }
+
+    Livewire::test(ListAIModelPrices::class)
+        ->callAction('configureModelRoutes', data: ['routes' => $routes])
+        ->assertHasNoActionErrors();
+
+    $outlineRoutes = AIModelRoute::query()
+        ->whereIn('role', array_keys($profiles))
+        ->get()
+        ->keyBy(fn (AIModelRoute $route): string => $route->role->value);
+    expect($outlineRoutes)->toHaveCount(4);
+    foreach ($profiles as $stage => $profile) {
+        expect($outlineRoutes[$stage]->provider)->toBe('openai')
+            ->and($outlineRoutes[$stage]->model)->toBe($profile['model'])
+            ->and($outlineRoutes[$stage]->reasoning_effort?->value)->toBe($profile['reasoning']);
+    }
+});
+
+test('route modal keeps invalid outline routes open and shows actionable validation feedback', function () {
+    AIProviderConnection::query()->create([
+        'provider' => 'openai',
+        'name' => 'OpenAI',
+        'base_url' => 'https://api.openai.com/v1',
+        'api_key' => 'database-key',
+        'connect_timeout' => 10,
+        'timeout' => 60,
+        'is_enabled' => true,
+    ]);
+    $price = AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'outline-capability-not-verified',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'input_price' => 1,
+        'output_price' => 2,
+        'is_enabled' => true,
+    ]);
+    $routes = collect(AiStage::cases())->mapWithKeys(
+        fn (AiStage $stage): array => [$stage->value => [
+            'model_price_id' => $price->getKey(),
+            'reasoning_effort' => $stage === AiStage::Embedding ? null : 'high',
+        ]],
+    )->all();
+
+    Livewire::test(ListAIModelPrices::class)
+        ->callAction('configureModelRoutes', data: ['routes' => $routes])
+        ->assertActionMounted('configureModelRoutes')
+        ->assertNotified('模型路由未保存')
+        ->assertHasActionErrors([
+            'routes.outline_foundation.model_price_id',
+            'routes.outline_foundation.reasoning_effort',
+            'routes.outline_structure.model_price_id',
+            'routes.outline_arc_beats.model_price_id',
+            'routes.outline_beat_detail.model_price_id',
+        ]);
+
+    expect(AIModelRoute::query()->count())->toBe(0);
+});
+
+test('outline route fields stay empty when only the planner route exists', function () {
     $price = AIModelPrice::query()->create([
         'provider' => 'openai',
         'model' => 'planner-fallback-model',
@@ -235,8 +363,8 @@ test('outline route fields are prefilled from the planner route', function () {
         AiStage::OutlineBeatDetail,
     ] as $stage) {
         expect($state[$stage->value])->toBe([
-            'model_price_id' => $price->getKey(),
-            'reasoning_effort' => 'high',
+            'model_price_id' => null,
+            'reasoning_effort' => null,
         ]);
     }
 });
@@ -256,6 +384,10 @@ test('model route rejects an unsupported reasoning effort', function () {
         'model' => 'reasoning-model',
         'currency' => 'USD',
         'billing_unit' => 1_000_000,
+        'context_window_tokens' => 1_050_000,
+        'max_output_tokens' => 128_000,
+        'supports_structured_output' => true,
+        'supports_reasoning_effort' => true,
         'input_price' => 1,
         'output_price' => 2,
         'is_enabled' => true,
@@ -272,6 +404,48 @@ test('model route rejects an unsupported reasoning effort', function () {
         $this->fail('Expected invalid reasoning effort to be rejected.');
     } catch (ValidationException $exception) {
         expect($exception->errors())->toHaveKey('routes.writer.reasoning_effort')
+            ->and(AIModelRoute::query()->count())->toBe(0);
+    }
+});
+
+test('outline routes reject models without verified capacity or required capabilities', function () {
+    AIProviderConnection::query()->create([
+        'provider' => 'openai',
+        'name' => 'OpenAI',
+        'base_url' => 'https://api.openai.com/v1',
+        'api_key' => 'database-key',
+        'connect_timeout' => 10,
+        'timeout' => 60,
+        'is_enabled' => true,
+    ]);
+    $price = AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'unverified-outline-model',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'input_price' => 1,
+        'output_price' => 2,
+        'is_enabled' => true,
+    ]);
+    $routes = collect(AiStage::cases())->mapWithKeys(
+        fn (AiStage $stage): array => [$stage->value => [
+            'model_price_id' => $price->getKey(),
+            'reasoning_effort' => $stage === AiStage::OutlineFoundation ? 'high' : null,
+        ]],
+    )->all();
+
+    try {
+        app(AiModelRouteService::class)->save($routes, auth()->id());
+        $this->fail('Expected an unsuitable Outline model to be rejected.');
+    } catch (ValidationException $exception) {
+        expect($exception->errors())
+            ->toHaveKeys([
+                'routes.outline_foundation.model_price_id',
+                'routes.outline_foundation.reasoning_effort',
+                'routes.outline_structure.model_price_id',
+                'routes.outline_arc_beats.model_price_id',
+                'routes.outline_beat_detail.model_price_id',
+            ])
             ->and(AIModelRoute::query()->count())->toBe(0);
     }
 });

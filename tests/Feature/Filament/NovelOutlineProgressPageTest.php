@@ -8,9 +8,11 @@ use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Jobs\GenerateNovelFoundationJob;
 use App\Jobs\GenerateNovelOutlineJob;
+use App\Models\AIModelRoute;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\UsageRecord;
 use App\Models\User;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineStageContract;
@@ -21,6 +23,7 @@ use Livewire\Livewire;
 uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
+    seedVerifiedOutlineModelProfiles();
     $this->actingAs(User::factory()->create());
 });
 
@@ -53,6 +56,11 @@ function outlineUiRoutes(): array
         'reasoning_effort' => 'medium',
         'source' => 'database',
         'prompt_version' => $prompt,
+        'request_budget' => [
+            'output_tokens' => 8_000,
+            'reasoning_reserve_tokens' => 4_000,
+            'max_completion_tokens' => 12_000,
+        ],
         'model_capacity' => [
             'provider' => 'openai',
             'model' => 'gpt-5.6-terra',
@@ -266,8 +274,6 @@ function outlineUiDetail(Novel $novel, GenerationRun $batch, GenerationArtifact 
 
 test('outline page starts a persisted queued batch and polls only while active', function () {
     Queue::fake();
-    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
-    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
     $novel = Novel::factory()->create([
         'status' => NovelStatus::Draft,
         'target_words' => 200000,
@@ -315,8 +321,6 @@ test('outline page starts a persisted queued batch and polls only while active',
 });
 
 test('outline generation action previews every resolved task route before start', function () {
-    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
-    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
 
     Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
@@ -328,16 +332,47 @@ test('outline generation action previews every resolved task route before start'
             AiStage::OutlineStructure->getLabel(),
             AiStage::OutlineArcBeats->getLabel(),
             AiStage::OutlineBeatDetail->getLabel(),
-            '可启动 · OPENAI / '.config('ai.models.planner'),
+            '可启动 · OPENAI / '.config('ai.models.outline_foundation'),
             '容量 1,050,000 / 128,000',
         ]);
+});
+
+test('outline start reports missing dedicated routes instead of using planner', function () {
+    Queue::fake();
+    foreach ([
+        AiStage::OutlineFoundation,
+        AiStage::OutlineStructure,
+        AiStage::OutlineArcBeats,
+        AiStage::OutlineBeatDetail,
+    ] as $stage) {
+        config()->set("ai.models.{$stage->value}", null);
+        config()->set("ai.stage_providers.{$stage->value}", null);
+    }
+    AIModelRoute::query()->create([
+        'role' => AiStage::Planner,
+        'provider' => 'openai',
+        'model' => 'planner-must-not-be-used',
+        'reasoning_effort' => 'high',
+    ]);
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
+
+    $component = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('generateOutlineCandidate')
+        ->assertActionMounted('generateOutlineCandidate')
+        ->assertMountedActionModalSee(['不可启动', '[outline_route_not_configured]', '未配置独立的 Provider 和 Model 路由']);
+
+    $component
+        ->setActionData(['volume_count' => 1])
+        ->callMountedAction()
+        ->assertNotified('无法生成大纲候选');
+
+    Queue::assertNotPushed(GenerateNovelOutlineJob::class);
+    expect($novel->generationRuns()->count())->toBe(0);
 });
 
 test('outline route preview exposes a capacity mismatch and start still rejects it', function () {
     Queue::fake();
     config()->set('ai.providers.openai.api_key', 'test-key');
-    config()->set('generation.outline_planner_capacity.provider', config('ai.provider'));
-    config()->set('generation.outline_planner_capacity.model', config('ai.models.planner'));
     $novel = Novel::factory()->create([
         'status' => NovelStatus::Draft,
         'settings' => ['ai' => ['stages' => [
@@ -466,7 +501,7 @@ test('outline page resumes through the domain action and dispatches only the ear
     Queue::assertNotPushed(GenerateNovelOutlineJob::class);
 });
 
-test('outline failure messages distinguish structured output failures', function (string $code, string $message) {
+test('outline failure messages distinguish completion limit failures', function (string $code, string $category, string $message, bool $canResume) {
     $novel = Novel::factory()->create();
     outlineUiBatch($novel, RunStatus::Failed, [
         'error_code' => $code,
@@ -474,15 +509,98 @@ test('outline failure messages distinguish structured output failures', function
         'error_retryable' => false,
         'error_metadata' => [
             'failed_scope' => NovelOutlinePipeline::FOUNDATION_SCOPE,
-            'category' => 'structured_output',
+            'category' => $category,
         ],
     ]);
 
-    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+    $page = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
         ->assertSee($message)
-        ->assertSee($code)
-        ->assertActionVisible('resumeOutlineGeneration');
+        ->assertSee($code);
+
+    if ($canResume) {
+        $page->assertActionVisible('resumeOutlineGeneration')
+            ->assertActionHidden('generateOutlineCandidate');
+    } else {
+        $page->assertActionHidden('resumeOutlineGeneration')
+            ->assertActionVisible('generateOutlineCandidate');
+    }
 })->with([
-    'truncated' => ['outline_output_truncated', 'AI 返回的大纲内容被截断，未保存不完整结果。'],
-    'schema' => ['outline_stage_schema_invalid', 'AI 返回的大纲格式不符合要求，未保存该结果。'],
+    'visible output truncated' => ['outline_output_truncated', 'visible_output_truncated', 'AI 已开始返回大纲，但可见输出在完成前耗尽请求预算；未保存不完整结果。', false],
+    'reasoning exhausted' => ['outline_reasoning_budget_exhausted', 'reasoning_budget_exhausted', 'AI 在产生可见大纲前已耗尽推理预算，未保存结果。请增加推理预留或降低推理程度。', false],
+    'completion limit unknown' => ['outline_completion_budget_exhausted', 'completion_budget_exhausted', 'AI 未返回完整大纲，且响应信息不足以判断预算耗在推理还是可见输出。请检查 Usage。', false],
+    'provider configuration' => ['provider_run_route_missing', 'provider_configuration', 'Outline 独立路由配置不完整，请检查对应 Stage 的 Provider、Model 与推理程度。', false],
+    'schema' => ['outline_stage_schema_invalid', 'structured_output', 'AI 返回的大纲格式不符合要求，未保存该结果。', true],
 ]);
+
+test('outline run details show frozen route capacity request budget sent parameters and reasoning usage', function () {
+    $novel = Novel::factory()->create();
+    $batch = outlineUiBatch($novel);
+    $route = outlineUiRoutes()['outline_foundation'];
+    $run = outlineUiRun($novel, $batch, NovelOutlinePipeline::FOUNDATION_SCOPE, RunStatus::Failed, overrides: [
+        'context_snapshot' => [
+            'batch_run_id' => $batch->getKey(),
+            'reasoning_effort' => 'medium',
+            'request_budget' => $route['request_budget'],
+            'input' => [
+                'capacity_snapshot' => [
+                    'estimated_input_tokens' => 2_100,
+                    'required_context_tokens' => 14_100,
+                    'available_context_tokens' => 1_050_000,
+                ],
+            ],
+            'generation_preferences' => [
+                'substage_routes' => ['outline_foundation' => $route],
+            ],
+        ],
+        'error_code' => 'novel_outline_foundation_reasoning_budget_exhausted',
+        'error_message' => 'reasoning exhausted',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'reasoning_budget_exhausted'],
+    ]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $run->getKey(),
+        'novel_id' => $novel->getKey(),
+        'provider' => 'openai',
+        'model' => 'gpt-5.6-terra',
+        'input_tokens' => 2_000,
+        'output_tokens' => 12_000,
+        'reasoning_tokens' => 12_000,
+        'request_id' => 'request-outline-observation',
+        'request_metadata' => [
+            'finish_reason' => 'length',
+            'completion_limit_reason' => 'reasoning_budget_exhausted',
+            'sent_parameters' => [
+                'model' => 'gpt-5.6-terra',
+                'max_completion_tokens' => 12_000,
+                'reasoning_effort' => 'medium',
+                'response_format' => 'json_schema',
+            ],
+        ],
+    ]);
+    $batch->update([
+        'status' => RunStatus::Failed,
+        'error_code' => $run->error_code,
+        'error_message' => $run->error_message,
+        'error_retryable' => false,
+        'error_metadata' => [
+            'failed_scope' => NovelOutlinePipeline::FOUNDATION_SCOPE,
+            'child_run_id' => $run->getKey(),
+            'category' => 'reasoning_budget_exhausted',
+        ],
+        'finished_at' => now(),
+    ]);
+
+    $component = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->mountAction('viewOutlineGenerationRuns');
+    $content = $component->instance()->getMountedAction()?->getModalContent()?->render();
+
+    expect($content)
+        ->toContain('冻结路由与模型容量')
+        ->toContain('context_window_tokens')
+        ->toContain('实际预算与容量门禁')
+        ->toContain('required_context_tokens')
+        ->toContain('Provider 实际发送参数与响应用量')
+        ->toContain('max_completion_tokens')
+        ->toContain('reasoning_budget_exhausted')
+        ->toContain('12,000');
+});
