@@ -1,8 +1,10 @@
 <?php
 
+use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
+use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
@@ -16,6 +18,7 @@ use App\Models\UsageRecord;
 use App\Models\User;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineStageContract;
+use Database\Factories\Support\NormalizedOutlineDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -319,6 +322,70 @@ test('outline page starts a persisted queued batch and polls only while active',
 
     Queue::assertPushed(GenerateNovelOutlineJob::class, 1);
 });
+
+test('outline page edits exactly one selected node instead of opening the whole outline', function (string $nodeType, string $nodeKey, array $data, string $attribute, mixed $expected) {
+    $novel = Novel::factory()->create();
+    $base = app(CreateNormalizedNovelOutlineVersionAction::class)->handle(
+        $novel,
+        NormalizedOutlineDefinition::make(),
+    );
+    $arguments = [
+        'outline_id' => $base->getKey(),
+        'outline_checksum' => $base->checksum,
+        'node_type' => $nodeType,
+        'node_key' => $nodeKey,
+    ];
+
+    $component = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->assertActionHidden('saveManualOutline')
+        ->assertActionDoesNotExist('applyOutlineRevision')
+        ->assertSee('编辑')
+        ->mountAction('editOutlineNode', $arguments)
+        ->assertActionMounted('editOutlineNode')
+        ->assertMountedActionModalSee(['只修改当前节点', '保存为新版本'])
+        ->setActionData($data)
+        ->callMountedAction()
+        ->assertHasNoActionErrors()
+        ->assertNotified('节点修订已保存为新 Draft Version');
+
+    $revision = $novel->outlines()->where('status', NovelOutlineStatus::Draft->value)->latest('version')->firstOrFail();
+    $node = match ($nodeType) {
+        'volume' => $revision->volumes()->where('volume_key', $nodeKey)->sole(),
+        'arc' => $revision->arcs()->where('arc_key', $nodeKey)->sole(),
+        'beat' => $revision->beats()->where('beat_key', $nodeKey)->sole(),
+        'milestone' => $revision->milestones()->where('milestone_key', $nodeKey)->sole(),
+    };
+
+    expect($revision->version)->toBe(2)
+        ->and($node->{$attribute})->toBe($expected)
+        // 页面提交单节点表单后，旧不可变版本仍保留原始内容。
+        ->and($base->fresh()->volumes()->firstOrFail()->title)->toBe('Factory Volume');
+})->with([
+    'volume name' => ['volume', 'factory-volume', [
+        'title' => '页面修订分卷',
+    ], 'title', '页面修订分卷'],
+    'arc' => ['arc', 'factory-arc', [
+        'title' => '页面修订 Arc',
+        'goal' => '页面修订目标。',
+        'stakes' => '页面修订风险。',
+        'completion_conditions' => ['页面修订完成条件。'],
+    ], 'title', '页面修订 Arc'],
+    'beat' => ['beat', 'factory-beat', [
+        'title' => '页面修订 Beat',
+        'summary' => '页面修订节点摘要。',
+        'chapter_budget' => ['min' => 1, 'max' => 3],
+        'acceptance_criteria' => ['页面修订节点验收条件。'],
+        'must_include' => [],
+        'must_not_include' => [],
+    ], 'title', '页面修订 Beat'],
+    'milestone' => ['milestone', 'factory-milestone', [
+        'title' => '页面修订 Milestone',
+        'objective' => '页面修订阶段目标。',
+        'acceptance_criteria' => ['页面修订里程碑验收条件。'],
+        'must_include' => [],
+        'must_not_include' => [],
+    ], 'title', '页面修订 Milestone'],
+]);
 
 test('outline generation action previews every resolved task route before start', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);

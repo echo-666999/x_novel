@@ -4,9 +4,9 @@ namespace App\Filament\Resources\Novels\Pages;
 
 use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Novels\ApplyNovelBlueprintAction;
-use App\Actions\Novels\ApplyNovelOutlineRevisionAction;
 use App\Actions\Novels\CreateNovelOutlineVersionAction;
 use App\Actions\Novels\ResumeNovelOutlineGenerationAction;
+use App\Actions\Novels\ReviseNovelOutlineNodeAction;
 use App\Actions\Novels\StartNovelOutlineGenerationAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Data\NormalizedNovelOutline;
@@ -24,9 +24,14 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\NovelOutline;
+use App\Models\NovelOutlineArc;
+use App\Models\NovelOutlineBeat;
+use App\Models\NovelOutlineMilestone;
+use App\Models\NovelOutlineVolume;
 use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineProgressResolver;
+use App\Services\NovelOutlineStageContract;
 use App\Services\NovelPlanner;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Hidden;
@@ -207,24 +212,22 @@ class ManageNovelOutline extends ViewRecord
                     'progress' => $this->outlineGenerationProgress(),
                 ])),
             Action::make('saveManualOutline')
-                ->label(fn (): string => $this->latestDraft() === null ? '手工创建' : '编辑为新版本')
+                ->label('手工创建')
                 ->icon('heroicon-o-pencil-square')
-                ->visible(fn (): bool => $this->getRecord()->current_outline_id === null && ! $this->hasFormalStructure())
-                ->modalHeading(fn (): string => $this->latestDraft() === null ? '手工创建全书大纲' : '创建大纲修订版本')
-                ->modalDescription('保存会创建新的不可变 Draft Version，不覆盖旧版本。')
+                ->visible(fn (): bool => $this->getRecord()->current_outline_id === null
+                    && ! $this->hasFormalStructure()
+                    && $this->latestDraft() === null)
+                ->modalHeading('手工创建全书大纲')
+                ->modalDescription('保存会创建不可变 Draft Version。后续请直接编辑单个节点。')
                 ->modalWidth('7xl')
-                ->fillForm(fn (): array => ($draft = $this->latestDraft()) === null
-                    ? $this->emptyOutline()
-                    : NormalizedNovelOutline::fromModel($draft)->toArray())
+                ->fillForm(fn (): array => $this->emptyOutline())
                 ->schema(self::outlineForm())
                 ->action(function (array $data, CreateNovelOutlineVersionAction $create): void {
-                    $base = $this->latestDraft();
                     $data = $this->synchronizeSequences($data);
                     $create->handle(
                         novel: $this->getRecord(),
                         outline: $data,
-                        source: $base === null ? NovelOutlineSource::Manual : NovelOutlineSource::Revision,
-                        basedOn: $base,
+                        source: NovelOutlineSource::Manual,
                         creator: auth()->user(),
                     );
                     $this->getRecord()->refresh();
@@ -290,51 +293,6 @@ class ManageNovelOutline extends ViewRecord
                     $this->getRecord()->refresh();
                     Notification::make()->title('Current Novel Outline 已采用')->success()->send();
                 }),
-            Action::make('applyOutlineRevision')
-                ->label('从下一章生效')
-                ->icon('heroicon-o-arrow-right-circle')
-                ->color('primary')
-                ->visible(fn (): bool => $this->getRecord()->current_outline_id !== null)
-                ->modalHeading('修订未来大纲并从下一章生效')
-                ->modalDescription('保存会创建并采用新的不可变 Outline Version。当前非正式章继续使用其已冻结的旧 Chapter Plan；正式内容和正在使用的节点不会被改写。')
-                ->modalWidth('7xl')
-                ->fillForm(function (): array {
-                    $current = $this->getRecord()->currentOutline()->firstOrFail();
-
-                    return [
-                        ...NormalizedNovelOutline::fromModel($current)->toArray(),
-                        'expected_current_outline_id' => $current->getKey(),
-                        'expected_current_outline_checksum' => $current->checksum,
-                    ];
-                })
-                ->schema([
-                    Hidden::make('expected_current_outline_id')->required(),
-                    Hidden::make('expected_current_outline_checksum')->required(),
-                    ...self::outlineForm(),
-                ])
-                ->action(function (array $data, ApplyNovelOutlineRevisionAction $apply): void {
-                    // expected ID 与 checksum 构成乐观并发检查，防止基于过期 Current 版本修订。
-                    $expectedId = (int) $data['expected_current_outline_id'];
-                    $expectedChecksum = (string) $data['expected_current_outline_checksum'];
-                    unset($data['expected_current_outline_id'], $data['expected_current_outline_checksum']);
-
-                    try {
-                        $apply->handle(
-                            novel: $this->getRecord(),
-                            outline: $this->synchronizeSequences($data),
-                            expectedCurrentOutlineId: $expectedId,
-                            expectedCurrentChecksum: $expectedChecksum,
-                            creator: auth()->user(),
-                        );
-                    } catch (ValidationException $exception) {
-                        Notification::make()->title('无法修订大纲')->body(collect($exception->errors())->flatten()->first())->danger()->send();
-
-                        return;
-                    }
-
-                    $this->getRecord()->refresh();
-                    Notification::make()->title('新 Outline Version 已从下一章生效')->success()->send();
-                }),
             Action::make('restartChapterFromOutline')
                 ->label('重建当前非正式章')
                 ->icon('heroicon-o-arrow-path')
@@ -376,6 +334,186 @@ class ManageNovelOutline extends ViewRecord
                         ->send();
                 }),
         ];
+    }
+
+    /**
+     * 页面内每个节点复用同一个短表单；稳定 Key 和层级关系只作为参数，不允许从表单修改。
+     */
+    public function editOutlineNodeAction(): Action
+    {
+        return Action::make('editOutlineNode')
+            ->label('编辑')
+            ->icon('heroicon-m-pencil-square')
+            ->link()
+            ->color('gray')
+            ->disabled(fn (): bool => $this->outlineGenerationProgress()->isActive())
+            ->tooltip(fn (): ?string => $this->outlineGenerationProgress()->isActive()
+                ? 'AI 大纲批次仍在运行，结束后才能创建修订版本。'
+                : null)
+            ->modalHeading(fn (array $arguments): string => '编辑'.$this->outlineNodeTypeLabel((string) ($arguments['node_type'] ?? '')).' · '.($arguments['node_key'] ?? ''))
+            ->modalDescription(function (array $arguments): string {
+                $outline = $this->outlineForNodeArguments($arguments);
+
+                return $outline->status === NovelOutlineStatus::Current
+                    ? '只修改当前节点；保存会创建并采用新的不可变 Outline Version，从下一章生效。'
+                    : '只修改当前节点；保存会创建新的不可变 Draft Version，不覆盖旧版本。';
+            })
+            ->modalWidth('2xl')
+            ->modalSubmitActionLabel('保存为新版本')
+            ->fillForm(fn (array $arguments): array => $this->outlineNodeFormData($arguments))
+            ->schema(fn (array $arguments): array => self::outlineNodeForm((string) ($arguments['node_type'] ?? '')))
+            ->action(function (array $data, array $arguments, ReviseNovelOutlineNodeAction $revise): void {
+                try {
+                    $revision = $revise->handle(
+                        novel: $this->getRecord(),
+                        expectedOutlineId: (int) ($arguments['outline_id'] ?? 0),
+                        expectedOutlineChecksum: (string) ($arguments['outline_checksum'] ?? ''),
+                        nodeType: (string) ($arguments['node_type'] ?? ''),
+                        nodeKey: (string) ($arguments['node_key'] ?? ''),
+                        changes: $data,
+                        creator: auth()->user(),
+                    );
+                } catch (ValidationException $exception) {
+                    Notification::make()
+                        ->title('无法保存节点修订')
+                        ->body((string) collect($exception->errors())->flatten()->first())
+                        ->danger()
+                        ->send();
+
+                    return;
+                }
+
+                $this->getRecord()->refresh();
+                $unchanged = $revision->getKey() === (int) ($arguments['outline_id'] ?? 0);
+                Notification::make()
+                    ->title(match (true) {
+                        $unchanged => '节点内容未发生变化',
+                        $revision->status === NovelOutlineStatus::Current => '节点修订已从下一章生效',
+                        default => '节点修订已保存为新 Draft Version',
+                    })
+                    ->success()
+                    ->send();
+            });
+    }
+
+    /** @return array<int, mixed> */
+    private static function outlineNodeForm(string $nodeType): array
+    {
+        return match ($nodeType) {
+            'volume' => [
+                TextInput::make('title')->label('分卷名称')->required()->maxLength(NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH),
+            ],
+            'arc' => [
+                TextInput::make('title')->label('Arc 标题')->required()->maxLength(NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH),
+                Textarea::make('goal')->label('目标')->required()->rows(3)->maxLength(NovelOutlineStageContract::MAX_TEXT_LENGTH),
+                Textarea::make('stakes')->label('风险 / 代价')->required()->rows(3)->maxLength(NovelOutlineStageContract::MAX_TEXT_LENGTH),
+                self::outlineNodeTags('completion_conditions', '完成条件', true),
+            ],
+            'beat' => [
+                TextInput::make('title')->label('Beat 标题')->required()->maxLength(NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH),
+                Textarea::make('summary')->label('节点摘要')->required()->rows(4)->maxLength(NovelOutlineStageContract::MAX_TEXT_LENGTH),
+                Section::make('章节预算')->columns(2)->schema([
+                    TextInput::make('chapter_budget.min')->label('最少章节')->integer()->minValue(1)->required(),
+                    TextInput::make('chapter_budget.max')->label('最多章节')->integer()->minValue(1)->nullable(),
+                ]),
+                self::outlineNodeTags('acceptance_criteria', '验收条件', true),
+                self::outlineNodeTags('must_include', '必须包含'),
+                self::outlineNodeTags('must_not_include', '禁止包含'),
+            ],
+            'milestone' => [
+                TextInput::make('title')->label('Milestone 标题')->required()->maxLength(NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH),
+                Textarea::make('objective')->label('阶段目标')->required()->rows(4)->maxLength(NovelOutlineStageContract::MAX_TEXT_LENGTH),
+                self::outlineNodeTags('acceptance_criteria', '验收条件', true),
+                self::outlineNodeTags('must_include', '必须包含'),
+                self::outlineNodeTags('must_not_include', '禁止包含'),
+            ],
+            default => throw ValidationException::withMessages(['outline_node' => '不支持的 Outline 节点类型。']),
+        };
+    }
+
+    private static function outlineNodeTags(string $name, string $label, bool $required = false): TagsInput
+    {
+        return TagsInput::make($name)
+            ->label($label)
+            ->required($required)
+            ->rules(['array', ($required ? 'min:1' : 'min:0'), 'max:'.NovelOutlineStageContract::MAX_LIST_ITEMS])
+            ->nestedRecursiveRules(['string', 'max:'.NovelOutlineStageContract::MAX_LIST_ITEM_LENGTH]);
+    }
+
+    /** @return array<string, mixed> */
+    private function outlineNodeFormData(array $arguments): array
+    {
+        $node = $this->outlineNode($arguments);
+
+        return match ((string) ($arguments['node_type'] ?? '')) {
+            'volume' => ['title' => $node->title],
+            'arc' => [
+                'title' => $node->title,
+                'goal' => $node->goal,
+                'stakes' => $node->stakes,
+                'completion_conditions' => $node->completion_conditions ?? [],
+            ],
+            'beat' => [
+                'title' => $node->title,
+                'summary' => $node->summary,
+                'chapter_budget' => ['min' => $node->chapter_budget_min, 'max' => $node->chapter_budget_max],
+                'acceptance_criteria' => $node->acceptance_criteria ?? [],
+                'must_include' => $node->must_include ?? [],
+                'must_not_include' => $node->must_not_include ?? [],
+            ],
+            'milestone' => [
+                'title' => $node->title,
+                'objective' => $node->objective,
+                'acceptance_criteria' => $node->acceptance_criteria ?? [],
+                'must_include' => $node->must_include ?? [],
+                'must_not_include' => $node->must_not_include ?? [],
+            ],
+            default => throw ValidationException::withMessages(['outline_node' => '不支持的 Outline 节点类型。']),
+        };
+    }
+
+    private function outlineNode(array $arguments): NovelOutlineVolume|NovelOutlineArc|NovelOutlineBeat|NovelOutlineMilestone
+    {
+        $outline = $this->outlineForNodeArguments($arguments);
+        $nodeType = (string) ($arguments['node_type'] ?? '');
+        $nodeKey = (string) ($arguments['node_key'] ?? '');
+        $node = match ($nodeType) {
+            'volume' => $outline->volumes()->where('volume_key', $nodeKey)->first(),
+            'arc' => $outline->arcs()->where('arc_key', $nodeKey)->first(),
+            'beat' => $outline->beats()->where('beat_key', $nodeKey)->first(),
+            'milestone' => $outline->milestones()->where('milestone_key', $nodeKey)->first(),
+            default => null,
+        };
+
+        if (! $node instanceof NovelOutlineVolume
+            && ! $node instanceof NovelOutlineArc
+            && ! $node instanceof NovelOutlineBeat
+            && ! $node instanceof NovelOutlineMilestone) {
+            throw ValidationException::withMessages(['outline_node' => "Outline 中不存在 {$nodeType} 节点 {$nodeKey}。"]);
+        }
+
+        return $node;
+    }
+
+    private function outlineForNodeArguments(array $arguments): NovelOutline
+    {
+        $outline = $this->getRecord()->outlines()->find((int) ($arguments['outline_id'] ?? 0));
+        if ($outline === null || ! in_array($outline->status, [NovelOutlineStatus::Draft, NovelOutlineStatus::Current], true)) {
+            throw ValidationException::withMessages(['outline' => '只能编辑当前 Draft 或 Current Outline。']);
+        }
+
+        return $outline;
+    }
+
+    private function outlineNodeTypeLabel(string $nodeType): string
+    {
+        return match ($nodeType) {
+            'volume' => '分卷名称',
+            'arc' => 'Arc',
+            'beat' => 'Beat',
+            'milestone' => 'Milestone',
+            default => 'Outline 节点',
+        };
     }
 
     /** @return array<int, AiStage> */
@@ -584,7 +722,10 @@ class ManageNovelOutline extends ViewRecord
 
     private function displayedOutline(): ?NovelOutline
     {
-        return $this->getRecord()->currentOutline ?? $this->latestDraft() ?? $this->getRecord()->outlines()->first();
+        $outline = $this->getRecord()->currentOutline ?? $this->latestDraft() ?? $this->getRecord()->outlines()->first();
+
+        // 页面会同时展示四层节点，预加载完整关系，避免 Beat 数量增加后产生逐节点查询。
+        return $outline?->loadMissing('volumes.arcs.beats.milestones');
     }
 
     private function latestDraft(): ?NovelOutline

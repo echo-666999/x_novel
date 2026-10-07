@@ -239,7 +239,8 @@ class NovelOutlinePipeline
         }
 
         $batch->touch();
-        if ($this->artifact($batch, ArtifactType::OutlineFoundation) === null) {
+        $foundation = $this->artifact($batch, ArtifactType::OutlineFoundation);
+        if ($foundation === null) {
             GenerateNovelFoundationJob::dispatch($batch->getKey());
 
             return;
@@ -252,29 +253,40 @@ class NovelOutlinePipeline
         }
         $this->assertCurrentBatch($batch);
 
-        $structure = $this->currentStructureArtifact($batch);
+        // 一次推进只读取一次上游 Artifact；后续校验统一复用内存对象，避免递归查询同一来源链。
+        $structure = $this->currentStructureArtifactForSource($batch, $foundation);
         if ($structure === null) {
             GenerateNovelOutlineStructureJob::dispatch($batch->getKey());
 
             return;
         }
-        foreach ($this->orderedArcs($this->payload($structure)) as $arc) {
-            if ($this->arcBeatsArtifact($batch, (string) $arc['key']) === null) {
-                GenerateNovelArcBeatsJob::dispatch($batch->getKey(), (string) $arc['key']);
+        $arcs = $this->orderedArcs($this->payload($structure));
+        $arcArtifacts = $this->currentArcBeatsArtifacts($batch, $foundation, $structure, $arcs);
+        $orderedArcArtifacts = [];
+        foreach ($arcs as $arc) {
+            $arcKey = (string) $arc['key'];
+            if (! isset($arcArtifacts[$arcKey])) {
+                GenerateNovelArcBeatsJob::dispatch($batch->getKey(), $arcKey);
 
                 return;
             }
+            $orderedArcArtifacts[$arcKey] = $arcArtifacts[$arcKey];
         }
 
-        $skeleton = $this->artifact($batch, ArtifactType::OutlineSkeleton);
+        $skeleton = $this->currentSkeletonArtifactBySources($batch, $foundation, $structure, $orderedArcArtifacts);
         if ($skeleton === null) {
             AssembleNovelOutlineSkeletonJob::dispatch($batch->getKey());
 
             return;
         }
 
-        foreach ($this->mainBeats($this->payload($skeleton)) as $beat) {
-            if ($this->beatDetailArtifact($batch, (string) $beat['key']) === null) {
+        $beats = $this->mainBeats($this->payload($skeleton));
+        $completedBeatKeys = array_fill_keys(
+            array_keys($this->currentBeatDetailArtifacts($batch, $foundation, $skeleton, $beats)),
+            true,
+        );
+        foreach ($beats as $beat) {
+            if (! isset($completedBeatKeys[(string) $beat['key']])) {
                 GenerateNovelBeatDetailJob::dispatch($batch->getKey(), (string) $beat['key']);
 
                 return;
@@ -758,31 +770,34 @@ class NovelOutlinePipeline
     {
         $this->assertRunnableBatch($batch);
         $foundation = $this->requiredArtifact($batch, ArtifactType::OutlineFoundation);
-        $skeleton = $this->requiredArtifact($batch, ArtifactType::OutlineSkeleton);
-        $skeletonData = $this->payload($skeleton);
-        $details = [];
-        foreach ($this->mainBeats($skeletonData) as $beat) {
-            $artifact = $this->beatDetailArtifact($batch, (string) $beat['key']);
-            if ($artifact === null) {
-                throw ValidationException::withMessages(['outline' => "Main Beat {$beat['key']} 缺少 Detail Artifact。"]);
-            }
-            $details[(string) $beat['key']] = $artifact;
-        }
-
         $this->assertStageArtifact($batch, $foundation, ArtifactType::OutlineFoundation, self::FOUNDATION_SCOPE);
         $structure = null;
         $arcArtifacts = [];
         if ($this->isLegacyBatch($batch)) {
+            $skeleton = $this->requiredArtifact($batch, ArtifactType::OutlineSkeleton);
             $this->assertStageArtifact($batch, $skeleton, ArtifactType::OutlineSkeleton, self::SKELETON_SCOPE);
         } else {
-            $structure = $this->requiredCurrentStructure($batch);
-            foreach ($this->orderedArcs($this->payload($structure)) as $arc) {
+            $structure = $this->currentStructureArtifactForSource($batch, $foundation)
+                ?? throw ValidationException::withMessages(['outline' => '缺少当前来源链对应的 outline_structure Artifact。']);
+            $this->assertStageArtifact(
+                $batch,
+                $structure,
+                ArtifactType::OutlineStructure,
+                self::STRUCTURE_SCOPE,
+                null,
+                $this->structureInputHash($batch, $foundation),
+            );
+            $arcs = $this->orderedArcs($this->payload($structure));
+            $currentArcArtifacts = $this->currentArcBeatsArtifacts($batch, $foundation, $structure, $arcs);
+            foreach ($arcs as $arc) {
                 $arcKey = (string) $arc['key'];
-                $arcArtifact = $this->arcBeatsArtifact($batch, $arcKey)
+                $arcArtifact = ($currentArcArtifacts[$arcKey] ?? null)
                     ?? throw ValidationException::withMessages(['outline' => "Arc {$arcKey} 缺少 Beats Artifact。"]);
                 $this->assertStageArtifact($batch, $arcArtifact, ArtifactType::OutlineArcBeats, self::ARC_BEATS_SCOPE, $arcKey, $this->arcBeatsInputHash($batch, $foundation, $structure, $arcKey));
                 $arcArtifacts[$arcKey] = $arcArtifact;
             }
+            $skeleton = $this->currentSkeletonArtifactBySources($batch, $foundation, $structure, $arcArtifacts)
+                ?? throw ValidationException::withMessages(['outline' => '缺少与当前来源链匹配的 Skeleton Artifact。']);
             $assemblyInputHash = $this->hash([
                 'algorithm' => self::SKELETON_ASSEMBLY_VERSION,
                 'sources' => [
@@ -793,6 +808,34 @@ class NovelOutlinePipeline
             ]);
             $this->assertStageArtifact($batch, $skeleton, ArtifactType::OutlineSkeleton, self::SKELETON_ASSEMBLY_SCOPE, null, $assemblyInputHash);
         }
+
+        $skeletonData = $this->payload($skeleton);
+        $beats = $this->mainBeats($skeletonData);
+        if ($this->isLegacyBatch($batch)) {
+            $details = [];
+            foreach ($beats as $beat) {
+                $beatKey = (string) $beat['key'];
+                $artifact = $this->beatDetailArtifact($batch, $beatKey);
+                if ($artifact === null) {
+                    throw ValidationException::withMessages(['outline' => "Main Beat {$beatKey} 缺少 Detail Artifact。"]);
+                }
+                $details[$beatKey] = $artifact;
+            }
+        } else {
+            $details = $this->currentBeatDetailArtifacts($batch, $foundation, $skeleton, $beats);
+        }
+
+        // Finalize 是采用整条来源链的确定性边界；每个节点的完整 input hash 只在这里复核一次。
+        $orderedDetails = [];
+        foreach ($beats as $beat) {
+            $beatKey = (string) $beat['key'];
+            $artifact = $details[$beatKey] ?? null;
+            if (! $artifact instanceof GenerationArtifact) {
+                throw ValidationException::withMessages(['outline' => "Main Beat {$beatKey} 缺少 Detail Artifact。"]);
+            }
+            $orderedDetails[$beatKey] = $artifact;
+        }
+        $details = $orderedDetails;
         foreach ($details as $beatKey => $artifact) {
             $this->assertStageArtifact(
                 $batch,
@@ -1532,19 +1575,38 @@ class NovelOutlinePipeline
     private function currentSkeletonArtifact(GenerationRun $batch): ?GenerationArtifact
     {
         $foundation = $this->artifact($batch, ArtifactType::OutlineFoundation);
-        $structure = $this->currentStructureArtifact($batch);
-        if ($foundation === null || $structure === null) {
+        if ($foundation === null) {
             return null;
         }
-        $arcArtifacts = [];
-        foreach ($this->orderedArcs($this->payload($structure)) as $arc) {
+        $structure = $this->currentStructureArtifactForFoundation($batch, $foundation);
+        if ($structure === null) {
+            return null;
+        }
+        $arcs = $this->orderedArcs($this->payload($structure));
+        $currentArcArtifacts = $this->currentArcBeatsArtifacts($batch, $foundation, $structure, $arcs);
+        $orderedArcArtifacts = [];
+        foreach ($arcs as $arc) {
             $arcKey = (string) $arc['key'];
-            $arcArtifact = $this->arcBeatsArtifact($batch, $arcKey);
-            if ($arcArtifact === null) {
+            if (! isset($currentArcArtifacts[$arcKey])) {
                 return null;
             }
-            $arcArtifacts[$arcKey] = $arcArtifact;
+            $orderedArcArtifacts[$arcKey] = $currentArcArtifacts[$arcKey];
         }
+
+        return $this->currentSkeletonArtifactForSources($batch, $foundation, $structure, $orderedArcArtifacts);
+    }
+
+    /**
+     * 使用已加载的 Structure 与有序 Arc 集合定位 Skeleton，禁止在本方法内重新读取上游 Artifact。
+     *
+     * @param  array<string, GenerationArtifact>  $arcArtifacts
+     */
+    private function currentSkeletonArtifactForSources(
+        GenerationRun $batch,
+        GenerationArtifact $foundation,
+        GenerationArtifact $structure,
+        array $arcArtifacts,
+    ): ?GenerationArtifact {
         $inputHash = $this->hash([
             'algorithm' => self::SKELETON_ASSEMBLY_VERSION,
             'sources' => [
@@ -1566,6 +1628,43 @@ class NovelOutlinePipeline
             ->first();
     }
 
+    /**
+     * 推进阶段只比较成功 Run 冻结的来源链；完整 input hash 留在生成和 Finalize 边界校验。
+     *
+     * @param  array<string, GenerationArtifact>  $arcArtifacts
+     */
+    private function currentSkeletonArtifactBySources(
+        GenerationRun $batch,
+        GenerationArtifact $foundation,
+        GenerationArtifact $structure,
+        array $arcArtifacts,
+    ): ?GenerationArtifact {
+        $expectedSources = [
+            'foundation' => $this->artifactReference($foundation),
+            'structure' => $this->artifactReference($structure),
+            'arc_beats' => collect($arcArtifacts)
+                ->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))
+                ->all(),
+        ];
+        $candidates = GenerationArtifact::query()
+            ->join('generation_runs', 'generation_runs.id', '=', 'generation_artifacts.generation_run_id')
+            ->where('generation_artifacts.type', ArtifactType::OutlineSkeleton)
+            ->where('generation_runs.novel_id', $batch->novel_id)
+            ->where('generation_runs.scope_type', self::SKELETON_ASSEMBLY_SCOPE)
+            ->where('generation_runs.scope_id', $batch->getKey())
+            ->where('generation_runs.status', RunStatus::Succeeded)
+            ->orderByDesc('generation_artifacts.id')
+            ->get([
+                'generation_artifacts.*',
+                'generation_runs.context_snapshot->discriminator as run_discriminator',
+                'generation_runs.context_snapshot->source_artifacts as run_source_artifacts',
+            ]);
+
+        return $candidates->first(fn (GenerationArtifact $candidate): bool => $candidate->getAttribute('run_discriminator') === null
+            && data_get($candidate->data, 'discriminator') === null
+            && $this->stageSourceArtifactsMatch($candidate, $candidate->getAttribute('run_source_artifacts'), $expectedSources));
+    }
+
     private function requiredCurrentStructure(GenerationRun $batch): GenerationArtifact
     {
         return $this->currentStructureArtifact($batch)
@@ -1580,6 +1679,14 @@ class NovelOutlinePipeline
             return null;
         }
 
+        return $this->currentStructureArtifactForFoundation($batch, $foundation);
+    }
+
+    /** 使用内存中的 Foundation 计算 Structure 指纹，避免同一次推进重复读取 Foundation。 */
+    private function currentStructureArtifactForFoundation(
+        GenerationRun $batch,
+        GenerationArtifact $foundation,
+    ): ?GenerationArtifact {
         return GenerationArtifact::query()
             ->where('type', ArtifactType::OutlineStructure)
             ->whereHas('generationRun', fn ($query) => $query
@@ -1592,27 +1699,100 @@ class NovelOutlinePipeline
             ->first();
     }
 
+    /** 推进阶段按成功 Run 冻结的 Foundation 引用定位 Structure，不重算完整请求合同。 */
+    private function currentStructureArtifactForSource(
+        GenerationRun $batch,
+        GenerationArtifact $foundation,
+    ): ?GenerationArtifact {
+        $expectedSources = [$this->artifactReference($foundation)];
+        $candidates = GenerationArtifact::query()
+            ->join('generation_runs', 'generation_runs.id', '=', 'generation_artifacts.generation_run_id')
+            ->where('generation_artifacts.type', ArtifactType::OutlineStructure)
+            ->where('generation_runs.novel_id', $batch->novel_id)
+            ->where('generation_runs.scope_type', self::STRUCTURE_SCOPE)
+            ->where('generation_runs.scope_id', $batch->getKey())
+            ->where('generation_runs.status', RunStatus::Succeeded)
+            ->orderByDesc('generation_artifacts.id')
+            ->get([
+                'generation_artifacts.*',
+                'generation_runs.context_snapshot->discriminator as run_discriminator',
+                'generation_runs.context_snapshot->source_artifacts as run_source_artifacts',
+            ]);
+
+        return $candidates->first(fn (GenerationArtifact $candidate): bool => $candidate->getAttribute('run_discriminator') === null
+            && data_get($candidate->data, 'discriminator') === null
+            && $this->stageSourceArtifactsMatch($candidate, $candidate->getAttribute('run_source_artifacts'), $expectedSources));
+    }
+
     /** 按 Arc Key 与当前 Foundation/Structure 输入指纹选择成功 Artifact。 */
     private function arcBeatsArtifact(GenerationRun $batch, string $arcKey): ?GenerationArtifact
     {
         $foundation = $this->artifact($batch, ArtifactType::OutlineFoundation);
-        $structure = $this->currentStructureArtifact($batch);
-        if ($foundation === null || $structure === null) {
+        if ($foundation === null) {
+            return null;
+        }
+        $structure = $this->currentStructureArtifactForFoundation($batch, $foundation);
+        if ($structure === null) {
             return null;
         }
 
-        return GenerationArtifact::query()
-            ->where('type', ArtifactType::OutlineArcBeats)
-            ->where('data->discriminator', $arcKey)
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('novel_id', $batch->novel_id)
-                ->where('scope_type', self::ARC_BEATS_SCOPE)
-                ->where('scope_id', $batch->getKey())
-                ->where('input_hash', $this->arcBeatsInputHash($batch, $foundation, $structure, $arcKey))
-                ->where('context_snapshot->discriminator', $arcKey)
-                ->where('status', RunStatus::Succeeded))
-            ->latest('id')
-            ->first();
+        return $this->currentArcBeatsArtifacts($batch, $foundation, $structure, [['key' => $arcKey]])[$arcKey] ?? null;
+    }
+
+    /**
+     * 一次批量读取当前 Structure 下全部有效 Arc Artifact，供推进与 Skeleton 来源校验共同复用。
+     *
+     * @param  array<int, array<string, mixed>>  $arcs
+     * @return array<string, GenerationArtifact>
+     */
+    private function currentArcBeatsArtifacts(
+        GenerationRun $batch,
+        GenerationArtifact $foundation,
+        GenerationArtifact $structure,
+        array $arcs,
+    ): array {
+        $arcKeys = collect($arcs)
+            ->pluck('key')
+            ->filter(fn (mixed $key): bool => is_string($key) && $key !== '')
+            ->values()
+            ->all();
+        if ($arcKeys === []) {
+            return [];
+        }
+
+        $expectedSources = [$this->artifactReference($foundation), $this->artifactReference($structure)];
+
+        $candidates = GenerationArtifact::query()
+            ->join('generation_runs', 'generation_runs.id', '=', 'generation_artifacts.generation_run_id')
+            ->where('generation_artifacts.type', ArtifactType::OutlineArcBeats)
+            ->where('generation_runs.novel_id', $batch->novel_id)
+            ->where('generation_runs.scope_type', self::ARC_BEATS_SCOPE)
+            ->where('generation_runs.scope_id', $batch->getKey())
+            ->where('generation_runs.status', RunStatus::Succeeded)
+            ->whereIn('generation_runs.context_snapshot->discriminator', $arcKeys)
+            ->whereIn('generation_artifacts.data->discriminator', $arcKeys)
+            ->orderByDesc('generation_artifacts.id')
+            ->get([
+                'generation_artifacts.*',
+                'generation_runs.context_snapshot->discriminator as run_discriminator',
+                'generation_runs.context_snapshot->source_artifacts as run_source_artifacts',
+            ]);
+
+        $artifacts = [];
+        foreach ($candidates as $candidate) {
+            $runDiscriminator = (string) $candidate->getAttribute('run_discriminator');
+            $artifactDiscriminator = (string) data_get($candidate->data, 'discriminator');
+            if (isset($artifacts[$runDiscriminator])
+                || $runDiscriminator === ''
+                || $runDiscriminator !== $artifactDiscriminator
+                || ! $this->stageSourceArtifactsMatch($candidate, $candidate->getAttribute('run_source_artifacts'), $expectedSources)) {
+                continue;
+            }
+
+            $artifacts[$runDiscriminator] = $candidate;
+        }
+
+        return $artifacts;
     }
 
     /** 按稳定 Beat Key 查找当前批次的成功 Detail Artifact。 */
@@ -1636,6 +1816,65 @@ class NovelOutlinePipeline
                 ->where('status', RunStatus::Succeeded))
             ->latest('id')
             ->first();
+    }
+
+    /**
+     * 一次读取当前批次全部成功 Beat，并按 Run 冻结来源链判断能否进入下一节点。
+     *
+     * 推进阶段只负责识别确定性断点，不重算 Prompt、Schema、预算组成的完整 input hash；
+     * 该指纹已经在节点生成时写入，并会在 Finalize 采用 Artifact 前重新校验一次。
+     *
+     * @param  array<int, array<string, mixed>>  $beats
+     * @return array<string, GenerationArtifact>
+     */
+    private function currentBeatDetailArtifacts(
+        GenerationRun $batch,
+        GenerationArtifact $foundation,
+        GenerationArtifact $skeleton,
+        array $beats,
+    ): array {
+        $beatKeys = collect($beats)
+            ->pluck('key')
+            ->filter(fn (mixed $key): bool => is_string($key) && $key !== '')
+            ->values()
+            ->all();
+        if ($beatKeys === []) {
+            return [];
+        }
+
+        $expectedSources = [$this->artifactReference($foundation), $this->artifactReference($skeleton)];
+
+        $candidates = GenerationArtifact::query()
+            ->join('generation_runs', 'generation_runs.id', '=', 'generation_artifacts.generation_run_id')
+            ->where('generation_artifacts.type', ArtifactType::OutlineBeatDetail)
+            ->where('generation_runs.novel_id', $batch->novel_id)
+            ->where('generation_runs.scope_type', self::BEAT_DETAIL_SCOPE)
+            ->where('generation_runs.scope_id', $batch->getKey())
+            ->where('generation_runs.status', RunStatus::Succeeded)
+            ->whereIn('generation_runs.context_snapshot->discriminator', $beatKeys)
+            ->whereIn('generation_artifacts.data->discriminator', $beatKeys)
+            ->orderByDesc('generation_artifacts.id')
+            ->get([
+                'generation_artifacts.*',
+                'generation_runs.context_snapshot->discriminator as run_discriminator',
+                'generation_runs.context_snapshot->source_artifacts as run_source_artifacts',
+            ]);
+
+        $artifacts = [];
+        foreach ($candidates as $candidate) {
+            $runDiscriminator = (string) $candidate->getAttribute('run_discriminator');
+            $artifactDiscriminator = (string) data_get($candidate->data, 'discriminator');
+            if (isset($artifacts[$runDiscriminator])
+                || $runDiscriminator === ''
+                || $runDiscriminator !== $artifactDiscriminator
+                || ! $this->stageSourceArtifactsMatch($candidate, $candidate->getAttribute('run_source_artifacts'), $expectedSources)) {
+                continue;
+            }
+
+            $artifacts[$runDiscriminator] = $candidate;
+        }
+
+        return $artifacts;
     }
 
     /** @return array{0: array<string, mixed>, 1: string|null} */
@@ -1717,6 +1956,45 @@ class NovelOutlinePipeline
     private function artifactReference(GenerationArtifact $artifact): array
     {
         return ['id' => $artifact->getKey(), 'checksum' => $artifact->checksum, 'type' => $artifact->type->value];
+    }
+
+    /**
+     * 同时核对成功 Run 冻结来源与 Artifact 自身来源，避免只凭 discriminator 复用跨来源结果。
+     *
+     * @param  array<int|string, mixed>  $expectedSources
+     */
+    private function stageSourceArtifactsMatch(
+        GenerationArtifact $artifact,
+        mixed $runSourceArtifacts,
+        array $expectedSources,
+    ): bool {
+        if (is_string($runSourceArtifacts)) {
+            $runSourceArtifacts = json_decode($runSourceArtifacts, true);
+        }
+
+        $artifactSourceArtifacts = data_get($artifact->data, 'source_artifacts');
+        if (! is_array($runSourceArtifacts) || ! is_array($artifactSourceArtifacts)) {
+            return false;
+        }
+
+        // JSON 对象读取后键顺序可能改变；只排序关联数组，保留列表顺序以继续约束来源先后关系。
+        $expected = $this->normalizeSourceArtifacts($expectedSources);
+
+        return $this->normalizeSourceArtifacts($runSourceArtifacts) === $expected
+            && $this->normalizeSourceArtifacts($artifactSourceArtifacts) === $expected;
+    }
+
+    /** 递归稳定来源对象的键顺序，同时保持有序来源列表不变。 */
+    private function normalizeSourceArtifacts(array $sources): array
+    {
+        if (! array_is_list($sources)) {
+            ksort($sources);
+        }
+
+        return array_map(
+            fn (mixed $value): mixed => is_array($value) ? $this->normalizeSourceArtifacts($value) : $value,
+            $sources,
+        );
     }
 
     /** 按 mainline_sequence 返回需要逐个细化的 Main Beat。 */

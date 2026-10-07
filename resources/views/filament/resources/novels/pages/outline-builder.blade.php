@@ -53,6 +53,14 @@
             <x-filament::section collapsible>
                 <x-slot name="heading">{{ $volume->sequence }}. {{ $volume->title }}</x-slot>
                 <x-slot name="description">{{ $volume->volume_key }} · 目标 {{ number_format($volume->target_words) }} 字</x-slot>
+                <x-slot name="afterHeader">
+                    {{ ($this->editOutlineNodeAction)([
+                        'outline_id' => $outline->getKey(),
+                        'outline_checksum' => $outline->checksum,
+                        'node_type' => 'volume',
+                        'node_key' => $volume->volume_key,
+                    ]) }}
+                </x-slot>
 
                 <div class="space-y-5">
                     <div class="grid gap-4 md:grid-cols-2">
@@ -63,7 +71,15 @@
                         <div class="rounded-lg border border-gray-200 p-4 dark:border-white/10">
                             <div class="flex flex-wrap items-center justify-between gap-2">
                                 <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ $arc->sequence }}. {{ $arc->title }}</h3>
-                                <span class="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-300">{{ $arc->type->getLabel() }} · {{ $arc->arc_key }}</span>
+                                <div class="flex items-center gap-2">
+                                    <span class="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-300">{{ $arc->type->getLabel() }} · {{ $arc->arc_key }}</span>
+                                    {{ ($this->editOutlineNodeAction)([
+                                        'outline_id' => $outline->getKey(),
+                                        'outline_checksum' => $outline->checksum,
+                                        'node_type' => 'arc',
+                                        'node_key' => $arc->arc_key,
+                                    ]) }}
+                                </div>
                             </div>
                             <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">{{ $arc->goal }}</p>
                             <div class="mt-4 divide-y divide-gray-200 dark:divide-white/10">
@@ -74,13 +90,29 @@
                                             <div class="text-sm font-medium text-gray-900 dark:text-white">{{ $beat->sequence }}. {{ $beat->title }}</div>
                                             <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">{{ $beat->summary }}</p>
                                         </div>
-                                        <div class="font-mono text-xs text-gray-500">{{ $beat->beat_key }} · {{ $beat->chapter_budget_min }}–{{ $beat->chapter_budget_max ?? '∞' }} 章</div>
+                                        <div class="flex items-center gap-2">
+                                          <div class="font-mono text-xs text-gray-500">{{ $beat->beat_key }} · {{ $beat->chapter_budget_min }}–{{ $beat->chapter_budget_max ?? '∞' }} 章</div>
+                                          {{ ($this->editOutlineNodeAction)([
+                                              'outline_id' => $outline->getKey(),
+                                              'outline_checksum' => $outline->checksum,
+                                              'node_type' => 'beat',
+                                              'node_key' => $beat->beat_key,
+                                          ]) }}
+                                        </div>
                                       </div>
                                       @if ($beat->milestones->isNotEmpty())
                                         <div class="grid gap-2 md:grid-cols-2">
                                           @foreach ($beat->milestones as $milestone)
                                             <div class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-white/5">
-                                              <div class="font-medium text-gray-900 dark:text-white">M{{ $milestone->sequence }} · {{ $milestone->title }}</div>
+                                              <div class="flex items-start justify-between gap-2">
+                                                <div class="font-medium text-gray-900 dark:text-white">M{{ $milestone->sequence }} · {{ $milestone->title }}</div>
+                                                {{ ($this->editOutlineNodeAction)([
+                                                    'outline_id' => $outline->getKey(),
+                                                    'outline_checksum' => $outline->checksum,
+                                                    'node_type' => 'milestone',
+                                                    'node_key' => $milestone->milestone_key,
+                                                ]) }}
+                                              </div>
                                               <div class="mt-1 text-gray-600 dark:text-gray-400">{{ $milestone->objective }}</div>
                                             </div>
                                           @endforeach

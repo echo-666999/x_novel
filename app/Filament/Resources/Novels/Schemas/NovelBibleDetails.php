@@ -11,7 +11,8 @@ class NovelBibleDetails
 {
     public static function configure(Schema $schema): Schema
     {
-        return $schema->components([
+        // 圣经详情内容较长，顶层固定为单列，避免宽屏下两个 Section 并排压缩内容。
+        return $schema->columns(1)->components([
             Section::make('当前版本')
                 ->description('所有重大设定变更都通过新版本保存，当前版本是后续规划与生成的约束来源。')
                 ->columns([
