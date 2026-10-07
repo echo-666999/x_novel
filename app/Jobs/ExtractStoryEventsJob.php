@@ -57,7 +57,14 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
         try {
             $artifact = $extractor->extract($this->chapterId, $this->regenerate, singleProviderCall: true);
             if ($artifact !== null) {
-                $advance->handle($this->chapterId);
+                if (! $this->advanceAfterSuccessfulStage(
+                    $advance,
+                    GenerationStage::EventExtraction,
+                    $this->chapterId,
+                    generationRunId: $artifact->generation_run_id,
+                )) {
+                    return;
+                }
             }
 
             $this->releaseGenerationDispatch();

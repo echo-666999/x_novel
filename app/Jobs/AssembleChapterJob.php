@@ -55,7 +55,14 @@ class AssembleChapterJob implements ShouldBeUnique, ShouldQueue
         try {
             $artifact = $assembler->assemble($this->chapterId, $this->regenerate);
             if ($artifact !== null) {
-                $advance->handle($this->chapterId);
+                if (! $this->advanceAfterSuccessfulStage(
+                    $advance,
+                    GenerationStage::ChapterAssembly,
+                    $this->chapterId,
+                    generationRunId: $artifact->generation_run_id,
+                )) {
+                    return;
+                }
             }
 
             $this->releaseGenerationDispatch();

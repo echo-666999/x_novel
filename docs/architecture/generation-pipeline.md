@@ -88,6 +88,8 @@ GenerateNextChapterAction
 
 `AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan Admission、Scene、Deterministic Assembly、Event Extraction、Review 和局部 Rewrite 成功后都调用该动作，不再各自维护后续分支。
 
+阶段执行结果与流程推进结果分开记录。Provider 或确定性阶段完成并写入有效 Artifact 后，Run 保持 `succeeded`；随后 `AdvanceChapterPipelineAction` 的选择、校验或派发异常写入该 Run 的 `progression_failure` JSONB，不覆盖 `error_code / error_message`，也不把 Scene 或 Chapter 的成功阶段反向改成失败。所有章节生成 Job 通过同一推进边界记录错误并停止自动续写；Generation 页面、章节运行记录、场景运行详情和流水线时间轴显示“阶段成功 · 推进异常”。同一成功 Run 再次推进成功时只写入 `resolved_at`，保留原始故障证据且不重复调用 Provider。
+
 推进器使用 `GenerationJobDispatcher` 的短期待执行标记消除重复入队窗口，但断点判断只依赖 PostgreSQL。Scene 按 sequence 严格串行；Chapter Draft 必须对应当前 Scene Artifact，Event Candidate 必须来源于当前 Chapter Draft，State Patch 必须来源于当前 Event Candidate 且匹配当前 State Version，Review 必须来源于当前 Chapter Draft。任一来源不匹配时，从最早失效阶段恢复，不复用失效的下游结果。PASS、NEEDS_ATTENTION、BLOCK、暂停、正式提交或废弃章节都不会继续派发生成 Job。
 
 ## 3. Queue

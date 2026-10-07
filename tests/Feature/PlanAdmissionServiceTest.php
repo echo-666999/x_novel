@@ -107,6 +107,52 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
         ->and($provider->requests())->toBe([]);
 });
 
+test('plan checksum ignores associative key order while preserving list order', function () {
+    $persisted = admissionReadyPlan(1);
+    $scene = $persisted->scene_plans[0];
+    $scene['outcome_allowed'] = ['先确认水声', '再停止喂乳'];
+
+    // 刻意调整对象键顺序，验证规范化哈希不依赖 Provider 返回 Map 的排列方式。
+    $sceneWithProviderOrder = [
+        'goal' => $scene['goal'],
+        'conflict' => $scene['conflict'],
+        'turn' => $scene['turn'],
+        'outcome' => $scene['outcome'],
+        'outcome_allowed' => $scene['outcome_allowed'],
+        'outcome_forbidden' => $scene['outcome_forbidden'],
+        'continuity_requirements' => $scene['continuity_requirements'],
+        'pov_character_id' => $scene['pov_character_id'],
+        'location' => $scene['location'],
+        'time_anchor' => $scene['time_anchor'],
+        'transition_from_previous' => $scene['transition_from_previous'],
+    ];
+    $candidate = new ChapterPlan([
+        ...$persisted->semanticPayload(),
+        'scene_plans' => [$sceneWithProviderOrder],
+        'version' => $persisted->version,
+        'status' => PlanStatus::Ready,
+    ]);
+    $candidate->setRelation('chapter', $persisted->chapter);
+    $checksumBeforeSave = $candidate->semanticChecksum();
+    $admission = app(PlanAdmissionService::class)->prepare($candidate);
+
+    $persisted->update([
+        ...$candidate->semanticPayload(),
+        ...$admission,
+    ]);
+    $reloaded = $persisted->fresh();
+
+    expect($reloaded->semanticChecksum())->toBe($checksumBeforeSave)
+        ->and(fn () => app(PlanAdmissionService::class)->admit($reloaded))->not->toThrow(ValidationException::class);
+
+    $reversedList = $reloaded->scene_plans;
+    $reversedList[0]['outcome_allowed'] = array_reverse($reversedList[0]['outcome_allowed']);
+    $reloaded->scene_plans = $reversedList;
+
+    // List 顺序会改变执行含义，必须继续形成不同 checksum。
+    expect($reloaded->semanticChecksum())->not->toBe($checksumBeforeSave);
+});
+
 test('provider stages reject a request budget above the plan admission frozen route before calling a provider', function () {
     $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
     $maximum = (int) data_get($plan->admission_snapshot, 'capacity.event_extraction.max_output_tokens');

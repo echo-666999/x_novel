@@ -61,7 +61,14 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
             $review = $reviewer->review($this->chapterId, $this->regenerate, $this->operationId);
 
             if ($review !== null) {
-                $advance->handle($this->chapterId);
+                if (! $this->advanceAfterSuccessfulStage(
+                    $advance,
+                    GenerationStage::Review,
+                    $this->chapterId,
+                    generationRunId: $review->generation_run_id,
+                )) {
+                    return;
+                }
             }
 
             $this->releaseGenerationDispatch();

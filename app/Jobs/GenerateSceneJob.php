@@ -65,7 +65,16 @@ class GenerateSceneJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
             if ($artifact !== null) {
                 $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
                 if ($chapterId !== null) {
-                    $advance->handle((int) $chapterId, $this->regenerationBatchId);
+                    if (! $this->advanceAfterSuccessfulStage(
+                        $advance,
+                        GenerationStage::SceneGeneration,
+                        (int) $chapterId,
+                        $this->sceneId,
+                        $artifact->generation_run_id,
+                        $this->regenerationBatchId,
+                    )) {
+                        return;
+                    }
                 }
             }
 

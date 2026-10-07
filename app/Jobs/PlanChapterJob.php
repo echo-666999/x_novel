@@ -57,7 +57,13 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
         try {
             $plan = $planner->generate($this->chapterId, $this->regenerate);
             if ($plan !== null) {
-                $advance->handle($this->chapterId);
+                if (! $this->advanceAfterSuccessfulStage(
+                    $advance,
+                    GenerationStage::ChapterPlanning,
+                    $this->chapterId,
+                )) {
+                    return;
+                }
             }
         } catch (AiProviderException $exception) {
             if (app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::ChapterPlanning)) {

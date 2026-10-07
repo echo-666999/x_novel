@@ -143,13 +143,24 @@ class Generation extends Page implements HasTable
                 TextColumn::make('status')
                     ->label('状态')
                     ->formatStateUsing(fn (RunStatus $state, GenerationRun $record): string => match (true) {
+                        $record->hasUnresolvedProgressionFailure() => '阶段成功 · 推进异常',
                         $record->error_code === StalledRunRecoveryService::ERROR_CODE => 'Worker 丢失',
                         app(StalledRunRecoveryService::class)->isStalled($record) => '已停滞',
                         default => $state->getLabel(),
                     })
                     ->badge()
-                    ->color(fn (RunStatus $state, GenerationRun $record): string => $record->error_code === StalledRunRecoveryService::ERROR_CODE
+                    ->color(fn (RunStatus $state, GenerationRun $record): string => $record->hasUnresolvedProgressionFailure()
+                        || $record->error_code === StalledRunRecoveryService::ERROR_CODE
                         || app(StalledRunRecoveryService::class)->isStalled($record) ? 'danger' : $state->getColor()),
+                TextColumn::make('progression_failure_code')
+                    ->label('推进错误码')
+                    ->state(fn (GenerationRun $record): ?string => $record->hasUnresolvedProgressionFailure()
+                        ? (string) data_get($record->progression_failure, 'code')
+                        : null)
+                    ->badge()
+                    ->color('danger')
+                    ->placeholder('—')
+                    ->toggleable(),
                 TextColumn::make('error_code')
                     ->label('错误码')
                     ->badge()
@@ -317,6 +328,54 @@ class Generation extends Page implements HasTable
                         ->badge()
                         ->color(fn (GenerationRun $record): string => $this->recommendedActionColor($record)),
                     TextEntry::make('error_message')->label('错误信息')->columnSpanFull(),
+                ]),
+            Section::make('流程推进异常')
+                ->description('当前 Run 的阶段产物已经成功；异常发生在选择或派发下一阶段时，不应重新请求本阶段 Provider。')
+                ->visible(fn (GenerationRun $record): bool => is_array($record->progression_failure))
+                ->columns(2)
+                ->schema([
+                    TextEntry::make('progression_failure_code')
+                        ->label('推进错误码')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'code'))
+                        ->badge()
+                        ->color('danger'),
+                    TextEntry::make('progression_failure_status')
+                        ->label('推进状态')
+                        ->state(fn (GenerationRun $record): string => $record->hasUnresolvedProgressionFailure() ? '尚未恢复' : '已恢复')
+                        ->badge()
+                        ->color(fn (GenerationRun $record): string => $record->hasUnresolvedProgressionFailure() ? 'danger' : 'success'),
+                    TextEntry::make('progression_failure_cause_code')
+                        ->label('原始错误码')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'cause_code'))
+                        ->placeholder('—'),
+                    TextEntry::make('progression_failure_source_stage')
+                        ->label('成功阶段')
+                        ->state(fn (GenerationRun $record): string => $record->stage->getLabel()),
+                    TextEntry::make('progression_failure_category')
+                        ->label('错误类别')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'category'))
+                        ->badge()
+                        ->color('gray'),
+                    TextEntry::make('progression_failure_retryable')
+                        ->label('可重试')
+                        ->state(fn (GenerationRun $record): string => data_get($record->progression_failure, 'retryable') === true ? '是' : '否')
+                        ->badge(),
+                    TextEntry::make('progression_failure_failed_at')
+                        ->label('发生时间')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'failed_at')),
+                    TextEntry::make('progression_failure_resolved_at')
+                        ->label('恢复时间')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'resolved_at'))
+                        ->placeholder('—'),
+                    TextEntry::make('progression_failure_recommended_action')
+                        ->label('推荐动作')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'recommended_action'))
+                        ->badge()
+                        ->color('warning'),
+                    TextEntry::make('progression_failure_message')
+                        ->label('错误信息')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->progression_failure, 'message'))
+                        ->columnSpanFull(),
                 ]),
             Section::make('Usage')->schema([
                 RepeatableEntry::make('usageRecords')

@@ -95,6 +95,36 @@ test('generation run inspector shows context artifacts errors and usage', functi
         ->and($run->usageRecords->first()->request_id)->toBe('request-debug-1');
 });
 
+test('generation page distinguishes a successful stage from its unresolved progression failure', function () {
+    $run = GenerationRun::factory()->create([
+        'status' => RunStatus::Succeeded,
+        'stage' => GenerationStage::ChapterPlanning,
+        'progression_failure' => [
+            'code' => 'pipeline_progression_failed',
+            'cause_code' => 'plan_checksum_mismatch',
+            'message' => 'Plan checksum 校验失败。',
+            'retryable' => false,
+            'category' => 'domain_validation',
+            'recommended_action' => '修复推进条件后继续流水线',
+            'source_stage' => GenerationStage::ChapterPlanning->value,
+            'first_failed_at' => now()->toISOString(),
+            'failed_at' => now()->toISOString(),
+            'occurrences' => 1,
+            'resolved_at' => null,
+        ],
+    ]);
+
+    Livewire::test(Generation::class)
+        ->assertSee('阶段成功 · 推进异常')
+        ->assertSee('pipeline_progression_failed')
+        ->mountTableAction('inspect', $run)
+        ->assertSchemaComponentExists('progression_failure_code', null, fn ($component): bool => $component->getState() === 'pipeline_progression_failed')
+        ->assertSchemaComponentExists('progression_failure_status', null, fn ($component): bool => $component->getState() === '尚未恢复')
+        ->assertSchemaComponentExists('progression_failure_cause_code', null, fn ($component): bool => $component->getState() === 'plan_checksum_mismatch')
+        ->assertSchemaComponentExists('progression_failure_message', null, fn ($component): bool => $component->getState() === 'Plan checksum 校验失败。')
+        ->assertSchemaComponentExists('progression_failure_recommended_action', null, fn ($component): bool => $component->getState() === '修复推进条件后继续流水线');
+});
+
 test('generation page has a useful empty state', function () {
     Livewire::test(Generation::class)
         ->assertOk()

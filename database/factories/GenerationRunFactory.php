@@ -36,6 +36,7 @@ class GenerationRunFactory extends Factory
             'error_message' => null,
             'error_retryable' => null,
             'error_metadata' => null,
+            'progression_failure' => null,
             'started_at' => null,
             'finished_at' => null,
         ];

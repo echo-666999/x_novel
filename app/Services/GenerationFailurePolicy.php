@@ -6,6 +6,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\Data\GenerationFailure;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
+use App\Exceptions\ChapterPipelineProgressionException;
 use App\Models\GenerationRun;
 use Illuminate\Database\QueryException;
 use Illuminate\Validation\ValidationException;
@@ -91,6 +92,11 @@ final class GenerationFailurePolicy
 
     public function shouldMarkTerminal(GenerationStage $stage, ?Throwable $exception): bool
     {
+        // 推进异常发生在当前阶段成功之后，不能反向把已经验证的阶段产物标记为失败。
+        if ($exception instanceof ChapterPipelineProgressionException) {
+            return false;
+        }
+
         if (! $exception instanceof AiProviderException) {
             return true;
         }

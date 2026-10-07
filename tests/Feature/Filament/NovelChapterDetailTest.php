@@ -5,6 +5,7 @@ use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
@@ -756,6 +757,41 @@ test('pipeline timeline identifies the blocked stage and exposes its run details
         ->assertSchemaComponentExists('timeline_context_l4')
         ->assertSchemaComponentExists('timeline_context_token_allocation')
         ->assertSchemaComponentExists('timeline_context_selected_memories');
+});
+
+test('chapter detail shows a successful stage whose next pipeline step failed', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Succeeded,
+        'progression_failure' => [
+            'code' => 'pipeline_progression_failed',
+            'cause_code' => 'plan_checksum_mismatch',
+            'message' => 'Plan checksum 校验失败。',
+            'retryable' => false,
+            'category' => 'domain_validation',
+            'recommended_action' => '修复推进条件后继续流水线',
+            'source_stage' => GenerationStage::ChapterPlanning->value,
+            'failed_at' => now()->toISOString(),
+            'occurrences' => 1,
+            'resolved_at' => null,
+        ],
+    ]);
+    GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterPlan]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('阶段成功 · 推进异常')
+        ->assertSee('pipeline_progression_failed')
+        ->assertSee('Plan checksum 校验失败。')
+        ->assertSee('修复推进条件后继续流水线')
+        ->mountAction(TestAction::make('inspectTimelinePlan')->schemaComponent('timeline-stage-plan', 'content'))
+        ->assertSee('流程推进异常')
+        ->assertSee('pipeline_progression_failed · Plan checksum 校验失败。');
 });
 
 test('events workspace shows candidates and can dispatch extraction', function () {

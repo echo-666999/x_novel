@@ -33,6 +33,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'error_message',
     'error_retryable',
     'error_metadata',
+    'progression_failure',
     'started_at',
     'finished_at',
 ])]
@@ -86,6 +87,12 @@ class GenerationRun extends Model
         return (int) $this->started_at->diffInMilliseconds($this->finished_at);
     }
 
+    public function hasUnresolvedProgressionFailure(): bool
+    {
+        return is_array($this->progression_failure)
+            && blank(data_get($this->progression_failure, 'resolved_at'));
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
@@ -101,6 +108,7 @@ class GenerationRun extends Model
             'context_snapshot' => 'array',
             'error_retryable' => 'boolean',
             'error_metadata' => 'array',
+            'progression_failure' => 'array',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];

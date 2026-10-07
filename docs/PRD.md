@@ -231,6 +231,8 @@ Chapter
 
 恢复必须以 PostgreSQL 中的 Run、Artifact 和章节状态为依据。Current Bible 的叙事基线或完整 Style Profile 缺失时，生成前置检查必须以 `current_bible_incomplete` 停止；用户在“小说圣经”创建新的完整版本后才能重试，不得回退到旧 Editorial。Rewrite 达到上限后必须停在 NEEDS_ATTENTION，由用户人工修改后重新审校，或在没有 Hard Conflict 且满足 Override 条件时明确填写原因后人工通过。
 
+章节阶段产物成功后，如果选择或派发下一阶段发生异常，当前 `Generation Run` 必须继续保持 `succeeded`，并在独立的 `progression_failure` 中持久化错误码、原始原因、分类、可恢复性、推荐动作、发生时间和恢复时间。章节工作台与 Generation 页面必须显示“阶段成功 · 推进异常”，不得只显示成功 Run，也不得把已经验证的 Artifact 反向标记为失败。恢复时复用该成功 Run / Artifact，推进成功后标记异常已恢复，不能再次请求同一阶段 Provider。
+
 全书 Outline 生成必须具备持久化的可见进度和领域恢复入口。用户点击“AI 生成候选”时，Web 请求必须先在 PostgreSQL 创建或复用 `queued` 主批次，再在事务提交后投递协调 Job；Worker 激活批次时改为 `running`。任一子阶段最终失败必须把主批次收口为 `failed` 并保存可展示的错误码、用户文案、技术信息和可恢复性；Finalize 成功后才可变为 `succeeded`。页面不能依赖一次性 Toast、Redis、Horizon 或 `failed_jobs` 判断业务进度。
 
 全书大纲页面在批次为 `queued` 或 `running` 时轮询 PostgreSQL 中的 Run 与 Artifact 投影，并展示当前阶段、尝试次数和已知分母下的 `x/y` 进度；终态停止轮询。Structure 完成前不得伪造整体百分比，完成后可显示 Arc Beats 进度，Skeleton Assembly 完成后可显示 Main Beat Detail 进度。失败原因必须持久显示；仅临时 Provider 或基础设施故障提供“继续 AI 生成”，由领域 Resume Action 校验暂停、版本、活动 Run、输入指纹和 Artifact 来源链后，从最早缺失的有效 Artifact 继续，并保持原批次冻结路由和预算。Provider 配置、冻结路由、推理预算耗尽、可见输出截断或完成预算证据不足等必须修改配置或预算的失败不得 Resume；页面提供“重新生成候选”作为 Restart 入口，使用当前配置创建新的 v4 主批次，同时保留旧批次、子 Run、Artifact、Usage 和冻结快照，不得静默改写。禁止把 `queue:retry` 作为产品恢复入口。
@@ -1091,6 +1093,9 @@ context_snapshot JSONB
 
 error_code nullable
 error_message nullable
+error_retryable nullable
+error_metadata JSONB nullable
+progression_failure JSONB nullable
 
 started_at
 finished_at

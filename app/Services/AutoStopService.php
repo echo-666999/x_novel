@@ -66,6 +66,7 @@ class AutoStopService
             $errorCode === 'rewrite_exhausted' => ['rewrite_exhausted', 'Rewrite 次数已耗尽。', '人工编辑章节或调整 Review Findings。'],
             str_starts_with((string) $errorCode, 'budget_') => ['budget_limit', '生成已达到预算 Hard Limit。', '检查并调整小说或全局预算。'],
             $errorCode === 'state_version_conflict' => ['state_version_conflict', 'Canonical Story State 版本已经变化。', '基于最新 Story State 重建 Context 后恢复。'],
+            $errorCode === 'pipeline_progression_failed' => ['pipeline_progression_failed', '生成阶段已成功，但后续流程推进失败。', '查看成功 Run 的推进异常，修复条件后继续流水线。'],
             $errorCode === 'blocked_review' => ['review_blocked', '存在被审校阻塞的章节。', '打开 Review Inbox 处理阻塞章节。'],
             in_array($errorCode, ['current_volume_missing', 'volume_gate_failed'], true) => ['volume_gate', '当前分卷不允许继续自动生成。', '检查分卷状态与下一章规划。'],
             $errorCode === 'critical_foreshadowing_overdue' => ['critical_foreshadowing_overdue', 'Critical 伏笔已经逾期，自动 Planner 已停止。', '在当前章节建立明确兑现的修复计划，或先完成人工授权的延期/放弃。'],

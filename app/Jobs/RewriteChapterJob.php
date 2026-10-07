@@ -60,7 +60,15 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
 
                 return;
             }
-            $advance->handle($this->chapterId);
+            if (! $this->advanceAfterSuccessfulStage(
+                $advance,
+                GenerationStage::Rewrite,
+                $this->chapterId,
+                $this->sceneId,
+                $artifact->generation_run_id,
+            )) {
+                return;
+            }
             $this->releaseGenerationDispatch();
         } catch (GenerationStageDeferredException) {
             $this->releaseGenerationDispatch();

@@ -1165,6 +1165,10 @@ class ViewNovelChapter extends ViewRecord
         $chapter = $this->chapter();
         $review = $this->currentDraftReview();
         $paused = $this->getRecord()->status === NovelStatus::Paused;
+        $latestRun = $chapter->generationRuns
+            ->where('id', '>=', $this->currentPlanningRunId())
+            ->sortByDesc('id')
+            ->first();
 
         if ($chapter->status === ChapterStatus::Canonical) {
             return [
@@ -1174,6 +1178,20 @@ class ViewNovelChapter extends ViewRecord
                     ? '等待下一章自动启动'
                     : '返回小说概览生成下一章',
                 'color' => 'success',
+            ];
+        }
+
+        $progressionRun = $chapter->generationRuns
+            ->where('id', '>=', $this->currentPlanningRunId())
+            ->sortByDesc('id')
+            ->first(fn (GenerationRun $run): bool => $run->hasUnresolvedProgressionFailure());
+        if ($progressionRun !== null) {
+            return [
+                'stage' => $progressionRun->stage->getLabel().' · 推进异常',
+                'reason' => (string) data_get($progressionRun->progression_failure, 'code', 'pipeline_progression_failed')
+                    .' · '.(string) data_get($progressionRun->progression_failure, 'message', '后续流程推进失败。'),
+                'next_action' => (string) data_get($progressionRun->progression_failure, 'recommended_action', '修复推进条件后继续流水线'),
+                'color' => 'danger',
             ];
         }
 
@@ -1196,11 +1214,6 @@ class ViewNovelChapter extends ViewRecord
                 'color' => $review->decision->getColor(),
             ];
         }
-
-        $latestRun = $chapter->generationRuns
-            ->where('id', '>=', $this->currentPlanningRunId())
-            ->sortByDesc('id')
-            ->first();
 
         if ($paused) {
             return [
@@ -1442,13 +1455,21 @@ class ViewNovelChapter extends ViewRecord
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('关闭')
                     ->infolist([
-                        TextEntry::make('scene_run_status_'.$scene->getKey())->label('状态')->state($run?->status)->badge(),
+                        TextEntry::make('scene_run_status_'.$scene->getKey())
+                            ->label('状态')
+                            ->state($run?->hasUnresolvedProgressionFailure() ? '阶段成功 · 推进异常' : $run?->status)
+                            ->badge()
+                            ->color($run?->hasUnresolvedProgressionFailure() ? 'danger' : null),
                         TextEntry::make('scene_run_provider_'.$scene->getKey())->label('Provider')->state($run?->provider ?? '旧记录未保存 Provider'),
                         TextEntry::make('scene_run_model_'.$scene->getKey())->label('模型')->state($run?->model_policy)->placeholder('—'),
                         TextEntry::make('scene_run_prompt_'.$scene->getKey())->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
                         TextEntry::make('scene_run_error_'.$scene->getKey())
                             ->label('错误')
                             ->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)
+                            ->placeholder('—'),
+                        TextEntry::make('scene_run_progression_error_'.$scene->getKey())
+                            ->label('流程推进异常')
+                            ->state($run?->progression_failure === null ? null : data_get($run->progression_failure, 'code').' · '.data_get($run->progression_failure, 'message'))
                             ->placeholder('—'),
                     ]),
             ])
@@ -2162,12 +2183,16 @@ class ViewNovelChapter extends ViewRecord
                             ->get()
                             ->map(fn ($run): array => [
                                 'run' => '#'.$run->getKey().' · 第 '.$run->attempt.' 次尝试',
-                                'status' => $run->status,
+                                'status' => $run->hasUnresolvedProgressionFailure() ? '阶段成功 · 推进异常' : $run->status->getLabel(),
                                 'provider' => $run->provider ?? '旧记录未保存 Provider',
                                 'model' => $run->model_policy,
                                 'prompt_version' => $run->prompt_version,
                                 'state_version' => $run->state_version === null ? '—' : 'v'.$run->state_version,
                                 'error' => $run->error_code === null ? '—' : $run->error_code.' · '.$run->error_message,
+                                'progression_error' => ! is_array($run->progression_failure)
+                                    ? '—'
+                                    : data_get($run->progression_failure, 'code').' · '.data_get($run->progression_failure, 'message')
+                                        .(filled(data_get($run->progression_failure, 'resolved_at')) ? '（已恢复）' : ''),
                             ])
                             ->all())
                         ->columns(['default' => 1, 'md' => 3])
@@ -2179,6 +2204,7 @@ class ViewNovelChapter extends ViewRecord
                             TextEntry::make('prompt_version')->label('提示词版本')->placeholder('—'),
                             TextEntry::make('state_version')->label('状态版本'),
                             TextEntry::make('error')->label('错误'),
+                            TextEntry::make('progression_error')->label('流程推进异常')->columnSpanFull(),
                         ]),
                 ]),
         ];
@@ -2269,6 +2295,14 @@ class ViewNovelChapter extends ViewRecord
                 ? ContextInspectorSchema::make(fn (mixed $record): GenerationRun => $run, 'timeline_context_')
                 : []),
             TextEntry::make('timeline_detail_error_'.$item['key'])->label('错误')->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)->placeholder('—'),
+            TextEntry::make('timeline_detail_progression_error_'.$item['key'])
+                ->label('流程推进异常')
+                ->state($run?->progression_failure === null ? null : data_get($run->progression_failure, 'code').' · '.data_get($run->progression_failure, 'message'))
+                ->placeholder('—'),
+            TextEntry::make('timeline_detail_progression_action_'.$item['key'])
+                ->label('推进恢复建议')
+                ->state($run?->progression_failure === null ? null : data_get($run->progression_failure, 'recommended_action'))
+                ->placeholder('—'),
         ];
     }
 
@@ -2318,7 +2352,7 @@ class ViewNovelChapter extends ViewRecord
                 continue;
             }
 
-            if (in_array($item['state'], ['failed', 'running'], true)) {
+            if (in_array($item['state'], ['failed', 'progression_failed', 'running'], true)) {
                 $blocked = true;
                 $currentAssigned = true;
 
@@ -2340,11 +2374,13 @@ class ViewNovelChapter extends ViewRecord
     /** @return array<string, mixed> */
     private function timelineItem(string $key, string $label, ?GenerationRun $run, ?GenerationArtifact $artifact, bool $complete, string $detail): array
     {
-        $state = match ($run?->status) {
-            RunStatus::Failed, RunStatus::Cancelled => 'failed',
-            RunStatus::Queued, RunStatus::Running => 'running',
-            default => $complete ? 'completed' : 'waiting',
-        };
+        $state = $run?->hasUnresolvedProgressionFailure()
+            ? 'progression_failed'
+            : match ($run?->status) {
+                RunStatus::Failed, RunStatus::Cancelled => 'failed',
+                RunStatus::Queued, RunStatus::Running => 'running',
+                default => $complete ? 'completed' : 'waiting',
+            };
 
         return [
             'key' => $key,
@@ -2352,6 +2388,7 @@ class ViewNovelChapter extends ViewRecord
             'state' => $state,
             'status' => match ($state) {
                 'completed' => '已完成',
+                'progression_failed' => '阶段成功 · 推进异常',
                 'running' => $run?->status->getLabel() ?? '运行中',
                 'failed' => $run?->status->getLabel() ?? '失败',
                 default => '等待中',
@@ -2386,7 +2423,7 @@ class ViewNovelChapter extends ViewRecord
         return match ($state) {
             'completed' => 'success',
             'running', 'current' => 'primary',
-            'failed' => 'danger',
+            'failed', 'progression_failed' => 'danger',
             default => 'gray',
         };
     }
@@ -2397,7 +2434,7 @@ class ViewNovelChapter extends ViewRecord
             'completed' => 'heroicon-o-check-circle',
             'running' => 'heroicon-o-arrow-path',
             'current' => 'heroicon-o-play-circle',
-            'failed' => 'heroicon-o-exclamation-triangle',
+            'failed', 'progression_failed' => 'heroicon-o-exclamation-triangle',
             default => 'heroicon-o-clock',
         };
     }

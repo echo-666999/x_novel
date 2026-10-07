@@ -157,9 +157,32 @@ class ChapterPlan extends Model
     public function semanticChecksum(): string
     {
         return hash('sha256', json_encode(
-            $this->semanticPayload(),
+            $this->normalizeChecksumValue($this->semanticPayload()),
             JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
         ));
+    }
+
+    /**
+     * PostgreSQL jsonb 不保留对象键顺序，因此 Map 必须递归排序后再计算哈希；
+     * List 的顺序属于 Plan 语义，例如 Scene 和验收条件顺序，不能参与排序。
+     */
+    private function normalizeChecksumValue(mixed $value): mixed
+    {
+        if (! is_array($value)) {
+            return $value;
+        }
+
+        if (array_is_list($value)) {
+            return array_map($this->normalizeChecksumValue(...), $value);
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $item) {
+            $normalized[$key] = $this->normalizeChecksumValue($item);
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
     }
 
     /** @return array<string, string> */

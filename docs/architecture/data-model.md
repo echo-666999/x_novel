@@ -764,6 +764,7 @@ Context Snapshot
 Provider
 Model
 Error
+Progression Failure（阶段成功后的推进异常，独立于 Run Status）
 Timing
 ```
 

@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
@@ -19,6 +20,7 @@ use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
 use App\Exceptions\GenerationPreflightException;
+use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
@@ -39,6 +41,8 @@ use App\Services\GenerationStageFingerprint;
 use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
@@ -805,6 +809,67 @@ test('duplicate delivery reuses the successful run and does not call the provide
     expect($second?->is($first))->toBeTrue()
         ->and($chapter->plans()->count())->toBe(1)
         ->and($chapter->generationRuns()->count())->toBe(1)
+        ->and($fake->requests())->toHaveCount(1);
+});
+
+test('a successful plan chapter job dispatches scene one without creating a failed queue record', function () {
+    Queue::fake();
+    [$chapter, $character] = plannerChapter();
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
+    app()->instance(AiProvider::class, $fake);
+
+    (new PlanChapterJob($chapter->getKey()))->handle(app(ChapterPlanner::class));
+
+    $plan = $chapter->plans()->sole()->fresh();
+    $scene = $chapter->scenes()->orderBy('sequence')->sole();
+    $run = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->sole();
+
+    // 覆盖 Plan 落库后重新读取并推进的边界，防止 jsonb 键重排再次阻断 Scene 1。
+    expect($run->status)->toBe(RunStatus::Succeeded)
+        ->and($plan->status)->toBe(PlanStatus::Ready)
+        ->and($plan->checksum)->toBe($plan->semanticChecksum())
+        ->and(data_get($plan->admission_snapshot, 'plan_checksum'))->toBe($plan->checksum)
+        ->and($scene->sequence)->toBe(1)
+        ->and(DB::table('failed_jobs')->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(1);
+
+    Queue::assertPushed(GenerateSceneJob::class, 1);
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $scene->getKey());
+});
+
+test('a failure after successful planning is persisted separately and resolved after progression succeeds', function () {
+    [$chapter, $character] = plannerChapter();
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
+    app()->instance(AiProvider::class, $fake);
+    $advance = Mockery::mock(AdvanceChapterPipelineAction::class);
+    $advance->shouldReceive('handle')
+        ->once()
+        ->with($chapter->getKey())
+        ->andThrow(ValidationException::withMessages([
+            'pipeline' => '[PLAN_CHECKSUM_MISMATCH] Plan 保存后的语义校验失败。',
+        ]));
+
+    $job = (new PlanChapterJob($chapter->getKey()))->withFakeQueueInteractions();
+    $job->handle(app(ChapterPlanner::class), $advance);
+    $job->assertFailed();
+
+    $run = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->sole()->fresh();
+
+    // 阶段产物仍然成功，推进失败独立持久化，避免页面只显示一个误导性的成功 Run。
+    expect($run->status)->toBe(RunStatus::Succeeded)
+        ->and($run->error_code)->toBeNull()
+        ->and(data_get($run->progression_failure, 'code'))->toBe('pipeline_progression_failed')
+        ->and(data_get($run->progression_failure, 'message'))->toContain('PLAN_CHECKSUM_MISMATCH')
+        ->and(data_get($run->progression_failure, 'source_stage'))->toBe(GenerationStage::ChapterPlanning->value)
+        ->and(data_get($run->progression_failure, 'resolved_at'))->toBeNull()
+        ->and($fake->requests())->toHaveCount(1);
+
+    $successfulAdvance = Mockery::mock(AdvanceChapterPipelineAction::class);
+    $successfulAdvance->shouldReceive('handle')->once()->with($chapter->getKey())->andReturn(GenerationStage::SceneGeneration);
+
+    (new PlanChapterJob($chapter->getKey()))->handle(app(ChapterPlanner::class), $successfulAdvance);
+
+    expect(data_get($run->fresh()->progression_failure, 'resolved_at'))->not->toBeNull()
         ->and($fake->requests())->toHaveCount(1);
 });
 

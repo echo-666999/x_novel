@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
+use App\Enums\GenerationStage;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\Scene;
 use App\Services\AutoStopService;
@@ -58,7 +59,15 @@ class RepairSceneLengthJob implements ShouldBeUnique, ShouldQueue
         if ($artifact !== null) {
             $chapterId = Scene::query()->whereKey($this->sceneId)->value('chapter_id');
             if ($chapterId !== null) {
-                $advance->handle((int) $chapterId);
+                if (! $this->advanceAfterSuccessfulStage(
+                    $advance,
+                    GenerationStage::Rewrite,
+                    (int) $chapterId,
+                    $this->sceneId,
+                    $artifact->generation_run_id,
+                )) {
+                    return;
+                }
             }
         }
         $this->releaseGenerationDispatch();
