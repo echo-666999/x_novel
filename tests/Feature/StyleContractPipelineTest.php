@@ -49,6 +49,7 @@ test('deterministic assembly avoids style prompting while review and rewrite kee
         'target_words' => 8,
         'scene_plans' => [],
     ]);
+    freezeChapterRouteContractsForTest($plan);
 
     foreach ([1 => '甲乙丙丁', 2 => '戊己庚辛'] as $sequence => $content) {
         $scene = Scene::factory()->for($chapter)->create([

@@ -17,6 +17,7 @@ use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Exceptions\GenerationStageDeferredException;
 use App\Exceptions\SceneStageDeferredException;
+use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Scene;
@@ -37,6 +38,8 @@ class SceneGenerator
         private readonly ForeshadowingCoverageEvidenceRepairer $foreshadowingCoverageEvidenceRepairer,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly SceneExecutionClock $executionClock,
+        private readonly GenerationRequestBudget $requestBudget,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
     ) {}
 
     public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null, bool $singleProviderCall = false): ?GenerationArtifact
@@ -98,15 +101,28 @@ class SceneGenerator
         $context['writing_constraints'] = [
             ...$this->sceneAllocation($scene, (int) $plan->target_words),
         ];
-        $context['generation_preferences']['scene_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.scene_max_output_tokens', 12_000),
-            'retry_max_completion_tokens' => (int) config('generation.scene_retry_max_output_tokens', 16_000),
-            'final_retry_max_completion_tokens' => (int) config('generation.scene_final_retry_max_output_tokens', 24_000),
+        $writerRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Writer);
+        $context['generation_preferences']['model_capacity'] = $writerRoute['model_capacity'];
+        $context['generation_preferences']['request_budgets'] = $writerRoute['request_budgets'];
+        // Run 自身保留可直接观测的冻结路由，页面不应依赖之后可能变化的全局配置反推。
+        $context['generation_preferences']['frozen_route'] = [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $promptVersion,
+        ];
+        // 修复子请求也必须随父 Run 冻结，Resume 不能因部署时配置变化而改变实际发送参数。
+        $context['generation_preferences']['repair_budgets'] = [
+            'coverage_evidence' => ['initial' => (int) config('generation.coverage_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000)],
+            'foreshadowing_coverage' => ['initial' => (int) config('generation.coverage_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000)],
+            'scene_structure' => ['initial' => (int) config('generation.scene_structure_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.scene_structure_repair_retry_max_output_tokens', 4_000)],
+            'length_repair' => (int) config('generation.scene_length_repair_max_output_tokens', 4_000),
         ];
         $context['generation_preferences']['substage_routes'] = [
-            'prose' => $this->routeSnapshot($settings, AiStage::Writer, $promptVersion, null),
-            'structure_and_coverage' => $this->routeSnapshot($extractorSettings, AiStage::Extractor, 'scene-support-repair-v2', null),
-            'length_repair' => $this->routeSnapshot($rewriteSettings, AiStage::Rewrite, 'scene-length-repair-v2', (int) config('generation.scene_length_repair_max_output_tokens', 4_000)),
+            'prose' => $this->routeSnapshot($chapter, $settings, AiStage::Writer, $promptVersion, null),
+            'structure_and_coverage' => $this->routeSnapshot($chapter, $extractorSettings, AiStage::Extractor, 'scene-support-repair-v2', null),
+            'length_repair' => $this->routeSnapshot($chapter, $rewriteSettings, AiStage::Rewrite, 'scene-length-repair-v2', (int) data_get($context, 'generation_preferences.repair_budgets.length_repair')),
         ];
         $foreshadowingExpectations = ForeshadowingCoverage::expectationsForScene(
             data_get($context, 'l0.foreshadowing_contract', []),
@@ -139,8 +155,9 @@ class SceneGenerator
             return $artifact;
         }
 
+        $budget = null;
         try {
-            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
+            $budget = $this->resolveRequestBudget($run, $baseKey);
             $metadata = [
                 'generation_run_id' => $run->getKey(),
                 'novel_id' => $novel->getKey(),
@@ -175,18 +192,28 @@ class SceneGenerator
 
             if (! is_array($payload)) {
                 $beforeRequest('prose_generation', $settings->provider);
-                $response = $this->provider->generate(new AiRequest(
+                $request = new AiRequest(
                     model: $settings->model,
                     provider: $settings->provider,
-                    reasoningEffort: $this->sentReasoningEffort($settings->provider, $settings->reasoningEffort),
+                    reasoningEffort: $this->sentReasoningEffort($settings->reasoningEffort),
                     systemPrompt: '你是 XNovel 场景写作器。只写当前场景。l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约；只能执行 actions 中 target_scene_sequence 等于当前 Scene 序号的动作，未列入 actions 的伏笔不能在本章主动铺设、强化、兑现、延期或放弃。plan_constraints.arc_contributions 和 world_entity_candidates 同样是冻结契约：只推进目标 Scene 等于当前序号的 Arc Beat，只能引入其中批准的重大世界实体，并在正文中使用 candidate_key 对应的名称与定义；不得自由创造未登记的重大地点、物品、阵营、组织、规则或概念。promised_payoff 是作者侧约束，不代表允许向读者直接揭晓；必须同时遵守 plan_constraints.must_not_reveal，并按 plan_action.action 与 acceptance_criteria 控制揭示程度。foreshadowing_coverage 必须按契约顺序返回当前 Scene 的全部伏笔动作；只有正文证据足以证明 acceptance_criteria 已实现时才能标记 fulfilled，主题相近但没有动作结果必须标记 missing，反转既定动作则标记 contradicted。fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。l4 是唯一的 Style Contract；严格保持其中的 POV、时态和主文风，只使用指定辅助文风补充特征，不得让辅助文风覆盖主文风，并执行 expanded_parameters。第一场景必须从 previous_chapter_ending 连续展开，并把 scene_task.transition_from_previous 指定的时间、地点与行动过渡写进正文；不得从上一章结尾直接跳到次日或新地点而省略关键过程。scene_task.continuity_requirements 中 establish 只负责首次建立，persist 只写本场新增影响或必要的最短提醒，change 必须写出状态变化，callback 只在章末自然回扣；不得逐 Scene 重复解释同一伤势、限制、等待状态或监管边界。goal、conflict、turn、outcome 都是不可省略的验收项，尤其不得反转 outcome；正文行为必须位于 outcome_allowed 内且不得出现 outcome_forbidden。self_check 必须逐项返回 fulfilled、missing 或 contradicted；fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。scene_target_words 是当前场景目标字数，maximum_scene_words 是不可超过的硬上限；字数统计排除空白和换行。当 required_scene_words 大于 0 时，正文还必须至少达到该字数，使各场景总量达到章节下限。场景可以短于目标，未使用的字数由后续场景承接。通过完整的动作、对话、环境、感官和人物反应展开既定场景，不得用提纲、摘要、无意义重复或新增重大事实凑字。返回符合 Schema 的 JSON；除固定字段和枚举值外，正文及所有自然语言内容必须使用简体中文。草稿不得修改正式故事状态。'.NarrativeProsePolicy::writing(),
                     prompt: '请根据以下权威上下文生成当前场景：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                     temperature: 0.7,
-                    maxTokens: $maxTokens,
+                    maxTokens: $budget['max_completion_tokens'],
                     responseSchema: SceneDraftPayload::schema(),
                     promptVersion: $promptVersion,
                     metadata: [...$metadata, 'stage' => AiStage::Writer->value, 'substage' => 'prose_generation', 'route_key' => 'prose'],
-                ));
+                );
+                // 主写作请求必须使用 Admission 冻结的 Writer 预算，并按完整消息估算上下文占用。
+                $this->outputCapacity->assertRequestWithinFrozenRoute(
+                    $chapter,
+                    $run,
+                    AiStage::Writer,
+                    $request,
+                    'prose_generation',
+                    $budget,
+                );
+                $response = $this->provider->generate($request);
                 $payload = StructuredOutput::require($response, 'scene', 'Scene Draft');
                 $this->saveCheckpoint($run, 'prose_generated', $payload, $inputHash, null);
                 $checkpointRank = 1;
@@ -198,7 +225,7 @@ class SceneGenerator
                     context: $context,
                     provider: $extractorSettings->provider,
                     model: $extractorSettings->model,
-                    reasoningEffort: $this->sentReasoningEffort($extractorSettings->provider, $extractorSettings->reasoningEffort),
+                    reasoningEffort: $this->sentReasoningEffort($extractorSettings->reasoningEffort),
                     metadata: [...$metadata, 'route_key' => 'structure_and_coverage'],
                     beforeRequest: $beforeRequest,
                     repairState: $checkpoint ?? [],
@@ -215,13 +242,13 @@ class SceneGenerator
                     provider: $rewriteSettings->provider,
                     model: $rewriteSettings->model,
                     promptVersion: 'scene-length-repair-v2',
-                    reasoningEffort: $this->sentReasoningEffort($rewriteSettings->provider, $rewriteSettings->reasoningEffort),
-                    maxTokens: (int) config('generation.scene_length_repair_max_output_tokens', 4_000),
+                    reasoningEffort: $this->sentReasoningEffort($rewriteSettings->reasoningEffort),
+                    maxTokens: (int) data_get($context, 'generation_preferences.substage_routes.length_repair.max_completion_tokens', 0),
                     metadata: $metadata,
                     beforeRequest: $beforeRequest,
                     extractorProvider: $extractorSettings->provider,
                     extractorModel: $extractorSettings->model,
-                    extractorReasoningEffort: $this->sentReasoningEffort($extractorSettings->provider, $extractorSettings->reasoningEffort),
+                    extractorReasoningEffort: $this->sentReasoningEffort($extractorSettings->reasoningEffort),
                     startingAttempt: ($checkpoint['repair_kind'] ?? null) === 'length'
                         ? ((int) ($checkpoint['repair_attempt'] ?? 0)) + 1
                         : 1,
@@ -251,6 +278,18 @@ class SceneGenerator
                 $foreshadowingExpectations,
             );
         } catch (Throwable $exception) {
+            if ($exception instanceof AiProviderException && is_array($budget)) {
+                // 正文阶段按耗尽类型升级冻结预算；不存在更高额度时立即终止，不能原参数重放。
+                $exception = $this->requestBudget->classifyRetry(
+                    $exception,
+                    (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []),
+                    AiStage::Writer,
+                    $budget,
+                    'scene',
+                    'Scene Draft',
+                    data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                );
+            }
             $this->failRun($run, $exception);
             throw $exception;
         }
@@ -489,7 +528,7 @@ class SceneGenerator
             );
 
             $beforeRequest?->__invoke('length_repair', $provider);
-            $response = $this->provider->generate(new AiRequest(
+            $request = new AiRequest(
                 model: $model,
                 provider: $provider,
                 reasoningEffort: $reasoningEffort,
@@ -512,7 +551,10 @@ class SceneGenerator
                 responseSchema: SceneDraftPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'stage' => AiStage::Rewrite->value, 'substage' => 'length_repair', 'route_key' => 'length_repair', 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
-            ));
+            );
+            // 长度修复切换到 Rewrite Route 后，也必须按该 Route 的冻结模型容量重新门禁。
+            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Rewrite, 'length_repair');
+            $response = $this->provider->generate($request);
 
             $repairedPayload = $response->structuredData;
             if (is_array($repairedPayload)) {
@@ -522,7 +564,7 @@ class SceneGenerator
                 );
             }
             $afterResponse?->__invoke($attempt, is_array($repairedPayload) ? $repairedPayload : $payload);
-            $repairedPayload = StructuredOutput::require($response, 'scene', 'Scene Draft');
+            $repairedPayload = StructuredOutput::require($response, 'scene_length_repair', 'Scene Length Repair');
             $repairedPayload['foreshadowing_coverage'] = ForeshadowingCoverage::reconcileWithIdentityTemplate(
                 is_array($repairedPayload['foreshadowing_coverage'] ?? null) ? $repairedPayload['foreshadowing_coverage'] : [],
                 $foreshadowingCoverageTemplate,
@@ -781,43 +823,33 @@ class SceneGenerator
         };
     }
 
-    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): array
     {
-        $priorTruncatedRuns = GenerationRun::query()
+        $priorRuns = GenerationRun::query()
             ->where('scene_id', $run->scene_id)
             ->where('stage', GenerationStage::SceneGeneration)
             ->where('provider', $run->provider)
             ->where('model_policy', $run->model_policy)
             ->where('id', '<', $run->getKey())
-            ->where('error_code', 'scene_output_truncated')
-            ->get(['idempotency_key', 'context_snapshot'])
+            ->whereNotNull('error_code')
+            ->orderBy('id')
+            ->get(['idempotency_key', 'error_code', 'context_snapshot'])
             ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
                 || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
             ->values();
-        $retryOrdinal = max($priorTruncatedRuns->count() + 1, min($run->attempt, 3));
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.scene_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
+        $budgets = (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []);
+        $selection = $this->requestBudget->resolveForAttempt($budgets, AiStage::Writer, $priorRuns, 'scene', 'Scene Draft');
+        $budget = $selection['budget'];
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.scene_retry_ordinal', $retryOrdinal);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        data_set($snapshot, 'generation_preferences.scene_retry_ordinal', $selection['ordinal']);
+        data_set($snapshot, 'generation_preferences.request_budget_tier', $selection['tier']);
+        data_set($snapshot, 'generation_preferences.request_budget_trigger', $selection['trigger']);
+        data_set($snapshot, 'generation_preferences.selected_request_budget', $budget);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $budget['max_completion_tokens']);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
-            throw new AiProviderException(
-                'scene_output_budget_exhausted',
-                "Scene Draft 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Writer 模型后再重试。",
-                false,
-            );
-        }
-
-        return $maxTokens;
+        return $budget;
     }
 
     private function assertProviderCallFits(GenerationRun $run, int $jobStartedAt, string $provider, string $substage): void
@@ -847,22 +879,27 @@ class SceneGenerator
         }
     }
 
-    private function sentReasoningEffort(string $provider, ?string $reasoningEffort): ?string
+    private function sentReasoningEffort(?string $reasoningEffort): ?string
     {
-        return $provider === 'deepseek' ? null : $reasoningEffort;
+        // 当前已注册的文本 Provider 都会发送显式 reasoning_effort；留空仍表示采用 Provider 默认值。
+        return $reasoningEffort;
     }
 
     /** @return array<string, mixed> */
-    private function routeSnapshot(object $settings, AiStage $stage, string $promptVersion, ?int $maxTokens): array
+    private function routeSnapshot(Chapter $chapter, object $settings, AiStage $stage, string $promptVersion, ?int $maxTokens): array
     {
+        $route = $this->outputCapacity->frozenRoute($chapter, $stage);
+
         return array_filter([
             'stage' => $stage->value,
             'provider' => $settings->provider,
             'model' => $settings->model,
             'prompt_version' => $promptVersion,
             'reasoning_effort_configured' => $settings->reasoningEffort,
-            'reasoning_effort_sent' => $this->sentReasoningEffort($settings->provider, $settings->reasoningEffort),
-            'max_output_tokens' => $maxTokens,
+            'reasoning_effort_sent' => $this->sentReasoningEffort($settings->reasoningEffort),
+            'max_completion_tokens' => $maxTokens,
+            'model_capacity' => $route['model_capacity'],
+            'request_budgets' => $route['request_budgets'],
         ], static fn (mixed $value): bool => $value !== null);
     }
 }

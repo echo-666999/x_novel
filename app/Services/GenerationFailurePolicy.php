@@ -87,7 +87,13 @@ final class GenerationFailurePolicy
         $failure = $this->fromException($exception, "{$stage->value}_failed");
 
         return $failure->retryable
-            && in_array($failure->metadata['category'] ?? null, ['external_temporary', 'infrastructure_temporary', 'visible_output_truncated'], true);
+            && in_array($failure->metadata['category'] ?? null, [
+                'external_temporary',
+                'infrastructure_temporary',
+                'reasoning_budget_exhausted',
+                'visible_output_truncated',
+                'completion_budget_exhausted',
+            ], true);
     }
 
     public function shouldMarkTerminal(GenerationStage $stage, ?Throwable $exception): bool
@@ -170,6 +176,27 @@ final class GenerationFailurePolicy
         return ! in_array($category, self::FROZEN_RESUME_BLOCKED_CATEGORIES, true);
     }
 
+    public function allowsFrozenChapterResume(GenerationRun $run): bool
+    {
+        $failure = $this->forRun($run);
+        $category = $failure->metadata['category'] ?? 'manual_attention';
+
+        if ($category === 'provider_configuration') {
+            return false;
+        }
+
+        // 章节预算类错误只有在冻结合同仍有更高档、且失败记录明确标记可重试时才能继续。
+        if (in_array($category, [
+            'reasoning_budget_exhausted',
+            'visible_output_truncated',
+            'completion_budget_exhausted',
+        ], true)) {
+            return $failure->retryable;
+        }
+
+        return true;
+    }
+
     private function category(string $code, ?int $status = null, ?Throwable $exception = null): string
     {
         if ($code === 'outline_worker_contract_mismatch') {
@@ -221,19 +248,19 @@ final class GenerationFailurePolicy
             return '继续执行';
         }
         if (str_contains($code, 'reasoning_budget_exhausted')) {
-            return '增加推理预留或降低推理程度';
+            return $retryable ? '按冻结合同升级推理预留后重试' : '调整推理配置后重建来源链';
         }
         if (str_contains($code, 'output_truncated')) {
-            return '调整模型路由或输出预算';
+            return $retryable ? '按冻结合同升级可见输出预算后重试' : '调整模型路由或输出预算后重建来源链';
         }
         if (str_contains($code, 'completion_budget_exhausted')) {
-            return '检查 Usage 并调整请求预算';
+            return $retryable ? '按冻结合同升级完成预算后重试' : '检查 Usage 并调整请求预算后重建来源链';
         }
         if ($retryable) {
             return '重试';
         }
         if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'outline_route_not_configured', 'model_run_mismatch'], true)) {
-            return '修复 AI 配置';
+            return '修复 AI 配置后重建来源链';
         }
         if (str_contains($code, 'output_budget_exhausted')) {
             return '调整模型路由或输出预算';

@@ -67,6 +67,7 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     Cache::flush();
     seedVerifiedOutlineModelProfiles();
+    seedVerifiedChapterModelProfiles();
     $this->actingAs(User::factory()->create());
 });
 

@@ -27,6 +27,7 @@ final class SceneLengthRepairer
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
     ) {}
 
     public function repair(
@@ -61,6 +62,13 @@ final class SceneLengthRepairer
         }
         $contract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $expectations = ForeshadowingCoverage::expectationsForScene($contract, (int) $scene->sequence);
+        $rewriteRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Rewrite);
+        $repairMaxTokens = (int) config('generation.scene_length_repair_max_output_tokens', 4_000);
+        $repairBudget = [
+            'output_tokens' => $repairMaxTokens,
+            'reasoning_reserve_tokens' => 0,
+            'max_completion_tokens' => $repairMaxTokens,
+        ];
         $context = [
             'scope' => 'scene',
             'repair_reason' => 'deterministic_assembly_length',
@@ -81,6 +89,11 @@ final class SceneLengthRepairer
             ],
             'assembly_hash' => $assemblyHash,
             'state_version' => $stateVersion,
+            // 独立修复 Run 必须把实际预算和模型容量纳入 input hash，Resume 时不得重新读取新配置。
+            'generation_preferences' => [
+                'request_budget' => $repairBudget,
+                'model_capacity' => $rewriteRoute['model_capacity'],
+            ],
         ];
         $inputHash = hash('sha256', json_encode([
             'context' => $context,
@@ -95,7 +108,7 @@ final class SceneLengthRepairer
         }
 
         try {
-            $response = $this->provider->generate(new AiRequest(
+            $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
@@ -105,7 +118,7 @@ final class SceneLengthRepairer
                     .'不得改变 goal、conflict、turn、outcome、既定事实或伏笔动作，不得加入其他 Scene 内容。必须按冻结身份返回 self_check 和 foreshadowing_coverage，证据逐字来自最终 content。正文必须落在 length_requirement 的硬边界内。'.NarrativeProsePolicy::writing(),
                 prompt: '请执行一次有界 Scene 字数修复：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: (int) config('generation.scene_length_repair_max_output_tokens', 4_000),
+                maxTokens: $repairBudget['max_completion_tokens'],
                 responseSchema: SceneLengthRepairPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [
@@ -113,9 +126,18 @@ final class SceneLengthRepairer
                     'chapter_id' => $chapter->getKey(), 'scene_id' => $scene->getKey(),
                     'stage' => AiStage::Rewrite->value, 'substage' => 'assembly_length_repair',
                 ],
-            ));
+            );
+            $this->outputCapacity->assertRequestWithinFrozenRoute(
+                $chapter,
+                $run,
+                AiStage::Rewrite,
+                $request,
+                'assembly_length_repair',
+                $repairBudget,
+            );
+            $response = $this->provider->generate($request);
             $payload = SceneLengthRepairPayload::validate(
-                StructuredOutput::require($response, 'rewrite', 'Scene Length Repair'),
+                StructuredOutput::require($response, 'scene_length_repair', 'Scene Length Repair'),
                 $expectations,
             );
             $this->validateLengthAndDirection($payload['content'], (string) $source->content, $mode, $minimumWords, $maximumWords);

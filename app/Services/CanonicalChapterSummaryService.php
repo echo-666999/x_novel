@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
-use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -27,10 +25,10 @@ class CanonicalChapterSummaryService
 {
     public function __construct(
         private readonly AiProvider $provider,
-        private readonly AiSettingsResolver $settingsResolver,
-        private readonly PromptVersionResolver $promptVersionResolver,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly PlanAdmissionService $planAdmission,
+        private readonly GenerationRequestBudget $requestBudget,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
     ) {}
 
     /** @return array{novel_id: int, novel_title: string, chapters: array<int, array<string, mixed>>, plan_hash: string} */
@@ -97,20 +95,17 @@ class CanonicalChapterSummaryService
     {
         $chapter = Chapter::query()->with(['novel', 'canonicalArtifact.generationRun'])->findOrFail($chapterId);
         $source = $this->canonicalArtifact($chapter);
-        $settings = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Summary)
-            : $this->settingsResolver->resolve(AiStage::Summary, $chapter->novel);
-        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Summary)
-            : $this->promptVersionResolver->resolve(AiStage::Summary);
-        $tokenBudget = [
-            'initial_max_completion_tokens' => (int) config('generation.summary_max_output_tokens', 1_200),
-            'retry_max_completion_tokens' => (int) config('generation.summary_retry_max_output_tokens', 2_400),
-            'final_retry_max_completion_tokens' => (int) config('generation.summary_final_retry_max_output_tokens', 4_000),
-        ];
+        $plan = $chapter->latestPlan;
+        if ($plan === null || ! is_array($plan->admission_snapshot)) {
+            throw new AiProviderException('summary_capacity_contract_missing', 'Canonical Chapter Summary 缺少已冻结的 Plan Admission 合同。', false);
+        }
+        $settings = $this->planAdmission->historicalRouteFor($plan, AiStage::Summary);
+        $promptVersion = $this->planAdmission->historicalPromptVersionFor($plan, AiStage::Summary);
+        $summaryRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Summary);
+        $requestBudgets = $summaryRoute['request_budgets'];
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::MemorySummary,
-            ['chapter_id' => $chapter->getKey(), 'token_budget' => $tokenBudget],
+            ['chapter_id' => $chapter->getKey(), 'request_budgets' => $requestBudgets, 'model_capacity' => $summaryRoute['model_capacity']],
             upstreamChecksums: [$source->checksum],
             frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
             contractVersion: $promptVersion,
@@ -133,11 +128,21 @@ class CanonicalChapterSummaryService
         }
 
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.summary_token_budget', $tokenBudget);
+        data_set($snapshot, 'generation_preferences.request_budgets', $requestBudgets);
+        data_set($snapshot, 'generation_preferences.model_capacity', $summaryRoute['model_capacity']);
+        // Post-Commit 摘要同样冻结并展示 Route，避免恢复时受后台配置变化影响。
+        data_set($snapshot, 'generation_preferences.frozen_route', [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $promptVersion,
+        ]);
         $run->update(['context_snapshot' => $snapshot]);
 
+        $budget = null;
         try {
-            $maxTokens = $this->resolveRequestBudget($run);
+            $budget = $this->resolveRequestBudget($run);
             $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -152,7 +157,7 @@ class CanonicalChapterSummaryService
                     'canonical_content' => $source->content,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: $this->schema(),
                 promptVersion: $promptVersion,
                 metadata: [
@@ -162,6 +167,15 @@ class CanonicalChapterSummaryService
                     'stage' => AiStage::Summary->value,
                     'provider' => $settings->provider,
                 ],
+            );
+            // Canonical 摘要虽在 Commit 后执行，仍必须沿用该 Plan 冻结的 Summary 容量合同。
+            $this->outputCapacity->assertRequestWithinFrozenRoute(
+                $chapter,
+                $run,
+                AiStage::Summary,
+                $request,
+                'canonical_summary',
+                $budget,
             );
             $response = $this->provider->generate($request);
             $summary = $this->validate(StructuredOutput::require($response, 'summary', 'Canonical Chapter 摘要'));
@@ -192,6 +206,18 @@ class CanonicalChapterSummaryService
 
             return ['artifact' => $artifact, 'reused' => false, 'applied' => $applied];
         } catch (Throwable $exception) {
+            if ($exception instanceof AiProviderException && is_array($budget)) {
+                // 摘要 Job 只有在冻结预算确实升级时才可重试，防止相同请求重复消费。
+                $exception = $this->requestBudget->classifyRetry(
+                    $exception,
+                    $requestBudgets,
+                    AiStage::Summary,
+                    $budget,
+                    'summary',
+                    'Canonical Chapter Summary',
+                    data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                );
+            }
             if ($run->fresh()->status !== RunStatus::Succeeded) {
                 $this->failurePolicy->record(
                     $run,
@@ -260,9 +286,10 @@ class CanonicalChapterSummaryService
         });
     }
 
-    private function resolveRequestBudget(GenerationRun $run): int
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function resolveRequestBudget(GenerationRun $run): array
     {
-        $priorTruncatedRuns = GenerationRun::query()
+        $priorRuns = GenerationRun::query()
             ->where('chapter_id', $run->chapter_id)
             ->where('stage', GenerationStage::MemorySummary)
             ->where('provider', $run->provider)
@@ -270,32 +297,21 @@ class CanonicalChapterSummaryService
             ->where('prompt_version', $run->prompt_version)
             ->where('input_hash', $run->input_hash)
             ->where('id', '<', $run->getKey())
-            ->where('error_code', 'summary_output_truncated')
-            ->get(['context_snapshot']);
-        $retryOrdinal = $priorTruncatedRuns->count() + 1;
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.summary_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 1_200),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 2_400),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 4_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
+            ->whereNotNull('error_code')
+            ->orderBy('id')
+            ->get(['error_code', 'context_snapshot']);
+        $budgets = (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []);
+        $selection = $this->requestBudget->resolveForAttempt($budgets, AiStage::Summary, $priorRuns, 'summary', 'Canonical Chapter Summary');
+        $budget = $selection['budget'];
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.summary_retry_ordinal', $retryOrdinal);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        data_set($snapshot, 'generation_preferences.summary_retry_ordinal', $selection['ordinal']);
+        data_set($snapshot, 'generation_preferences.request_budget_tier', $selection['tier']);
+        data_set($snapshot, 'generation_preferences.request_budget_trigger', $selection['trigger']);
+        data_set($snapshot, 'generation_preferences.selected_request_budget', $budget);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $budget['max_completion_tokens']);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
-            throw new AiProviderException(
-                'summary_output_budget_exhausted',
-                "Canonical Chapter Summary 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Summary 模型后再重试。",
-                false,
-            );
-        }
-
-        return $maxTokens;
+        return $budget;
     }
 
     private function canonicalArtifact(Chapter $chapter): GenerationArtifact

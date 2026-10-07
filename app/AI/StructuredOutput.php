@@ -35,12 +35,13 @@ final class StructuredOutput
     /** @return array<string, mixed> */
     public static function require(AiResponse $response, string $errorPrefix, string $label): array
     {
-        if ($response->structuredData !== null) {
-            return $response->structuredData;
+        if (data_get($response->metadata, 'finish_reason') === 'length') {
+            // 即使 Provider/Fake 同时给出了解析结果，length 也表示结果可能不完整，禁止把截断对象当成成功产物。
+            self::throwCompletionLimit($response, $errorPrefix, $label);
         }
 
-        if (data_get($response->metadata, 'finish_reason') === 'length') {
-            self::throwCompletionLimit($response, $errorPrefix, $label);
+        if ($response->structuredData !== null) {
+            return $response->structuredData;
         }
 
         if (filled(data_get($response->metadata, 'refusal'))) {
@@ -82,7 +83,8 @@ final class StructuredOutput
             throw new AiProviderException(
                 $errorPrefix.'_output_truncated',
                 "AI 已开始返回 {$label}，但可见输出在完成前耗尽请求预算；未保存不完整结果。",
-                true,
+                // 是否可重试取决于调用阶段是否冻结了更高输出额度，通用解析层不能自行决定。
+                false,
             );
         }
 

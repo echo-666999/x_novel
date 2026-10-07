@@ -17,6 +17,7 @@ use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Jobs\GenerateSceneJob;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -37,6 +38,7 @@ uses(RefreshDatabase::class);
 
 function admissionReadyPlan(int $sceneCount = 2): ChapterPlan
 {
+    seedVerifiedChapterModelProfiles();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
@@ -96,13 +98,20 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
     expect($admitted->checksum)->toHaveLength(64)
         ->and($admitted->input_hash)->toHaveLength(64)
         ->and($admitted->admitted_at)->not->toBeNull()
+        ->and(data_get($admitted->admission_snapshot, 'schema_version'))->toBe(2)
         ->and(data_get($admitted->admission_snapshot, 'state_version'))->toBe(0)
         ->and(data_get($admitted->admission_snapshot, 'outline_checksum'))->toHaveLength(64)
         ->and(data_get($admitted->admission_snapshot, 'routes.writer.provider'))->not->toBeEmpty()
         ->and(data_get($admitted->admission_snapshot, 'routes.reviewer.prompt_version'))->not->toBeEmpty()
         ->and(data_get($admitted->admission_snapshot, 'capacity.scene_allocations'))->toHaveCount(2)
-        ->and(data_get($admitted->admission_snapshot, 'capacity.event_extraction.max_output_tokens'))->toBeGreaterThan(0)
-        ->and(data_get($admitted->admission_snapshot, 'capacity.rewrite.max_output_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.model_price_id'))->toBeInt()
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.context_window_tokens'))->toBe(1_050_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.max_output_tokens'))->toBe(128_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.output_tokens'))->toBe(4_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.reasoning_reserve_tokens'))->toBe(0)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.max_completion_tokens'))->toBe(4_000)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.event_extraction.max_completion_tokens'))->toBe(12_000)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.rewrite.max_completion_tokens'))->toBeGreaterThan(0)
         ->and($plan->chapter->generationRuns()->count())->toBe(0)
         ->and($provider->requests())->toBe([]);
 });
@@ -153,15 +162,114 @@ test('plan checksum ignores associative key order while preserving list order', 
     expect($reloaded->semanticChecksum())->not->toBe($checksumBeforeSave);
 });
 
-test('provider stages reject a request budget above the plan admission frozen route before calling a provider', function () {
+test('plan admission freezes verified model capacity and normalized budgets for every downstream provider stage', function (AiStage $stage) {
     $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
-    $maximum = (int) data_get($plan->admission_snapshot, 'capacity.event_extraction.max_output_tokens');
+    $route = data_get($plan->admission_snapshot, "routes.{$stage->value}");
+
+    // Scene 1 之前一次冻结全部下游合同，恢复期间不得再从当前后台配置拼装容量。
+    expect($route)->toBeArray()
+        ->and(data_get($route, 'model_capacity.model_price_id'))->toBeInt()
+        ->and(data_get($route, 'model_capacity.context_window_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($route, 'model_capacity.max_output_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($route, 'model_capacity.supports_structured_output'))->toBeTrue()
+        ->and(data_get($route, 'request_budgets.initial.output_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($route, 'request_budgets.initial.max_completion_tokens'))
+        ->toBe(data_get($route, 'request_budgets.initial.output_tokens') + data_get($route, 'request_budgets.initial.reasoning_reserve_tokens'));
+})->with([
+    'writer' => [AiStage::Writer],
+    'extractor' => [AiStage::Extractor],
+    'reviewer' => [AiStage::Reviewer],
+    'rewrite' => [AiStage::Rewrite],
+    'summary' => [AiStage::Summary],
+]);
+
+test('all downstream provider stages reject a request budget above the plan admission frozen route', function (AiStage $stage) {
+    $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
+    $maximum = (int) collect(data_get($plan->admission_snapshot, "routes.{$stage->value}.request_budgets", []))
+        ->max(fn (mixed $budget): int => is_array($budget) ? (int) ($budget['max_completion_tokens'] ?? 0) : 0);
+
+    expect(fn () => app(GenerationOutputCapacityGuard::class)->assertWithinFrozenRoute(
+        $plan->chapter,
+        $stage,
+        $maximum + 1,
+    ))->toThrow(AiProviderException::class, '超过 Plan Admission 冻结容量');
+})->with([
+    'writer' => [AiStage::Writer],
+    'extractor' => [AiStage::Extractor],
+    'reviewer' => [AiStage::Reviewer],
+    'rewrite' => [AiStage::Rewrite],
+    'summary' => [AiStage::Summary],
+]);
+
+test('plan admission rejects a missing model capacity profile without calling a provider', function () {
+    $plan = admissionReadyPlan();
+    AIModelPrice::query()->delete();
+    $provider = new FakeAiProvider;
+    app()->instance(AiProvider::class, $provider);
+
+    expect(fn () => app(PlanAdmissionService::class)->prepare($plan))
+        ->toThrow(ValidationException::class, '[MODEL_CAPACITY_NOT_VERIFIED]');
+
+    expect($provider->requests())->toBe([])
+        ->and($plan->chapter->generationRuns()->count())->toBe(0);
+});
+
+test('plan admission freezes model capacity and request budgets independently from later settings changes', function () {
+    config()->set('generation.chapter_request_budgets.extractor.initial.reasoning_reserve_tokens', 6_000);
+    config()->set('generation.chapter_request_budgets.extractor.retry.reasoning_reserve_tokens', 6_000);
+    config()->set('generation.chapter_request_budgets.extractor.final.reasoning_reserve_tokens', 6_000);
+    $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
+    $snapshot = $plan->admission_snapshot;
+    $profileId = (int) data_get($snapshot, 'routes.extractor.model_capacity.model_price_id');
+
+    AIModelPrice::query()->whereKey($profileId)->update([
+        'context_window_tokens' => 2_000_000,
+        'max_output_tokens' => 256_000,
+    ]);
+    config()->set('generation.chapter_request_budgets.extractor.initial.output_tokens', 9_000);
+
+    expect(data_get($plan->fresh()->admission_snapshot, 'routes.extractor.model_capacity.context_window_tokens'))->toBe(1_050_000)
+        ->and(data_get($plan->fresh()->admission_snapshot, 'routes.extractor.model_capacity.max_output_tokens'))->toBe(128_000)
+        ->and(data_get($plan->fresh()->admission_snapshot, 'routes.extractor.request_budgets.initial'))->toBe([
+            'output_tokens' => 4_000,
+            'reasoning_reserve_tokens' => 6_000,
+            'max_completion_tokens' => 10_000,
+        ]);
+});
+
+test('plan admission rejects a configured request budget above the selected model static capacity', function () {
+    $plan = admissionReadyPlan();
+    AIModelPrice::query()->update([
+        'context_window_tokens' => 20_000,
+        'max_output_tokens' => 10_000,
+    ]);
+
+    expect(fn () => app(PlanAdmissionService::class)->prepare($plan))
+        ->toThrow(ValidationException::class, '[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY]');
+});
+
+test('capacity guard accounts for the estimated input against the frozen context window', function () {
+    $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
 
     expect(fn () => app(GenerationOutputCapacityGuard::class)->assertWithinFrozenRoute(
         $plan->chapter,
         AiStage::Extractor,
-        $maximum + 1,
-    ))->toThrow(AiProviderException::class, '超过 Plan Admission 冻结容量');
+        4_000,
+        1_049_000,
+    ))->toThrow(AiProviderException::class, '当前剩余上下文 1000');
+});
+
+test('a legacy admission snapshot is rejected without being silently rewritten', function () {
+    $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
+    $snapshot = $plan->admission_snapshot;
+    $snapshot['schema_version'] = 1;
+    $plan->update(['admission_snapshot' => $snapshot]);
+
+    $result = app(PlanValidator::class)->validate($plan->fresh(), $snapshot);
+
+    expect(collect($result->findings)->pluck('code'))
+        ->toContain('ADMISSION_CONTRACT_VERSION_UNSUPPORTED')
+        ->and(data_get($plan->fresh()->admission_snapshot, 'schema_version'))->toBe(1);
 });
 
 test('a newly generated plan freezes the bible version of its planning run instead of an older ready plan anchor', function () {
@@ -244,7 +352,9 @@ test('missing frozen routes and source versions invalidate an admitted plan', fu
 
 test('writer and reviewer capacity are checked before admission', function () {
     $plan = admissionReadyPlan(1);
-    config()->set('generation.scene_final_retry_max_output_tokens', 10);
+    config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 10);
+    config()->set('generation.chapter_request_budgets.writer.retry.output_tokens', 10);
+    config()->set('generation.chapter_request_budgets.writer.final.output_tokens', 10);
     config()->set('generation.review_context_token_budget', 10);
 
     try {

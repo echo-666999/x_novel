@@ -2,11 +2,9 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
-use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Data\StoryEventCandidate;
 use App\Enums\AiStage;
@@ -28,8 +26,6 @@ class StoryEventExtractor
 {
     public function __construct(
         private readonly AiProvider $provider,
-        private readonly AiSettingsResolver $settingsResolver,
-        private readonly PromptVersionResolver $promptVersionResolver,
         private readonly GenerationRunCoordinator $runCoordinator,
         private readonly StoryEventEvidenceRepairer $evidenceRepairer,
         private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
@@ -39,6 +35,7 @@ class StoryEventExtractor
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly PlanAdmissionService $planAdmission,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
+        private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false): ?GenerationArtifact
@@ -59,17 +56,25 @@ class StoryEventExtractor
 
         $draft = $this->latestChapterDraft($chapter);
         $context = $this->context($chapter, $draft);
-        $context['generation_preferences']['event_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.event_extraction_max_output_tokens', 4_000),
-            'retry_max_completion_tokens' => (int) config('generation.event_extraction_retry_max_output_tokens', 8_000),
-            'final_retry_max_completion_tokens' => (int) config('generation.event_extraction_final_retry_max_output_tokens', 12_000),
+        if ($chapter->latestPlan === null) {
+            throw new AiProviderException('event_capacity_contract_missing', 'Story Event Extraction 缺少 Chapter Plan。', false);
+        }
+        $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Extractor);
+        $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Extractor);
+        $extractorRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Extractor);
+        $context['generation_preferences']['model_capacity'] = $extractorRoute['model_capacity'];
+        $context['generation_preferences']['request_budgets'] = $extractorRoute['request_budgets'];
+        // Run 自身保存冻结路由，恢复和页面诊断都不再读取当前后台配置来猜测历史请求。
+        $context['generation_preferences']['frozen_route'] = [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $promptVersion,
         ];
-        $settings = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->routeFor($chapter->latestPlan, AiStage::Extractor)
-            : $this->settingsResolver->resolve(AiStage::Extractor, $chapter->novel);
-        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->promptVersionFor($chapter->latestPlan, AiStage::Extractor)
-            : $this->promptVersionResolver->resolve(AiStage::Extractor);
+        $context['generation_preferences']['repair_budgets'] = [
+            'event_evidence' => ['initial' => (int) config('generation.event_evidence_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.event_evidence_repair_retry_max_output_tokens', 4_000)],
+        ];
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::EventExtraction,
             $context,
@@ -84,9 +89,9 @@ class StoryEventExtractor
             return $run->artifacts()->where('type', ArtifactType::EventCandidate)->latest('version')->first();
         }
 
+        $budget = null;
         try {
-            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
-            $this->outputCapacity->assertWithinFrozenRoute($chapter, AiStage::Extractor, $maxTokens);
+            $budget = $this->resolveRequestBudget($run, $baseKey);
             $metadata = [
                 'generation_run_id' => $run->getKey(),
                 'novel_id' => $chapter->novel_id,
@@ -102,18 +107,28 @@ class StoryEventExtractor
             $payload = $this->latestPayloadCheckpoint($chapter, $inputHash);
             if ($payload === null) {
                 $beforeRequest('event_extraction');
-                $response = $this->provider->generate(new AiRequest(
+                $request = new AiRequest(
                     model: $settings->model,
                     provider: $settings->provider,
                     reasoningEffort: $settings->reasoningEffort,
                     systemPrompt: '你是 XNovel 故事事件提取器。只识别会改变后续故事状态的事件，并返回符合 Schema 的 JSON。event_type 与 subject_type 必须严格遵守 event_subject_type_rules；subject_id 必须引用 current_state 中已存在的实体，或引用 Chapter Plan 冻结的 Candidate Key。正文确实引入批准人物候选时必须输出 character_introduced，subject_type=character，subject_id=chapter_plan.character_candidates[].candidate_key，payload 包含 candidate_key；正文确实引入批准世界实体候选时必须输出 world_entity_introduced，subject_type=world_entity，subject_id=chapter_plan.world_entity_candidates[].candidate_key，payload 包含 candidate_key；不得为未批准候选生成 Introduced Event。不要在 events 中输出 story_arc_beat_completed 或 story_arc_beat_milestone_completed；必须改为在 outline_completion 中按冻结条件原顺序分别审计 Milestone、Beat Exit 和 Handoff，不得返回数据库 ID。fulfilled/contradicted 必须给出当前正文逐字证据和所属数据库 Scene ID，not_met 的 evidence 必须为 null。Laravel 会结合历史 Canonical Milestone Event、恢复冻结 ID 并决定是否创建 Completion Candidate。没有有效主体时必须省略该事件，不能借用角色 ID 充当其他类型 ID。current_state.world.entities 中的对象统一使用 subject_type=world_entity，其内部 type（例如 concept、rule、location、faction）不能作为 subject_type。foreshadowing_contract 是本章冻结的唯一伏笔动作契约；foreshadowing_* 候选只能引用 actions 中的 foreshadowing_id，事件类型必须与 plan_action.action 一致，而且对应 Scene 的最终 foreshadowing_coverage 必须为 fulfilled。事件 evidence 必须覆盖逐字证据并使用目标 Scene；evidence.scene_id 只能填 current_scene_references[].scene_id 中的数据库 ID，不得把 sequence 当作 scene_id。未列入契约、Coverage 为 missing/contradicted、动作不匹配或只有主题相似的内容不能生成事件。其他自然语言内容必须使用简体中文。每条 evidence quote 必须逐字复制自给定章节草稿，不得改写、概括或补字。含义不确定时必须降低 confidence。不得修改正式故事数据。',
                     prompt: '请从以下章节草稿和权威上下文中提取故事事件候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                     temperature: 0.2,
-                    maxTokens: $maxTokens,
+                    maxTokens: $budget['max_completion_tokens'],
                     responseSchema: $this->responseSchema(),
                     promptVersion: $promptVersion,
                     metadata: $metadata,
-                ));
+                );
+                // 事件提取的输入正文可能很长，必须在发送前同时检查冻结预算与剩余上下文。
+                $this->outputCapacity->assertRequestWithinFrozenRoute(
+                    $chapter,
+                    $run,
+                    AiStage::Extractor,
+                    $request,
+                    'event_extraction',
+                    $budget,
+                );
+                $response = $this->provider->generate($request);
                 $payload = StructuredOutput::require($response, 'event', 'Story Event Candidates');
                 $this->savePayloadCheckpoint($run, $payload, $inputHash, $draft);
             }
@@ -122,6 +137,7 @@ class StoryEventExtractor
                 $payload,
                 $chapter,
                 $draft,
+                $settings->provider,
                 $settings->model,
                 $metadata,
                 $context['foreshadowing_contract'],
@@ -141,6 +157,18 @@ class StoryEventExtractor
                 $context['foreshadowing_contract_checksum'],
             );
         } catch (Throwable $exception) {
+            if ($exception instanceof AiProviderException && is_array($budget)) {
+                // 事件提取只在下一档冻结预算能解决当前耗尽类型时重试。
+                $exception = $this->requestBudget->classifyRetry(
+                    $exception,
+                    (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []),
+                    AiStage::Extractor,
+                    $budget,
+                    'event',
+                    'Story Event Extraction',
+                    data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                );
+            }
             $this->failRun($run, $exception);
 
             throw $exception;
@@ -271,7 +299,7 @@ class StoryEventExtractor
     }
 
     /** @return array{0: array<int, StoryEventCandidate>, 1: array<string, mixed>} */
-    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $model, array $metadata, array $foreshadowingContract, ?string $reasoningEffort, ?callable $beforeRequest, GenerationRun $run, string $inputHash): array
+    private function validateCandidates(array $payload, Chapter $chapter, GenerationArtifact $draft, string $provider, string $model, array $metadata, array $foreshadowingContract, ?string $reasoningEffort, ?callable $beforeRequest, GenerationRun $run, string $inputHash): array
     {
         if (! $this->hasExactKeys($payload, ['events', 'outline_completion']) || ! is_array($payload['events']) || ! is_array($payload['outline_completion'])) {
             throw ValidationException::withMessages(['events' => 'Story Event Extractor 必须返回 events 与 outline_completion。']);
@@ -286,7 +314,7 @@ class StoryEventExtractor
                 true,
             ))
             ->values()
-            ->map(function (mixed $event, int $index) use ($chapter, $draft, $model, $metadata, $reasoningEffort, $beforeRequest, $run, $inputHash): StoryEventCandidate {
+            ->map(function (mixed $event, int $index) use ($chapter, $draft, $provider, $model, $metadata, $reasoningEffort, $beforeRequest, $run, $inputHash): StoryEventCandidate {
                 if (! is_array($event)) {
                     throw ValidationException::withMessages(["events.{$index}" => '第 '.($index + 1).' 个事件必须是对象。']);
                 }
@@ -306,6 +334,7 @@ class StoryEventExtractor
                         $event['evidence'] = $this->evidenceRepairer->repair(
                             event: $event,
                             content: (string) $draft->content,
+                            provider: $provider,
                             model: $model,
                             metadata: $metadata,
                             eventIndex: $index,
@@ -403,43 +432,33 @@ class StoryEventExtractor
             );
     }
 
-    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): array
     {
-        $priorTruncatedRuns = GenerationRun::query()
+        $priorRuns = GenerationRun::query()
             ->where('chapter_id', $run->chapter_id)
             ->where('stage', GenerationStage::EventExtraction)
             ->where('provider', $run->provider)
             ->where('model_policy', $run->model_policy)
             ->where('id', '<', $run->getKey())
-            ->where('error_code', 'event_output_truncated')
-            ->get(['idempotency_key', 'context_snapshot'])
+            ->whereNotNull('error_code')
+            ->orderBy('id')
+            ->get(['idempotency_key', 'error_code', 'context_snapshot'])
             ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
                 || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
             ->values();
-        $retryOrdinal = $priorTruncatedRuns->count() + 1;
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.event_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 4_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 8_000),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 12_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
+        $budgets = (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []);
+        $selection = $this->requestBudget->resolveForAttempt($budgets, AiStage::Extractor, $priorRuns, 'event', 'Story Event Extraction');
+        $budget = $selection['budget'];
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.event_retry_ordinal', $retryOrdinal);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        data_set($snapshot, 'generation_preferences.event_retry_ordinal', $selection['ordinal']);
+        data_set($snapshot, 'generation_preferences.request_budget_tier', $selection['tier']);
+        data_set($snapshot, 'generation_preferences.request_budget_trigger', $selection['trigger']);
+        data_set($snapshot, 'generation_preferences.selected_request_budget', $budget);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $budget['max_completion_tokens']);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
-            throw new AiProviderException(
-                'event_output_budget_exhausted',
-                "Story Event Extraction 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Extractor 模型后再重试。",
-                false,
-            );
-        }
-
-        return $maxTokens;
+        return $budget;
     }
 
     private function withCandidateIndex(ValidationException $exception, int $index): ValidationException

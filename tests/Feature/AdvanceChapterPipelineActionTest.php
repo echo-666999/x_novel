@@ -40,6 +40,7 @@ use Illuminate\Support\Facades\Queue;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    seedVerifiedChapterModelProfiles();
     Cache::flush();
     Queue::fake();
     config()->set('ai.budget.daily_hard_limit', null);

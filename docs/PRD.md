@@ -748,7 +748,9 @@ updated_at
 
 Primary Contribution 使用 `novel_outline_arc_id + novel_outline_beat_id + novel_outline_milestone_id` 引用冻结 Outline 的完整父链，并记录目标 Scene 与验收条件；每个新 Plan 必须恰有一个 Primary，Secondary 只能推进获准支线，不能替代或提前完成后续 Main Beat/Milestone。`character_candidates` 与 `world_entity_candidates` 保存稳定临时键、名称或类型、描述、去重依据、潜在重复对象、引入理由与目标 Scene。三者在 Review PASS 前都只是 Draft 契约。
 
-Chapter Plan 必须冻结 Outline ID、Checksum、Primary Arc/Beat/Milestone ID 和 Handoff 契约。`admission_snapshot` 在 Scene 1 前同时冻结 Bible/State/Outline/Plan 来源、下游 AI Stage Route 和 Scene/Review 容量；相同 `input_hash` 复用 Ready Plan，语义输入变化创建新 Plan Version。Generation Run 的 Context Snapshot 同时记录已完成 Milestone/Beat IDs、当前 Beat 已使用的 Canonical Chapter 数和章节预算；后续大纲修订不得把旧 Plan 静默改挂到新版本。
+Chapter Plan 必须冻结 Outline ID、Checksum、Primary Arc/Beat/Milestone ID 和 Handoff 契约。`admission_snapshot` 在 Scene 1 前同时冻结 Bible/State/Outline/Plan 来源，以及 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五个下游 AI Stage 的 Route、Prompt Version、模型容量和分档请求预算；相同 `input_hash` 复用 Ready Plan，语义输入变化创建新 Plan Version。Generation Run 的 Context Snapshot 同时记录已完成 Milestone/Beat IDs、当前 Beat 已使用的 Canonical Chapter 数和章节预算；后续大纲修订不得把旧 Plan 静默改挂到新版本。
+
+Plan Admission v2 必须把模型静态容量与工作流请求预算分开保存。模型容量来自与冻结 Provider + Model 精确匹配且已启用的 `ai_model_prices` 记录；每档请求预算分别包含 `output_tokens`、`reasoning_reserve_tokens` 和两者之和 `max_completion_tokens`。任一 Stage 缺少已核实容量、缺少结构化输出能力、配置了不受支持的推理程度、预算超过模型最大输出或输入后的剩余上下文时，必须在 Provider 请求前失败。Chapter Planner 位于 Admission 之前，因此在其首个 Run 中独立冻结同样的路由、容量和预算合同。
 
 ---
 
@@ -1858,6 +1860,8 @@ Chapter Plan
 
 然后从最近可恢复阶段继续。
 
+章节技术 Retry 和 Resume 必须复用失败 Run 或 Plan Admission 已冻结的 Provider、Model、推理程度、Prompt Version、模型容量与分档请求预算；后台配置变化不得改变同一恢复链。Provider 配置失败或冻结最高档的推理耗尽、可见输出截断、完成预算耗尽不得 Resume，必须修复配置后显式重建章节来源链。运行详情必须把冻结路由、静态容量、本次预算档位与触发原因、容量门禁快照、Provider 实际发送参数、`reasoning_tokens`、`finish_reason` 和完成预算分类分开显示。
+
 ---
 
 # 23. Failure Recovery
@@ -2104,7 +2108,9 @@ DeepSeek
 
 Laravel 按 Stage 已解析并冻结到 Generation Run 的 Provider 进行固定路由。不得实现动态选型、按价格自动路由或失败后跨 Provider 自动切换。Embedding 继续固定使用 OpenAI，不随文本生成 Provider 切换。
 
-OpenAI 严格结构化输出在发出请求前必须递归校验 Schema：根节点为 object、每个 object 设置 `additionalProperties=false`，且 `required` 完整覆盖 `properties`。Provider 成功响应仍按同一 Schema 本地复验；非法 JSON、Schema 不匹配、拒绝和 Token 截断必须使用不同错误码。`finish_reason=length` 不能单独证明可见输出被截断：有部分可见内容时分类为 `visible_output_truncated`，没有可见内容且 `reasoning_tokens>0` 时分类为 `reasoning_budget_exhausted`，证据不足时分类为 `completion_budget_exhausted`，不得猜测。HTTP 4xx 应保留经过脱敏和长度限制的 Provider 原始错误原因，便于从 Generation Run 直接定位参数或 Schema 问题。Embedding 响应必须验证向量为数值列表且维度与请求一致。
+OpenAI 严格结构化输出在发出请求前必须递归校验 Schema：根节点为 object、每个 object 设置 `additionalProperties=false`，且 `required` 完整覆盖 `properties`。Provider 成功响应仍按同一 Schema 本地复验；非法 JSON、Schema 不匹配、拒绝和 Token 截断必须使用不同错误码。`finish_reason=length` 不能单独证明可见输出被截断：有部分可见内容时分类为 `visible_output_truncated`，没有可见内容且 `reasoning_tokens>0` 时分类为 `reasoning_budget_exhausted`，证据不足时分类为 `completion_budget_exhausted`，不得猜测。章节阶段只有在下一档分别增加可见输出额度、推理预留或总完成预算时，才允许对应分类进入 Queue Retry；普通临时故障沿用当前档，最高档耗尽立即终止。DeepSeek Route 显式冻结推理程度时必须发送并记录实际 `reasoning_effort`，留空时采用 Provider 默认行为。HTTP 4xx 应保留经过脱敏和长度限制的 Provider 原始错误原因，便于从 Generation Run 直接定位参数或 Schema 问题。Embedding 响应必须验证向量为数值列表且维度与请求一致。
+
+章节 Provider Stage 的预算键固定为 `planner`、`writer`、`extractor`、`reviewer`、`rewrite`、`summary`。除当前仅有 `initial` 档的 `reviewer` 外，其余阶段使用 `initial / retry / final` 冻结档位；环境变量中的 `*_MAX_OUTPUT_TOKENS` 表示可见输出额度，`*_REASONING_RESERVE_TOKENS` 表示隐藏推理预留。确定性的 Chapter Assembly 不读取模型路由或 Token 环境变量，也不得创建 Provider 请求或 Usage。
 
 ---
 

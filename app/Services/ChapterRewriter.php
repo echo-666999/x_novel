@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
-use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -29,7 +27,7 @@ use Throwable;
 
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity) {}
+    public function __construct(private readonly AiProvider $provider, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget) {}
 
     public function rewrite(int $chapterId, ?int $sceneId = null, bool $singleProviderCall = false): ?GenerationArtifact
     {
@@ -81,12 +79,11 @@ class ChapterRewriter
         }
 
         $findingHash = hash('sha256', json_encode($findings, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-        $settings = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->routeFor($chapter->latestPlan, AiStage::Rewrite)
-            : $this->settingsResolver->resolve(AiStage::Rewrite, $chapter->novel);
-        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->promptVersionFor($chapter->latestPlan, AiStage::Rewrite)
-            : $this->promptVersionResolver->resolve(AiStage::Rewrite);
+        if (! is_array($chapter->latestPlan?->admission_snapshot)) {
+            throw new AiProviderException('rewrite_capacity_contract_missing', 'Rewrite 缺少已冻结的 Plan Admission 合同。', false);
+        }
+        $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Rewrite);
+        $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Rewrite);
         $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
         $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $brief = [
@@ -127,10 +124,26 @@ class ChapterRewriter
             ],
             'content' => $source->content,
         ];
-        $brief['generation_preferences']['rewrite_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.rewrite_max_output_tokens', 16_000),
-            'retry_max_completion_tokens' => (int) config('generation.rewrite_retry_max_output_tokens', 20_000),
-            'final_retry_max_completion_tokens' => (int) config('generation.rewrite_final_retry_max_output_tokens', 24_000),
+        $rewriteRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Rewrite);
+        $brief['generation_preferences']['model_capacity'] = $rewriteRoute['model_capacity'];
+        $brief['generation_preferences']['request_budgets'] = $rewriteRoute['request_budgets'];
+        // Rewrite 的恢复必须沿用原 Route，并让运行详情直接展示冻结的推理配置。
+        $brief['generation_preferences']['frozen_route'] = [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $promptVersion,
+        ];
+        // 长度修复同样会发送完整正文，固定使用本次 Run 已冻结的 Rewrite 初始预算。
+        $brief['generation_preferences']['length_repair_budget'] = $this->requestBudget->tier(
+            $rewriteRoute['request_budgets'],
+            'initial',
+            AiStage::Rewrite,
+        );
+        $brief['generation_preferences']['repair_budgets'] = [
+            'coverage_evidence' => ['initial' => (int) config('generation.coverage_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000)],
+            'length_repair' => (int) data_get($brief, 'generation_preferences.length_repair_budget.max_completion_tokens'),
         ];
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::Rewrite,
@@ -145,9 +158,9 @@ class ChapterRewriter
             return $run->artifacts()->where('type', ArtifactType::RewriteDraft)->first();
         }
 
+        $budget = null;
         try {
-            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
-            $this->outputCapacity->assertWithinFrozenRoute($chapter, AiStage::Rewrite, $maxTokens);
+            $budget = $this->resolveRequestBudget($run, $baseKey);
             $metadata = ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scene_id' => $sceneId, 'stage' => AiStage::Rewrite->value];
             $beforeRequest = function (string $substage) use ($singleProviderCall, &$providerCalls): void {
                 if ($singleProviderCall && $providerCalls >= 1) {
@@ -161,18 +174,27 @@ class ChapterRewriter
             $lengthRepairAttempt = (int) ($checkpoint['length_repair_attempt'] ?? 0);
             if (! is_array($structured)) {
                 $beforeRequest('rewrite');
-                $response = $this->provider->generate(new AiRequest(
+                $request = new AiRequest(
                     model: $settings->model,
                     provider: $settings->provider,
                     reasoningEffort: $settings->reasoningEffort,
                     systemPrompt: $this->systemPrompt($paragraphPatch ? 'paragraph' : 'scene'),
                     prompt: '请根据以下修订要求重写正文：'.json_encode($brief, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                     temperature: .3,
-                    maxTokens: $maxTokens,
+                    maxTokens: $budget['max_completion_tokens'],
                     responseSchema: $paragraphPatch ? ParagraphPatchPayload::schema() : SceneRewritePayload::schema(),
                     promptVersion: $promptVersion,
                     metadata: $metadata,
-                ));
+                );
+                $this->outputCapacity->assertRequestWithinFrozenRoute(
+                    $chapter,
+                    $run,
+                    AiStage::Rewrite,
+                    $request,
+                    'rewrite',
+                    $budget,
+                );
+                $response = $this->provider->generate($request);
                 $structured = StructuredOutput::require($response, 'rewrite', $paragraphPatch ? 'Paragraph Patch' : 'Scene Rewrite');
                 $this->saveRewriteCheckpoint($run, 'rewrite_payload', $structured, $inputHash, $source);
                 $checkpointName = 'rewrite_payload';
@@ -271,12 +293,26 @@ class ChapterRewriter
                         $source,
                         ['repair_kind' => 'coverage', 'repair_attempt' => $repairAttempt, 'length_repair_attempt' => $currentLengthAttempt],
                     ),
+                    chapter: $chapter,
+                    run: $run,
                 );
             }
             $this->validateLength($payload['content'], $brief['length_requirement']);
 
             return $this->complete($run, $chapter, $sceneId, $source, $review, $payload, $findingHash, $attempt, $brief['state_version']);
         } catch (Throwable $exception) {
+            if ($exception instanceof AiProviderException && is_array($budget)) {
+                // Rewrite 的三档预算按实际耗尽类型升级，不能用业务 Rewrite 次数代替技术预算重试。
+                $exception = $this->requestBudget->classifyRetry(
+                    $exception,
+                    (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []),
+                    AiStage::Rewrite,
+                    $budget,
+                    'rewrite',
+                    'Rewrite',
+                    data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                );
+            }
             $this->failurePolicy->record($run, $exception, 'rewrite_failed');
             throw $exception;
         }
@@ -370,6 +406,7 @@ class ChapterRewriter
                     'self_check' => is_array($response) ? $response : ($structuredData['self_check'] ?? null),
                 ]);
             },
+            stage: AiStage::Rewrite,
         );
 
         try {
@@ -413,7 +450,7 @@ class ChapterRewriter
     /** @param array<string, mixed> $brief
      * @param  array<string, mixed>  $metadata
      */
-    private function repairLengthIfNeeded(array $payload, array $brief, string $provider, string $model, string $promptVersion, array $metadata, bool $sceneRewrite, ?string $reasoningEffort = null, ?callable $beforeRequest = null, ?callable $afterRawResponse = null, ?callable $afterValidatedResponse = null, int $startingAttempt = 1, int $startingEvidenceAttempt = 1, ?callable $afterEvidenceResponse = null): array
+    private function repairLengthIfNeeded(array $payload, array $brief, string $provider, string $model, string $promptVersion, array $metadata, bool $sceneRewrite, ?string $reasoningEffort = null, ?callable $beforeRequest = null, ?callable $afterRawResponse = null, ?callable $afterValidatedResponse = null, int $startingAttempt = 1, int $startingEvidenceAttempt = 1, ?callable $afterEvidenceResponse = null, ?Chapter $chapter = null, ?GenerationRun $run = null): array
     {
         $requirement = $brief['length_requirement'];
 
@@ -429,8 +466,10 @@ class ChapterRewriter
             }
 
             $beforeRequest?->__invoke('rewrite_length_repair');
-            $response = $this->provider->generate(new AiRequest(
+            $repairBudget = (array) data_get($brief, 'generation_preferences.length_repair_budget', []);
+            $request = new AiRequest(
                 model: $model,
+                provider: $provider,
                 reasoningEffort: $reasoningEffort,
                 systemPrompt: ($tooLong
                     ? '你是 XNovel 场景重写稿压缩器。当前稿仍然超限。l4 是唯一的 Style Contract；压缩后必须保持其中的 POV、时态、主文风和辅助文风层级。保留必须修复的问题、plan_acceptance、连续性和既定事实，删除重复解释、重复感受、重复争论与不推动情节的细节。最终正文应接近 target_words，且不得超过 maximum_words；字数统计排除空白和换行。不得截断句子，不得输出摘要或解释，不得新增重大事实。必须同时返回覆盖最终正文的固定 self_check。'
@@ -449,14 +488,26 @@ class ChapterRewriter
                     'draft' => $payload,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: (int) config('generation.rewrite_max_output_tokens', 12_000),
+                maxTokens: (int) ($repairBudget['max_completion_tokens'] ?? 0),
                 responseSchema: SceneRewritePayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
-            ));
+            );
+            if (! $chapter instanceof Chapter || ! $run instanceof GenerationRun) {
+                throw new AiProviderException('rewrite_capacity_contract_missing', '长度修复缺少冻结请求合同。', false);
+            }
+            $this->outputCapacity->assertRequestWithinFrozenRoute(
+                $chapter,
+                $run,
+                AiStage::Rewrite,
+                $request,
+                'rewrite_length_repair',
+                $repairBudget,
+            );
+            $response = $this->provider->generate($request);
             $structured = $response->structuredData;
             $afterRawResponse?->__invoke($attempt, is_array($structured) ? $structured : $payload);
-            $structured = StructuredOutput::require($response, 'rewrite', 'Scene Rewrite');
+            $structured = StructuredOutput::require($response, 'rewrite_length_repair', 'Scene Rewrite Length Repair');
             $payload = $this->responsePayload(
                 content: $response->content,
                 structuredData: $structured,
@@ -574,43 +625,33 @@ class ChapterRewriter
         });
     }
 
-    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): array
     {
-        $priorTruncatedRuns = GenerationRun::query()
+        $priorRuns = GenerationRun::query()
             ->where('chapter_id', $run->chapter_id)
             ->where('stage', GenerationStage::Rewrite)
             ->where('provider', $run->provider)
             ->where('model_policy', $run->model_policy)
             ->where('id', '<', $run->getKey())
-            ->where('error_code', 'rewrite_output_truncated')
-            ->get(['idempotency_key', 'context_snapshot'])
+            ->whereNotNull('error_code')
+            ->orderBy('id')
+            ->get(['idempotency_key', 'error_code', 'context_snapshot'])
             ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
                 || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
             ->values();
-        $retryOrdinal = $priorTruncatedRuns->count() + 1;
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.rewrite_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 16_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 20_000),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
+        $budgets = (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []);
+        $selection = $this->requestBudget->resolveForAttempt($budgets, AiStage::Rewrite, $priorRuns, 'rewrite', 'Rewrite');
+        $budget = $selection['budget'];
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.rewrite_retry_ordinal', $retryOrdinal);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        data_set($snapshot, 'generation_preferences.rewrite_retry_ordinal', $selection['ordinal']);
+        data_set($snapshot, 'generation_preferences.request_budget_tier', $selection['tier']);
+        data_set($snapshot, 'generation_preferences.request_budget_trigger', $selection['trigger']);
+        data_set($snapshot, 'generation_preferences.selected_request_budget', $budget);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $budget['max_completion_tokens']);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
-            throw new AiProviderException(
-                'rewrite_output_budget_exhausted',
-                "Rewrite 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Rewrite 模型后再重试。",
-                false,
-            );
-        }
-
-        return $maxTokens;
+        return $budget;
     }
 
     private function complete(GenerationRun $run, Chapter $chapter, int $sceneId, GenerationArtifact $source, Review $review, array $payload, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact

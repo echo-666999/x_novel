@@ -32,6 +32,10 @@ use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    seedVerifiedChapterModelProfiles();
+});
+
 function rewriteFixture(): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
@@ -62,6 +66,7 @@ function rewriteFixture(): array
             ...$target->milestone['must_not_include'],
         ])),
     ]);
+    admitChapterPlanForTest($plan);
     $assembly = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
     $draft = GenerationArtifact::factory()->for($assembly)->create(['type' => ArtifactType::ChapterDraft, 'content' => '原始章节正文', 'checksum' => hash('sha256', '原始章节正文')]);
     $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded]);
@@ -262,6 +267,8 @@ function sceneRewriteFixture(): array
         'data' => ['source_artifact_id' => $fixture['draft']->getKey()],
     ]);
     $fixture['review']->update(['artifact_id' => $reviewArtifact->getKey()]);
+    $fixture['chapter']->latestPlan->update(['admission_snapshot' => null, 'admitted_at' => null]);
+    admitChapterPlanForTest($fixture['chapter']->latestPlan->fresh());
 
     return [...$fixture, 'target' => $scenes[0], 'untouched' => $scenes[1]];
 }
@@ -355,6 +362,37 @@ test('rewrite job checkpoints a paid response and resumes repair in a new job at
         ->and($fixture['target']['scene']->fresh()->currentArtifact?->type)->toBe(ArtifactType::RewriteDraft)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->count())->toBe(3);
     Queue::assertPushed(AssembleChapterJob::class, 1);
+});
+
+test('rewrite visible truncation upgrades all frozen tiers and stops before a fourth provider request', function () {
+    config()->set('generation.chapter_request_budgets.rewrite.initial.output_tokens', 100);
+    config()->set('generation.chapter_request_budgets.rewrite.retry.output_tokens', 200);
+    config()->set('generation.chapter_request_budgets.rewrite.final.output_tokens', 300);
+    $fixture = sceneRewriteFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(truncatedRewriteResponse())
+        ->enqueue(truncatedRewriteResponse())
+        ->enqueue(truncatedRewriteResponse());
+    app()->instance(AiProvider::class, $fake);
+    $rewriter = app(ChapterRewriter::class);
+
+    foreach ([100, 200, 300] as $index => $expectedBudget) {
+        try {
+            $rewriter->rewrite($fixture['chapter']->getKey(), $fixture['target']['scene']->getKey());
+            $this->fail('Expected Rewrite visible output truncation.');
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('rewrite_output_truncated')
+                ->and($exception->retryable)->toBe($index < 2);
+        }
+
+        expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
+    }
+
+    expect(fn () => $rewriter->rewrite($fixture['chapter']->getKey(), $fixture['target']['scene']->getKey()))
+        ->toThrow(AiProviderException::class, '最高可见输出额度 300 Token');
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::Rewrite)->latest('id')->first()->error_code)
+        ->toBe('rewrite_output_truncated');
 });
 
 test('scene rewrite job returns to assembly before event extraction', function () {

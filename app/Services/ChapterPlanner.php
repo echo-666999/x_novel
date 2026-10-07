@@ -7,6 +7,7 @@ use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
+use App\AI\Data\ResolvedAiSettings;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
 use App\AI\PromptVersionResolver;
@@ -20,6 +21,7 @@ use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Exceptions\GenerationPreflightException;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationRun;
@@ -48,6 +50,8 @@ class ChapterPlanner
         private readonly OutlineContextBuilder $outlineContextBuilder,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly InvalidateChapterPlanDownstreamAction $invalidatePlanDownstream,
+        private readonly GenerationRequestBudget $requestBudget,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
@@ -61,14 +65,51 @@ class ChapterPlanner
 
         $this->foreshadowingPlanningGate->assertModelPlanningAllowed($chapter);
 
-        $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
-        $promptVersion = $this->promptVersionResolver->resolve(AiStage::Planner);
         $context = $this->context($chapter, $regenerate);
+        $frozenRetry = $this->frozenRetryContract($chapter, $context, $regenerate);
+        if ($frozenRetry === null) {
+            $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
+            $promptVersion = $this->promptVersionResolver->resolve(AiStage::Planner);
+            $profile = AIModelPrice::findEnabledForRoute($settings->provider, $settings->model);
+            if ($profile === null) {
+                throw new AiProviderException('planner_capacity_contract_missing', '章节规划 Route 缺少已启用的模型容量记录。', false);
+            }
+            $capabilityErrors = $profile->generationSuitabilityErrors(AiStage::Planner, $settings->reasoningEffort);
+            if ($capabilityErrors !== []) {
+                throw new AiProviderException('planner_model_capability_invalid', implode(' ', $capabilityErrors), false);
+            }
+            $requestBudgets = $this->requestBudget->configured(AiStage::Planner);
+            $modelCapacity = $profile->capacitySnapshot();
+            $baseKey = $this->baseKey($chapter, $context, $settings, $promptVersion);
+        } else {
+            // 技术 Retry 必须沿用首次请求冻结的路由、容量、Prompt 和预算，不能读取后台的新配置。
+            $settings = $frozenRetry['settings'];
+            $promptVersion = $frozenRetry['prompt_version'];
+            $requestBudgets = $frozenRetry['request_budgets'];
+            $modelCapacity = $frozenRetry['model_capacity'];
+            $baseKey = $frozenRetry['base_key'];
+        }
+        $staticMaximum = min(
+            (int) $modelCapacity['context_window_tokens'],
+            (int) $modelCapacity['max_output_tokens'],
+        );
+        if ($this->requestBudget->maximum($requestBudgets) > $staticMaximum) {
+            throw new AiProviderException(
+                'planner_request_budget_exceeds_model_capacity',
+                "章节规划最大完成预算超过模型静态容量 {$staticMaximum} Token。",
+                false,
+            );
+        }
         $context['prompt_version'] = $promptVersion;
-        $context['generation_preferences']['planner_token_budget'] = [
-            'initial_max_completion_tokens' => (int) config('generation.planner_max_output_tokens', 12_000),
-            'retry_max_completion_tokens' => (int) config('generation.planner_retry_max_output_tokens', 16_000),
-            'final_retry_max_completion_tokens' => (int) config('generation.planner_final_retry_max_output_tokens', 24_000),
+        // Planner 发生在 Plan Admission 之前，因此在 Planner Run 自身冻结模型容量和全部重试预算。
+        $context['generation_preferences']['model_capacity'] = $modelCapacity;
+        $context['generation_preferences']['request_budgets'] = $requestBudgets;
+        $context['generation_preferences']['frozen_route'] = [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $promptVersion,
         ];
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::ChapterPlanning,
@@ -76,10 +117,6 @@ class ChapterPlanner
             frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
             contractVersion: $promptVersion,
         );
-        $baseKey = "plan:{$chapter->getKey()}:{$context['state_version']}:{$context['bible_version']}:".
-            $context['novel_outline_id'].':'.$context['outline_checksum'].":{$promptVersion}:".
-            hash('sha256', $settings->provider.'|'.$settings->model.'|'.($settings->reasoningEffort ?? 'default').'|'.$settings->source);
-
         [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate);
 
         if ($reused) {
@@ -88,9 +125,10 @@ class ChapterPlanner
             return is_numeric($planId) ? ChapterPlan::query()->find((int) $planId) : null;
         }
 
+        $budget = null;
         try {
-            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
-            $response = $this->provider->generate(new AiRequest(
+            $budget = $this->resolveRequestBudget($run, $baseKey);
+            $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
@@ -107,7 +145,7 @@ class ChapterPlanner
                     .'每个 Scene Plan 都必须返回 transition_from_previous；第一场景应说明如何承接 previous_chapter_ending，若没有上一章则返回 null，后续场景说明如何承接前一场景。进入新 Main Beat 时，第一场景必须逐项原样包含 inbound_handoff.contract.required_transition 的要求，并把 carried_states/open_threads 建立为 continuity_requirements；不得省略时间、地点、行动或人物状态变化。上下文：'
                     .json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: ChapterPlanPayload::schema(),
                 promptVersion: $promptVersion,
                 metadata: [
@@ -116,7 +154,16 @@ class ChapterPlanner
                     'chapter_id' => $chapter->getKey(),
                     'stage' => AiStage::Planner->value,
                 ],
-            ));
+            );
+            $requestSnapshot = $this->outputCapacity->assertRequestAgainstContract(
+                $request,
+                AiStage::Planner,
+                $modelCapacity,
+                $this->requestBudget->maximum($requestBudgets),
+                $budget,
+            );
+            $this->outputCapacity->recordRequestSnapshot($run, 'chapter_planning', $requestSnapshot);
+            $response = $this->provider->generate($request);
 
             $payload = ChapterPlanPayload::validate(
                 StructuredOutput::require($response, 'plan', 'Chapter Plan'),
@@ -129,48 +176,50 @@ class ChapterPlanner
 
             return $this->complete($run, $chapter, $payload, $response->content, $context['state_version'], $regenerate);
         } catch (Throwable $exception) {
+            if ($exception instanceof AiProviderException && is_array($budget)) {
+                // 只有冻结预算确实存在更高一档时才允许重试，避免相同参数重复计费。
+                $exception = $this->requestBudget->classifyRetry(
+                    $exception,
+                    $requestBudgets,
+                    AiStage::Planner,
+                    $budget,
+                    'plan',
+                    'Chapter Plan',
+                    data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                );
+            }
             $this->fail($run, $exception);
             throw $exception;
         }
     }
 
-    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): array
     {
-        $priorTruncatedRuns = GenerationRun::query()
+        $priorRuns = GenerationRun::query()
             ->where('chapter_id', $run->chapter_id)
             ->where('stage', GenerationStage::ChapterPlanning)
             ->where('provider', $run->provider)
             ->where('model_policy', $run->model_policy)
             ->where('id', '<', $run->getKey())
-            ->whereIn('error_code', ['plan_output_truncated', 'provider_output_truncated'])
-            ->get(['idempotency_key', 'context_snapshot'])
+            ->whereNotNull('error_code')
+            ->orderBy('id')
+            ->get(['idempotency_key', 'error_code', 'context_snapshot'])
             ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
                 || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
             ->values();
-        $retryOrdinal = max($priorTruncatedRuns->count() + 1, min($run->attempt, 3));
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.planner_token_budget', []);
-        $maxTokens = match ($retryOrdinal) {
-            1 => (int) ($budget['initial_max_completion_tokens'] ?? 12_000),
-            2 => (int) ($budget['retry_max_completion_tokens'] ?? 16_000),
-            default => (int) ($budget['final_retry_max_completion_tokens'] ?? 24_000),
-        };
-        $priorMaximum = $priorTruncatedRuns
-            ->map(fn (GenerationRun $prior): int => (int) data_get($prior->context_snapshot, 'generation_preferences.max_completion_tokens', 0))
-            ->max();
+        $budgets = (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []);
+        $selection = $this->requestBudget->resolveForAttempt($budgets, AiStage::Planner, $priorRuns, 'plan', 'Chapter Plan');
+        $budget = $selection['budget'];
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.planner_retry_ordinal', $retryOrdinal);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        data_set($snapshot, 'generation_preferences.planner_retry_ordinal', $selection['ordinal']);
+        data_set($snapshot, 'generation_preferences.request_budget_tier', $selection['tier']);
+        data_set($snapshot, 'generation_preferences.request_budget_trigger', $selection['trigger']);
+        data_set($snapshot, 'generation_preferences.selected_request_budget', $budget);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $budget['max_completion_tokens']);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if (is_int($priorMaximum) && $priorMaximum >= $maxTokens) {
-            throw new AiProviderException(
-                'plan_output_budget_exhausted',
-                "Chapter Plan 已在冻结的最高输出预算 {$maxTokens} Token 下被截断；请提高预算或调整 Planner 模型后再重试。",
-                false,
-            );
-        }
-
-        return $maxTokens;
+        return $budget;
     }
 
     /**
@@ -275,6 +324,100 @@ class ChapterPlanner
             ->values();
 
         return $authoritative->concat($supplemental)->values()->all();
+    }
+
+    /**
+     * Planner 位于 Plan Admission 之前，因此 Retry 必须从失败 Run 还原合同；否则配置变更会把同一次重试静默改路由。
+     *
+     * @param  array<string, mixed>  $context
+     * @return array{settings: ResolvedAiSettings, prompt_version: string, request_budgets: array<string, mixed>, model_capacity: array<string, mixed>, base_key: string}|null
+     */
+    private function frozenRetryContract(Chapter $chapter, array $context, bool $regenerate): ?array
+    {
+        if ($regenerate) {
+            return null;
+        }
+
+        $failed = $chapter->generationRuns()
+            ->where('stage', GenerationStage::ChapterPlanning)
+            ->where('status', RunStatus::Failed)
+            ->latest('id')
+            ->first();
+        if ($failed === null || ! $this->samePlannerSource($failed, $context)) {
+            return null;
+        }
+
+        $failure = $this->failurePolicy->forRun($failed);
+        $category = $failure->metadata['category'] ?? 'manual_attention';
+        $completionBudgetFailure = in_array($category, [
+            'reasoning_budget_exhausted',
+            'visible_output_truncated',
+            'completion_budget_exhausted',
+        ], true);
+        if ((! $failure->retryable && ! $completionBudgetFailure)
+            || ($failure->retryable && ! $this->failurePolicy->allowsFrozenChapterResume($failed))) {
+            throw new AiProviderException(
+                'planner_restart_required',
+                '最近一次章节规划失败不能沿用冻结合同继续；请修复配置或输入后显式重建章节来源链。',
+                false,
+            );
+        }
+
+        $modelCapacity = data_get($failed->context_snapshot, 'generation_preferences.model_capacity');
+        $requestBudgets = data_get($failed->context_snapshot, 'generation_preferences.request_budgets');
+        $provider = trim((string) $failed->provider);
+        $model = trim((string) $failed->model_policy);
+        $promptVersion = trim((string) $failed->prompt_version);
+        if ($provider === '' || $model === '' || $promptVersion === '' || ! is_array($modelCapacity) || ! is_array($requestBudgets) || $requestBudgets === []) {
+            throw new AiProviderException(
+                'planner_frozen_contract_missing',
+                '最近一次章节规划 Run 缺少完整冻结路由、容量或请求预算，不能安全 Retry；请显式重建章节来源链。',
+                false,
+            );
+        }
+
+        $requestSnapshots = data_get($failed->context_snapshot, 'generation_preferences.provider_requests', []);
+        $lastRequest = is_array($requestSnapshots) ? collect($requestSnapshots)->last() : null;
+        $reasoningEffort = data_get($failed->context_snapshot, 'generation_preferences.frozen_route.reasoning_effort');
+        if ($reasoningEffort === null && is_array($lastRequest)) {
+            $reasoningEffort = $lastRequest['reasoning_effort'] ?? null;
+        }
+
+        $baseKey = preg_replace('/:attempt:\d+$/', '', $failed->idempotency_key) ?: $failed->idempotency_key;
+
+        return [
+            'settings' => new ResolvedAiSettings(
+                stage: AiStage::Planner,
+                provider: $provider,
+                model: $model,
+                reasoningEffort: is_string($reasoningEffort) && $reasoningEffort !== '' ? $reasoningEffort : null,
+                source: (string) data_get($failed->context_snapshot, 'generation_preferences.frozen_route.source', 'frozen_run'),
+            ),
+            'prompt_version' => $promptVersion,
+            'request_budgets' => $requestBudgets,
+            'model_capacity' => $modelCapacity,
+            'base_key' => $baseKey,
+        ];
+    }
+
+    /** @param array<string, mixed> $context */
+    private function samePlannerSource(GenerationRun $run, array $context): bool
+    {
+        return (int) $run->state_version === (int) ($context['state_version'] ?? -1)
+            && (int) $run->bible_version === (int) ($context['bible_version'] ?? -1)
+            && (int) data_get($run->context_snapshot, 'novel_outline_id', -1) === (int) ($context['novel_outline_id'] ?? -2)
+            && hash_equals(
+                (string) data_get($run->context_snapshot, 'outline_checksum', ''),
+                (string) ($context['outline_checksum'] ?? ''),
+            );
+    }
+
+    /** @param array<string, mixed> $context */
+    private function baseKey(Chapter $chapter, array $context, ResolvedAiSettings $settings, string $promptVersion): string
+    {
+        return "plan:{$chapter->getKey()}:{$context['state_version']}:{$context['bible_version']}:".
+            $context['novel_outline_id'].':'.$context['outline_checksum'].":{$promptVersion}:".
+            hash('sha256', $settings->provider.'|'.$settings->model.'|'.($settings->reasoningEffort ?? 'default').'|'.$settings->source);
     }
 
     /** @return array{0: GenerationRun, 1: bool} */

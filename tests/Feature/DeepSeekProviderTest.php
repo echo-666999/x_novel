@@ -59,6 +59,24 @@ test('deepseek structured requests use json output and map usage', function () {
         && str_contains($request['messages'][0]['content'], 'valid JSON object'));
 });
 
+test('deepseek sends and records the frozen reasoning effort when configured', function () {
+    Http::fake(['deepseek.example/*' => Http::response([
+        'id' => 'deepseek-reasoning-effort',
+        'model' => 'deepseek-chat',
+        'choices' => [['finish_reason' => 'stop', 'message' => ['content' => 'OK']]],
+        'usage' => ['prompt_tokens' => 2, 'completion_tokens' => 1],
+    ])]);
+
+    $response = app(DeepSeekProvider::class)->generate(new AiRequest(
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        reasoningEffort: 'low',
+    ));
+
+    Http::assertSent(fn (Request $request): bool => $request['reasoning_effort'] === 'low');
+    expect($response->metadata['sent_parameters']['reasoning_effort'])->toBe('low');
+});
+
 test('deepseek structured output failures are non retryable', function (string $content, string $code) {
     Http::fake(['deepseek.example/*' => Http::response([
         'id' => 'deepseek-invalid',

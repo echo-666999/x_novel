@@ -44,6 +44,10 @@ use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    seedVerifiedChapterModelProfiles();
+});
+
 function sceneGenerationFixture(int $sceneCount = 2): array
 {
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
@@ -643,6 +647,7 @@ test('scene prose evidence repair and length repair use independent routes and b
     config()->set('ai.models.writer', 'writer-route-model');
     config()->set('ai.models.extractor', 'extractor-route-model');
     config()->set('ai.models.rewrite', 'rewrite-route-model');
+    seedVerifiedChapterModelProfiles();
     $fixture = sceneGenerationFixture(1);
     $fixture['plan']->update(['target_words' => 10]);
     $longContent = str_repeat('长', 20);
@@ -1141,6 +1146,8 @@ test('retryable provider failures are recorded and rethrown for queue retry', fu
     Queue::fake();
     config()->set('generation.scene_max_output_tokens', 12_000);
     config()->set('generation.scene_retry_max_output_tokens', 16_000);
+    config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 12_000);
+    config()->set('generation.chapter_request_budgets.writer.retry.output_tokens', 16_000);
     $fixture = sceneGenerationFixture(1);
     $fixture['plan']->update(['target_words' => 12]);
     $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', 'timeout', true));
@@ -1161,9 +1168,9 @@ test('retryable provider failures are recorded and rethrown for queue retry', fu
         ->and($fixture['scenes']->first()->generationRuns()->count())->toBe(2)
         ->and($fixture['scenes']->first()->generationRuns()->latest('id')->first()->attempt)->toBe(2)
         ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
-        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(12_000)
         ->and(data_get($fixture['scenes']->first()->generationRuns()->oldest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
-        ->and(data_get($fixture['scenes']->first()->generationRuns()->latest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
+        ->and(data_get($fixture['scenes']->first()->generationRuns()->latest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
         ->and($fake->requests())->toHaveCount(2);
 });
 
@@ -1197,6 +1204,9 @@ test('scene truncation escalates to the final budget and then stops before anoth
     config()->set('generation.scene_max_output_tokens', 12_000);
     config()->set('generation.scene_retry_max_output_tokens', 16_000);
     config()->set('generation.scene_final_retry_max_output_tokens', 24_000);
+    config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 12_000);
+    config()->set('generation.chapter_request_budgets.writer.retry.output_tokens', 16_000);
+    config()->set('generation.chapter_request_budgets.writer.final.output_tokens', 24_000);
     $fixture = sceneGenerationFixture(1);
     $scene = $fixture['scenes']->first();
     $fake = (new FakeAiProvider)
@@ -1207,12 +1217,13 @@ test('scene truncation escalates to the final budget and then stops before anoth
     app()->instance(AiProvider::class, $fake);
     $generator = app(SceneGenerator::class);
 
-    foreach ([12_000, 16_000, 24_000] as $budget) {
+    foreach ([12_000, 16_000, 24_000] as $index => $budget) {
         try {
             $generator->generate($scene->getKey());
             $this->fail("Expected scene truncation at {$budget} tokens.");
         } catch (AiProviderException $exception) {
-            expect($exception->errorCode)->toBe('scene_output_truncated');
+            expect($exception->errorCode)->toBe('scene_output_truncated')
+                ->and($exception->retryable)->toBe($index < 2);
         }
     }
 
@@ -1220,7 +1231,7 @@ test('scene truncation escalates to the final budget and then stops before anoth
         $generator->generate($scene->getKey());
         $this->fail('Expected exhausted scene output budget.');
     } catch (AiProviderException $exception) {
-        expect($exception->errorCode)->toBe('scene_output_budget_exhausted')
+        expect($exception->errorCode)->toBe('scene_output_truncated')
             ->and($exception->retryable)->toBeFalse();
     }
 

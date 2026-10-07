@@ -11,7 +11,10 @@ final class ForeshadowingCoverageEvidenceRepairer
 {
     public const PROMPT_VERSION = 'foreshadowing-coverage-evidence-repair-v1';
 
-    public function __construct(private readonly AiProvider $provider) {}
+    public function __construct(
+        private readonly AiProvider $provider,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
+    ) {}
 
     /**
      * @param  array<int, array<string, mixed>>  $coverage
@@ -33,11 +36,10 @@ final class ForeshadowingCoverageEvidenceRepairer
         ?callable $afterResponse = null,
     ): array {
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
-            $maxTokens = $attempt === 1
-                ? (int) config('generation.coverage_repair_max_output_tokens', 1_000)
-                : (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000);
+            $tier = $attempt === 1 ? 'initial' : 'retry';
+            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "foreshadowing_coverage.{$tier}");
             $beforeRequest?->__invoke('foreshadowing_coverage_repair', $provider);
-            $response = $this->provider->generate(new AiRequest(
+            $request = new AiRequest(
                 model: $model,
                 provider: $provider,
                 reasoningEffort: $reasoningEffort,
@@ -54,7 +56,10 @@ final class ForeshadowingCoverageEvidenceRepairer
                 responseSchema: self::responseSchema(),
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'foreshadowing_coverage_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
-            ));
+            );
+            // 伏笔证据修复必须沿用 Extractor Route，不能退回运行时全局配置。
+            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Extractor, 'foreshadowing_coverage_repair');
+            $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 
             $repairedCoverage = data_get($response->structuredData, 'coverage');

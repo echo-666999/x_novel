@@ -56,7 +56,8 @@ function reviewFixture(?Closure $draftDataFactory = null): array
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
     $content = '林舟守住城门，也兑现了向同伴作出的承诺。';
-    ChapterPlan::factory()->for($chapter)->create(['target_words' => mb_strlen($content)]);
+    $plan = ChapterPlan::factory()->for($chapter)->create(['target_words' => mb_strlen($content)]);
+    freezeChapterRouteContractsForTest($plan);
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);
     $draft = GenerationArtifact::factory()->for($run)->create([
         'type' => ArtifactType::ChapterDraft,
@@ -142,16 +143,22 @@ test('reviewer uses one fixed legal output budget for compact review', function 
         ->and(config('generation'))->not->toHaveKeys(['review_retry_max_output_tokens', 'review_final_retry_max_output_tokens']);
 });
 
-test('review truncation keeps the fixed legal cap and a repeat enters capacity handling', function () {
+test('review truncation is terminal when the frozen route has no higher budget', function () {
     config()->set('generation.review_max_output_tokens', 4_000);
+    config()->set('generation.chapter_request_budgets.reviewer.initial.output_tokens', 4_000);
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));
     $fake = (new FakeAiProvider)->enqueue(truncatedReviewResponse(4_000));
     app()->instance(AiProvider::class, $fake);
     $reviewer = app(ChapterReviewer::class);
 
-    expect(fn () => $reviewer->review($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, '可见输出');
+    try {
+        $reviewer->review($fixture['chapter']->getKey());
+        $this->fail('Expected Reviewer truncation.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('review_output_truncated')
+            ->and($exception->retryable)->toBeFalse();
+    }
     expect(Review::query()->count())->toBe(0)
         ->and(GenerationArtifact::query()->where('type', ArtifactType::RewriteDraft)->count())->toBe(0)
         ->and($fake->requests())->toHaveCount(1)
@@ -159,9 +166,9 @@ test('review truncation keeps the fixed legal cap and a repeat enters capacity h
 
     try {
         $reviewer->review($fixture['chapter']->getKey());
-        $this->fail('Expected Reviewer capacity handling.');
+        $this->fail('Expected Reviewer truncation to remain terminal.');
     } catch (AiProviderException $exception) {
-        expect($exception->errorCode)->toBe('review_capacity_mismatch')->and($exception->retryable)->toBeFalse();
+        expect($exception->errorCode)->toBe('review_output_truncated')->and($exception->retryable)->toBeFalse();
     }
 
     expect($fake->requests())->toHaveCount(1)
@@ -326,12 +333,23 @@ test('planning review audits normalize quoted evidence with an omission marker t
 
 test('arc completion repair retries a previously failed provider request instead of reusing it', function () {
     $fixture = reviewFixture();
+    $fixture['chapter']->latestPlan->update(['admission_snapshot' => null, 'admitted_at' => null]);
+    $plan = admitChapterPlanForTest($fixture['chapter']->latestPlan->fresh());
+    $route = data_get($plan->admission_snapshot, 'routes.reviewer');
     $firstRun = $fixture['draft']->generationRun;
+    $firstRun->update([
+        'provider' => $route['provider'],
+        'model_policy' => $route['model'],
+        'context_snapshot' => ['generation_preferences' => ['repair_budgets' => ['arc_completion' => 1_000]]],
+    ]);
     $secondRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
         'scope_type' => 'chapter',
         'scope_id' => $fixture['chapter']->getKey(),
         'stage' => GenerationStage::Review,
         'status' => RunStatus::Running,
+        'provider' => $route['provider'],
+        'model_policy' => $route['model'],
+        'context_snapshot' => ['generation_preferences' => ['repair_budgets' => ['arc_completion' => 1_000]]],
     ]);
     $contract = [[
         'arc_id' => 1,
@@ -367,8 +385,8 @@ test('arc completion repair retries a previously failed provider request instead
     app()->instance(AiProvider::class, $fake);
     $repairer = app(ArcCompletionAuditRepairer::class);
 
-    $failed = $repairer->repair($firstRun, $contract, $invalidAudits, $fixture['draft']->content, 'review-test');
-    $succeeded = $repairer->repair($secondRun, $contract, $invalidAudits, $fixture['draft']->content, 'review-test');
+    $failed = $repairer->repair($firstRun->fresh(), $contract, $invalidAudits, $fixture['draft']->content, $route['model']);
+    $succeeded = $repairer->repair($secondRun, $contract, $invalidAudits, $fixture['draft']->content, $route['model']);
 
     expect($failed['status'])->toBe('failed')
         ->and($succeeded['status'])->toBe('succeeded')

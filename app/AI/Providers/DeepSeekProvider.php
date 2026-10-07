@@ -97,6 +97,11 @@ class DeepSeekProvider implements AiProvider
             'temperature' => $request->temperature,
         ];
 
+        if ($request->reasoningEffort !== null) {
+            // DeepSeek Chat Completions 已支持 reasoning_effort；只发送路由冻结的显式值，留空时保留 Provider 默认行为。
+            $payload['reasoning_effort'] = $request->reasoningEffort;
+        }
+
         if ($request->responseSchema !== null) {
             array_unshift($payload['messages'], [
                 'role' => 'system',
@@ -187,7 +192,7 @@ class DeepSeekProvider implements AiProvider
                 'finish_reason' => $finishReason,
                 'refusal' => $refusal,
                 'completion_limit_reason' => $completionLimitReason,
-                // DeepSeek 不接收统一 reasoning_effort；这里只记录适配器真实发送的参数。
+                // 这里只记录适配器真实发送的非敏感参数，便于核对推理配置是否真正生效。
                 'sent_parameters' => $this->observableSentParameters($sentPayload),
             ],
             reasoningTokens: $reasoningTokens,
@@ -200,6 +205,7 @@ class DeepSeekProvider implements AiProvider
         return array_filter([
             'model' => $payload['model'] ?? null,
             'max_tokens' => $payload['max_tokens'] ?? null,
+            'reasoning_effort' => $payload['reasoning_effort'] ?? null,
             'temperature' => $payload['temperature'] ?? null,
             'response_format' => data_get($payload, 'response_format.type'),
         ], static fn (mixed $value): bool => $value !== null && $value !== '');
@@ -245,8 +251,7 @@ class DeepSeekProvider implements AiProvider
             'endpoint' => '/chat/completions',
             'prompt_version' => $request->promptVersion,
             'max_output_tokens' => $request->maxTokens,
-            // DeepSeek adapter does not send the unified reasoning_effort field.
-            'reasoning_effort_sent' => null,
+            'reasoning_effort_sent' => $request->reasoningEffort,
         ];
         foreach (self::DIAGNOSTIC_METADATA_KEYS as $key) {
             if (array_key_exists($key, $request->metadata)) {

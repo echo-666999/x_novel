@@ -408,7 +408,7 @@ test('model route rejects an unsupported reasoning effort', function () {
     }
 });
 
-test('outline routes reject models without verified capacity or required capabilities', function () {
+test('all text routes reject models without verified capacity or required capabilities', function () {
     AIProviderConnection::query()->create([
         'provider' => 'openai',
         'name' => 'OpenAI',
@@ -445,6 +445,12 @@ test('outline routes reject models without verified capacity or required capabil
                 'routes.outline_structure.model_price_id',
                 'routes.outline_arc_beats.model_price_id',
                 'routes.outline_beat_detail.model_price_id',
+                'routes.planner.model_price_id',
+                'routes.writer.model_price_id',
+                'routes.extractor.model_price_id',
+                'routes.reviewer.model_price_id',
+                'routes.rewrite.model_price_id',
+                'routes.summary.model_price_id',
             ])
             ->and(AIModelRoute::query()->count())->toBe(0);
     }

@@ -40,8 +40,9 @@ function eventExtractionFixture(): array
     $state = app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Generating]);
-    ChapterPlan::factory()->for($chapter)->create();
     $character = Character::factory()->for($novel)->create(['name' => '林舟']);
+    $plan = ChapterPlan::factory()->for($chapter)->create(['pov_character_id' => $character->getKey()]);
+    freezeChapterRouteContractsForTest($plan);
     $assemblyRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'scene_id' => null,
         'scope_type' => 'chapter',
@@ -894,6 +895,9 @@ test('event extraction increases frozen output budgets and stops before a fourth
     config()->set('generation.event_extraction_max_output_tokens', 100);
     config()->set('generation.event_extraction_retry_max_output_tokens', 200);
     config()->set('generation.event_extraction_final_retry_max_output_tokens', 300);
+    config()->set('generation.chapter_request_budgets.extractor.initial.output_tokens', 100);
+    config()->set('generation.chapter_request_budgets.extractor.retry.output_tokens', 200);
+    config()->set('generation.chapter_request_budgets.extractor.final.output_tokens', 300);
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedEventExtractionResponse())
@@ -902,17 +906,22 @@ test('event extraction increases frozen output budgets and stops before a fourth
     app()->instance(AiProvider::class, $fake);
     $extractor = app(StoryEventExtractor::class);
 
-    foreach ([100, 200, 300] as $expectedBudget) {
-        expect(fn () => $extractor->extract($fixture['chapter']->getKey()))
-            ->toThrow(AiProviderException::class, '可见输出');
+    foreach ([100, 200, 300] as $index => $expectedBudget) {
+        try {
+            $extractor->extract($fixture['chapter']->getKey());
+            $this->fail('Expected visible output truncation.');
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('event_output_truncated')
+                ->and($exception->retryable)->toBe($index < 2);
+        }
         expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
     }
 
     expect(fn () => $extractor->extract($fixture['chapter']->getKey()))
-        ->toThrow(AiProviderException::class, '已在冻结的最高输出预算 300 Token 下被截断');
+        ->toThrow(AiProviderException::class, '已在冻结的最高可见输出额度 300 Token 下被截断');
     expect($fake->requests())->toHaveCount(3)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->error_code)
-        ->toBe('event_output_budget_exhausted');
+        ->toBe('event_output_truncated');
 });
 
 test('stale event extraction run is marked interrupted before recovery', function () {

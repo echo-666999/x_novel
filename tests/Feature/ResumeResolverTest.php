@@ -42,7 +42,10 @@ use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
 
-beforeEach(fn () => Cache::flush());
+beforeEach(function () {
+    Cache::flush();
+    seedVerifiedChapterModelProfiles();
+});
 
 test('resolver detects every persisted pipeline resume point without queue state', function () {
     $resolver = app(ResumeResolver::class);
@@ -212,6 +215,31 @@ test('blocked review stays paused and repeated resume is rejected', function () 
 
     expect($resolver->detect($novel)->canResume)->toBeFalse()
         ->and(fn () => $resolver->resume($novel))->toThrow(ValidationException::class, '需要先人工处理');
+    expect($novel->fresh()->status)->toBe(NovelStatus::Paused);
+    Queue::assertNothingPushed();
+});
+
+test('terminal frozen budget failure cannot resume with the same chapter contract', function () {
+    Queue::fake();
+    $novel = pausedResumeNovel();
+    $chapter = resumeChapter($novel);
+    GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scope_type' => 'chapter',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Failed,
+        'error_code' => 'plan_reasoning_budget_exhausted',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'reasoning_budget_exhausted'],
+    ]);
+    $resolver = app(ResumeResolver::class);
+
+    $point = $resolver->detect($novel);
+
+    expect($point->key)->toBe('blocked')
+        ->and($point->canResume)->toBeFalse()
+        ->and($point->label)->toContain('重建章节来源链')
+        ->and(fn () => $resolver->resume($novel->fresh()))->toThrow(ValidationException::class, '需要先人工处理');
     expect($novel->fresh()->status)->toBe(NovelStatus::Paused);
     Queue::assertNothingPushed();
 });

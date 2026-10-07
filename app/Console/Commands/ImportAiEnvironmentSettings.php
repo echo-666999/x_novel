@@ -91,7 +91,7 @@ class ImportAiEnvironmentSettings extends Command
                     ]];
                 })->all();
 
-                // 环境导入与后台共用路由保存边界，避免导入出缺少容量或能力的 Outline 路由。
+                // 环境导入与后台共用路由保存边界，避免导入出缺少容量或能力的文本生成路由。
                 $routeService->save($routeSelections, null);
             });
         } catch (ValidationException $exception) {

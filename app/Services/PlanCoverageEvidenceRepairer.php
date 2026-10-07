@@ -11,21 +11,23 @@ final class PlanCoverageEvidenceRepairer
 {
     public const PROMPT_VERSION = 'coverage-evidence-repair-v1';
 
-    public function __construct(private readonly AiProvider $provider) {}
+    public function __construct(
+        private readonly AiProvider $provider,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
+    ) {}
 
     /**
      * @param  array<string, mixed>  $coverage
      * @param  array<string, mixed>  $metadata
      * @return array<string, array{status: string, evidence: string|null}>
      */
-    public function repair(array $coverage, string $content, string $provider, string $model, array $metadata, mixed $task, string $path, ?string $reasoningEffort = null, ?callable $beforeRequest = null, int $startingAttempt = 1, ?callable $afterResponse = null): array
+    public function repair(array $coverage, string $content, string $provider, string $model, array $metadata, mixed $task, string $path, ?string $reasoningEffort = null, ?callable $beforeRequest = null, int $startingAttempt = 1, ?callable $afterResponse = null, AiStage $stage = AiStage::Extractor): array
     {
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
-            $maxTokens = $attempt === 1
-                ? (int) config('generation.coverage_repair_max_output_tokens', 1_000)
-                : (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000);
+            $tier = $attempt === 1 ? 'initial' : 'retry';
+            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "coverage_evidence.{$tier}");
             $beforeRequest?->__invoke('coverage_evidence_repair', $provider);
-            $response = $this->provider->generate(new AiRequest(
+            $request = new AiRequest(
                 model: $model,
                 provider: $provider,
                 reasoningEffort: $reasoningEffort,
@@ -39,8 +41,11 @@ final class PlanCoverageEvidenceRepairer
                 maxTokens: $maxTokens,
                 responseSchema: PlanCoverage::schema(),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'coverage_evidence_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
-            ));
+                metadata: [...$metadata, 'stage' => $stage->value, 'substage' => 'coverage_evidence_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
+            );
+            // Coverage 修复也是独立 Provider 请求，必须复用所属主阶段的冻结容量合同。
+            $this->outputCapacity->assertRequestFromMetadata($request, $stage, 'coverage_evidence_repair');
+            $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 
             if ($response->structuredData === null) {

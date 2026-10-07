@@ -5,6 +5,7 @@ namespace App\Services;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use Illuminate\Validation\ValidationException;
 
@@ -12,7 +13,10 @@ final class SceneDraftStructureRepairer
 {
     public const PROMPT_VERSION = 'scene-support-fields-repair-v1';
 
-    public function __construct(private readonly AiProvider $provider) {}
+    public function __construct(
+        private readonly AiProvider $provider,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
+    ) {}
 
     /**
      * Repair only the machine-readable support fields. The prose and Coverage stay unchanged.
@@ -26,11 +30,10 @@ final class SceneDraftStructureRepairer
         $lastException = null;
 
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_scene_structure_repair_attempts', 2); $attempt++) {
-            $maxTokens = $attempt === 1
-                ? (int) config('generation.scene_structure_repair_max_output_tokens', 1_000)
-                : (int) config('generation.scene_structure_repair_retry_max_output_tokens', 4_000);
+            $tier = $attempt === 1 ? 'initial' : 'retry';
+            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "scene_structure.{$tier}");
             $beforeRequest?->__invoke('scene_structure_repair', $provider);
-            $response = $this->provider->generate(new AiRequest(
+            $request = new AiRequest(
                 model: $model,
                 provider: $provider,
                 reasoningEffort: $reasoningEffort,
@@ -46,21 +49,19 @@ final class SceneDraftStructureRepairer
                 responseSchema: self::schema(),
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'scene_structure_repair', 'scene_structure_repair_attempt' => $attempt],
-            ));
+            );
+            // 辅助字段修复仍属于 Extractor 阶段，发送前必须经过相同容量门禁。
+            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Extractor, 'scene_structure_repair');
+            $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 
             if ($response->structuredData === null) {
-                $lastException = data_get($response->metadata, 'finish_reason') === 'length'
-                    ? new AiProviderException(
-                        'scene_structure_repair_output_truncated',
-                        "场景辅助字段修复第 {$attempt} 次响应因输出 Token 用尽而被截断。",
-                        false,
-                    )
-                    : new AiProviderException(
-                        'scene_structure_repair_schema_invalid',
-                        "场景辅助字段修复第 {$attempt} 次响应没有返回可解析的结构化结果。",
-                        false,
-                    );
+                try {
+                    // 统一解析完成预算分类，不能仅凭 finish_reason=length 猜成可见输出截断。
+                    StructuredOutput::require($response, 'scene_structure_repair', '场景辅助字段修复结果');
+                } catch (AiProviderException $exception) {
+                    $lastException = $exception;
+                }
 
                 continue;
             }

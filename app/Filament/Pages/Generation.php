@@ -2,7 +2,6 @@
 
 namespace App\Filament\Pages;
 
-use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\AI\AiSettingsService;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
@@ -14,6 +13,7 @@ use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateCanonicalChapterSummaryJob;
+use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
@@ -103,7 +103,7 @@ class Generation extends Page implements HasTable
                 ->color('warning')
                 ->visible(fn (): bool => $this->nextRetryableRun() !== null)
                 ->requiresConfirmation()
-                ->modalDescription('重新执行最近一个可重试的失败阶段；已经成功的 Artifact 会保留。')
+                ->modalDescription('按失败 Run 已冻结的路由、容量和请求预算重试；已经成功的 Artifact 会保留。')
                 ->action(fn () => $this->retryNext()),
             Action::make('openReview')
                 ->label('Open Review')
@@ -211,13 +211,13 @@ class Generation extends Page implements HasTable
                     ->color('warning')
                     ->visible(fn (GenerationRun $record): bool => $this->canRetry($record))
                     ->requiresConfirmation()
-                    ->modalDescription(fn (GenerationRun $record): string => '将重新执行 '.$record->stage->getLabel().'，成功的其他阶段与 Artifact 会保留。')
-                    ->action(fn (GenerationRun $record) => $this->dispatchRun($record, regenerate: true)),
+                    ->modalDescription(fn (GenerationRun $record): string => '将按冻结合同重试 '.$record->stage->getLabel().'，不会读取后台刚修改的模型路由或预算。')
+                    ->action(fn (GenerationRun $record) => $this->dispatchRun($record, retry: true)),
                 Action::make('resume')
                     ->label('Resume')
                     ->icon('heroicon-o-play')
                     ->visible(fn (GenerationRun $record): bool => $this->canResume($record))
-                    ->action(fn (GenerationRun $record) => $this->dispatchRun($record, regenerate: false)),
+                    ->action(fn (GenerationRun $record) => $this->dispatchRun($record, retry: false)),
                 Action::make('recover')
                     ->label('恢复')
                     ->icon('heroicon-o-arrow-path-rounded-square')
@@ -262,6 +262,53 @@ class Generation extends Page implements HasTable
                 TextEntry::make('state_version')->label('State Version')->placeholder('—'),
                 TextEntry::make('bible_version')->label('Bible Version')->placeholder('—'),
             ]),
+            Section::make('冻结路由、容量与请求预算')
+                ->description('冻结合同决定 Retry 的实际边界；后台之后修改的模型配置不会覆盖这里的值。')
+                ->columns(2)
+                ->schema([
+                    TextEntry::make('frozen_provider')
+                        ->label('冻结 Provider')
+                        ->state(fn (GenerationRun $record): string => $record->provider ?: '—'),
+                    TextEntry::make('frozen_model')
+                        ->label('冻结 Model')
+                        ->state(fn (GenerationRun $record): string => $record->model_policy ?: '—'),
+                    TextEntry::make('frozen_reasoning_effort')
+                        ->label('冻结推理程度')
+                        ->state(fn (GenerationRun $record): string => $this->frozenReasoningEffort($record) ?? 'Provider 默认'),
+                    TextEntry::make('request_budget_tier')
+                        ->label('本次预算档位')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->context_snapshot, 'generation_preferences.request_budget_tier'))
+                        ->badge()
+                        ->placeholder('旧记录未保存'),
+                    TextEntry::make('request_budget_trigger')
+                        ->label('升档原因')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->context_snapshot, 'generation_preferences.request_budget_trigger'))
+                        ->badge()
+                        ->placeholder('首次请求 / 未升档'),
+                    TextEntry::make('selected_request_budget')
+                        ->label('本次拆分预算')
+                        ->state(fn (GenerationRun $record): string => $this->formatJson(
+                            data_get($record->context_snapshot, 'generation_preferences.selected_request_budget'),
+                        ))
+                        ->fontFamily('mono')
+                        ->copyable(),
+                    TextEntry::make('model_capacity')
+                        ->label('静态模型容量')
+                        ->state(fn (GenerationRun $record): string => $this->formatJson(
+                            data_get($record->context_snapshot, 'generation_preferences.model_capacity'),
+                        ))
+                        ->fontFamily('mono')
+                        ->copyable()
+                        ->columnSpanFull(),
+                    TextEntry::make('provider_request_snapshots')
+                        ->label('容量门禁与请求快照')
+                        ->state(fn (GenerationRun $record): string => $this->formatJson(
+                            data_get($record->context_snapshot, 'generation_preferences.provider_requests'),
+                        ))
+                        ->fontFamily('mono')
+                        ->copyable()
+                        ->columnSpanFull(),
+                ]),
             Section::make('原始 Context Snapshot')->schema([
                 TextEntry::make('context_snapshot')
                     ->hiddenLabel()
@@ -327,6 +374,11 @@ class Generation extends Page implements HasTable
                         ->state(fn (GenerationRun $record): string => $this->recommendedAction($record))
                         ->badge()
                         ->color(fn (GenerationRun $record): string => $this->recommendedActionColor($record)),
+                    TextEntry::make('recovery_contract')
+                        ->label('恢复合同')
+                        ->state(fn (GenerationRun $record): string => $this->recoveryContract($record))
+                        ->badge()
+                        ->color(fn (GenerationRun $record): string => $this->canRetry($record) ? 'warning' : 'gray'),
                     TextEntry::make('error_message')->label('错误信息')->columnSpanFull(),
                 ]),
             Section::make('流程推进异常')
@@ -378,6 +430,11 @@ class Generation extends Page implements HasTable
                         ->columnSpanFull(),
                 ]),
             Section::make('Usage')->schema([
+                TextEntry::make('provider_call_observations')
+                    ->label('Provider 实际发送参数与响应用量')
+                    ->state(fn (GenerationRun $record): string => $this->formatJson($this->providerCallObservations($record)))
+                    ->fontFamily('mono')
+                    ->copyable(),
                 RepeatableEntry::make('usageRecords')
                     ->hiddenLabel()
                     ->columns(2)
@@ -394,6 +451,25 @@ class Generation extends Page implements HasTable
                         TextEntry::make('output_tokens')->label('Output Tokens')->numeric(),
                         TextEntry::make('reasoning_tokens')->label('Reasoning Tokens')->numeric(),
                         TextEntry::make('cached_tokens')->label('Cached Tokens')->numeric(),
+                        TextEntry::make('finish_reason')
+                            ->label('Finish Reason')
+                            ->state(fn ($record): mixed => data_get($record->request_metadata, 'finish_reason'))
+                            ->placeholder('—'),
+                        TextEntry::make('completion_limit_reason')
+                            ->label('完成预算分类')
+                            ->state(fn ($record): mixed => data_get($record->request_metadata, 'completion_limit_reason'))
+                            ->badge()
+                            ->placeholder('—'),
+                        TextEntry::make('reasoning_effort_sent')
+                            ->label('实际推理程度')
+                            ->state(fn ($record): mixed => data_get($record->request_metadata, 'reasoning_effort_sent'))
+                            ->placeholder('Provider 默认'),
+                        TextEntry::make('sent_parameters')
+                            ->label('Provider 实际发送参数')
+                            ->state(fn ($record): string => $this->formatJson(data_get($record->request_metadata, 'sent_parameters')))
+                            ->fontFamily('mono')
+                            ->copyable()
+                            ->columnSpanFull(),
                         TextEntry::make('latency_ms')->label('Latency')->suffix(' ms')->numeric(),
                         TextEntry::make('estimated_cost')
                             ->label('Cost')
@@ -403,8 +479,7 @@ class Generation extends Page implements HasTable
         ];
     }
 
-    /** @param array<string, mixed>|null $value */
-    private function formatJson(?array $value): string
+    private function formatJson(mixed $value): string
     {
         return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }
@@ -413,6 +488,7 @@ class Generation extends Page implements HasTable
     {
         return $run->status === RunStatus::Failed
             && $this->isRetryableError($run)
+            && app(GenerationFailurePolicy::class)->allowsFrozenChapterResume($run)
             && ! in_array($run->error_code, ['worker_interrupted', StalledRunRecoveryService::ERROR_CODE], true)
             && $this->supportsDispatch($run)
             && $this->isLatestRunForScope($run);
@@ -495,18 +571,81 @@ class Generation extends Page implements HasTable
         };
     }
 
-    private function dispatchRun(GenerationRun $run, bool $regenerate): void
+    private function frozenReasoningEffort(GenerationRun $run): ?string
+    {
+        $configured = data_get($run->context_snapshot, 'generation_preferences.frozen_route.reasoning_effort');
+        if (is_string($configured) && $configured !== '') {
+            return $configured;
+        }
+
+        $requests = data_get($run->context_snapshot, 'generation_preferences.provider_requests', []);
+        $lastRequest = is_array($requests) ? collect($requests)->last() : null;
+        $requestValue = is_array($lastRequest) ? ($lastRequest['reasoning_effort'] ?? null) : null;
+
+        return is_string($requestValue) && $requestValue !== '' ? $requestValue : null;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function providerCallObservations(GenerationRun $run): array
+    {
+        return $run->usageRecords()
+            ->orderBy('id')
+            ->get()
+            ->map(fn ($usage): array => [
+                'provider' => $usage->provider,
+                'model' => $usage->model,
+                'request_id' => $usage->request_id,
+                'input_tokens' => $usage->input_tokens,
+                'output_tokens' => $usage->output_tokens,
+                'reasoning_tokens' => $usage->reasoning_tokens,
+                'cached_tokens' => $usage->cached_tokens,
+                'finish_reason' => data_get($usage->request_metadata, 'finish_reason'),
+                'completion_limit_reason' => data_get($usage->request_metadata, 'completion_limit_reason'),
+                'reasoning_effort_sent' => data_get($usage->request_metadata, 'reasoning_effort_sent'),
+                'sent_parameters' => data_get($usage->request_metadata, 'sent_parameters'),
+            ])
+            ->all();
+    }
+
+    private function recoveryContract(GenerationRun $run): string
+    {
+        $failure = app(GenerationFailurePolicy::class)->forRun($run);
+        $category = $failure->metadata['category'] ?? 'manual_attention';
+
+        if ($this->canRetry($run)) {
+            return 'Retry：复用冻结合同';
+        }
+        if (in_array($run->error_code, ['worker_interrupted', StalledRunRecoveryService::ERROR_CODE], true)) {
+            return 'Resume：从持久化状态继续';
+        }
+        if (in_array($category, [
+            'provider_configuration',
+            'reasoning_budget_exhausted',
+            'visible_output_truncated',
+            'completion_budget_exhausted',
+        ], true)) {
+            return 'Restart：修复后重建来源链';
+        }
+
+        return '按推荐动作人工处理';
+    }
+
+    private function dispatchRun(GenerationRun $run, bool $retry): void
     {
         if ($run->stage === GenerationStage::SceneGeneration) {
-            app(RegenerateSceneSequenceAction::class)->handle(
-                Scene::query()->findOrFail((int) $run->scene_id),
+            $batchId = data_get($run->context_snapshot, 'regeneration_batch_id');
+            GenerateSceneJob::dispatch(
+                sceneId: Scene::query()->findOrFail((int) $run->scene_id)->getKey(),
+                cascade: is_string($batchId) && $batchId !== '',
+                regenerationBatchId: is_string($batchId) && $batchId !== '' ? $batchId : null,
             );
         } else {
             match ($run->stage) {
-                GenerationStage::ChapterPlanning => PlanChapterJob::dispatch($run->chapter_id, $regenerate),
-                GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, $regenerate),
-                GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, $regenerate),
-                GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, $regenerate),
+                // 技术 Retry 与 Resume 都沿用原来源链；只有显式 Restart 才能读取新的 Route 或预算配置。
+                GenerationStage::ChapterPlanning => PlanChapterJob::dispatch($run->chapter_id, false),
+                GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, false),
+                GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, false),
+                GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, false),
                 GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),
                 GenerationStage::MemorySummary => GenerateCanonicalChapterSummaryJob::dispatch(
                     (int) $run->chapter_id,
@@ -517,8 +656,8 @@ class Generation extends Page implements HasTable
         }
 
         Notification::make()
-            ->title($regenerate ? '失败阶段已重新排队' : '恢复任务已排队')
-            ->body($run->stage->getLabel().' 将从现有 Run / Artifact 状态继续。')
+            ->title($retry ? '失败阶段已按冻结合同重新排队' : '恢复任务已排队')
+            ->body($run->stage->getLabel().' 将从已持久化的 Run / Artifact 状态继续。')
             ->success()
             ->send();
     }
@@ -587,7 +726,7 @@ class Generation extends Page implements HasTable
     {
         $run = $this->nextRetryableRun();
         if ($run !== null) {
-            $this->dispatchRun($run, regenerate: true);
+            $this->dispatchRun($run, retry: true);
         }
     }
 
@@ -605,6 +744,6 @@ class Generation extends Page implements HasTable
             return;
         }
 
-        $this->dispatchRun($run, regenerate: false);
+        $this->dispatchRun($run, retry: false);
     }
 }

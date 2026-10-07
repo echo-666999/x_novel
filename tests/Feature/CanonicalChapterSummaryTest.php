@@ -14,9 +14,11 @@ use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelBible;
 use App\Models\UsageRecord;
 use App\Services\CanonicalChapterSummaryService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -37,6 +39,9 @@ test('a non-canonical chapter is rejected before the provider is called', functi
 });
 
 test('a successful canonical summary persists its run artifact usage and input hash', function () {
+    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 300);
+    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 300);
+    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 300);
     [$chapter] = canonicalSummaryChapter();
     $fake = (new FakeAiProvider)->enqueue(summaryResponse());
     app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
@@ -52,6 +57,11 @@ test('a successful canonical summary persists its run artifact usage and input h
         ->and($run->input_hash)->toHaveLength(64)
         ->and($run->prompt_version)->toBe('summary-v2+natural-prose-v1')
         ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('summary-v2+natural-prose-v1')
+        ->and($fake->requests()[0]->maxTokens)->toBe(1_500)
+        ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.output_tokens'))->toBe(1_200)
+        ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.reasoning_reserve_tokens'))->toBe(300)
+        ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.max_completion_tokens'))->toBe(1_500)
+        ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.remaining_context_tokens'))->toBeGreaterThan(0)
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得评价文笔、解释主题')
         ->and($result['artifact']->type)->toBe(ArtifactType::Summary)
         ->and(data_get($result['artifact']->data, 'source_canonical_artifact_id'))->toBe($chapter->canonical_artifact_id)
@@ -138,6 +148,9 @@ test('canonical summary increases frozen output budgets and stops before a fourt
     config()->set('generation.summary_max_output_tokens', 100);
     config()->set('generation.summary_retry_max_output_tokens', 200);
     config()->set('generation.summary_final_retry_max_output_tokens', 300);
+    config()->set('generation.chapter_request_budgets.summary.initial.output_tokens', 100);
+    config()->set('generation.chapter_request_budgets.summary.retry.output_tokens', 200);
+    config()->set('generation.chapter_request_budgets.summary.final.output_tokens', 300);
     [$chapter] = canonicalSummaryChapter();
     $truncated = new AiResponse(
         content: '',
@@ -154,17 +167,22 @@ test('canonical summary increases frozen output budgets and stops before a fourt
     app()->instance(AiProvider::class, $fake);
     $service = app(CanonicalChapterSummaryService::class);
 
-    foreach ([100, 200, 300] as $expectedBudget) {
-        expect(fn () => $service->generate($chapter->getKey()))
-            ->toThrow(AiProviderException::class, '可见输出');
+    foreach ([100, 200, 300] as $index => $expectedBudget) {
+        try {
+            $service->generate($chapter->getKey());
+            $this->fail('Expected visible output truncation.');
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('summary_output_truncated')
+                ->and($exception->retryable)->toBe($index < 2);
+        }
         expect($fake->requests()[array_key_last($fake->requests())]->maxTokens)->toBe($expectedBudget);
     }
 
     expect(fn () => $service->generate($chapter->getKey()))
-        ->toThrow(AiProviderException::class, '已在冻结的最高输出预算 300 Token 下被截断');
+        ->toThrow(AiProviderException::class, '已在冻结的最高可见输出额度 300 Token 下被截断');
     expect($fake->requests())->toHaveCount(3)
         ->and(GenerationRun::query()->where('scope_type', 'chapter_summary')->latest('id')->first()->error_code)
-        ->toBe('summary_output_budget_exhausted');
+        ->toBe('summary_output_truncated');
 });
 
 test('summary job ignores a stale canonical artifact without calling the provider', function () {
@@ -217,13 +235,15 @@ test('the backfill command is dry-run by default and requires the reviewed plan 
 function canonicalSummaryChapter(array $chapterAttributes = [], bool $initializeState = false): array
 {
     $novel = Novel::factory()->create();
-    if ($initializeState) {
+    if ($initializeState || $novel->canonical_state_version_id === null) {
         app(InitializeNovelStateAction::class)->handle($novel);
     }
+    NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create([
         'status' => ChapterStatus::Canonical,
         ...$chapterAttributes,
     ]);
+    admitChapterPlanForTest(ChapterPlan::factory()->for($chapter)->create());
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'stage' => GenerationStage::ChapterAssembly,
         'status' => RunStatus::Succeeded,

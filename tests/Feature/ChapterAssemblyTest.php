@@ -30,6 +30,7 @@ use App\Services\ChapterAssembler;
 use App\Services\ContextBuilder;
 use App\Services\DraftLengthPolicy;
 use App\Services\GenerationFailurePolicy;
+use App\Services\GenerationOutputCapacityGuard;
 use App\Services\PlanAdmissionService;
 use App\Services\SceneLengthRepairer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -339,6 +340,22 @@ test('targeted scene length repair creates a new current scene artifact within f
         'scene-length-repair',
         'rewrite-test',
     ));
+    $fixture['chapter']->latestPlan->update(['admission_snapshot' => [
+        'schema_version' => 2,
+        'routes' => ['rewrite' => [
+            'provider' => 'fake',
+            'model' => 'rewrite-test',
+            'reasoning_effort' => null,
+            'prompt_version' => 'rewrite-v14+natural-prose-v1',
+            'model_capacity' => [
+                'context_window_tokens' => 128_000,
+                'max_output_tokens' => 32_000,
+            ],
+            'request_budgets' => [
+                'initial' => ['output_tokens' => 16_000, 'reasoning_reserve_tokens' => 0, 'max_completion_tokens' => 16_000],
+            ],
+        ]],
+    ]]);
     $admission = Mockery::mock(PlanAdmissionService::class);
     $admission->shouldReceive('admit')->once()->andReturn($fixture['chapter']->latestPlan);
     $admission->shouldReceive('routeFor')->once()->andReturn(new ResolvedAiSettings(
@@ -355,6 +372,7 @@ test('targeted scene length repair creates a new current scene artifact within f
         app(ContextBuilder::class),
         app(DraftLengthPolicy::class),
         app(GenerationFailurePolicy::class),
+        app(GenerationOutputCapacityGuard::class),
     );
 
     $artifact = $repairer->repair(

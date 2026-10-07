@@ -35,6 +35,7 @@ use Livewire\Livewire;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    seedVerifiedChapterModelProfiles();
     $this->actingAs(User::factory()->create());
 });
 

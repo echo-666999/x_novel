@@ -22,6 +22,7 @@ use App\Enums\VolumeStatus;
 use App\Exceptions\GenerationPreflightException;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -49,6 +50,7 @@ uses(RefreshDatabase::class);
 
 function plannerChapter(): array
 {
+    seedVerifiedChapterModelProfiles();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create(['version' => 1]);
@@ -139,6 +141,22 @@ function truncatedPlannerResponse(int $outputTokens): AiResponse
     );
 }
 
+function reasoningExhaustedPlannerResponse(int $reasoningTokens): AiResponse
+{
+    return new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: $reasoningTokens,
+        cachedTokens: 0,
+        latencyMs: 50,
+        providerRequestId: 'reasoning-exhausted-plan-request',
+        model: 'planner-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'reasoning_budget_exhausted'],
+        reasoningTokens: $reasoningTokens,
+    );
+}
+
 function plannerOutlineContent(int $maximum = 2): array
 {
     return [
@@ -186,6 +204,7 @@ function plannerOutlineContent(int $maximum = 2): array
 
 function outlinePlannerChapter(int $maximum = 2, ?array $content = null): array
 {
+    seedVerifiedChapterModelProfiles();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     NovelBible::factory()->for($novel)->create(['version' => 1]);
     $content ??= plannerOutlineContent($maximum);
@@ -494,6 +513,8 @@ test('an exhausted outline beat budget stops planning before a run or provider c
 test('outline retries and duplicate delivery keep the same frozen outline context', function () {
     config()->set('generation.planner_max_output_tokens', 12_000);
     config()->set('generation.planner_retry_max_output_tokens', 16_000);
+    config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
+    config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
     [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
     $payload = outlinePlannerPayload($character, $outline, $arc);
     $fake = (new FakeAiProvider)
@@ -510,18 +531,92 @@ test('outline retries and duplicate delivery keep the same frozen outline contex
     expect($duplicate?->is($plan))->toBeTrue()
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
-        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(12_000)
         ->and($runs)->toHaveCount(2)
         ->and($runs->pluck('context_snapshot')->pluck('outline_checksum')->unique()->all())->toBe([$outline->checksum])
         ->and(data_get($runs[0]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
-        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
+        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
         ->and($chapter->plans()->count())->toBe(1);
+});
+
+test('planner technical retry keeps the failed run route capacity prompt and budget after configuration changes', function () {
+    $provider = (string) config('ai.stage_providers.planner', config('ai.provider'));
+    config()->set('ai.models.planner', 'planner-frozen-old');
+    config()->set('ai.reasoning_efforts.planner', 'high');
+    [$chapter, $character] = plannerChapter();
+    $payload = plannerPayload($character->getKey());
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiProviderException('provider_timeout', 'timeout', true))
+        ->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    expect(fn () => $planner->generate($chapter->getKey()))->toThrow(AiProviderException::class, 'timeout');
+    $first = $chapter->generationRuns()->sole();
+
+    config()->set('ai.models.planner', 'planner-new-config');
+    config()->set('ai.reasoning_efforts.planner', 'low');
+    AIModelPrice::query()->create([
+        'provider' => $provider,
+        'model' => 'planner-new-config',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'context_window_tokens' => 1_050_000,
+        'max_output_tokens' => 128_000,
+        'supports_structured_output' => true,
+        'supports_reasoning_effort' => true,
+        'input_price' => 0,
+        'output_price' => 0,
+        'is_enabled' => true,
+    ]);
+
+    $planner->generate($chapter->getKey());
+    $runs = $chapter->generationRuns()->oldest('id')->get();
+
+    expect($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[0]->model)->toBe('planner-frozen-old')
+        ->and($fake->requests()[1]->model)->toBe('planner-frozen-old')
+        ->and($fake->requests()[0]->reasoningEffort)->toBe('high')
+        ->and($fake->requests()[1]->reasoningEffort)->toBe('high')
+        ->and($runs)->toHaveCount(2)
+        ->and($runs->pluck('provider')->unique()->all())->toBe([$provider])
+        ->and($runs->pluck('model_policy')->unique()->all())->toBe(['planner-frozen-old'])
+        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.model_capacity'))
+        ->toBe(data_get($first->context_snapshot, 'generation_preferences.model_capacity'))
+        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.request_budgets'))
+        ->toBe(data_get($first->context_snapshot, 'generation_preferences.request_budgets'))
+        ->and($runs[1]->prompt_version)->toBe($first->prompt_version);
+});
+
+test('planner rejects an oversized request contract before creating a run or calling the provider', function () {
+    [$chapter] = plannerChapter();
+    AIModelPrice::query()->update([
+        'context_window_tokens' => 20_000,
+        'max_output_tokens' => 10_000,
+    ]);
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+
+    try {
+        app(ChapterPlanner::class)->generate($chapter->getKey());
+        $this->fail('Expected Planner capacity contract rejection.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('planner_request_budget_exceeds_model_capacity')
+            ->and($exception->retryable)->toBeFalse();
+    }
+
+    // 配置类容量错误必须停在 Provider 边界之前，不能产生计费请求或误导性的 Run。
+    expect($fake->requests())->toBeEmpty()
+        ->and($chapter->generationRuns()->count())->toBe(0);
 });
 
 test('planner truncation escalates to the final budget and then stops before another provider request', function () {
     config()->set('generation.planner_max_output_tokens', 12_000);
     config()->set('generation.planner_retry_max_output_tokens', 16_000);
     config()->set('generation.planner_final_retry_max_output_tokens', 24_000);
+    config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
+    config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
+    config()->set('generation.chapter_request_budgets.planner.final.output_tokens', 24_000);
     [$chapter] = plannerChapter();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedPlannerResponse(12_000))
@@ -530,12 +625,13 @@ test('planner truncation escalates to the final budget and then stops before ano
     app()->instance(AiProvider::class, $fake);
     $planner = app(ChapterPlanner::class);
 
-    foreach ([12_000, 16_000, 24_000] as $budget) {
+    foreach ([12_000, 16_000, 24_000] as $index => $budget) {
         try {
             $planner->generate($chapter->getKey());
             $this->fail("Expected planner truncation at {$budget} tokens.");
         } catch (AiProviderException $exception) {
-            expect($exception->errorCode)->toBe('plan_output_truncated');
+            expect($exception->errorCode)->toBe('plan_output_truncated')
+                ->and($exception->retryable)->toBe($index < 2);
         }
     }
 
@@ -543,7 +639,7 @@ test('planner truncation escalates to the final budget and then stops before ano
         $planner->generate($chapter->getKey());
         $this->fail('Expected exhausted planner output budget.');
     } catch (AiProviderException $exception) {
-        expect($exception->errorCode)->toBe('plan_output_budget_exhausted')
+        expect($exception->errorCode)->toBe('plan_output_truncated')
             ->and($exception->retryable)->toBeFalse();
     }
 
@@ -551,6 +647,37 @@ test('planner truncation escalates to the final budget and then stops before ano
         ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
         ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
         ->and($fake->requests()[2]->maxTokens)->toBe(24_000);
+});
+
+test('planner reasoning exhaustion upgrades only a larger frozen reasoning reserve', function () {
+    config()->set('generation.chapter_request_budgets.planner.initial.reasoning_reserve_tokens', 1_000);
+    config()->set('generation.chapter_request_budgets.planner.retry.reasoning_reserve_tokens', 2_000);
+    config()->set('generation.chapter_request_budgets.planner.final.reasoning_reserve_tokens', 3_000);
+    [$chapter] = plannerChapter();
+    $fake = (new FakeAiProvider)
+        ->enqueue(reasoningExhaustedPlannerResponse(1_000))
+        ->enqueue(reasoningExhaustedPlannerResponse(2_000))
+        ->enqueue(reasoningExhaustedPlannerResponse(3_000));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    foreach ([13_000, 18_000, 27_000] as $index => $maximum) {
+        try {
+            $planner->generate($chapter->getKey());
+            $this->fail("Expected planner reasoning exhaustion at {$maximum} tokens.");
+        } catch (AiProviderException $exception) {
+            expect($exception->errorCode)->toBe('plan_reasoning_budget_exhausted')
+                ->and($exception->retryable)->toBe($index < 2);
+        }
+    }
+
+    $runs = $chapter->generationRuns()->oldest('id')->get();
+    expect($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[0]->maxTokens)->toBe(13_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(18_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(27_000)
+        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.request_budget_trigger'))->toBe('reasoning_budget_exhausted')
+        ->and(data_get($runs[2]->context_snapshot, 'generation_preferences.selected_request_budget.reasoning_reserve_tokens'))->toBe(3_000);
 });
 
 test('the model payload cannot authorize defer or abandon actions', function (string $action) {

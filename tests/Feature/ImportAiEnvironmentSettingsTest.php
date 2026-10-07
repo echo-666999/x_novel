@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\AiStage;
 use App\Models\AIModelPrice;
 use App\Models\AIModelRoute;
 use App\Models\AIProviderConnection;
@@ -27,7 +28,7 @@ beforeEach(function () {
 });
 
 test('the environment import command creates a provider connection, model prices, and model routes', function () {
-    createVerifiedEnvironmentOutlinePrices();
+    createVerifiedEnvironmentTextPrices();
 
     $this->artisan('ai:import-environment-settings', ['--force' => true])
         ->expectsOutput('AI 环境配置已写入供应商连接、模型价格和模型路由；API Key 已加密且未输出。')
@@ -81,7 +82,7 @@ test('the environment import command does not overwrite existing data by default
 
 test('the environment import command can explicitly update existing data', function () {
     createExistingProviderConnection();
-    createVerifiedEnvironmentOutlinePrices();
+    createVerifiedEnvironmentTextPrices();
 
     $this->artisan('ai:import-environment-settings', ['--force' => true])
         ->assertSuccessful();
@@ -90,7 +91,7 @@ test('the environment import command can explicitly update existing data', funct
         ->and(AIProviderConnection::query()->sole()->api_key)->toBe('environment-import-key');
 });
 
-test('the environment import command does not infer outline model capacity or capabilities', function () {
+test('the environment import command does not infer text generation model capacity or capabilities', function () {
     $this->artisan('ai:import-environment-settings')
         ->assertFailed();
 
@@ -112,17 +113,14 @@ function createExistingProviderConnection(): AIProviderConnection
     ]);
 }
 
-function createVerifiedEnvironmentOutlinePrices(): void
+function createVerifiedEnvironmentTextPrices(): void
 {
-    collect([
-        'outline_foundation',
-        'outline_structure',
-        'outline_arc_beats',
-        'outline_beat_detail',
-    ])->map(fn (string $stage): array => [
-        'provider' => strtolower((string) config("ai.stage_providers.{$stage}")),
-        'model' => (string) config("ai.models.{$stage}"),
-    ])->unique(fn (array $route): string => $route['provider'].'|'.$route['model'])
+    collect(AiStage::cases())
+        ->reject(fn (AiStage $stage): bool => $stage === AiStage::Embedding)
+        ->map(fn (AiStage $stage): array => [
+            'provider' => strtolower((string) config("ai.stage_providers.{$stage->value}", config('ai.provider'))),
+            'model' => (string) config("ai.models.{$stage->value}", config('ai.model')),
+        ])->unique(fn (array $route): string => $route['provider'].'|'.$route['model'])
         ->each(function (array $route): void {
             AIModelPrice::query()->create([
                 ...$route,

@@ -7,6 +7,7 @@ use App\AI\Data\ResolvedAiSettings;
 use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
 use App\Enums\PlanStatus;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use Illuminate\Support\Carbon;
@@ -36,6 +37,7 @@ class PlanAdmissionService
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly PreviousChapterEnding $previousChapterEnding,
+        private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
     /**
@@ -70,12 +72,40 @@ class PlanAdmissionService
                 ]);
             }
 
+            $profile = AIModelPrice::findEnabledForRoute($settings->provider, $settings->model);
+            if ($profile === null) {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}" => "[MODEL_CAPACITY_NOT_VERIFIED] {$stage->getLabel()} Route {$settings->provider}/{$settings->model} 缺少已启用的模型价格记录，无法冻结容量与能力。",
+                ]);
+            }
+            $capabilityErrors = $profile->generationSuitabilityErrors($stage, $settings->reasoningEffort);
+            if ($capabilityErrors !== []) {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}" => "[MODEL_CAPABILITY_NOT_VERIFIED] {$stage->getLabel()} Route {$settings->provider}/{$settings->model} 不适用：".implode(' ', $capabilityErrors),
+                ]);
+            }
+
+            $requestBudgets = $this->requestBudget->configured($stage);
+            $modelCapacity = $profile->capacitySnapshot();
+            $maximumBudget = $this->requestBudget->maximum($requestBudgets);
+            $staticMaximum = min(
+                (int) $modelCapacity['context_window_tokens'],
+                (int) $modelCapacity['max_output_tokens'],
+            );
+            if ($maximumBudget > $staticMaximum) {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}" => "[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY] {$stage->getLabel()} 最大完成预算 {$maximumBudget} Token 超过模型静态容量 {$staticMaximum} Token。",
+                ]);
+            }
+
             $routes[$stage->value] = [
                 'provider' => $settings->provider,
                 'model' => $settings->model,
                 'reasoning_effort' => $settings->reasoningEffort,
                 'prompt_version' => $promptVersion,
-                'max_output_tokens' => $this->maximumOutputTokens($stage),
+                // 模型容量与请求预算必须分别冻结，避免把工作流预算误当成模型硬上限。
+                'model_capacity' => $modelCapacity,
+                'request_budgets' => $requestBudgets,
             ];
         }
 
@@ -86,14 +116,15 @@ class PlanAdmissionService
             fn (mixed $scene, int $index): array => [
                 'sequence' => $index + 1,
                 'target_words' => $sceneTarget,
-                'writer_max_output_tokens' => data_get($routes, 'writer.max_output_tokens'),
+                'writer_max_completion_tokens' => $this->requestBudget->maximum((array) data_get($routes, 'writer.request_budgets', [])),
             ],
         )->all();
         $planChecksum = $plan->semanticChecksum();
         $handoff = $target->beat['handoff'];
         $previousEnding = $this->previousChapterEnding->for($chapter);
         $snapshot = [
-            'schema_version' => 1,
+            // v2 首次区分模型静态容量、分档请求预算与 Provider 实际发送参数，旧快照不得静默补写。
+            'schema_version' => 2,
             'plan_checksum' => $planChecksum,
             'bible_version' => $bibleVersion ?? $this->contextBuilder->bibleVersionForChapter($chapter),
             'state_version' => $stateVersion,
@@ -123,13 +154,13 @@ class PlanAdmissionService
                 'review' => [
                     'estimated_input_words' => $this->lengthPolicy->chapterMaximum($plan->target_words),
                     'context_token_budget' => (int) config('generation.review_context_token_budget', 32_000),
-                    'max_output_tokens' => data_get($routes, 'reviewer.max_output_tokens'),
+                    'max_completion_tokens' => $this->requestBudget->maximum((array) data_get($routes, 'reviewer.request_budgets', [])),
                 ],
                 'event_extraction' => [
-                    'max_output_tokens' => data_get($routes, 'extractor.max_output_tokens'),
+                    'max_completion_tokens' => $this->requestBudget->maximum((array) data_get($routes, 'extractor.request_budgets', [])),
                 ],
                 'rewrite' => [
-                    'max_output_tokens' => data_get($routes, 'rewrite.max_output_tokens'),
+                    'max_completion_tokens' => $this->requestBudget->maximum((array) data_get($routes, 'rewrite.request_budgets', [])),
                 ],
             ],
         ];
@@ -247,17 +278,5 @@ class PlanAdmissionService
             ->where('input_hash', $inputHash)
             ->latest('version')
             ->first();
-    }
-
-    private function maximumOutputTokens(AiStage $stage): int
-    {
-        return match ($stage) {
-            AiStage::Writer => (int) config('generation.scene_final_retry_max_output_tokens', 24_000),
-            AiStage::Extractor => (int) config('generation.event_extraction_final_retry_max_output_tokens', 12_000),
-            AiStage::Reviewer => (int) config('generation.review_max_output_tokens', 12_000),
-            AiStage::Rewrite => (int) config('generation.rewrite_final_retry_max_output_tokens', 24_000),
-            AiStage::Summary => (int) config('generation.summary_final_retry_max_output_tokens', 4_000),
-            default => 0,
-        };
     }
 }

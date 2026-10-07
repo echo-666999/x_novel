@@ -37,7 +37,8 @@ class UsageRecorder
                 'substage' => $request->metadata['substage'] ?? null,
                 'route_key' => $request->metadata['route_key'] ?? null,
                 'prompt_version' => $request->promptVersion,
-                'reasoning_effort_sent' => $request->provider === 'deepseek' ? null : $request->reasoningEffort,
+                // OpenAI 与 DeepSeek 适配器都只发送显式冻结的 reasoning_effort；这里记录实际请求意图供运行审计。
+                'reasoning_effort_sent' => $request->reasoningEffort,
                 'max_output_tokens' => $request->maxTokens,
                 'finish_reason' => data_get($response->metadata, 'finish_reason'),
                 'completion_limit_reason' => data_get($response->metadata, 'completion_limit_reason'),

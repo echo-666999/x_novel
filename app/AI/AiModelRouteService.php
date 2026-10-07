@@ -475,11 +475,7 @@ class AiModelRouteService
     /** @return array<string, string> */
     private function modelCapabilityErrors(AiStage $stage, AIModelPrice $price, ?string $reasoningEffort): array
     {
-        if (! $this->isOutlineStage($stage)) {
-            return [];
-        }
-
-        // Outline 依赖严格结构化数据和请求前 Token 门禁，缺少任一证据都不能保存为可用路由。
-        return $price->outlineSuitabilityErrors($reasoningEffort);
+        // 除 Embedding 外的 Stage 都会生成结构化结果，路由保存时统一拒绝未核实容量或能力的模型。
+        return $price->generationSuitabilityErrors($stage, $reasoningEffort);
     }
 }

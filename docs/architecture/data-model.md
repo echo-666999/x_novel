@@ -1354,8 +1354,12 @@ Source of Truth 边界：
 - `story_events` 保存正式 Milestone/Beat Completion，不回写 Outline 表。
 - 运行态 `volumes.source_outline_volume_id`、`story_arcs.source_outline_arc_id` 非空且唯一。
 - 删除 `volumes.outline_key`、`story_arcs.outline_key` 和 `story_arcs.beats`。
-- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链；`checksum`、`input_hash`、`admission_snapshot` 和 `admitted_at` 固化 Scene 1 前通过门禁的语义输入、Bible/State/Outline/Handoff 来源、下游 Route 与容量。
+- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链；`checksum`、`input_hash`、`admission_snapshot` 和 `admitted_at` 固化 Scene 1 前通过门禁的语义输入、Bible/State/Outline/Handoff 来源，以及 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 的下游 Route、模型容量与请求预算。
 - 不保留 `baseline_completions`、旧 JSONB Outline 双读或 Key 回退。
+
+新 Admission Snapshot 使用 `schema_version=2`。`routes.<stage>.model_capacity` 保存匹配模型价格记录 ID、Provider、Model、上下文窗口、最大输出和能力声明；`routes.<stage>.request_budgets.<tier>` 保存 `output_tokens`、`reasoning_reserve_tokens`、`max_completion_tokens`。每个实际 Run 的 `context_snapshot.generation_preferences` 再保存 `frozen_route`、`request_budget_tier`、`request_budget_trigger`、`selected_request_budget` 和逐次容量门禁快照。模型价格或全局预算后续变化不得更新已 Admission 的 JSONB；旧 `schema_version=1` 只允许读取和明确拒绝，不能静默升级。
+
+`planner` 在 Plan Admission 之前运行，其首个 Chapter Planning Run 的 `context_snapshot.generation_preferences` 直接保存同结构的 `model_capacity`、`request_budgets` 与 `frozen_route`；同来源技术 Retry 只能复制该 Run 合同。`writer`、`extractor`、`reviewer`、`rewrite`、`summary` 则以 Plan Admission v2 为冻结事实源。
 
 版本创建在一个事务中按 Volume、Arc、Beat、Milestone 顺序写入，随后按稳定 `beat_key` 回填 Handoff 自外键，并从持久化关系重新计算 Checksum。任一引用、顺序、邻接或 Checksum 校验失败都回滚整个版本。`source=ai` 时 `source_artifact_id` 必须引用同小说同规划批次的最终 `outline_blueprint` Artifact，且一个 Finalize Artifact 最多创建一个 Outline Version。
 

@@ -7,7 +7,8 @@ return [
         'chapter_assembly' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => ['length'], 'non_terminal_codes' => ['novel_paused', 'assembly_input_incomplete', 'assembly_scene_incomplete', 'assembly_context_incomplete']],
         'event_extraction' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['evidence'], 'non_terminal_codes' => ['novel_paused']],
         'review' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => [], 'non_terminal_codes' => ['novel_paused', 'review_prerequisite_missing']],
-        'rewrite' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => ['evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'rewrite_exhausted']],
+        // Rewrite 有 initial/retry/final 三档技术预算，Queue 必须允许三次投递才能真正到达最终档。
+        'rewrite' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'rewrite_exhausted']],
         'commit' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
         'memory_summary' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
         'embedding' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
@@ -73,4 +74,35 @@ return [
     'summary_max_output_tokens' => (int) env('SUMMARY_MAX_OUTPUT_TOKENS', 1_200),
     'summary_retry_max_output_tokens' => (int) env('SUMMARY_RETRY_MAX_OUTPUT_TOKENS', 2_400),
     'summary_final_retry_max_output_tokens' => (int) env('SUMMARY_FINAL_RETRY_MAX_OUTPUT_TOKENS', 4_000),
+    // Chapter Pipeline 将可见输出与推理预留分开冻结；旧 max_output 配置继续表示可见输出额度。
+    'chapter_request_budgets' => [
+        'planner' => [
+            'initial' => ['output_tokens' => (int) env('PLANNER_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('PLANNER_REASONING_RESERVE_TOKENS', 0)],
+            'retry' => ['output_tokens' => (int) env('PLANNER_RETRY_MAX_OUTPUT_TOKENS', 16_000), 'reasoning_reserve_tokens' => (int) env('PLANNER_RETRY_REASONING_RESERVE_TOKENS', env('PLANNER_REASONING_RESERVE_TOKENS', 0))],
+            'final' => ['output_tokens' => (int) env('PLANNER_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000), 'reasoning_reserve_tokens' => (int) env('PLANNER_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('PLANNER_RETRY_REASONING_RESERVE_TOKENS', env('PLANNER_REASONING_RESERVE_TOKENS', 0)))],
+        ],
+        'writer' => [
+            'initial' => ['output_tokens' => (int) env('SCENE_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('SCENE_REASONING_RESERVE_TOKENS', 0)],
+            'retry' => ['output_tokens' => (int) env('SCENE_RETRY_MAX_OUTPUT_TOKENS', 16_000), 'reasoning_reserve_tokens' => (int) env('SCENE_RETRY_REASONING_RESERVE_TOKENS', env('SCENE_REASONING_RESERVE_TOKENS', 0))],
+            'final' => ['output_tokens' => (int) env('SCENE_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000), 'reasoning_reserve_tokens' => (int) env('SCENE_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('SCENE_RETRY_REASONING_RESERVE_TOKENS', env('SCENE_REASONING_RESERVE_TOKENS', 0)))],
+        ],
+        'extractor' => [
+            'initial' => ['output_tokens' => (int) env('EVENT_EXTRACTION_MAX_OUTPUT_TOKENS', 4_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 0)],
+            'retry' => ['output_tokens' => (int) env('EVENT_EXTRACTION_RETRY_MAX_OUTPUT_TOKENS', 8_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_RETRY_REASONING_RESERVE_TOKENS', env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 0))],
+            'final' => ['output_tokens' => (int) env('EVENT_EXTRACTION_FINAL_RETRY_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('EVENT_EXTRACTION_RETRY_REASONING_RESERVE_TOKENS', env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 0)))],
+        ],
+        'reviewer' => [
+            'initial' => ['output_tokens' => (int) env('REVIEW_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('REVIEW_REASONING_RESERVE_TOKENS', 0)],
+        ],
+        'rewrite' => [
+            'initial' => ['output_tokens' => (int) env('REWRITE_MAX_OUTPUT_TOKENS', 16_000), 'reasoning_reserve_tokens' => (int) env('REWRITE_REASONING_RESERVE_TOKENS', 0)],
+            'retry' => ['output_tokens' => (int) env('REWRITE_RETRY_MAX_OUTPUT_TOKENS', 20_000), 'reasoning_reserve_tokens' => (int) env('REWRITE_RETRY_REASONING_RESERVE_TOKENS', env('REWRITE_REASONING_RESERVE_TOKENS', 0))],
+            'final' => ['output_tokens' => (int) env('REWRITE_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000), 'reasoning_reserve_tokens' => (int) env('REWRITE_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('REWRITE_RETRY_REASONING_RESERVE_TOKENS', env('REWRITE_REASONING_RESERVE_TOKENS', 0)))],
+        ],
+        'summary' => [
+            'initial' => ['output_tokens' => (int) env('SUMMARY_MAX_OUTPUT_TOKENS', 1_200), 'reasoning_reserve_tokens' => (int) env('SUMMARY_REASONING_RESERVE_TOKENS', 0)],
+            'retry' => ['output_tokens' => (int) env('SUMMARY_RETRY_MAX_OUTPUT_TOKENS', 2_400), 'reasoning_reserve_tokens' => (int) env('SUMMARY_RETRY_REASONING_RESERVE_TOKENS', env('SUMMARY_REASONING_RESERVE_TOKENS', 0))],
+            'final' => ['output_tokens' => (int) env('SUMMARY_FINAL_RETRY_MAX_OUTPUT_TOKENS', 4_000), 'reasoning_reserve_tokens' => (int) env('SUMMARY_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('SUMMARY_RETRY_REASONING_RESERVE_TOKENS', env('SUMMARY_REASONING_RESERVE_TOKENS', 0)))],
+        ],
+    ],
 ];

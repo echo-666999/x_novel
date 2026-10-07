@@ -2,12 +2,10 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
-use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -42,7 +40,7 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly AiSettingsResolver $settingsResolver, private readonly PromptVersionResolver $promptVersionResolver, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity) {}
+    public function __construct(private readonly AiProvider $provider, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget) {}
 
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
@@ -114,18 +112,26 @@ class ChapterReviewer
             return $review;
         }
 
-        $settings = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->routeFor($chapter->latestPlan, AiStage::Reviewer)
-            : $this->settingsResolver->resolve(AiStage::Reviewer, $chapter->novel);
-        $promptVersion = is_array($chapter->latestPlan?->admission_snapshot)
-            ? $this->planAdmission->promptVersionFor($chapter->latestPlan, AiStage::Reviewer)
-            : $this->promptVersionResolver->resolve(AiStage::Reviewer);
+        $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Reviewer);
+        $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Reviewer);
         $context['prompt_version'] = $promptVersion;
+        $reviewerRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Reviewer);
+        $context['generation_preferences']['model_capacity'] = $reviewerRoute['model_capacity'];
+        $context['generation_preferences']['request_budgets'] = $reviewerRoute['request_budgets'];
+        // 历史 Run 必须能独立说明当时的 Route，不能用当前设置补写推理程度。
+        $context['generation_preferences']['frozen_route'] = [
+            'provider' => $settings->provider,
+            'model' => $settings->model,
+            'reasoning_effort' => $settings->reasoningEffort,
+            'source' => $settings->source,
+            'prompt_version' => $promptVersion,
+        ];
+        $context['generation_preferences']['repair_budgets'] = [
+            'coverage_judgment' => (int) config('generation.coverage_judgment_repair_max_output_tokens', 1_500),
+            'review_schema' => (int) config('generation.review_schema_repair_max_output_tokens', 1_500),
+            'arc_completion' => (int) config('generation.arc_completion_repair_max_output_tokens', 1_000),
+        ];
         $context['generation_preferences']['review_token_budget'] = [
-            'max_legal_output_tokens' => min(
-                (int) config('generation.review_max_output_tokens', 12_000),
-                (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.max_output_tokens', config('generation.review_max_output_tokens', 12_000)),
-            ),
             'context_token_budget' => (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.context_token_budget', config('generation.review_context_token_budget', 32_000)),
         ];
         $reviewOperationId = $regenerate ? $operationId : null;
@@ -150,19 +156,30 @@ class ChapterReviewer
             return $run->review;
         }
 
+        $budget = null;
         try {
-            $maxTokens = $this->resolveRequestBudget($run, $baseKey);
-            $this->assertReviewCapacity($context, $maxTokens);
+            $budget = $this->resolveRequestBudget($run, $baseKey);
+            $this->assertReviewCapacity($context, $budget['max_completion_tokens']);
 
-            $response = $this->provider->generate(new AiRequest(
+            $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换，章节功能、Milestone、Handoff、剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。'.NarrativeProsePolicy::reviewing(),
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: .2, maxTokens: $maxTokens, responseSchema: $this->schema(), promptVersion: $promptVersion,
+                temperature: .2, maxTokens: $budget['max_completion_tokens'], responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
-            ));
+            );
+            // 审校请求既受审校上下文策略限制，也必须通过模型真实容量和冻结请求预算门禁。
+            $this->outputCapacity->assertRequestWithinFrozenRoute(
+                $chapter,
+                $run,
+                AiStage::Reviewer,
+                $request,
+                'narrative_review',
+                $budget,
+            );
+            $response = $this->provider->generate($request);
             $payload = StructuredOutput::require($response, 'review', 'Narrative Review');
             if (! array_key_exists('recommended_decision', $payload)) {
                 $payload = CompactReviewPayload::expand(
@@ -192,6 +209,18 @@ class ChapterReviewer
 
             return $review;
         } catch (Throwable $e) {
+            if ($e instanceof AiProviderException && is_array($budget)) {
+                // Reviewer 当前只有一档冻结预算，完成预算耗尽必须直接终止而不能同参数重试。
+                $e = $this->requestBudget->classifyRetry(
+                    $e,
+                    (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []),
+                    AiStage::Reviewer,
+                    $budget,
+                    'review',
+                    'Narrative Review',
+                    data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                );
+            }
             $this->failRun($run, $e);
             throw $e;
         }
@@ -440,42 +469,37 @@ class ChapterReviewer
         });
     }
 
-    private function resolveRequestBudget(GenerationRun $run, string $baseKey): int
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    private function resolveRequestBudget(GenerationRun $run, string $baseKey): array
     {
-        $priorTruncatedRuns = GenerationRun::query()
+        $priorRuns = GenerationRun::query()
             ->where('chapter_id', $run->chapter_id)
             ->where('stage', GenerationStage::Review)
             ->where('provider', $run->provider)
             ->where('model_policy', $run->model_policy)
             ->where('id', '<', $run->getKey())
-            ->where('error_code', 'review_output_truncated')
-            ->get(['idempotency_key', 'context_snapshot'])
+            ->whereNotNull('error_code')
+            ->orderBy('id')
+            ->get(['idempotency_key', 'error_code', 'context_snapshot'])
             ->filter(fn (GenerationRun $prior): bool => $prior->idempotency_key === $baseKey
                 || str_starts_with($prior->idempotency_key, $baseKey.':attempt:'))
             ->values();
-        $budget = (array) data_get($run->context_snapshot, 'generation_preferences.review_token_budget', []);
-        $maxTokens = (int) ($budget['max_legal_output_tokens'] ?? config('generation.review_max_output_tokens', 12_000));
+        $budgets = (array) data_get($run->context_snapshot, 'generation_preferences.request_budgets', []);
+        $selection = $this->requestBudget->resolveForAttempt($budgets, AiStage::Reviewer, $priorRuns, 'review', 'Narrative Review');
+        $budget = $selection['budget'];
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.review_retry_ordinal', $priorTruncatedRuns->count() + 1);
-        data_set($snapshot, 'generation_preferences.max_completion_tokens', $maxTokens);
+        data_set($snapshot, 'generation_preferences.review_retry_ordinal', $selection['ordinal']);
+        data_set($snapshot, 'generation_preferences.request_budget_tier', $selection['tier']);
+        data_set($snapshot, 'generation_preferences.request_budget_trigger', $selection['trigger']);
+        data_set($snapshot, 'generation_preferences.selected_request_budget', $budget);
+        data_set($snapshot, 'generation_preferences.max_completion_tokens', $budget['max_completion_tokens']);
         $run->update(['context_snapshot' => $snapshot]);
 
-        if ($priorTruncatedRuns->isNotEmpty()) {
-            throw new AiProviderException(
-                'review_capacity_mismatch',
-                "Narrative Review 已在当前 Reviewer Route 的最大合法输出预算 {$maxTokens} Token 下截断；请调整模型、Context 或 Route 容量后重试。",
-                false,
-            );
-        }
-
-        if ($maxTokens < 1) {
+        if ($budget['max_completion_tokens'] < 1) {
             throw new AiProviderException('review_capacity_mismatch', 'Reviewer Route 没有合法的输出容量。', false);
         }
 
-        $chapter = Chapter::query()->with('latestPlan')->findOrFail($run->chapter_id);
-        $this->outputCapacity->assertWithinFrozenRoute($chapter, AiStage::Reviewer, $maxTokens);
-
-        return $maxTokens;
+        return $budget;
     }
 
     /** @param array<string, mixed> $context */

@@ -7,6 +7,7 @@ use App\Actions\Generation\GenerateNextChapterAction;
 use App\Data\ResumePoint;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
@@ -14,6 +15,7 @@ use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Review;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +28,7 @@ class ResumeResolver
         private readonly AdvanceChapterPipelineAction $advanceChapterPipeline,
         private readonly RewriteScopeResolver $rewriteScopeResolver,
         private readonly CanonicalPostCommitDispatcher $postCommitDispatcher,
+        private readonly GenerationFailurePolicy $failurePolicy,
     ) {}
 
     public function detect(Novel $novel): ResumePoint
@@ -36,6 +39,11 @@ class ResumeResolver
             throw ValidationException::withMessages(['novel' => '只有已暂停的小说可以检测恢复点。']);
         }
 
+        return $this->guardFrozenFailure($this->detectPoint($novel));
+    }
+
+    private function detectPoint(Novel $novel): ResumePoint
+    {
         $chapter = $this->activeChapter($novel);
 
         if ($chapter === null) {
@@ -103,6 +111,48 @@ class ResumeResolver
         }
 
         return new ResumePoint('scene', '场景 1', $chapter->getKey());
+    }
+
+    private function guardFrozenFailure(ResumePoint $point): ResumePoint
+    {
+        $stage = match ($point->key) {
+            'plan' => GenerationStage::ChapterPlanning,
+            'scene' => GenerationStage::SceneGeneration,
+            'assemble' => GenerationStage::ChapterAssembly,
+            'event_extraction', 'review_preparation' => GenerationStage::EventExtraction,
+            'review' => GenerationStage::Review,
+            'rewrite' => GenerationStage::Rewrite,
+            'post_commit' => GenerationStage::MemorySummary,
+            default => null,
+        };
+        if ($stage === null || $point->chapterId === null) {
+            return $point;
+        }
+
+        $query = GenerationRun::query()
+            ->where('chapter_id', $point->chapterId)
+            ->where('stage', $stage);
+        if ($stage === GenerationStage::SceneGeneration && $point->sceneId !== null) {
+            $query->where('scene_id', $point->sceneId);
+        } elseif ($stage !== GenerationStage::SceneGeneration) {
+            $query->whereNull('scene_id');
+        }
+
+        $latest = $query->latest('id')->first();
+        if ($latest === null
+            || $latest->status !== RunStatus::Failed
+            || $this->failurePolicy->allowsFrozenChapterResume($latest)) {
+            return $point;
+        }
+
+        // 配置或终态预算失败不能借 Resume 偷换新配置，必须由显式 Restart 建立新的来源链。
+        return new ResumePoint(
+            'blocked',
+            $stage->getLabel().' 的冻结配置或预算已终止；请修复配置后重建章节来源链',
+            $point->chapterId,
+            $point->sceneId,
+            canResume: false,
+        );
     }
 
     public function resume(Novel $novel): ResumePoint

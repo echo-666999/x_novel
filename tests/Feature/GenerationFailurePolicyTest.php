@@ -1,6 +1,7 @@
 <?php
 
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Models\GenerationRun;
 use App\Services\GenerationFailurePolicy;
@@ -57,7 +58,7 @@ test('frozen provider route drift is classified as provider configuration', func
     );
 
     expect($failure->metadata['category'])->toBe('provider_configuration')
-        ->and($failure->recommendedAction)->toBe('修复 AI 配置');
+        ->and($failure->recommendedAction)->toBe('修复 AI 配置后重建来源链');
 })->with([
     'provider_run_mismatch',
     'provider_run_route_missing',
@@ -103,9 +104,49 @@ test('reasoning exhaustion and visible truncation keep distinct failure categori
     expect($failure->metadata['category'])->toBe($category)
         ->and($failure->recommendedAction)->toBe($action);
 })->with([
-    'reasoning exhausted' => ['novel_outline_foundation_reasoning_budget_exhausted', false, 'reasoning_budget_exhausted', '增加推理预留或降低推理程度'],
-    'visible truncated' => ['novel_outline_foundation_output_truncated', true, 'visible_output_truncated', '调整模型路由或输出预算'],
-    'unclassified completion limit' => ['novel_outline_foundation_completion_budget_exhausted', false, 'completion_budget_exhausted', '检查 Usage 并调整请求预算'],
+    'reasoning exhausted' => ['novel_outline_foundation_reasoning_budget_exhausted', false, 'reasoning_budget_exhausted', '调整推理配置后重建来源链'],
+    'visible truncated' => ['novel_outline_foundation_output_truncated', true, 'visible_output_truncated', '按冻结合同升级可见输出预算后重试'],
+    'unclassified completion limit' => ['novel_outline_foundation_completion_budget_exhausted', false, 'completion_budget_exhausted', '检查 Usage 并调整请求预算后重建来源链'],
+]);
+
+test('chapter frozen resume allows a real budget upgrade but blocks a terminal budget or provider configuration failure', function () {
+    $retryableBudget = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'plan_output_truncated',
+        'error_retryable' => true,
+    ]);
+    $terminalBudget = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'plan_output_truncated',
+        'error_retryable' => false,
+    ]);
+    $configuration = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_run_mismatch',
+        'error_retryable' => true,
+    ]);
+    $policy = app(GenerationFailurePolicy::class);
+
+    expect($policy->allowsFrozenChapterResume($retryableBudget))->toBeTrue()
+        ->and($policy->allowsFrozenChapterResume($terminalBudget))->toBeFalse()
+        ->and($policy->allowsFrozenChapterResume($configuration))->toBeFalse();
+});
+
+test('completion budget failures enter queue retry only after a stage marks a real budget upgrade available', function (string $code) {
+    $policy = app(GenerationFailurePolicy::class);
+
+    expect($policy->shouldQueueRetry(
+        new AiProviderException($code, 'Completion limit reached.', true),
+        GenerationStage::ChapterPlanning,
+    ))->toBeTrue()
+        ->and($policy->shouldQueueRetry(
+            new AiProviderException($code, 'No higher frozen budget.', false),
+            GenerationStage::ChapterPlanning,
+        ))->toBeFalse();
+})->with([
+    'plan_reasoning_budget_exhausted',
+    'plan_output_truncated',
+    'plan_completion_budget_exhausted',
 ]);
 
 test('unexpected code failures are terminal while database failures remain retryable', function () {

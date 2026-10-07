@@ -95,6 +95,73 @@ test('generation run inspector shows context artifacts errors and usage', functi
         ->and($run->usageRecords->first()->request_id)->toBe('request-debug-1');
 });
 
+test('generation run inspector separates frozen capacity budget gate and actual provider parameters', function () {
+    $run = GenerationRun::factory()->create([
+        'provider' => 'deepseek',
+        'model_policy' => 'deepseek-reasoner',
+        'context_snapshot' => [
+            'generation_preferences' => [
+                'frozen_route' => [
+                    'provider' => 'deepseek',
+                    'model' => 'deepseek-reasoner',
+                    'reasoning_effort' => 'high',
+                    'prompt_version' => 'chapter-planner-v1',
+                ],
+                'model_capacity' => [
+                    'context_window_tokens' => 128_000,
+                    'max_output_tokens' => 32_000,
+                ],
+                'request_budget_tier' => 'retry',
+                'request_budget_trigger' => 'reasoning_budget_exhausted',
+                'selected_request_budget' => [
+                    'output_tokens' => 12_000,
+                    'reasoning_reserve_tokens' => 4_000,
+                    'max_completion_tokens' => 16_000,
+                ],
+                'provider_requests' => [[
+                    'substage' => 'chapter_planning',
+                    'reasoning_effort' => 'high',
+                    'estimated_input_tokens' => 2_000,
+                    'remaining_context_tokens' => 126_000,
+                ]],
+            ],
+        ],
+    ]);
+    UsageRecord::factory()->create([
+        'generation_run_id' => $run->getKey(),
+        'reasoning_tokens' => 3_900,
+        'request_metadata' => [
+            'finish_reason' => 'length',
+            'completion_limit_reason' => 'reasoning_budget_exhausted',
+            'reasoning_effort_sent' => 'high',
+            'sent_parameters' => [
+                'model' => 'deepseek-reasoner',
+                'max_tokens' => 16_000,
+                'reasoning_effort' => 'high',
+            ],
+        ],
+    ]);
+
+    Livewire::test(Generation::class)
+        ->mountTableAction('inspect', $run)
+        ->assertSchemaComponentExists('frozen_provider', null, fn ($component): bool => $component->getState() === 'deepseek')
+        ->assertSchemaComponentExists('frozen_model', null, fn ($component): bool => $component->getState() === 'deepseek-reasoner')
+        ->assertSchemaComponentExists('frozen_reasoning_effort', null, fn ($component): bool => $component->getState() === 'high')
+        ->assertSchemaComponentExists('request_budget_tier', null, fn ($component): bool => $component->getState() === 'retry')
+        ->assertSchemaComponentExists('request_budget_trigger', null, fn ($component): bool => $component->getState() === 'reasoning_budget_exhausted')
+        ->assertSchemaComponentExists('selected_request_budget', null, fn ($component): bool => str_contains($component->getState(), '16000'))
+        ->assertSchemaComponentExists('model_capacity', null, fn ($component): bool => str_contains($component->getState(), '128000'))
+        ->assertSchemaComponentExists('provider_request_snapshots', null, fn ($component): bool => str_contains($component->getState(), 'remaining_context_tokens'))
+        ->assertSchemaComponentExists('provider_call_observations', null, fn ($component): bool => str_contains($component->getState(), 'reasoning_budget_exhausted')
+            && str_contains($component->getState(), 'max_tokens'));
+
+    $usage = $run->usageRecords()->sole();
+    expect(data_get($usage->request_metadata, 'finish_reason'))->toBe('length')
+        ->and(data_get($usage->request_metadata, 'completion_limit_reason'))->toBe('reasoning_budget_exhausted')
+        ->and(data_get($usage->request_metadata, 'reasoning_effort_sent'))->toBe('high')
+        ->and(data_get($usage->request_metadata, 'sent_parameters.max_tokens'))->toBe(16_000);
+});
+
 test('generation page distinguishes a successful stage from its unresolved progression failure', function () {
     $run = GenerationRun::factory()->create([
         'status' => RunStatus::Succeeded,
@@ -213,12 +280,12 @@ test('recovery dashboard quick actions reuse retry resume and context inspection
 
     Livewire::test(Generation::class)
         ->callAction('retryNext')
-        ->assertNotified('失败阶段已重新排队')
+        ->assertNotified('失败阶段已按冻结合同重新排队')
         ->callAction('resumeNext')
         ->assertNotified('恢复任务已排队')
         ->assertActionVisible('openContext');
 
-    Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $retryChapter->getKey() && $job->regenerate);
+    Queue::assertPushed(AssembleChapterJob::class, fn (AssembleChapterJob $job): bool => $job->chapterId === $retryChapter->getKey() && ! $job->regenerate);
     Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $resumeChapter->getKey() && ! $job->regenerate);
     expect($retryRun->context_snapshot)->toBe(['state_version' => 4]);
 });
@@ -285,6 +352,25 @@ test('failed run explains retryability and recommended action', function () {
         ->assertTableActionHidden('resume', $run);
 });
 
+test('terminal completion budget failure requires a new source chain instead of retrying frozen parameters', function () {
+    $run = GenerationRun::factory()->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Failed,
+        'error_code' => 'plan_reasoning_budget_exhausted',
+        'error_message' => '冻结最高档推理预留已耗尽。',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'reasoning_budget_exhausted'],
+    ]);
+
+    Livewire::test(Generation::class)
+        ->mountTableAction('inspect', $run)
+        ->assertSchemaComponentExists('recommended_action', null, fn ($component): bool => $component->getState() === '调整推理配置后重建来源链')
+        ->assertSchemaComponentExists('recovery_contract', null, fn ($component): bool => $component->getState() === 'Restart：修复后重建来源链')
+        ->unmountAction()
+        ->assertTableActionHidden('retry', $run)
+        ->assertTableActionHidden('resume', $run);
+});
+
 test('run inspector uses persisted provider failure facts instead of guessing from the error code', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
@@ -338,8 +424,9 @@ test('retry requeues a supported failed stage and keeps the chapter link', funct
         ->callTableAction('retry', $run);
 
     Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $scene->getKey()
-        && $job->cascade
-        && $job->regenerationBatchId !== null);
+        && ! $job->regenerate
+        && ! $job->cascade
+        && $job->regenerationBatchId === null);
 });
 
 test('worker interruption offers resume from persisted state', function () {

@@ -478,7 +478,7 @@ class PlanValidator
         $record = "chapter_plan:{$plan->getKey()}";
 
         $required = [
-            'plan_checksum', 'input_hash', 'bible_version', 'state_version',
+            'schema_version', 'plan_checksum', 'input_hash', 'bible_version', 'state_version',
             'novel_outline_id', 'outline_version', 'outline_checksum',
             'primary_outline_arc_id', 'primary_outline_beat_id', 'primary_outline_milestone_id',
             'handoff_checksum', 'routes', 'capacity',
@@ -493,6 +493,16 @@ class PlanValidator
                     '重新执行 Chapter Planning 或 Plan Admission 生成完整冻结快照。',
                 );
             }
+        }
+        if ((int) ($snapshot['schema_version'] ?? 0) !== 2) {
+            // v1 没有冻结真实模型容量和分档预算，继续执行会把运行时配置误当成历史合同。
+            $findings[] = $this->blocked(
+                'ADMISSION_CONTRACT_VERSION_UNSUPPORTED',
+                '当前 Chapter Plan 使用旧版 Admission 合同，不能静默补写为容量合同 v2。',
+                'admission_snapshot.schema_version',
+                $record,
+                '保留旧 Plan，并基于已验证内容创建新的 Plan Version 后重新 Admission。',
+            );
         }
         if (! array_key_exists('handoff_next_beat_id', $snapshot)) {
             $findings[] = $this->blocked(
@@ -613,18 +623,62 @@ class PlanValidator
 
         foreach (['writer', 'extractor', 'reviewer', 'rewrite', 'summary'] as $stage) {
             $route = data_get($snapshot, "routes.{$stage}");
+            $modelCapacity = is_array($route) ? ($route['model_capacity'] ?? null) : null;
+            $requestBudgets = is_array($route) ? ($route['request_budgets'] ?? null) : null;
             if (! is_array($route)
                 || blank($route['provider'] ?? null)
                 || blank($route['model'] ?? null)
                 || ! array_key_exists('reasoning_effort', $route)
                 || blank($route['prompt_version'] ?? null)
-                || (int) ($route['max_output_tokens'] ?? 0) < 1) {
+                || ! is_array($modelCapacity)
+                || (int) ($modelCapacity['model_price_id'] ?? 0) < 1
+                || ($modelCapacity['provider'] ?? null) !== ($route['provider'] ?? null)
+                || ($modelCapacity['model'] ?? null) !== ($route['model'] ?? null)
+                || (int) ($modelCapacity['context_window_tokens'] ?? 0) < 1
+                || (int) ($modelCapacity['max_output_tokens'] ?? 0) < 1
+                || ($modelCapacity['supports_structured_output'] ?? false) !== true
+                || ! array_key_exists('supports_reasoning_effort', $modelCapacity)
+                || (($route['reasoning_effort'] ?? null) !== null
+                    && ($modelCapacity['supports_reasoning_effort'] ?? false) !== true)
+                || ! is_array($requestBudgets)
+                || $requestBudgets === []) {
                 $findings[] = $this->blocked(
                     'PROVIDER_ROUTE_NOT_FROZEN',
-                    "{$stage} 的 Provider、Model、Prompt Version 或输出容量未完整冻结。",
+                    "{$stage} 的 Provider、Model、Prompt Version、模型容量或请求预算未完整冻结。",
                     "admission_snapshot.routes.{$stage}",
                     $record,
                     '在 AI 设置中修复该 Stage Route 后重新执行 Plan Admission。',
+                );
+
+                continue;
+            }
+
+            $invalidBudget = collect($requestBudgets)->contains(function (mixed $budget): bool {
+                if (! is_array($budget)) {
+                    return true;
+                }
+
+                $outputTokens = (int) ($budget['output_tokens'] ?? 0);
+                $reasoningReserve = (int) ($budget['reasoning_reserve_tokens'] ?? -1);
+
+                return $outputTokens < 1
+                    || $reasoningReserve < 0
+                    || (int) ($budget['max_completion_tokens'] ?? 0) !== $outputTokens + $reasoningReserve;
+            });
+            $maximumBudget = (int) collect($requestBudgets)->max(
+                fn (mixed $budget): int => is_array($budget) ? (int) ($budget['max_completion_tokens'] ?? 0) : 0,
+            );
+            $staticMaximum = min(
+                (int) $modelCapacity['context_window_tokens'],
+                (int) $modelCapacity['max_output_tokens'],
+            );
+            if ($invalidBudget || $maximumBudget < 1 || $maximumBudget > $staticMaximum) {
+                $findings[] = $this->blocked(
+                    'REQUEST_BUDGET_NOT_FROZEN',
+                    "{$stage} 的请求预算无效，或超过冻结模型容量。",
+                    "admission_snapshot.routes.{$stage}.request_budgets",
+                    $record,
+                    '修复模型容量或阶段请求预算后创建新的 Plan Version。',
                 );
             }
         }
@@ -645,7 +699,7 @@ class PlanValidator
             fn (mixed $allocation, int $index): bool => ! is_array($allocation)
                 || (int) ($allocation['sequence'] ?? 0) !== $index + 1
                 || (int) ($allocation['target_words'] ?? 0) < 1
-                || (int) ($allocation['target_words'] ?? 0) > (int) ($allocation['writer_max_output_tokens'] ?? 0),
+                || (int) ($allocation['target_words'] ?? 0) > (int) ($allocation['writer_max_completion_tokens'] ?? 0),
         )) {
             $findings[] = $this->blocked(
                 'SCENE_OUTPUT_CAPACITY_EXCEEDED',
@@ -658,7 +712,7 @@ class PlanValidator
 
         $reviewInput = (int) data_get($snapshot, 'capacity.review.estimated_input_words', 0);
         $reviewContext = (int) data_get($snapshot, 'capacity.review.context_token_budget', 0);
-        $reviewOutput = (int) data_get($snapshot, 'capacity.review.max_output_tokens', 0);
+        $reviewOutput = (int) data_get($snapshot, 'capacity.review.max_completion_tokens', 0);
         if ($reviewInput < 1 || $reviewContext < $reviewInput || $reviewOutput < 1) {
             $findings[] = $this->blocked(
                 'REVIEW_CAPACITY_EXCEEDED',
@@ -670,9 +724,12 @@ class PlanValidator
         }
 
         foreach (['event_extraction', 'rewrite'] as $stage) {
-            $capacity = (int) data_get($snapshot, "capacity.{$stage}.max_output_tokens", 0);
+            $capacity = (int) data_get($snapshot, "capacity.{$stage}.max_completion_tokens", 0);
             $route = $stage === 'event_extraction' ? 'extractor' : 'rewrite';
-            if ($capacity < 1 || $capacity !== (int) data_get($snapshot, "routes.{$route}.max_output_tokens", 0)) {
+            $routeMaximum = (int) collect((array) data_get($snapshot, "routes.{$route}.request_budgets", []))->max(
+                fn (mixed $budget): int => is_array($budget) ? (int) ($budget['max_completion_tokens'] ?? 0) : 0,
+            );
+            if ($capacity < 1 || $capacity !== $routeMaximum) {
                 $findings[] = $this->blocked(
                     'OUTPUT_CAPACITY_NOT_FROZEN',
                     "{$stage} 的输出容量未与冻结 Route 对齐。",
