@@ -26,9 +26,9 @@ class CanonicalChapterSummaryService
     public function __construct(
         private readonly AiProvider $provider,
         private readonly GenerationFailurePolicy $failurePolicy,
-        private readonly PlanAdmissionService $planAdmission,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
+        private readonly ChapterStageRouteResolver $routeResolver,
     ) {}
 
     /** @return array{novel_id: int, novel_title: string, chapters: array<int, array<string, mixed>>, plan_hash: string} */
@@ -99,13 +99,22 @@ class CanonicalChapterSummaryService
         if ($plan === null || ! is_array($plan->admission_snapshot)) {
             throw new AiProviderException('summary_capacity_contract_missing', 'Canonical Chapter Summary 缺少已冻结的 Plan Admission 合同。', false);
         }
-        $settings = $this->planAdmission->historicalRouteFor($plan, AiStage::Summary);
-        $promptVersion = $this->planAdmission->historicalPromptVersionFor($plan, AiStage::Summary);
-        $summaryRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Summary);
+        // Post-Commit Summary 仍属于原章节合同；Admission v1 必须读取显式恢复 Artifact。
+        $resolvedRoute = $this->routeResolver->resolve($chapter, AiStage::Summary, $source);
+        $settings = $resolvedRoute['settings'];
+        $promptVersion = $resolvedRoute['prompt_version'];
+        $summaryRoute = $resolvedRoute['route'];
         $requestBudgets = $summaryRoute['request_budgets'];
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::MemorySummary,
-            ['chapter_id' => $chapter->getKey(), 'request_budgets' => $requestBudgets, 'model_capacity' => $summaryRoute['model_capacity']],
+            [
+                'chapter_id' => $chapter->getKey(),
+                'request_budgets' => $requestBudgets,
+                'model_capacity' => $summaryRoute['model_capacity'],
+                // 恢复合同身份进入指纹，不能复用旧 Admission v1 的同模型摘要 Run。
+                'route_contract_source' => $resolvedRoute['contract_source'],
+                'recovery_contract_run_id' => $resolvedRoute['recovery_contract_run_id'],
+            ],
             upstreamChecksums: [$source->checksum],
             frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
             contractVersion: $promptVersion,
@@ -128,16 +137,8 @@ class CanonicalChapterSummaryService
         }
 
         $snapshot = $run->context_snapshot ?? [];
-        data_set($snapshot, 'generation_preferences.request_budgets', $requestBudgets);
-        data_set($snapshot, 'generation_preferences.model_capacity', $summaryRoute['model_capacity']);
-        // Post-Commit 摘要同样冻结并展示 Route，避免恢复时受后台配置变化影响。
-        data_set($snapshot, 'generation_preferences.frozen_route', [
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'source' => $settings->source,
-            'prompt_version' => $promptVersion,
-        ]);
+        // Post-Commit 摘要同样复制完整合同，恢复时不再受后台配置变化影响。
+        data_set($snapshot, 'generation_preferences', $this->routeResolver->generationPreferences($resolvedRoute));
         $run->update(['context_snapshot' => $snapshot]);
 
         $budget = null;

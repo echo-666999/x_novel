@@ -8,6 +8,7 @@ use App\Enums\AiStage;
 use App\Enums\GenerationStage;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Provider 调用前校验请求预算没有越过 Plan Admission 冻结的任务预算与模型容量。
@@ -15,6 +16,8 @@ use App\Models\GenerationRun;
 final class GenerationOutputCapacityGuard
 {
     public const LEGACY_EVENT_RECOVERY_CONTRACT = 'legacy-event-extraction-recovery-v1';
+
+    public const LEGACY_CHAPTER_RECOVERY_CONTRACT = LegacyAdmissionRecoveryContract::CONTRACT_VERSION;
 
     public function __construct(
         private readonly TokenBudget $tokenBudget,
@@ -45,7 +48,7 @@ final class GenerationOutputCapacityGuard
         if ($schemaVersion !== 2) {
             throw new AiProviderException(
                 'event_admission_contract_unsupported',
-                "[ADMISSION_CONTRACT_VERSION_UNSUPPORTED] 当前 Chapter Plan 使用 Admission v{$schemaVersion}，常规重新提取不能读取旧合同。请使用“恢复事件提取（旧合同）”。",
+                "[ADMISSION_CONTRACT_VERSION_UNSUPPORTED] 当前 Chapter Plan 使用 Admission v{$schemaVersion}，常规重新提取不能读取旧合同。请使用“恢复章节流程（Admission v1）”。",
                 false,
             );
         }
@@ -95,15 +98,42 @@ final class GenerationOutputCapacityGuard
             AiStage::Extractor,
             ['initial', 'retry', 'final'],
         );
+        $repairBudgets = $route['repair_request_budgets'] ?? null;
+        if (! is_array($repairBudgets)) {
+            throw new AiProviderException(
+                'event_repair_request_budget_invalid',
+                '[REPAIR_REQUEST_BUDGET_INVALID] Extractor 缺少 Event Evidence 修复预算。请创建新的 Plan Version 并重新 Admission。',
+                false,
+            );
+        }
+        try {
+            // 派发前同时验证事件证据修复分档，不能等主请求完成后才暴露修复合同缺失。
+            $eventEvidenceBudgets = $this->requestBudget->validateFrozen(
+                $this->requestBudget->repairTiers($repairBudgets, 'event_evidence', AiStage::Extractor),
+                AiStage::Extractor,
+                ['initial', 'retry'],
+            );
+        } catch (ValidationException $exception) {
+            throw new AiProviderException(
+                'event_repair_request_budget_invalid',
+                '[REPAIR_REQUEST_BUDGET_INVALID] Extractor 的 Event Evidence 修复预算无效：'.$exception->getMessage(),
+                false,
+                previous: $exception,
+            );
+        }
         $maximumBudget = $this->requestBudget->maximum($validatedBudgets);
+        $maximumRepairBudget = $this->requestBudget->maximum($eventEvidenceBudgets);
         $staticMaximum = min(
             (int) $capacity['context_window_tokens'],
             (int) $capacity['max_output_tokens'],
         );
-        if ($maximumBudget < 1 || $maximumBudget > $staticMaximum) {
+        if ($maximumBudget < 1
+            || $maximumBudget > $staticMaximum
+            || $maximumRepairBudget < 1
+            || $maximumRepairBudget > $staticMaximum) {
             throw new AiProviderException(
                 'event_request_budget_invalid',
-                "[REQUEST_BUDGET_INVALID] Extractor 最大完成预算 {$maximumBudget} Token 超过冻结模型容量 {$staticMaximum} Token。请调整容量或预算后创建新的 Plan Version。",
+                "[REQUEST_BUDGET_INVALID] Extractor 主请求最大完成预算 {$maximumBudget} Token 或事件证据修复最大完成预算 {$maximumRepairBudget} Token 超过冻结模型容量 {$staticMaximum} Token。请调整容量或预算后创建新的 Plan Version。",
                 false,
             );
         }
@@ -112,6 +142,10 @@ final class GenerationOutputCapacityGuard
             ...$route,
             'model_capacity' => $capacity,
             'request_budgets' => $validatedBudgets,
+            'repair_request_budgets' => [
+                ...$repairBudgets,
+                'event_evidence' => $eventEvidenceBudgets,
+            ],
         ];
     }
 
@@ -151,6 +185,7 @@ final class GenerationOutputCapacityGuard
 
     /**
      * @param  array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}|null  $selectedBudget
+     * @param  array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>|null  $requestBudgets
      * @return array<string, mixed>
      */
     public function assertRequestWithinFrozenRoute(
@@ -160,6 +195,7 @@ final class GenerationOutputCapacityGuard
         AiRequest $request,
         string $substage,
         ?array $selectedBudget = null,
+        ?array $requestBudgets = null,
     ): array {
         $route = $this->frozenRouteForRun($chapter, $run, $stage);
         $provider = strtolower(trim((string) $request->provider));
@@ -173,11 +209,13 @@ final class GenerationOutputCapacityGuard
             );
         }
 
+        // 修复子阶段传入自身完整分档后，容量门禁只能使用该合同，不能借用父阶段更大的上限。
+        $budgetContract = $requestBudgets ?? $route['request_budgets'];
         $snapshot = $this->assertRequestAgainstContract(
             request: $request,
             stage: $stage,
             modelCapacity: $route['model_capacity'],
-            requestMaximum: (int) collect($route['request_budgets'])->max(
+            requestMaximum: (int) collect($budgetContract)->max(
                 fn (mixed $budget): int => is_array($budget) ? (int) ($budget['max_completion_tokens'] ?? 0) : 0,
             ),
             selectedBudget: $selectedBudget,
@@ -206,8 +244,13 @@ final class GenerationOutputCapacityGuard
      *
      * @return array<string, mixed>
      */
-    public function assertRequestFromMetadata(AiRequest $request, AiStage $stage, string $substage): array
-    {
+    public function assertRequestFromMetadata(
+        AiRequest $request,
+        AiStage $stage,
+        string $substage,
+        ?array $selectedBudget = null,
+        ?array $requestBudgets = null,
+    ): array {
         $chapterId = $request->metadata['chapter_id'] ?? null;
         $runId = $request->metadata['generation_run_id'] ?? null;
         if (! is_numeric($chapterId) || ! is_numeric($runId)) {
@@ -221,32 +264,87 @@ final class GenerationOutputCapacityGuard
         $chapter = Chapter::query()->with('latestPlan')->findOrFail((int) $chapterId);
         $run = GenerationRun::query()->findOrFail((int) $runId);
 
-        return $this->assertRequestWithinFrozenRoute($chapter, $run, $stage, $request, $substage);
+        return $this->assertRequestWithinFrozenRoute(
+            $chapter,
+            $run,
+            $stage,
+            $request,
+            $substage,
+            $selectedBudget,
+            $requestBudgets,
+        );
     }
 
-    public function frozenSubstageMaxTokens(GenerationRun $run, string $key): int
+    /**
+     * 从 Run 读取一个修复子阶段的完整冻结分档，确保 Resume 不受当前环境配置变化影响。
+     *
+     * @return array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>
+     */
+    public function frozenRepairTiers(GenerationRun $run, AiStage $stage, string $substage): array
     {
-        $maxTokens = data_get($run->context_snapshot, "generation_preferences.repair_budgets.{$key}");
-        if (! is_numeric($maxTokens) || (int) $maxTokens < 1) {
+        $repairs = data_get($run->context_snapshot, 'generation_preferences.repair_request_budgets');
+        if (! is_array($repairs)) {
             throw new AiProviderException(
                 'repair_request_budget_missing',
-                "修复子请求 {$key} 缺少 Run 冻结预算，不能重新读取运行时配置。",
+                "修复子请求 {$substage} 缺少可见输出、推理预留和总完成预算组成的冻结合同。",
                 false,
             );
         }
 
-        return (int) $maxTokens;
+        try {
+            return $this->requestBudget->repairTiers($repairs, $substage, $stage);
+        } catch (ValidationException $exception) {
+            throw new AiProviderException(
+                'repair_request_budget_invalid',
+                "修复子请求 {$substage} 的冻结预算无效：".$exception->getMessage(),
+                false,
+                previous: $exception,
+            );
+        }
     }
 
-    /** @param array<string, mixed> $metadata */
-    public function frozenSubstageMaxTokensFromMetadata(array $metadata, string $key): int
+    /**
+     * 读取修复子阶段的精确分档，并同时返回完整合同供容量门禁验证上限。
+     *
+     * @return array{budget: array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}, tiers: array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>}
+     */
+    public function frozenRepairBudget(GenerationRun $run, AiStage $stage, string $substage, string $tier): array
+    {
+        $tiers = $this->frozenRepairTiers($run, $stage, $substage);
+
+        try {
+            $budget = $this->requestBudget->tier($tiers, $tier, $stage);
+        } catch (ValidationException $exception) {
+            throw new AiProviderException(
+                'repair_request_budget_invalid',
+                "修复子请求 {$substage} 缺少合法的 {$tier} 冻结分档。",
+                false,
+                previous: $exception,
+            );
+        }
+
+        return ['budget' => $budget, 'tiers' => $tiers];
+    }
+
+    /**
+     * 修复器只有请求元数据时，先恢复所属 Run，再读取该 Run 已冻结的精确预算分档。
+     *
+     * @param  array<string, mixed>  $metadata
+     * @return array{budget: array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}, tiers: array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>}
+     */
+    public function frozenRepairBudgetFromMetadata(array $metadata, AiStage $stage, string $substage, string $tier): array
     {
         $runId = $metadata['generation_run_id'] ?? null;
         if (! is_numeric($runId)) {
             throw new AiProviderException('repair_request_budget_missing', '修复子请求缺少 Generation Run 身份。', false);
         }
 
-        return $this->frozenSubstageMaxTokens(GenerationRun::query()->findOrFail((int) $runId), $key);
+        return $this->frozenRepairBudget(
+            GenerationRun::query()->findOrFail((int) $runId),
+            $stage,
+            $substage,
+            $tier,
+        );
     }
 
     /**
@@ -320,10 +418,15 @@ final class GenerationOutputCapacityGuard
         $route = is_array($snapshot) ? data_get($snapshot, "routes.{$stage->value}") : null;
         $modelCapacity = is_array($route) ? ($route['model_capacity'] ?? null) : null;
         $requestBudgets = is_array($route) ? ($route['request_budgets'] ?? null) : null;
-        if (! is_array($route) || ! is_array($modelCapacity) || ! is_array($requestBudgets) || $requestBudgets === []) {
+        $repairRequestBudgets = is_array($route) ? ($route['repair_request_budgets'] ?? null) : null;
+        if (! is_array($route)
+            || ! is_array($modelCapacity)
+            || ! is_array($requestBudgets)
+            || $requestBudgets === []
+            || ! is_array($repairRequestBudgets)) {
             throw new AiProviderException(
                 $stage->value.'_capacity_contract_missing',
-                "{$stage->getLabel()} 缺少 Plan Admission 冻结的模型容量或请求预算；请创建新的 Plan Version 并重新 Admission。",
+                "{$stage->getLabel()} 缺少 Plan Admission 冻结的模型容量、主请求预算或修复子阶段预算；请创建新的 Plan Version 并重新 Admission。",
                 false,
             );
         }
@@ -335,6 +438,27 @@ final class GenerationOutputCapacityGuard
     public function frozenRouteForRun(Chapter $chapter, GenerationRun $run, AiStage $stage): array
     {
         $contractSource = data_get($run->context_snapshot, 'generation_preferences.route_contract_source');
+        if ($contractSource === self::LEGACY_CHAPTER_RECOVERY_CONTRACT) {
+            $expectedStages = match ($stage) {
+                AiStage::Extractor => [GenerationStage::EventExtraction],
+                AiStage::Reviewer => [GenerationStage::CoverageJudgment, GenerationStage::Review],
+                AiStage::Rewrite => [GenerationStage::Rewrite],
+                AiStage::Summary => [GenerationStage::MemorySummary],
+                default => [],
+            };
+            if (! in_array($run->stage, $expectedStages, true)
+                || $run->chapter_id !== $chapter->getKey()
+                || (int) data_get($run->context_snapshot, 'generation_preferences.recovery_contract_run_id') < 1) {
+                throw new AiProviderException(
+                    'legacy_recovery_contract_mismatch',
+                    'Admission v1 恢复 Run 的 Stage、Chapter 或恢复合同身份不匹配。',
+                    false,
+                );
+            }
+
+            // 每个实际 Provider Run 都复制自身阶段的冻结合同，Resume 不需要重新读取当前后台配置。
+            return $this->routeFromRunSnapshot($run, $stage, 'legacy_recovery_contract_invalid');
+        }
         if ($contractSource !== self::LEGACY_EVENT_RECOVERY_CONTRACT) {
             return $this->frozenRoute($chapter, $stage);
         }
@@ -350,9 +474,16 @@ final class GenerationOutputCapacityGuard
             );
         }
 
+        return $this->routeFromRunSnapshot($run, $stage, 'extractor_recovery_contract_missing');
+    }
+
+    /** 从实际 Run 的快照恢复完整路由，并核对顶层观测字段没有漂移。 */
+    private function routeFromRunSnapshot(GenerationRun $run, AiStage $stage, string $errorCode): array
+    {
         $frozenRoute = data_get($run->context_snapshot, 'generation_preferences.frozen_route');
         $modelCapacity = data_get($run->context_snapshot, 'generation_preferences.model_capacity');
         $requestBudgets = data_get($run->context_snapshot, 'generation_preferences.request_budgets');
+        $repairRequestBudgets = data_get($run->context_snapshot, 'generation_preferences.repair_request_budgets');
         $route = is_array($frozenRoute) ? [
             'provider' => $frozenRoute['provider'] ?? null,
             'model' => $frozenRoute['model'] ?? null,
@@ -360,6 +491,7 @@ final class GenerationOutputCapacityGuard
             'prompt_version' => $frozenRoute['prompt_version'] ?? null,
             'model_capacity' => $modelCapacity,
             'request_budgets' => $requestBudgets,
+            'repair_request_budgets' => $repairRequestBudgets,
         ] : null;
 
         if (! is_array($route)
@@ -369,14 +501,15 @@ final class GenerationOutputCapacityGuard
             || ! is_array($modelCapacity)
             || ! is_array($requestBudgets)
             || $requestBudgets === []
+            || ! is_array($repairRequestBudgets)
             || strtolower((string) ($modelCapacity['provider'] ?? '')) !== strtolower((string) $route['provider'])
             || (string) ($modelCapacity['model'] ?? '') !== (string) $route['model']
             || $run->provider !== $route['provider']
             || $run->model_policy !== $route['model']
             || $run->prompt_version !== $route['prompt_version']) {
             throw new AiProviderException(
-                'extractor_recovery_contract_missing',
-                '事件提取恢复 Run 缺少完整冻结路由、模型容量或三档请求预算。',
+                $errorCode,
+                "{$stage->getLabel()} Run 缺少完整冻结路由、模型容量或请求预算。",
                 false,
             );
         }

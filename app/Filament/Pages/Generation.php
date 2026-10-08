@@ -10,6 +10,7 @@ use App\Enums\RunStatus;
 use App\Filament\Pages\Review as ReviewPage;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Support\ContextInspectorSchema;
+use App\Jobs\AdjudicatePlanCoverageJob;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateCanonicalChapterSummaryJob;
@@ -310,6 +311,43 @@ class Generation extends Page implements HasTable
                         ->copyable()
                         ->columnSpanFull(),
                 ]),
+            Section::make('恢复合同与来源链')
+                ->description('显示本 Run 使用的合同来源、恢复合同身份和被冻结的上游 Artifact；确定性恢复 Run 同时展示四个后续阶段的完整路由。')
+                ->visible(fn (GenerationRun $record): bool => $this->hasRouteContractObservation($record))
+                ->columns(2)
+                ->schema([
+                    TextEntry::make('route_contract_source')
+                        ->label('路由合同来源')
+                        ->state(fn (GenerationRun $record): string => $this->routeContractSource($record))
+                        ->badge(),
+                    TextEntry::make('recovery_contract_run_id')
+                        ->label('恢复合同 Run')
+                        ->state(fn (GenerationRun $record): ?string => $this->recoveryContractRunLabel($record))
+                        ->fontFamily('mono')
+                        ->placeholder('不适用'),
+                    TextEntry::make('provider_request_count')
+                        ->label('实际 Provider 请求数')
+                        ->state(fn (GenerationRun $record): int => $record->usageRecords()->count())
+                        ->numeric(),
+                    TextEntry::make('contract_artifact_id')
+                        ->label('合同 Artifact')
+                        ->state(fn (GenerationRun $record): mixed => data_get($record->context_snapshot, 'contract_artifact_id'))
+                        ->fontFamily('mono')
+                        ->placeholder('—'),
+                    TextEntry::make('frozen_source_lineage')
+                        ->label('冻结来源链')
+                        ->state(fn (GenerationRun $record): string => $this->formatJson($this->routeContractSourceLineage($record)))
+                        ->fontFamily('mono')
+                        ->copyable()
+                        ->columnSpanFull(),
+                    TextEntry::make('frozen_recovery_routes')
+                        ->label('恢复合同冻结路由')
+                        ->state(fn (GenerationRun $record): string => $this->formatJson($this->recoveryContractRoutes($record)))
+                        ->fontFamily('mono')
+                        ->copyable()
+                        ->visible(fn (GenerationRun $record): bool => $record->stage === GenerationStage::ChapterRecovery)
+                        ->columnSpanFull(),
+                ]),
             Section::make('原始 Context Snapshot')->schema([
                 TextEntry::make('context_snapshot')
                     ->hiddenLabel()
@@ -485,6 +523,69 @@ class Generation extends Page implements HasTable
         return json_encode($value ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }
 
+    /** 只有保存了 Admission 或恢复合同身份的 Run 才显示来源合同面板。 */
+    private function hasRouteContractObservation(GenerationRun $run): bool
+    {
+        return $run->stage === GenerationStage::ChapterRecovery
+            || filled(data_get($run->context_snapshot, 'generation_preferences.route_contract_source'))
+            || filled(data_get($run->context_snapshot, 'generation_preferences.recovery_contract_run_id'));
+    }
+
+    /** 返回实际驱动本 Run 的路由合同来源。 */
+    private function routeContractSource(GenerationRun $run): string
+    {
+        if ($run->stage === GenerationStage::ChapterRecovery) {
+            return (string) data_get(
+                $this->recoveryContractData($run),
+                'contract_version',
+                data_get($run->context_snapshot, 'contract_version', '未知恢复合同'),
+            );
+        }
+
+        return (string) data_get($run->context_snapshot, 'generation_preferences.route_contract_source', 'plan_admission');
+    }
+
+    /** 恢复合同自身和下游 Provider Run 都明确指向同一个合同 Run。 */
+    private function recoveryContractRunLabel(GenerationRun $run): ?string
+    {
+        $runId = $run->stage === GenerationStage::ChapterRecovery
+            ? $run->getKey()
+            : data_get($run->context_snapshot, 'generation_preferences.recovery_contract_run_id');
+
+        return is_numeric($runId) && (int) $runId > 0 ? '#'.(int) $runId : null;
+    }
+
+    /** 恢复 Run 从合同 Artifact 读取来源，普通 Run 保留自身 Context 中的可追踪来源。 */
+    private function routeContractSourceLineage(GenerationRun $run): array
+    {
+        if ($run->stage === GenerationStage::ChapterRecovery) {
+            return (array) data_get($this->recoveryContractData($run), 'source', []);
+        }
+
+        return array_filter([
+            'source_artifact_id' => data_get($run->context_snapshot, 'source_artifact_id'),
+            'source_artifact_checksum' => data_get($run->context_snapshot, 'source_artifact_checksum'),
+            'recovery' => data_get($run->context_snapshot, 'recovery.source'),
+        ], static fn (mixed $value): bool => $value !== null && $value !== []);
+    }
+
+    /** 只在确定性恢复 Run 中展示 Extractor、Reviewer、Rewrite、Summary 的完整冻结合同。 */
+    private function recoveryContractRoutes(GenerationRun $run): array
+    {
+        return (array) data_get($this->recoveryContractData($run), 'routes', []);
+    }
+
+    /** 从不可变 Context Artifact 读取恢复合同，避免把简化的 Run Snapshot 当作完整路由。 */
+    private function recoveryContractData(GenerationRun $run): array
+    {
+        $data = $run->artifacts()
+            ->where('type', ArtifactType::Context)
+            ->latest('version')
+            ->first()?->data;
+
+        return is_array($data) ? $data : [];
+    }
+
     private function canRetry(GenerationRun $run): bool
     {
         return $run->status === RunStatus::Failed
@@ -512,6 +613,7 @@ class Generation extends Page implements HasTable
             && $this->isLatestRunForScope($run);
     }
 
+    /** 判断停滞 Run 是否可由持久化来源链恢复。 */
     private function supportsRecovery(GenerationRun $run): bool
     {
         return $run->stage === GenerationStage::SceneGeneration
@@ -519,6 +621,7 @@ class Generation extends Page implements HasTable
             : $run->chapter_id !== null && in_array($run->stage, [
                 GenerationStage::ChapterPlanning,
                 GenerationStage::ChapterAssembly,
+                GenerationStage::CoverageJudgment,
                 GenerationStage::EventExtraction,
                 GenerationStage::Review,
                 GenerationStage::Rewrite,
@@ -526,11 +629,13 @@ class Generation extends Page implements HasTable
             ], true);
     }
 
+    /** 判断失败 Run 是否具备重新投递所需的持久化身份。 */
     private function supportsDispatch(GenerationRun $run): bool
     {
         return match ($run->stage) {
             GenerationStage::ChapterPlanning, GenerationStage::ChapterAssembly, GenerationStage::Review, GenerationStage::Rewrite => $run->chapter_id !== null,
             GenerationStage::EventExtraction => $run->chapter_id !== null,
+            GenerationStage::CoverageJudgment => $run->chapter_id !== null && $run->scene_id !== null,
             GenerationStage::SceneGeneration => $run->scene_id !== null,
             GenerationStage::MemorySummary => $run->chapter_id !== null && $run->scope_type === 'chapter_summary',
             default => false,
@@ -631,6 +736,7 @@ class Generation extends Page implements HasTable
         return '按推荐动作人工处理';
     }
 
+    /** 按 Run 冻结的来源身份重新投递对应 Job。 */
     private function dispatchRun(GenerationRun $run, bool $retry): void
     {
         if ($run->stage === GenerationStage::SceneGeneration) {
@@ -651,6 +757,11 @@ class Generation extends Page implements HasTable
                     false,
                     false,
                     $this->legacyEventRecoveryRunId($run),
+                ),
+                GenerationStage::CoverageJudgment => AdjudicatePlanCoverageJob::dispatch(
+                    (int) $run->chapter_id,
+                    (int) data_get($run->context_snapshot, 'source_artifact_id'),
+                    (int) $run->scene_id,
                 ),
                 GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, false),
                 GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),

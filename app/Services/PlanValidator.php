@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Data\PlanFinding;
 use App\Data\PlanValidationResult;
+use App\Enums\AiStage;
 use App\Enums\CharacterStatus;
 use App\Enums\FactStatus;
 use App\Enums\ForeshadowingImportance;
@@ -35,6 +36,7 @@ class PlanValidator
         private readonly NovelOutlineChecksum $outlineChecksum,
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
     /** @param array<string, mixed>|null $admissionSnapshot */
@@ -621,10 +623,18 @@ class PlanValidator
             }
         }
 
+        $expectedRepairSubstages = [
+            'writer' => [],
+            'extractor' => ['scene_structure', 'coverage_evidence', 'foreshadowing_coverage', 'event_evidence'],
+            'reviewer' => ['coverage_judgment', 'review_schema', 'arc_completion'],
+            'rewrite' => ['coverage_evidence', 'length_repair'],
+            'summary' => [],
+        ];
         foreach (['writer', 'extractor', 'reviewer', 'rewrite', 'summary'] as $stage) {
             $route = data_get($snapshot, "routes.{$stage}");
             $modelCapacity = is_array($route) ? ($route['model_capacity'] ?? null) : null;
             $requestBudgets = is_array($route) ? ($route['request_budgets'] ?? null) : null;
+            $repairRequestBudgets = is_array($route) ? ($route['repair_request_budgets'] ?? null) : null;
             if (! is_array($route)
                 || blank($route['provider'] ?? null)
                 || blank($route['model'] ?? null)
@@ -641,10 +651,11 @@ class PlanValidator
                 || (($route['reasoning_effort'] ?? null) !== null
                     && ($modelCapacity['supports_reasoning_effort'] ?? false) !== true)
                 || ! is_array($requestBudgets)
-                || $requestBudgets === []) {
+                || $requestBudgets === []
+                || ! is_array($repairRequestBudgets)) {
                 $findings[] = $this->blocked(
                     'PROVIDER_ROUTE_NOT_FROZEN',
-                    "{$stage} 的 Provider、Model、Prompt Version、模型容量或请求预算未完整冻结。",
+                    "{$stage} 的 Provider、Model、Prompt Version、模型容量、主请求预算或修复子阶段预算未完整冻结。",
                     "admission_snapshot.routes.{$stage}",
                     $record,
                     '在 AI 设置中修复该 Stage Route 后重新执行 Plan Admission。',
@@ -680,6 +691,41 @@ class PlanValidator
                     $record,
                     '修复模型容量或阶段请求预算后创建新的 Plan Version。',
                 );
+            }
+
+            // 修复子阶段也必须逐项验证分档结构和模型容量，不能只依赖父阶段预算兜底。
+            $actualRepairKeys = array_keys($repairRequestBudgets);
+            $requiredRepairKeys = $expectedRepairSubstages[$stage];
+            sort($actualRepairKeys);
+            sort($requiredRepairKeys);
+            if ($actualRepairKeys !== $requiredRepairKeys) {
+                $findings[] = $this->blocked(
+                    'REPAIR_REQUEST_BUDGET_NOT_FROZEN',
+                    "{$stage} 的修复子阶段预算键不完整。",
+                    "admission_snapshot.routes.{$stage}.repair_request_budgets",
+                    $record,
+                    '补齐该路由的修复子阶段预算后创建新的 Plan Version。',
+                );
+            }
+            foreach ($repairRequestBudgets as $substage => $repairBudgets) {
+                try {
+                    $validatedRepairBudgets = $this->requestBudget->validateFrozen(
+                        is_array($repairBudgets) ? $repairBudgets : [],
+                        AiStage::from($stage),
+                    );
+                    $repairMaximum = $this->requestBudget->maximum($validatedRepairBudgets);
+                    if ($repairMaximum < 1 || $repairMaximum > $staticMaximum) {
+                        throw ValidationException::withMessages(['budget' => '修复预算超过模型容量。']);
+                    }
+                } catch (ValidationException) {
+                    $findings[] = $this->blocked(
+                        'REPAIR_REQUEST_BUDGET_NOT_FROZEN',
+                        "{$stage}.{$substage} 的修复请求预算无效，或超过冻结模型容量。",
+                        "admission_snapshot.routes.{$stage}.repair_request_budgets.{$substage}",
+                        $record,
+                        '修复模型容量或子阶段请求预算后创建新的 Plan Version。',
+                    );
+                }
             }
         }
 

@@ -5,9 +5,10 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
-use App\Actions\Chapters\RecoverLegacyEventExtractionAction;
+use App\Actions\Chapters\RecoverLegacyChapterPipelineAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Chapters\RestartChapterFromOutlineAction;
+use App\Actions\Chapters\StartChapterRewriteAction;
 use App\AI\AiSettingsService;
 use App\AI\Exceptions\AiProviderException;
 use App\Data\CanonicalCommitData;
@@ -21,6 +22,7 @@ use App\Enums\SceneStatus;
 use App\Filament\Pages\Memory as MemoryPage;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Support\ContextInspectorSchema;
+use App\Jobs\AdjudicatePlanCoverageJob;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
@@ -528,46 +530,55 @@ class ViewNovelChapter extends ViewRecord
                         ->columns(['default' => 1, 'md' => 2]),
                 ]),
             Section::make('叙事审校')
+                ->key('narrative-review')
                 ->description('七维评分结合确定性状态检查结果形成最终审校决策。')
                 ->headerActions([
                     Action::make('rewriteScene')
-                        ->label('重写场景')
+                        ->label('执行局部重写')
                         ->icon('heroicon-o-arrow-path')
                         ->color('warning')
-                        ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
+                        ->visible(fn (): bool => $this->latestReview()?->decision === ReviewDecision::Rewrite)
                         ->disabled(fn (): bool => $this->generationWorkPending()
                             || $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
-                        ->tooltip(fn (): string => $this->rewriteActionTooltip('scene'))
-                        ->schema([
-                            Select::make('scene_id')->label('场景')->required()->options(fn (): array => $this->chapter()->scenes->mapWithKeys(fn (Scene $scene): array => [$scene->getKey() => '场景 '.$scene->sequence.' · '.$scene->goal])->all()),
-                        ])
-                        ->action(function (array $data): void {
-                            if (! $this->dispatchGenerationJob(new RewriteChapterJob($this->chapterId, (int) $data['scene_id']))) {
-                                return;
-                            }
-                            Notification::make()
-                                ->title('场景重写已加入队列')
-                                ->body('完成后将自动重新组装章节、提取事件、重建状态补丁并重新审校。')
-                                ->success()
-                                ->send();
-                        }),
-                    Action::make('rewriteChapter')
-                        ->label('重写章节')
-                        ->icon('heroicon-o-document-text')
-                        ->color('warning')
+                        ->tooltip(fn (): string => $this->rewriteActionTooltip())
                         ->requiresConfirmation()
-                        ->visible(fn (): bool => in_array($this->latestReview()?->decision, [ReviewDecision::Rewrite, ReviewDecision::NeedsAttention], true))
-                        ->disabled(fn (): bool => $this->generationWorkPending()
-                            || $this->automaticRewriteArtifacts()->count() >= (int) config('generation.max_rewrite_attempts', 2))
-                        ->tooltip(fn (): string => $this->rewriteActionTooltip('chapter'))
-                        ->modalDescription('将基于最新审校问题生成新的不可变重写稿。完成后系统会自动重新提取事件、重建状态补丁并重新审校。')
-                        ->action(function (): void {
-                            if (! $this->dispatchGenerationJob(new RewriteChapterJob($this->chapterId))) {
+                        ->modalHeading('按最新 Review 执行局部修复')
+                        ->modalDescription('系统会重新校验当前草稿、Coverage Judgment、冻结路由和安全重写范围。目标 Scene 由 Review 的不可变修复合同决定；旧 Admission 会先建立完整恢复合同，旧 Coverage Review 会先重新判定。')
+                        ->action(function (StartChapterRewriteAction $startRewrite): void {
+                            try {
+                                $result = $startRewrite->handle($this->chapter());
+                            } catch (AiProviderException|ValidationException $exception) {
+                                Notification::make()
+                                    ->title('无法启动局部重写')
+                                    ->body($exception->getMessage())
+                                    ->danger()
+                                    ->send();
+
                                 return;
                             }
+
+                            // 领域动作可能先恢复旧合同或复核 Coverage，通知必须展示真实下一阶段。
+                            [$title, $body] = match ($result['mode']) {
+                                'legacy_recovery' => [
+                                    'Admission v1 修复流程已恢复',
+                                    "已创建或复用恢复合同 Run #{$result['recovery_run_id']}；系统将从 Coverage / Review / Rewrite 的真实断点继续。",
+                                ],
+                                'coverage_recheck' => [
+                                    'Coverage 语义复核已加入队列',
+                                    '旧 Review 不再驱动正文重写；复核完成后系统会创建新 Review，再决定是否需要局部 Rewrite。',
+                                ],
+                                default => [
+                                    '局部重写已加入队列',
+                                    "目标 Scene #{$result['scene_id']}；完成后将自动重新组装、提取事件、重建状态补丁并审校。",
+                                ],
+                            };
+                            $this->cachedGenerationWorkPending = null;
+                            $this->cachedChapter = null;
+                            $this->cacheSchema('content', null);
+
                             Notification::make()
-                                ->title('章节重写已加入队列')
-                                ->body('完成后将自动提取事件、重建状态补丁并重新审校，无需再点“强制重新审校”。')
+                                ->title($title)
+                                ->body($body)
                                 ->success()
                                 ->send();
                         }),
@@ -665,7 +676,7 @@ class ViewNovelChapter extends ViewRecord
         $maximum = (int) config('generation.max_rewrite_attempts', 2);
         $budget = "已使用 {$used} / {$maximum} 次";
         $afterPass = '等待提交正式章节';
-        $flow = '重写场景 → 重新组装章节 → 重新提取事件 → 重建状态补丁 → 重新审校；重写章节从“重新提取事件”继续。';
+        $flow = '局部重写 → 重新组装章节 → 重新提取事件 → 重建状态补丁 → 重新审校。';
 
         if ($review === null) {
             return [
@@ -696,14 +707,10 @@ class ViewNovelChapter extends ViewRecord
 
         if ($review->decision === ReviewDecision::Rewrite && $used < $maximum) {
             $nextAttempt = $used + 1;
-            $hasChapterFinding = collect($review->findings)->contains(fn (array $finding): bool => str_starts_with((string) data_get($finding, 'code'), 'CHAPTER_LENGTH_')
-                || data_get($finding, 'scene_id') === null
-            );
-            $scope = $hasChapterFinding ? '重写章节' : '重写场景';
 
             return [
-                'action' => "第 {$nextAttempt} / {$maximum} 次{$scope}", 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
-                'explanation' => '点击重写一次即可。队列完成整条复审链路后刷新页面查看新结论，不需要手动点击“强制重新审校”。', 'flow' => $flow,
+                'action' => "第 {$nextAttempt} / {$maximum} 次局部修复", 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '点击一次即可。系统先校验 Coverage 和安全范围，再由统一推进器完成局部 Rewrite 与整条复审链路。', 'flow' => $flow,
             ];
         }
 
@@ -720,7 +727,8 @@ class ViewNovelChapter extends ViewRecord
         ];
     }
 
-    private function rewriteActionTooltip(string $scope): string
+    /** 说明自动重写的范围来自 Review 合同，页面不能人工指定任意 Scene。 */
+    private function rewriteActionTooltip(): string
     {
         $used = $this->automaticRewriteArtifacts()->count();
         $maximum = (int) config('generation.max_rewrite_attempts', 2);
@@ -729,9 +737,7 @@ class ViewNovelChapter extends ViewRecord
             return "已达到最大 {$maximum} 次自动重写，需要人工处理。";
         }
 
-        return $scope === 'scene'
-            ? '适合问题明确落在单个场景时使用；完成后会自动重新组装和复审。'
-            : '适合字数、节奏或跨场景问题；完成后会自动重新提取事件和复审。';
+        return '系统会按最新 Review 自动定位 Paragraph / Scene；旧 Coverage 结论会先复核，不能直接重写整章。';
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -1913,24 +1919,34 @@ class ViewNovelChapter extends ViewRecord
                                 ->success()
                                 ->send();
                         }),
-                    Action::make('recoverLegacyEventExtraction')
-                        ->label('恢复事件提取（旧合同）')
+                    Action::make('recoverLegacyChapterPipeline')
+                        ->label('恢复章节流程（Admission v1）')
                         ->icon('heroicon-o-lifebuoy')
                         ->color('warning')
                         ->visible(fn (): bool => $this->usesLegacyEventExtractionAdmission())
                         ->disabled($this->chapterDraftArtifacts()->isEmpty() || $this->generationWorkPending())
                         ->requiresConfirmation()
-                        ->modalHeading('使用当前 Extractor 合同恢复事件提取')
-                        ->modalDescription('系统会保留现有 Plan、Scene、Chapter Draft 和历史 Run，仅创建新的事件提取 Run，并冻结当前 Extractor 路由、模型容量与三档请求预算。旧 Admission v1 快照不会被修改。')
+                        ->modalHeading('创建 Admission v1 完整恢复合同')
+                        ->modalDescription('系统会保留现有 Plan、Scene、Chapter Draft、旧 Admission 和历史 Run，冻结 Extractor、Reviewer、Rewrite、Summary 的当前路由、模型容量、主预算和修复预算，再从当前真实节点继续。Planner 与 Writer 不会重新请求。')
                         ->action(function (): void {
-                            $run = app(RecoverLegacyEventExtractionAction::class)->handle($this->chapter());
+                            try {
+                                $run = app(RecoverLegacyChapterPipelineAction::class)->handle($this->chapter());
+                            } catch (AiProviderException|ValidationException $exception) {
+                                Notification::make()
+                                    ->title('无法恢复 Admission v1 章节流程')
+                                    ->body($exception->getMessage())
+                                    ->danger()
+                                    ->send();
+
+                                return;
+                            }
                             $this->cachedGenerationWorkPending = null;
                             $this->cachedChapter = null;
                             $this->cacheSchema('content', null);
 
                             Notification::make()
-                                ->title('旧合同事件提取恢复已加入队列')
-                                ->body("已创建 Run #{$run->getKey()}；Planner、Writer 和现有正文不会重新生成。")
+                                ->title('Admission v1 章节恢复已启动')
+                                ->body("已创建恢复合同 Run #{$run->getKey()}；系统将从当前真实节点继续，Planner、Writer 和现有正文不会重新生成。")
                                 ->success()
                                 ->send();
                         }),
@@ -2344,16 +2360,29 @@ class ViewNovelChapter extends ViewRecord
         ];
     }
 
-    /** @return array<int, array<string, mixed>> */
+    /**
+     * 构建章节流水线时间轴，并把章节恢复合同、Coverage Judgment 与普通 Context 快照分开展示。
+     *
+     * @return array<int, array<string, mixed>>
+     */
     private function pipelineTimeline(): array
     {
         $chapter = $this->chapter();
         $items = [];
         $planningRun = $this->latestTimelineRun(GenerationStage::ChapterPlanning);
-        $contextRun = $chapter->generationRuns->whereNotNull('context_snapshot')->sortByDesc('id')->first();
+        $contextRun = $chapter->generationRuns
+            ->whereNotIn('stage', [GenerationStage::ChapterRecovery, GenerationStage::CoverageJudgment])
+            ->whereNotNull('context_snapshot')
+            ->sortByDesc('id')
+            ->first();
+        $contextArtifact = $contextRun?->artifacts
+            ->where('type', ArtifactType::Context)
+            ->reject(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'role') === 'coverage_judgment')
+            ->sortByDesc('id')
+            ->first();
 
         $items[] = $this->timelineItem('plan', '计划', $planningRun, $this->latestTimelineArtifact(ArtifactType::ChapterPlan), $chapter->latestPlan !== null, $chapter->latestPlan === null ? '等待建立章节计划' : '计划 v'.$chapter->latestPlan->version);
-        $items[] = $this->timelineItem('context', '上下文', $contextRun, $this->latestTimelineArtifact(ArtifactType::Context), $contextRun !== null, $contextRun === null ? '等待冻结 L0 / L1 / L2 上下文快照' : '上下文快照已冻结');
+        $items[] = $this->timelineItem('context', '上下文', $contextRun, $contextArtifact, $contextRun !== null, $contextRun === null ? '等待冻结 L0 / L1 / L2 上下文快照' : '上下文快照已冻结');
 
         foreach ($chapter->scenes as $scene) {
             $run = $scene->generationRuns->sortByDesc('id')->first();
@@ -2362,11 +2391,22 @@ class ViewNovelChapter extends ViewRecord
         }
 
         $assemblyArtifact = $this->latestTimelineArtifact(ArtifactType::ChapterDraft);
+        $recoveryRun = $this->latestTimelineRun(GenerationStage::ChapterRecovery);
+        $recoveryArtifact = $recoveryRun?->artifacts->where('type', ArtifactType::Context)->sortByDesc('id')->first();
+        $coverageRun = $this->latestTimelineRun(GenerationStage::CoverageJudgment);
+        $coverageArtifact = $coverageRun?->artifacts->where('type', ArtifactType::Context)->sortByDesc('id')->first();
         $eventArtifact = $this->latestTimelineArtifact(ArtifactType::EventCandidate) ?? $this->latestTimelineArtifact(ArtifactType::StatePatch);
         $reviewArtifact = $this->latestTimelineArtifact(ArtifactType::ReviewResult);
         $memoryRun = $this->latestTimelineRun(GenerationStage::MemorySummary) ?? $this->latestTimelineRun(GenerationStage::Embedding);
 
         $items[] = $this->timelineItem('assembly', '章节组装', $this->latestTimelineRun(GenerationStage::ChapterAssembly), $assemblyArtifact, $assemblyArtifact !== null, $assemblyArtifact === null ? '等待组装章节草稿' : '章节草稿 v'.$assemblyArtifact->version);
+        if ($recoveryRun !== null) {
+            // 恢复合同是零 Provider 请求的正式运行事实，不能继续混在普通 Context 节点中。
+            $items[] = $this->timelineItem('chapter-recovery', '章节恢复合同', $recoveryRun, $recoveryArtifact, $recoveryRun->status === RunStatus::Succeeded, $recoveryRun->status === RunStatus::Succeeded ? 'Admission v1 后续阶段合同已冻结' : '章节恢复合同未完成');
+        }
+        if ($coverageRun !== null) {
+            $items[] = $this->timelineItem('coverage-judgment', 'Coverage 语义复核', $coverageRun, $coverageArtifact, $coverageRun->status === RunStatus::Succeeded, $coverageRun->status === RunStatus::Succeeded ? '计划 Coverage 已完成独立语义复核' : '计划 Coverage 复核未完成');
+        }
         $items[] = $this->timelineItem('events', '事件', $this->latestTimelineRun(GenerationStage::EventExtraction), $eventArtifact, $eventArtifact !== null, $eventArtifact === null ? '等待提取故事事件' : '事件候选已生成');
         $reviewDetail = match ($this->currentDraftReview()?->decision) {
             ReviewDecision::Pass => '审校 PASS，等待提交正式章节',
@@ -2521,6 +2561,7 @@ class ViewNovelChapter extends ViewRecord
             ->send();
     }
 
+    /** 判断当前章节是否已有生成工作，Coverage Judgment 运行时禁止重复操作。 */
     private function generationWorkPending(): bool
     {
         return $this->cachedGenerationWorkPending ??= GenerationRun::query()
@@ -2529,6 +2570,7 @@ class ViewNovelChapter extends ViewRecord
                 GenerationStage::ChapterPlanning,
                 GenerationStage::SceneGeneration,
                 GenerationStage::ChapterAssembly,
+                GenerationStage::CoverageJudgment,
                 GenerationStage::EventExtraction,
                 GenerationStage::Review,
                 GenerationStage::Rewrite,
@@ -2544,9 +2586,17 @@ class ViewNovelChapter extends ViewRecord
     /** @return array<int, ShouldQueue&ShouldBeUnique> */
     private function pendingGenerationJobs(): array
     {
+        $draft = $this->currentDraftArtifact();
+
         return [
             new PlanChapterJob($this->chapterId),
             ...$this->chapter()->scenes->map(fn (Scene $scene): GenerateSceneJob => new GenerateSceneJob($scene->getKey()))->all(),
+            // Coverage Run 尚未创建时也必须识别 Dispatcher 保留项，避免按钮再次变为可点击。
+            ...($draft === null ? [] : $this->chapter()->scenes->map(fn (Scene $scene): AdjudicatePlanCoverageJob => new AdjudicatePlanCoverageJob(
+                $this->chapterId,
+                $draft->getKey(),
+                $scene->getKey(),
+            ))->all()),
             new AssembleChapterJob($this->chapterId),
             new ExtractStoryEventsJob($this->chapterId),
             new ReviewChapterJob($this->chapterId),

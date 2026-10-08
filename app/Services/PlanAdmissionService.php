@@ -170,8 +170,17 @@ class PlanAdmissionService
         }
 
         $requestBudgets = $this->requestBudget->configured($stage);
+        // 修复子阶段预算与主阶段预算一起冻结进 Admission，后续 Run 不得重新读取已变化的环境配置。
+        $repairRequestBudgets = $this->requestBudget->configuredRepairs($stage);
         $modelCapacity = $profile->capacitySnapshot();
-        $maximumBudget = $this->requestBudget->maximum($requestBudgets);
+        $allBudgetMaximums = [
+            $this->requestBudget->maximum($requestBudgets),
+            ...collect($repairRequestBudgets)
+                ->map(fn (array $budgets): int => $this->requestBudget->maximum($budgets))
+                ->values()
+                ->all(),
+        ];
+        $maximumBudget = max($allBudgetMaximums);
         $staticMaximum = min(
             (int) $modelCapacity['context_window_tokens'],
             (int) $modelCapacity['max_output_tokens'],
@@ -192,6 +201,7 @@ class PlanAdmissionService
                 // 模型容量与请求预算必须分别冻结，避免把工作流预算误当成模型硬上限。
                 'model_capacity' => $modelCapacity,
                 'request_budgets' => $requestBudgets,
+                'repair_request_budgets' => $repairRequestBudgets,
             ],
         ];
     }

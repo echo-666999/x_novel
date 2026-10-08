@@ -19,6 +19,7 @@ use App\Models\Scene;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
+/** 将 Assembly 发现的 Scene 字数问题隔离为独立 Rewrite Run，并冻结真实修复预算。 */
 final class SceneLengthRepairer
 {
     public function __construct(
@@ -28,8 +29,10 @@ final class SceneLengthRepairer
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
+        private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
+    /** 使用当前 Scene Artifact 创建一次有界字数修复，不覆盖来源产物。 */
     public function repair(
         int $sceneId,
         int $sourceArtifactId,
@@ -63,12 +66,12 @@ final class SceneLengthRepairer
         $contract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $expectations = ForeshadowingCoverage::expectationsForScene($contract, (int) $scene->sequence);
         $rewriteRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Rewrite);
-        $repairMaxTokens = (int) config('generation.scene_length_repair_max_output_tokens', 4_000);
-        $repairBudget = [
-            'output_tokens' => $repairMaxTokens,
-            'reasoning_reserve_tokens' => 0,
-            'max_completion_tokens' => $repairMaxTokens,
-        ];
+        $repairTiers = $this->requestBudget->repairTiers(
+            (array) ($rewriteRoute['repair_request_budgets'] ?? []),
+            'length_repair',
+            AiStage::Rewrite,
+        );
+        $repairBudget = $this->requestBudget->tier($repairTiers, 'initial', AiStage::Rewrite);
         $context = [
             'scope' => 'scene',
             'repair_reason' => 'deterministic_assembly_length',
@@ -91,7 +94,9 @@ final class SceneLengthRepairer
             'state_version' => $stateVersion,
             // 独立修复 Run 必须把实际预算和模型容量纳入 input hash，Resume 时不得重新读取新配置。
             'generation_preferences' => [
-                'request_budget' => $repairBudget,
+                'repair_request_budgets' => ['length_repair' => $repairTiers],
+                'selected_request_budget' => $repairBudget,
+                'request_budget_tier' => 'initial',
                 'model_capacity' => $rewriteRoute['model_capacity'],
             ],
         ];
@@ -134,6 +139,7 @@ final class SceneLengthRepairer
                 $request,
                 'assembly_length_repair',
                 $repairBudget,
+                $repairTiers,
             );
             $response = $this->provider->generate($request);
             $payload = SceneLengthRepairPayload::validate(

@@ -519,7 +519,7 @@ test('scene generator repairs invalid coverage evidence without rewriting the pr
         ->and(data_get($artifact?->data, 'self_check.outcome.evidence'))->toBe($content)
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->promptVersion)->toBe('coverage-evidence-repair-v1')
-        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(9_000)
         ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1);
 });
 
@@ -637,9 +637,9 @@ test('coverage evidence repair retries with a larger budget after a truncated re
 
     expect($artifact?->content)->toBe($content)
         ->and($fake->requests())->toHaveCount(3)
-        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(9_000)
         ->and(data_get($fake->requests()[1]->metadata, 'coverage_repair_attempt'))->toBe(1)
-        ->and($fake->requests()[2]->maxTokens)->toBe(2_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(18_000)
         ->and(data_get($fake->requests()[2]->metadata, 'coverage_repair_attempt'))->toBe(2);
 });
 
@@ -668,10 +668,10 @@ test('scene prose evidence repair and length repair use independent routes and b
         ->and($fake->requests()[0]->model)->toBe('writer-route-model')
         ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
         ->and($fake->requests()[1]->model)->toBe('extractor-route-model')
-        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(9_000)
         ->and($fake->requests()[1]->promptVersion)->toBe(PlanCoverageEvidenceRepairer::PROMPT_VERSION)
         ->and($fake->requests()[2]->model)->toBe('rewrite-route-model')
-        ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(12_000)
         ->and($fake->requests()[2]->promptVersion)->toBe('scene-length-repair-v2')
         ->and($usage)->toHaveCount(3)
         ->and(data_get($usage[0]->request_metadata, 'substage'))->toBe('prose_generation')
@@ -680,7 +680,7 @@ test('scene prose evidence repair and length repair use independent routes and b
         ->and(data_get($usage[1]->request_metadata, 'route_key'))->toBe('structure_and_coverage')
         ->and(data_get($usage[2]->request_metadata, 'substage'))->toBe('length_repair')
         ->and(data_get($usage[2]->request_metadata, 'route_key'))->toBe('length_repair')
-        ->and(data_get($usage[2]->request_metadata, 'max_output_tokens'))->toBe(4_000);
+        ->and(data_get($usage[2]->request_metadata, 'max_output_tokens'))->toBe(12_000);
 });
 
 test('scene job hands off before the hard timeout and resumes from the prose checkpoint', function () {
@@ -725,7 +725,7 @@ test('scene job hands off before the hard timeout and resumes from the prose che
         ->and($fixture['scenes']->first()->generationRuns()->latest('id')->first()->artifacts()->where('type', ArtifactType::SceneDraft)->exists())->toBeTrue();
 });
 
-test('unverifiable coverage evidence becomes a rewrite finding after repair is exhausted', function () {
+test('unverifiable coverage evidence waits for semantic judgment after repair is exhausted', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
     $fixture['plan']->update(['target_words' => mb_strlen($content)]);
@@ -743,7 +743,10 @@ test('unverifiable coverage evidence becomes a rewrite finding after repair is e
     expect(data_get($artifact?->data, 'self_check.outcome'))->toBe([
         'status' => 'missing',
         'evidence' => null,
-    ])->and(data_get($artifact?->data, 'plan_findings.0.code'))->toBe('SCENE_PLAN_COVERAGE_MISSING')
+    ])->and(data_get($artifact?->data, 'coverage_evidence_unverified.0.element'))->toBe('outcome')
+        ->and(data_get($artifact?->data, 'coverage_evidence_unverified.0.reported_status'))->toBe('fulfilled')
+        ->and(data_get($artifact?->data, 'plan_findings.0.code'))->toBe('SCENE_PLAN_COVERAGE_EVIDENCE_UNVERIFIED')
+        ->and(data_get($artifact?->data, 'plan_findings.0.auto_fixable'))->toBeFalse()
         ->and($fake->requests())->toHaveCount(3);
 });
 

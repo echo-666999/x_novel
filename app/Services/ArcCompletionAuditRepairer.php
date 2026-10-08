@@ -12,6 +12,7 @@ use App\Models\GenerationRun;
 use Illuminate\Support\Str;
 use Throwable;
 
+/** 修复 Arc Completion 审计，并把技术预算与主 Review 请求隔离。 */
 final class ArcCompletionAuditRepairer
 {
     public const PROMPT_VERSION = 'arc-completion-repair-v2';
@@ -28,7 +29,14 @@ final class ArcCompletionAuditRepairer
      */
     public function repair(GenerationRun $run, array $contract, array $audits, string $draft, string $model, ?string $reasoningEffort = null): array
     {
-        $maxTokens = $this->outputCapacity->frozenSubstageMaxTokens($run, 'arc_completion');
+        // Arc Completion 只执行一次，但仍必须冻结可见输出、推理预留和总完成预算。
+        $repairContract = $this->outputCapacity->frozenRepairBudget(
+            $run,
+            AiStage::Reviewer,
+            'arc_completion',
+            'initial',
+        );
+        $budget = $repairContract['budget'];
         $input = [
             'arc_completion_contract' => $contract,
             'invalid_arc_completion_audits' => $audits,
@@ -36,7 +44,7 @@ final class ArcCompletionAuditRepairer
             'model' => $model,
             'reasoning_effort' => $reasoningEffort,
             'prompt_version' => self::PROMPT_VERSION,
-            'max_completion_tokens' => $maxTokens,
+            'request_budget' => $budget,
         ];
         $inputHash = hash('sha256', json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
 
@@ -54,7 +62,7 @@ final class ArcCompletionAuditRepairer
                 systemPrompt: '你是 XNovel Arc Completion 审计修复器。只修复 arc_completion_audits，不得修改正文、Chapter Plan、评分、Findings 或 Canonical 数据。必须严格按 arc_completion_contract 的数量和顺序为每个 arc_id 返回一个对象。只有正文同时满足该 Arc 的全部 completion_conditions 时才返回 fulfilled，并提供一段来自正文的连续逐字片段；不得拼接、删节或合并相隔的句段。否则返回 not_met 且 evidence=null。不得把每个 completion condition 拆成独立审计。',
                 prompt: '请修复以下 Arc Completion 审计：'.json_encode($input, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .1,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: $this->schema(),
                 promptVersion: self::PROMPT_VERSION,
                 metadata: [
@@ -62,11 +70,18 @@ final class ArcCompletionAuditRepairer
                     'novel_id' => $run->novel_id,
                     'chapter_id' => $run->chapter_id,
                     'stage' => 'arc_completion_repair',
+                    'repair_budget_tier' => 'initial',
                     'ai_request_log_id' => $logId,
                 ],
             );
             // Arc Completion 修复属于 Narrative Review 的一部分，不能绕过 Reviewer 容量合同。
-            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Reviewer, 'arc_completion_repair');
+            $this->outputCapacity->assertRequestFromMetadata(
+                $request,
+                AiStage::Reviewer,
+                'arc_completion_repair',
+                $budget,
+                $repairContract['tiers'],
+            );
             $response = $this->provider->generate($request);
             $repaired = data_get($response->structuredData, 'arc_completion_audits');
 

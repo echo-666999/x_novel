@@ -11,6 +11,7 @@ use App\Models\GenerationRun;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
+/** 将失去 Worker 心跳的可恢复阶段持久化为明确失败，并交给统一 Resume 流程。 */
 class StalledRunRecoveryService
 {
     public const ERROR_CODE = 'worker_lost';
@@ -19,6 +20,7 @@ class StalledRunRecoveryService
         GenerationStage::ChapterPlanning,
         GenerationStage::SceneGeneration,
         GenerationStage::ChapterAssembly,
+        GenerationStage::CoverageJudgment,
         GenerationStage::EventExtraction,
         GenerationStage::Review,
         GenerationStage::Rewrite,

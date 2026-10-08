@@ -283,7 +283,7 @@ Scene 字数压缩或扩写       → rewrite
 
 - 正文首试和正文重试继续使用各自 Scene 输出预算。
 - Coverage 和结构修复只返回小型 JSON，不得继承正文的 12,000/16,000 Token 预算。初始默认保持 1,000 Token，第二次定向重试从当前 4,000 收紧为 2,000 Token；真实回归证明不足时再单独调整。
-- 字数压缩或扩写使用独立的 `scene_length_repair_max_output_tokens`，初始默认 4,000 Token，不得继承正文重试预算。
+- 字数压缩或扩写使用 `chapter_repair_request_budgets.rewrite.length_repair` 的独立分档，初始默认 4,000 可见输出加 8,000 推理预留，不得继承正文重试预算。
 - Provider 不支持统一推理程度参数时，后台和日志明确显示“不适用/未发送”，不得显示为已生效。
 - 不通过删除 Hard Constraints、Current State、Ending Contract 或必须内容来缩短耗时。
 
@@ -650,7 +650,7 @@ php artisan test
 - Scene 正文继续解析 `writer` 路由。
 - `PlanCoverageEvidenceRepairer`、`SceneDraftStructureRepairer` 和伏笔 Coverage 证据修复改为解析 `extractor` 路由。
 - Scene 字数压缩或扩写改为解析 `rewrite` 路由。
-- 给字数修复增加独立配置 `scene_length_repair_max_output_tokens=4000`；不得继续传入 Scene 正文首试或重试预算。
+- 给字数修复增加独立的可见输出、推理预留和总完成预算分档；不得继续传入 Scene 正文首试或重试预算。
 - 保留 Coverage/结构修复首次 1,000 Token 预算，将对应的第二次重试预算默认收紧为 2,000 Token，并按目标模型实际输出验证；Token 截断只能触发一次有上限的定向重试。
 - 每次请求的实际 Provider、Model、Reasoning Effort、Max Tokens、Prompt Version 和子阶段名称进入日志及 Usage 关联信息。
 - DeepSeek 不支持当前统一推理程度字段时，不发送伪造参数；设置页面和 Run Inspector 显示该 Provider 的实际支持状态。
@@ -940,6 +940,13 @@ GFO-007
 - Run #414 的 12,000 completion Token 中有 8,796 被 reasoning 使用，结构化 JSON 在正文和 Coverage 尚未闭合时截断。Rewrite 三级预算调整为 `16,000 / 20,000 / 24,000`；保持原有 24,000 最高上限和三级熔断，避免扩大无界输出风险。
 - Run #415 完整返回三条 Coverage，但把数据库 Scene ID `43 / 44 / 45` 写成章内 sequence `1 / 2 / 3`。共享 Assembly Payload 校验现在只在完整数组严格等于冻结 Scene sequence 顺序时执行一一映射；乱序、重复、部分混用、跨章和无法解析引用仍然拒绝。
 - Rewrite Prompt 升级为 `rewrite-v14+natural-prose-v1`，明确 scene_coverage 必须复制数据库 Scene ID。本次未重放 #414/#415，未发起真实 AI 请求，也未修改 Canonical Story State。针对性测试 `60 passed / 280 assertions`；最终全量测试 `998 passed / 6020 assertions / 27 skipped / 1 warning`，测试工具未返回 warning 明细。
+
+**Admission v1 Rewrite End-to-End Regression（2026-10-08）**
+
+- 新增从章节页“执行局部重写”开始的完整回归：旧 Coverage Review 先进入 Coverage Judgment，再依次经过旧稿 Event Extraction、State Patch、新 Review、局部 Rewrite、确定性 Assembly、新稿 Event Extraction、State Patch 和最终 PASS Review。
+- 回归同时验证恢复过程不派发 Planner/Writer，旧 Admission 与历史失败 Run 不被改写，五个真实 Provider Run 均引用同一个 `chapter_recovery` 冻结合同，最终 Event Candidate 与 State Patch 指向新 Chapter Draft，且不产生 `failed_jobs`。
+- 108 Beat 查询数回归的两次测量统一改用全新的 Batch 模型实例，排除 Eloquent 关系缓存造成的基线波动；连续三次单测均通过。
+- 本次使用 Fake Provider 和假队列，未调用真实 AI Provider，未修改现有小说、章节或 Canonical 数据。相关回归 `24 passed / 354 assertions`；沙箱外最终全量测试 `1231 tests / 1204 passed / 27 skipped / 7804 assertions / 2 warnings / 0 failures`，测试工具未返回 warning 明细。
 
 每次只实施一个 `GFO-XXX`。开始前必须重新检查代码、数据库、依赖状态和工作区未提交修改。任务完成后记录：
 

@@ -333,6 +333,8 @@ Scene Generation
     ↓
 Laravel Deterministic Assembly
     ↓
+Coverage Judgment（存在计划 Coverage Finding 时）
+    ↓
 Event Extraction + State Validation
     ↓
 Compact Narrative Review
@@ -1506,6 +1508,8 @@ Scene 临时接受
    ↓
 Laravel 按顺序确定性 Assembly
    ↓
+Coverage Judgment（存在计划 Coverage Finding 时）
+   ↓
 Event Extraction / State Validation
    ↓
 Compact Narrative Review
@@ -1591,7 +1595,7 @@ Scene
 
 不可提交。
 
-Review 调用前由 Laravel 确定性检查字数、Scene 顺序、Artifact Lineage、State Version、Locked Facts、Outline/Beat/Milestone/Handoff 身份、Coverage 和逐字 Evidence。模型只返回七维分数、紧凑语义审计和可执行 Findings，不重复生成权威 ID、顺序或完整 Coverage。`findings` 是语义问题集合的权威来源，最终 Decision 由 Laravel 合并确定性 Findings、分数和 Rewrite 预算后派生。
+Review 调用前由 Laravel 确定性检查字数、Scene 顺序、Artifact Lineage、State Version、Locked Facts、Outline/Beat/Milestone/Handoff 身份、Coverage 和逐字 Evidence。Writer/Assembly 的 Coverage 是结构化自报，不得直接作为 Rewrite 事实；存在 `missing`、`contradicted` 或证据修复耗尽时，必须先按 Scene 创建独立 Coverage Judgment Run/Artifact。只有 Judgment 确认的缺失或反转才能成为 Rewrite 来源，Judgment 技术失败必须停止推进并显示失败 Run。模型只返回七维分数、紧凑语义审计和可执行 Findings，不重复生成权威 ID、顺序或完整 Coverage。`findings` 是语义问题集合的权威来源，最终 Decision 由 Laravel 合并确定性 Findings、分数和 Rewrite 预算后派生。
 
 每个 Review Job 最多一次模型请求。状态声称有问题但没有 Finding 等 Schema/Evidence 修复必须作为具有独立 Input Hash、Run 和 Artifact 的子阶段执行，不得在 Review Job 内循环调用；失败进入 NEEDS_ATTENTION 并保留 `ai_request_log_id`。
 
@@ -1862,9 +1866,15 @@ Chapter Plan
 
 章节技术 Retry 和 Resume 必须复用失败 Run 或 Plan Admission 已冻结的 Provider、Model、推理程度、Prompt Version、模型容量与分档请求预算；后台配置变化不得改变同一恢复链。Provider 配置失败或冻结最高档的推理耗尽、可见输出截断、完成预算耗尽不得 Resume，必须修复配置后显式重建章节来源链。运行详情必须把冻结路由、静态容量、本次预算档位与触发原因、容量门禁快照、Provider 实际发送参数、`reasoning_tokens`、`finish_reason` 和完成预算分类分开显示。
 
-历史 Admission v1 已经完成 Planner、Scene 和 Chapter Draft 时，允许使用显式“恢复事件提取（旧合同）”动作建立新的事件提取来源链。该动作不得修改旧 Plan Admission，不得重新请求 Planner 或 Writer；它必须先创建 `queued` Generation Run，冻结当前 Extractor 的 Provider、Model、Reasoning Effort、Prompt Version、模型容量与三档请求预算，再派发 Event Extraction Job。Worker 必须核对 Plan、Admission 快照、Scene 当前 Artifact、Chapter Draft、Bible Version 和 Canonical State Version 与恢复合同一致；任一来源变化时在 Provider 请求前失败。
+历史 Admission v1 已经完成 Planner、Scene 和 Chapter Draft 时，允许使用显式“恢复章节流程（Admission v1）”动作建立完整下游来源链。该动作不得修改旧 Plan Admission，不得重新请求 Planner 或 Writer；它必须创建零 Provider 的 `chapter_recovery` Generation Run 和不可变 Context Artifact，一次冻结当前 Extractor、Reviewer、Rewrite、Summary 的 Provider、Model、Reasoning Effort、Prompt Version、模型容量、主请求预算与修复子阶段预算。合同成功落库后只能由统一推进器从真实节点选择 Coverage Judgment、Event Extraction、Review、Rewrite 或确定性 Assembly；每个实际 Provider Run 必须复制恢复合同 ID 与自身阶段路由。执行前必须核对 Plan、Admission 快照、冻结 Chapter Draft、Scene 来源链、Bible Version 和 Canonical State Version；局部 Rewrite 只允许产生可追溯到同一合同的新 Scene Artifact，Canonical Commit 后 Summary 继续使用同一合同。任一来源变化时在 Provider 请求前失败。
 
-章节工作台的“提取事件 / 重新提取事件”常规动作必须在设置队列标记和派发 Job 前同步预检 Extractor 冻结合同。旧 Admission、Provider Route 不完整、模型容量缺失、三档预算无效或预算超过冻结容量时，页面直接显示具体错误码与修复方向，并保持零 Job 派发；Admission v1 应引导使用独立的旧合同恢复动作。
+审校页面只提供一个“执行局部重写”入口，目标 Paragraph / Scene 必须由当前 Review 保存的 `rewrite_scope` 决定，页面不得让用户任选 Scene，也不得提供会被误解为整章 Provider Rewrite 的按钮。点击入口后先同步验证当前 Draft、Review、Rewrite 次数与冻结合同：Admission v1 自动创建或复用完整恢复合同；旧 Coverage Review 先解除其遗留阻塞并进入 Coverage Judgment / 新 Review；只有当前 Review 已覆盖最新 Judgment 且范围可安全解析时才派发 Rewrite。`NEEDS_ATTENTION` 不得通过该入口自动重写。确定性预检失败必须直接显示具体原因，不得先提示已经加入队列。
+
+章节工作台的“提取事件 / 重新提取事件”常规动作必须在设置队列标记和派发 Job 前同步预检 Extractor 冻结合同。旧 Admission、Provider Route 不完整、模型容量缺失、三档预算无效或预算超过冻结容量时，页面直接显示具体错误码与修复方向，并保持零 Job 派发；Admission v1 应引导使用独立的完整章节恢复动作。
+
+运行详情必须单独显示 `route_contract_source`、恢复合同 Run ID、冻结来源 Artifact、实际 Provider 请求数；`chapter_recovery` Run 还必须从不可变 Context Artifact 展示 Extractor、Reviewer、Rewrite、Summary 四条完整冻结路由。章节时间轴把恢复合同作为独立的零 Provider 阶段展示，不能混入普通 Context 节点。恢复合同落库成功但后续推进失败时，使用统一 `progression_failure` 结构记录原始错误码、分类、可重试性、推荐动作和发生次数。
+
+完成预算分类不能只根据“是否已经出现少量可见内容”判断。Provider 返回 `finish_reason=length` 时，事件提取阶段必须把实际 `reasoning_tokens` 与本档冻结推理预留比较：推理消耗超过预留并挤占可见输出时归类为 `reasoning_budget_exhausted`；推理未超过预留但结构化结果仍不完整时才归类为 `visible_output_truncated`。Usage 同时保留 Provider 原始分类和结合冻结合同后的权威分类。
 
 ---
 
@@ -2115,6 +2125,8 @@ Laravel 按 Stage 已解析并冻结到 Generation Run 的 Provider 进行固定
 OpenAI 严格结构化输出在发出请求前必须递归校验 Schema：根节点为 object、每个 object 设置 `additionalProperties=false`，且 `required` 完整覆盖 `properties`。Provider 成功响应仍按同一 Schema 本地复验；非法 JSON、Schema 不匹配、拒绝和 Token 截断必须使用不同错误码。`finish_reason=length` 不能单独证明可见输出被截断：有部分可见内容时分类为 `visible_output_truncated`，没有可见内容且 `reasoning_tokens>0` 时分类为 `reasoning_budget_exhausted`，证据不足时分类为 `completion_budget_exhausted`，不得猜测。章节阶段只有在下一档分别增加可见输出额度、推理预留或总完成预算时，才允许对应分类进入 Queue Retry；普通临时故障沿用当前档，最高档耗尽立即终止。DeepSeek Route 显式冻结推理程度时必须发送并记录实际 `reasoning_effort`，留空时采用 Provider 默认行为。HTTP 4xx 应保留经过脱敏和长度限制的 Provider 原始错误原因，便于从 Generation Run 直接定位参数或 Schema 问题。Embedding 响应必须验证向量为数值列表且维度与请求一致。
 
 章节 Provider Stage 的预算键固定为 `planner`、`writer`、`extractor`、`reviewer`、`rewrite`、`summary`。除当前仅有 `initial` 档的 `reviewer` 外，其余阶段使用 `initial / retry / final` 冻结档位；环境变量中的 `*_MAX_OUTPUT_TOKENS` 表示可见输出额度，`*_REASONING_RESERVE_TOKENS` 表示隐藏推理预留。确定性的 Chapter Assembly 不读取模型路由或 Token 环境变量，也不得创建 Provider 请求或 Usage。
+
+会实际调用 Provider 的修复子阶段必须拥有独立预算合同，当前包括 Scene 辅助字段、计划 Coverage 证据、伏笔 Coverage 证据、Event Evidence、Coverage Judgment、Review Schema、Arc Completion 和 Scene 字数修复。每一档都同时冻结 `output_tokens`、`reasoning_reserve_tokens` 与两者之和 `max_completion_tokens`；不得以一个整数、父阶段最大预算或模型静态容量代替。修复合同随 Plan Admission Route 进入 Input Hash，Run 再冻结本次可用分档和所选档位；Resume 读取 Run/Admission 冻结值，只有新 Plan Admission 才读取新配置。Provider 请求必须精确等于所选总完成预算，运行详情必须记录子阶段、输出额度、推理预留和实际总预算。预算缺失、结构无效或超过模型容量时，在 Provider 请求前失败。
 
 ---
 

@@ -31,6 +31,7 @@ use App\Services\ContextBuilder;
 use App\Services\DraftLengthPolicy;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationOutputCapacityGuard;
+use App\Services\GenerationRequestBudget;
 use App\Services\PlanAdmissionService;
 use App\Services\SceneLengthRepairer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -354,6 +355,12 @@ test('targeted scene length repair creates a new current scene artifact within f
             'request_budgets' => [
                 'initial' => ['output_tokens' => 16_000, 'reasoning_reserve_tokens' => 0, 'max_completion_tokens' => 16_000],
             ],
+            // 独立 Scene 字数修复必须有自己的输出与推理预算。
+            'repair_request_budgets' => [
+                'length_repair' => [
+                    'initial' => ['output_tokens' => 4_000, 'reasoning_reserve_tokens' => 8_000, 'max_completion_tokens' => 12_000],
+                ],
+            ],
         ]],
     ]]);
     $admission = Mockery::mock(PlanAdmissionService::class);
@@ -373,6 +380,7 @@ test('targeted scene length repair creates a new current scene artifact within f
         app(DraftLengthPolicy::class),
         app(GenerationFailurePolicy::class),
         app(GenerationOutputCapacityGuard::class),
+        app(GenerationRequestBudget::class),
     );
 
     $artifact = $repairer->repair(

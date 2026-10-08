@@ -6,6 +6,7 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\AI\UsageRecorder;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -772,9 +773,9 @@ test('extractor repairs invalid event quotes without changing the event', functi
         ->and(data_get($artifact?->data, 'events.0.evidence.0.quote'))->toBe('林舟终于抵达洛阳城下。')
         ->and($fake->requests())->toHaveCount(3)
         ->and($fake->requests()[1]->promptVersion)->toBe('event-evidence-repair-v1')
-        ->and($fake->requests()[1]->maxTokens)->toBe(1_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(9_000)
         ->and(data_get($fake->requests()[1]->metadata, 'event_evidence_repair_attempt'))->toBe(1)
-        ->and($fake->requests()[2]->maxTokens)->toBe(4_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(20_000)
         ->and(data_get($fake->requests()[2]->metadata, 'event_evidence_repair_attempt'))->toBe(2)
         ->and(data_get($fake->requests()[2]->metadata, 'event_index'))->toBe(0);
 });
@@ -926,6 +927,60 @@ test('event extraction increases frozen output budgets and stops before a fourth
     expect($fake->requests())->toHaveCount(3)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->error_code)
         ->toBe('event_output_truncated');
+});
+
+test('event extraction reclassifies partial output as reasoning exhaustion from actual usage', function () {
+    config()->set('generation.chapter_request_budgets.extractor', [
+        'initial' => ['output_tokens' => 100, 'reasoning_reserve_tokens' => 100],
+        'retry' => ['output_tokens' => 200, 'reasoning_reserve_tokens' => 300],
+        'final' => ['output_tokens' => 300, 'reasoning_reserve_tokens' => 500],
+    ]);
+    $fixture = eventExtractionFixture();
+    $response = new AiResponse(
+        content: '{"events":[',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 200,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'reasoning-dominated-event',
+        model: 'extractor-test',
+        metadata: [
+            'finish_reason' => 'length',
+            'completion_limit_reason' => 'visible_output_truncated',
+        ],
+        reasoningTokens: 190,
+    );
+    app()->instance(AiProvider::class, new class($response) implements AiProvider
+    {
+        public function __construct(private readonly AiResponse $response) {}
+
+        public function generate(AiRequest $request): AiResponse
+        {
+            // 模拟真实 Tracking Provider 先写 Usage，再由阶段合同完成二次分类。
+            app(UsageRecorder::class)->record($request, $this->response);
+
+            return $this->response;
+        }
+    });
+
+    try {
+        app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+        $this->fail('Expected reasoning-dominated completion exhaustion.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('event_reasoning_budget_exhausted')
+            ->and($exception->retryable)->toBeTrue()
+            ->and($exception->getMessage())->toContain('实际推理消耗 190 Token');
+    }
+
+    $run = $fixture['chapter']->generationRuns()
+        ->where('stage', GenerationStage::EventExtraction)
+        ->latest('id')
+        ->firstOrFail();
+    $usage = $run->usageRecords()->sole();
+    expect($run->error_code)->toBe('event_reasoning_budget_exhausted')
+        ->and(data_get($usage->request_metadata, 'provider_completion_limit_reason'))->toBe('visible_output_truncated')
+        ->and(data_get($usage->request_metadata, 'completion_limit_reason'))->toBe('reasoning_budget_exhausted');
 });
 
 test('stale event extraction run is marked interrupted before recovery', function () {

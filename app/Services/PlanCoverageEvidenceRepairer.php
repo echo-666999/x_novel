@@ -7,6 +7,7 @@ use App\AI\Data\AiRequest;
 use App\Enums\AiStage;
 use Illuminate\Validation\ValidationException;
 
+/** 仅校正计划 Coverage 逐字证据，并按父 Run 冻结的修复预算发送请求。 */
 final class PlanCoverageEvidenceRepairer
 {
     public const PROMPT_VERSION = 'coverage-evidence-repair-v1';
@@ -25,7 +26,14 @@ final class PlanCoverageEvidenceRepairer
     {
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
             $tier = $attempt === 1 ? 'initial' : 'retry';
-            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "coverage_evidence.{$tier}");
+            // 证据修复的可见输出与推理预留必须作为一个不可拆分的档位读取。
+            $repairContract = $this->outputCapacity->frozenRepairBudgetFromMetadata(
+                $metadata,
+                $stage,
+                'coverage_evidence',
+                $tier,
+            );
+            $budget = $repairContract['budget'];
             $beforeRequest?->__invoke('coverage_evidence_repair', $provider);
             $request = new AiRequest(
                 model: $model,
@@ -38,13 +46,19 @@ final class PlanCoverageEvidenceRepairer
                     'coverage' => $coverage,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: PlanCoverage::schema(),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'stage' => $stage->value, 'substage' => 'coverage_evidence_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
+                metadata: [...$metadata, 'stage' => $stage->value, 'substage' => 'coverage_evidence_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path, 'repair_budget_tier' => $tier],
             );
             // Coverage 修复也是独立 Provider 请求，必须复用所属主阶段的冻结容量合同。
-            $this->outputCapacity->assertRequestFromMetadata($request, $stage, 'coverage_evidence_repair');
+            $this->outputCapacity->assertRequestFromMetadata(
+                $request,
+                $stage,
+                'coverage_evidence_repair',
+                $budget,
+                $repairContract['tiers'],
+            );
             $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 

@@ -340,7 +340,10 @@ test('arc completion repair retries a previously failed provider request instead
     $firstRun->update([
         'provider' => $route['provider'],
         'model_policy' => $route['model'],
-        'context_snapshot' => ['generation_preferences' => ['repair_budgets' => ['arc_completion' => 1_000]]],
+        'context_snapshot' => ['generation_preferences' => [
+            // 历史失败与新尝试必须共享同一份三元组预算，才能验证失败 Artifact 不会被复用。
+            'repair_request_budgets' => ['arc_completion' => data_get($route, 'repair_request_budgets.arc_completion')],
+        ]],
     ]);
     $secondRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
         'scope_type' => 'chapter',
@@ -349,7 +352,9 @@ test('arc completion repair retries a previously failed provider request instead
         'status' => RunStatus::Running,
         'provider' => $route['provider'],
         'model_policy' => $route['model'],
-        'context_snapshot' => ['generation_preferences' => ['repair_budgets' => ['arc_completion' => 1_000]]],
+        'context_snapshot' => ['generation_preferences' => [
+            'repair_request_budgets' => ['arc_completion' => data_get($route, 'repair_request_budgets.arc_completion')],
+        ]],
     ]);
     $contract = [[
         'arc_id' => 1,

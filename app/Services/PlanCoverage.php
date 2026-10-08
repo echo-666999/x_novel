@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Illuminate\Validation\ValidationException;
 
+/** 统一校验 Scene Plan Coverage，并将技术证据问题与语义缺失分开表达。 */
 final class PlanCoverage
 {
     public const ELEMENTS = ['goal', 'conflict', 'turn', 'outcome'];
@@ -78,7 +79,7 @@ final class PlanCoverage
     }
 
     /**
-     * Keep statuses that have verifiable evidence and conservatively mark unverifiable claims as missing.
+     * 将无法验证逐字证据的声明降级为可持久化的 missing，语义是否缺失交给后续 Coverage Judgment 判定。
      *
      * @param  array<string, mixed>  $coverage
      * @return array<string, array{status: string, evidence: string|null}>
@@ -121,6 +122,31 @@ final class PlanCoverage
     }
 
     /**
+     * 记录因证据修复耗尽而被技术性降级的元素，避免把它们误当成正文语义缺失。
+     *
+     * @param  array<string, mixed>  $reported
+     * @param  array<string, mixed>  $persisted
+     * @return array<int, array{element: string, reported_status: string, reported_evidence: string|null}>
+     */
+    public static function unverifiedElements(array $reported, array $persisted): array
+    {
+        return collect(self::ELEMENTS)
+            ->filter(function (string $element) use ($reported, $persisted): bool {
+                return in_array(data_get($reported, "{$element}.status"), ['fulfilled', 'contradicted'], true)
+                    && data_get($persisted, "{$element}.status") === 'missing';
+            })
+            ->map(fn (string $element): array => [
+                'element' => $element,
+                'reported_status' => (string) data_get($reported, "{$element}.status"),
+                'reported_evidence' => is_string(data_get($reported, "{$element}.evidence"))
+                    ? data_get($reported, "{$element}.evidence")
+                    : null,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param  array<string, mixed>  $scene
      * @param  array<string, mixed>  $scenePlan
      * @return array<string, mixed>
@@ -142,9 +168,10 @@ final class PlanCoverage
     /**
      * @param  array<string, array{status: string, evidence: string|null}>  $coverage
      * @param  array<string, mixed>  $expectations
+     * @param  array<int, array<string, mixed>>  $unverifiedElements
      * @return array<int, array<string, mixed>>
      */
-    public static function findings(int $sceneId, array $coverage, array $expectations, string $phase): array
+    public static function findings(int $sceneId, array $coverage, array $expectations, string $phase, array $unverifiedElements = []): array
     {
         $labels = [
             'goal' => '目标',
@@ -155,8 +182,31 @@ final class PlanCoverage
 
         return collect(self::ELEMENTS)
             ->filter(fn (string $element): bool => $coverage[$element]['status'] !== 'fulfilled')
-            ->map(function (string $element) use ($sceneId, $coverage, $expectations, $phase, $labels): array {
+            ->map(function (string $element) use ($sceneId, $coverage, $expectations, $phase, $labels, $unverifiedElements): array {
                 $status = $coverage[$element]['status'];
+                $unverified = collect($unverifiedElements)->first(
+                    fn (mixed $item): bool => is_array($item) && ($item['element'] ?? null) === $element,
+                );
+
+                // 证据修复失败只说明引用不可验证，不能直接证明正文没有完成计划。
+                if (is_array($unverified)) {
+                    return [
+                        'code' => 'SCENE_PLAN_COVERAGE_EVIDENCE_UNVERIFIED',
+                        'dimension' => 'plan',
+                        'severity' => 'ambiguous',
+                        'scene_id' => $sceneId,
+                        'scope' => 'scene',
+                        'auto_fixable' => false,
+                        'requires_human_decision' => false,
+                        'plan_element' => $element,
+                        'coverage_status' => 'unverified',
+                        'reported_status' => $unverified['reported_status'] ?? null,
+                        'expected' => $expectations[$element] ?? null,
+                        'evidence' => null,
+                        'message' => '场景计划的'.$labels[$element].'已被模型声明完成，但证据修复耗尽，必须先完成独立语义复核。',
+                        'source' => $phase,
+                    ];
+                }
 
                 return [
                     'code' => $status === 'missing'

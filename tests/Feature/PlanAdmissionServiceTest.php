@@ -4,6 +4,7 @@ use App\Actions\Chapters\InvalidateChapterPlanDownstreamAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Story\InitializeNovelStateAction;
+use App\AI\AiSettingsResolver;
 use App\AI\Contracts\AiProvider;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
@@ -114,6 +115,12 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.max_completion_tokens'))->toBe(24_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.reasoning_reserve_tokens'))->toBe(24_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.max_completion_tokens'))->toBe(36_000)
+        // 修复子阶段必须独立冻结输出、推理预留和 Provider 总完成预算。
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.repair_request_budgets.event_evidence.initial.output_tokens'))->toBe(1_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.repair_request_budgets.event_evidence.initial.reasoning_reserve_tokens'))->toBe(8_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.repair_request_budgets.event_evidence.initial.max_completion_tokens'))->toBe(9_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.reviewer.repair_request_budgets.coverage_judgment.retry.max_completion_tokens'))->toBe(19_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.rewrite.repair_request_budgets.length_repair.retry.max_completion_tokens'))->toBe(24_000)
         // Admission 必须冻结最高档 12k 可见输出与 24k 推理预留的总完成预算，避免运行时重新读取配置。
         ->and(data_get($admitted->admission_snapshot, 'capacity.event_extraction.max_completion_tokens'))->toBe(36_000)
         ->and(data_get($admitted->admission_snapshot, 'capacity.rewrite.max_completion_tokens'))->toBeGreaterThan(0)
@@ -251,6 +258,30 @@ test('plan admission rejects a configured request budget above the selected mode
 
     expect(fn () => app(PlanAdmissionService::class)->prepare($plan))
         ->toThrow(ValidationException::class, '[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY]');
+});
+
+test('plan admission rejects a repair budget above its selected model capacity before provider use', function () {
+    $plan = admissionReadyPlan();
+    $settings = app(AiSettingsResolver::class)->resolve(AiStage::Reviewer, $plan->chapter->novel);
+    AIModelPrice::query()
+        ->where('provider', $settings->provider)
+        ->where('model', $settings->model)
+        ->update(['context_window_tokens' => 16_000, 'max_output_tokens' => 16_000]);
+
+    // Reviewer 主请求为 12k，只有 Coverage Judgment retry 的 19k 会越过模型容量。
+    expect(fn () => app(PlanAdmissionService::class)->prepare($plan))
+        ->toThrow(ValidationException::class, '[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY]');
+});
+
+test('plan admission rejects an invalid repair budget without calling a provider', function () {
+    $plan = admissionReadyPlan();
+    $provider = new FakeAiProvider;
+    app()->instance(AiProvider::class, $provider);
+    config()->set('generation.chapter_repair_request_budgets.reviewer.coverage_judgment.initial.output_tokens', 0);
+
+    expect(fn () => app(PlanAdmissionService::class)->prepare($plan))
+        ->toThrow(ValidationException::class, '[REQUEST_BUDGET_INVALID]');
+    expect($provider->requests())->toBe([]);
 });
 
 test('capacity guard accounts for the estimated input against the frozen context window', function () {

@@ -40,8 +40,10 @@ class ChapterReviewer
 
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
-    public function __construct(private readonly AiProvider $provider, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget) {}
+    /** 注入 Narrative Review 依赖；Coverage 自报 Finding 必须先经过独立 Judgment 解析。 */
+    public function __construct(private readonly AiProvider $provider, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget, private readonly PlanCoverageJudgmentRepairer $coverageJudgment, private readonly ChapterStageRouteResolver $routeResolver) {}
 
+    /** 执行章节审校；技术性 Coverage 失败不得直接进入确定性 REWRITE。 */
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
     {
         $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan', 'scenes'])->findOrFail($chapterId);
@@ -69,6 +71,7 @@ class ChapterReviewer
             ->filter(fn (mixed $finding): bool => is_array($finding))
             ->values()
             ->all();
+        $planFindings = $this->coverageJudgment->resolveFindings($chapter, $draft, $planFindings);
         $repairVerification = $this->repairVerification($chapter, $draft);
         $context = [
             'chapter_id' => $chapter->getKey(),
@@ -99,6 +102,20 @@ class ChapterReviewer
         }
         $this->assertDeterministicDraftContract($chapter, $draft, (int) $context['state_version']);
 
+        // 即使确定性检查直接给出结论，也要先验证恢复来源并把合同身份写入 Run，避免旧 Review 混回 v1 路由。
+        $resolvedRoute = $this->routeResolver->resolve($chapter, AiStage::Reviewer, $draft);
+        $settings = $resolvedRoute['settings'];
+        $promptVersion = $resolvedRoute['prompt_version'];
+        $reviewerRoute = $resolvedRoute['route'];
+        $context['prompt_version'] = $promptVersion;
+        $context['generation_preferences'] = $this->routeResolver->generationPreferences($resolvedRoute);
+        $context['generation_preferences']['repair_request_budgets'] = collect($reviewerRoute['repair_request_budgets'])
+            ->only(['review_schema', 'arc_completion'])
+            ->all();
+        $context['generation_preferences']['review_token_budget'] = [
+            'context_token_budget' => (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.context_token_budget', config('generation.review_context_token_budget', 32_000)),
+        ];
+
         $deterministicFindings = [
             ...array_map(fn (array $finding): array => $this->normalizeStateFinding($finding), $context['state_findings']),
             ...($lengthCheck['status'] === 'within_range' ? [] : [$this->lengthFinding($lengthCheck)]),
@@ -112,28 +129,6 @@ class ChapterReviewer
             return $review;
         }
 
-        $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Reviewer);
-        $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Reviewer);
-        $context['prompt_version'] = $promptVersion;
-        $reviewerRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Reviewer);
-        $context['generation_preferences']['model_capacity'] = $reviewerRoute['model_capacity'];
-        $context['generation_preferences']['request_budgets'] = $reviewerRoute['request_budgets'];
-        // 历史 Run 必须能独立说明当时的 Route，不能用当前设置补写推理程度。
-        $context['generation_preferences']['frozen_route'] = [
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'source' => $settings->source,
-            'prompt_version' => $promptVersion,
-        ];
-        $context['generation_preferences']['repair_budgets'] = [
-            'coverage_judgment' => (int) config('generation.coverage_judgment_repair_max_output_tokens', 1_500),
-            'review_schema' => (int) config('generation.review_schema_repair_max_output_tokens', 1_500),
-            'arc_completion' => (int) config('generation.arc_completion_repair_max_output_tokens', 1_000),
-        ];
-        $context['generation_preferences']['review_token_budget'] = [
-            'context_token_budget' => (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.context_token_budget', config('generation.review_context_token_budget', 32_000)),
-        ];
         $reviewOperationId = $regenerate ? $operationId : null;
         $input = [
             'context' => $context,
@@ -150,7 +145,9 @@ class ChapterReviewer
             upstreamChecksums: [$draft->checksum],
             contractVersion: $promptVersion,
         );
-        $baseKey = "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}";
+        $recoveryContractId = (int) data_get($context, 'generation_preferences.recovery_contract_run_id', 0);
+        $baseKey = "review:{$draft->checksum}:{$context['state_version']}:{$promptVersion}".
+            ($recoveryContractId > 0 ? ":recovery:{$recoveryContractId}" : '');
         [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate, $reviewOperationId);
         if ($reused) {
             return $run->review;
@@ -301,7 +298,12 @@ class ChapterReviewer
                 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded, 'attempt' => (int) $chapter->generationRuns()->where('stage', GenerationStage::Review)->max('attempt') + 1,
                 'idempotency_key' => $key, 'input_hash' => $hash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'],
                 'prompt_version' => 'deterministic-review-preflight-v1', 'provider' => 'deterministic', 'model_policy' => 'deterministic',
-                'context_snapshot' => ['source_artifact_id' => $draft->getKey(), 'semantic_review_performed' => false], 'started_at' => now(), 'finished_at' => now(),
+                'context_snapshot' => [
+                    'source_artifact_id' => $draft->getKey(),
+                    'semantic_review_performed' => false,
+                    // 确定性 Review 也保留恢复合同身份，后续 Rewrite 才能解释来源链。
+                    'generation_preferences' => $context['generation_preferences'] ?? [],
+                ], 'started_at' => now(), 'finished_at' => now(),
             ]);
             $scores = array_fill_keys(self::DIMENSIONS, 100);
             $data = [

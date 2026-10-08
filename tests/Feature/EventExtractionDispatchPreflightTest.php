@@ -99,6 +99,20 @@ test('reextract preflight blocks missing extractor capacity before dispatching a
     Queue::assertNotPushed(ExtractStoryEventsJob::class);
 });
 
+test('reextract preflight blocks a missing event evidence repair budget before dispatching a job', function () {
+    Queue::fake();
+    $fixture = eventExtractionDispatchPreflightFixture();
+    $snapshot = $fixture['plan']->admission_snapshot;
+    data_forget($snapshot, 'routes.extractor.repair_request_budgets.event_evidence');
+    $fixture['plan']->update(['admission_snapshot' => $snapshot]);
+
+    expect(fn () => app(GenerationOutputCapacityGuard::class)
+        ->assertEventExtractionDispatchable($fixture['chapter']->fresh()))
+        ->toThrow(AiProviderException::class, '[REPAIR_REQUEST_BUDGET_INVALID]');
+
+    Queue::assertNotPushed(ExtractStoryEventsJob::class);
+});
+
 test('reextract preflight blocks invalid extractor budgets before dispatching a job', function () {
     Queue::fake();
     $fixture = eventExtractionDispatchPreflightFixture();

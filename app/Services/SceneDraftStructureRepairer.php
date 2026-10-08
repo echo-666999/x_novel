@@ -9,6 +9,7 @@ use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use Illuminate\Validation\ValidationException;
 
+/** 修复 Scene 的机器可读辅助字段，并拒绝使用父阶段预算替代子阶段合同。 */
 final class SceneDraftStructureRepairer
 {
     public const PROMPT_VERSION = 'scene-support-fields-repair-v1';
@@ -19,7 +20,7 @@ final class SceneDraftStructureRepairer
     ) {}
 
     /**
-     * Repair only the machine-readable support fields. The prose and Coverage stay unchanged.
+     * 只修复机器可读辅助字段，正文和 Coverage 必须保持不变。
      *
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $metadata
@@ -31,7 +32,14 @@ final class SceneDraftStructureRepairer
 
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_scene_structure_repair_attempts', 2); $attempt++) {
             $tier = $attempt === 1 ? 'initial' : 'retry';
-            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "scene_structure.{$tier}");
+            // 每次尝试读取对应冻结档位，避免 retry 仍使用 initial 总预算。
+            $repairContract = $this->outputCapacity->frozenRepairBudgetFromMetadata(
+                $metadata,
+                AiStage::Extractor,
+                'scene_structure',
+                $tier,
+            );
+            $budget = $repairContract['budget'];
             $beforeRequest?->__invoke('scene_structure_repair', $provider);
             $request = new AiRequest(
                 model: $model,
@@ -45,13 +53,19 @@ final class SceneDraftStructureRepairer
                     'declared_events' => $payload['declared_events'] ?? null,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.1,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: self::schema(),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'scene_structure_repair', 'scene_structure_repair_attempt' => $attempt],
+                metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'scene_structure_repair', 'scene_structure_repair_attempt' => $attempt, 'repair_budget_tier' => $tier],
             );
             // 辅助字段修复仍属于 Extractor 阶段，发送前必须经过相同容量门禁。
-            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Extractor, 'scene_structure_repair');
+            $this->outputCapacity->assertRequestFromMetadata(
+                $request,
+                AiStage::Extractor,
+                'scene_structure_repair',
+                $budget,
+                $repairContract['tiers'],
+            );
             $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 

@@ -9,6 +9,7 @@ use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use Illuminate\Validation\ValidationException;
 
+/** 校正 Story Event 的逐字证据，并按 Extractor Run 冻结的独立预算执行。 */
 final class StoryEventEvidenceRepairer
 {
     private const PROMPT_VERSION = 'event-evidence-repair-v1';
@@ -43,7 +44,14 @@ final class StoryEventEvidenceRepairer
 
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_event_evidence_repair_attempts', 2); $attempt++) {
             $tier = $attempt === 1 ? 'initial' : 'retry';
-            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "event_evidence.{$tier}");
+            // Event Evidence 的推理预留独立冻结，避免可见输出额度被隐藏推理全部挤占。
+            $repairContract = $this->outputCapacity->frozenRepairBudgetFromMetadata(
+                $metadata,
+                AiStage::Extractor,
+                'event_evidence',
+                $tier,
+            );
+            $budget = $repairContract['budget'];
             $beforeRequest?->__invoke('event_evidence_repair');
             $request = new AiRequest(
                 model: $model,
@@ -56,13 +64,19 @@ final class StoryEventEvidenceRepairer
                     'content' => $content,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: self::responseSchema(count($evidence)),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'event_evidence_repair_attempt' => $attempt, 'event_index' => $eventIndex],
+                metadata: [...$metadata, 'event_evidence_repair_attempt' => $attempt, 'event_index' => $eventIndex, 'repair_budget_tier' => $tier],
             );
             // Evidence 修复不得使用默认 Provider；它必须沿用 Extractor 的冻结 Route 与容量。
-            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Extractor, 'event_evidence_repair');
+            $this->outputCapacity->assertRequestFromMetadata(
+                $request,
+                AiStage::Extractor,
+                'event_evidence_repair',
+                $budget,
+                $repairContract['tiers'],
+            );
             $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 

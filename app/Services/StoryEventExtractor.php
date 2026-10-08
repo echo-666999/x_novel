@@ -34,9 +34,9 @@ class StoryEventExtractor
         private readonly ForeshadowingEventValidator $foreshadowingEventValidator,
         private readonly OutlineCompletionService $outlineCompletion,
         private readonly GenerationFailurePolicy $failurePolicy,
-        private readonly PlanAdmissionService $planAdmission,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly GenerationRequestBudget $requestBudget,
+        private readonly ChapterStageRouteResolver $routeResolver,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false, ?int $recoveryRunId = null): ?GenerationArtifact
@@ -77,11 +77,16 @@ class StoryEventExtractor
                 $promptVersion = (string) $extractorRoute['prompt_version'];
                 // 恢复 Run 的来源与路由合同必须进入 Stage 指纹，避免与旧 Admission v1 的失败链混用。
                 $context['recovery'] = data_get($recoveryRun->context_snapshot, 'recovery');
+                $generationPreferences = (array) data_get($recoveryRun->context_snapshot, 'generation_preferences', []);
             } else {
-                $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Extractor);
-                $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Extractor);
-                $extractorRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Extractor);
+                // Admission v1 必须从显式章节恢复 Artifact 读取路由；普通 Admission 继续读取 Plan 快照。
+                $resolvedRoute = $this->routeResolver->resolve($chapter, AiStage::Extractor, $draft);
+                $settings = $resolvedRoute['settings'];
+                $promptVersion = $resolvedRoute['prompt_version'];
+                $extractorRoute = $resolvedRoute['route'];
+                $generationPreferences = $this->routeResolver->generationPreferences($resolvedRoute);
             }
+            $context['generation_preferences'] = $generationPreferences;
             $context['generation_preferences']['model_capacity'] = $extractorRoute['model_capacity'];
             $context['generation_preferences']['request_budgets'] = $extractorRoute['request_budgets'];
             // Run 自身保存冻结路由，恢复和页面诊断都不再读取当前后台配置来猜测历史请求。
@@ -93,11 +98,12 @@ class StoryEventExtractor
                 'prompt_version' => $promptVersion,
             ];
             $context['generation_preferences']['route_contract_source'] = $recoveryRun === null
-                ? 'plan_admission'
+                ? ($generationPreferences['route_contract_source'] ?? 'plan_admission')
                 : GenerationOutputCapacityGuard::LEGACY_EVENT_RECOVERY_CONTRACT;
-            $context['generation_preferences']['repair_budgets'] = $recoveryRun === null
-                ? ['event_evidence' => ['initial' => (int) config('generation.event_evidence_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.event_evidence_repair_retry_max_output_tokens', 4_000)]]
-                : (array) data_get($recoveryRun->context_snapshot, 'generation_preferences.repair_budgets', []);
+            // 普通与旧合同恢复路径都必须读取已经冻结的 Event Evidence 三元组，不得重新解释当前配置。
+            $context['generation_preferences']['repair_request_budgets'] = $recoveryRun === null
+                ? collect($extractorRoute['repair_request_budgets'])->only(['event_evidence'])->all()
+                : (array) data_get($recoveryRun->context_snapshot, 'generation_preferences.repair_request_budgets', []);
             $inputHash = app(GenerationStageFingerprint::class)->make(
                 GenerationStage::EventExtraction,
                 $context,
@@ -105,8 +111,9 @@ class StoryEventExtractor
                 frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
                 contractVersion: $promptVersion,
             );
+            $chapterRecoveryId = (int) ($generationPreferences['recovery_contract_run_id'] ?? 0);
             $baseKey = $recoveryRun === null
-                ? "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}"
+                ? "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}".($chapterRecoveryId > 0 ? ":recovery:{$chapterRecoveryId}" : '')
                 : (string) data_get($recoveryRun->context_snapshot, 'recovery.base_key');
             if ($baseKey === '') {
                 throw new AiProviderException('extractor_recovery_contract_missing', '事件提取恢复 Run 缺少幂等链标识。', false);
@@ -135,6 +142,7 @@ class StoryEventExtractor
         }
 
         $budget = null;
+        $response = null;
         try {
             $budget = $this->resolveRequestBudget($run, $baseKey);
             $metadata = [
@@ -212,7 +220,9 @@ class StoryEventExtractor
                     'event',
                     'Story Event Extraction',
                     data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
+                    $response,
                 );
+                $this->recordCompletionLimitClassification($run, $exception);
             }
             $this->failRun($run, $exception);
 
@@ -809,6 +819,25 @@ class StoryEventExtractor
             $exception,
             $exception instanceof ValidationException ? 'event_validation_failed' : 'event_extraction_failed',
         );
+    }
+
+    private function recordCompletionLimitClassification(GenerationRun $run, AiProviderException $exception): void
+    {
+        $category = $this->requestBudget->completionLimitCategory($exception->errorCode);
+        if ($category === null) {
+            return;
+        }
+
+        $usage = $run->usageRecords()->latest('id')->first();
+        if ($usage === null || data_get($usage->request_metadata, 'finish_reason') !== 'length') {
+            return;
+        }
+
+        $metadata = $usage->request_metadata ?? [];
+        // 保留 Provider 的原始推断，同时记录结合冻结预算后的权威分类，页面不再把推理挤占误报成可见输出不足。
+        $metadata['provider_completion_limit_reason'] = $metadata['completion_limit_reason'] ?? null;
+        $metadata['completion_limit_reason'] = $category;
+        $usage->update(['request_metadata' => $metadata]);
     }
 
     /** @param array<string, mixed> $value @param array<int, string> $keys */

@@ -7,6 +7,7 @@ use App\AI\Data\AiRequest;
 use App\Enums\AiStage;
 use Illuminate\Validation\ValidationException;
 
+/** 只校正伏笔 Coverage 的逐字证据，并保持冻结身份与语义声明不变。 */
 final class ForeshadowingCoverageEvidenceRepairer
 {
     public const PROMPT_VERSION = 'foreshadowing-coverage-evidence-repair-v1';
@@ -37,7 +38,14 @@ final class ForeshadowingCoverageEvidenceRepairer
     ): array {
         for ($attempt = $startingAttempt; $attempt <= (int) config('generation.max_coverage_repair_attempts', 1); $attempt++) {
             $tier = $attempt === 1 ? 'initial' : 'retry';
-            $maxTokens = $this->outputCapacity->frozenSubstageMaxTokensFromMetadata($metadata, "foreshadowing_coverage.{$tier}");
+            // 伏笔证据修复必须使用自身的输出与推理预算，不能借用普通 Coverage 的整数上限。
+            $repairContract = $this->outputCapacity->frozenRepairBudgetFromMetadata(
+                $metadata,
+                AiStage::Extractor,
+                'foreshadowing_coverage',
+                $tier,
+            );
+            $budget = $repairContract['budget'];
             $beforeRequest?->__invoke('foreshadowing_coverage_repair', $provider);
             $request = new AiRequest(
                 model: $model,
@@ -50,15 +58,21 @@ final class ForeshadowingCoverageEvidenceRepairer
                     'coverage' => $coverage,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.2,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 // OpenAI strict Structured Outputs 要求根节点必须是 object，
                 // 因此用 coverage 包装领域层原本的数组结构。
                 responseSchema: self::responseSchema(),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'foreshadowing_coverage_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path],
+                metadata: [...$metadata, 'stage' => AiStage::Extractor->value, 'substage' => 'foreshadowing_coverage_repair', 'coverage_repair_attempt' => $attempt, 'coverage_path' => $path, 'repair_budget_tier' => $tier],
             );
             // 伏笔证据修复必须沿用 Extractor Route，不能退回运行时全局配置。
-            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Extractor, 'foreshadowing_coverage_repair');
+            $this->outputCapacity->assertRequestFromMetadata(
+                $request,
+                AiStage::Extractor,
+                'foreshadowing_coverage_repair',
+                $budget,
+                $repairContract['tiers'],
+            );
             $response = $this->provider->generate($request);
             $afterResponse?->__invoke($response->structuredData, $attempt);
 

@@ -2,14 +2,17 @@
 
 namespace App\Jobs;
 
+use App\Actions\Chapters\StartChapterRewriteAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
 use App\Exceptions\GenerationStageDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
+use App\Models\Chapter;
 use App\Services\AutoStopService;
 use App\Services\ChapterRewriter;
 use App\Services\GenerationFailurePolicy;
+use App\Services\GenerationProgressionFailureRecorder;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,6 +21,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
+/** 执行局部 Rewrite；发现旧 Coverage 误判来源时改由统一推进器先派发 Judgment。 */
 class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
@@ -45,6 +49,7 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
         return 'chapter:'.$this->chapterId;
     }
 
+    /** 执行一次 Rewrite Provider 调用或把旧 Review 安全退回 Coverage Judgment。 */
     public function handle(ChapterRewriter $rewriter, ?AdvanceChapterPipelineAction $advance = null): void
     {
         if ($this->stopWhenChapterWasDeleted($this->chapterId)) {
@@ -76,6 +81,23 @@ class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
 
             return;
         } catch (AiProviderException $exception) {
+            if ($exception->errorCode === 'coverage_judgment_required') {
+                // 已经排队的旧 Rewrite Job 也必须走同一领域入口，先解除旧 Coverage Block 并恢复正确流程。
+                $this->releaseGenerationDispatch();
+                try {
+                    app(StartChapterRewriteAction::class)->handle(Chapter::query()->findOrFail($this->chapterId));
+                } catch (Throwable $progressionException) {
+                    // Rewrite Run 尚未创建时，把失败挂到成功 Review，页面仍能看到真实阻断原因。
+                    app(GenerationProgressionFailureRecorder::class)->record(
+                        GenerationStage::Review,
+                        $this->chapterId,
+                        $progressionException,
+                    );
+                    $this->fail($progressionException);
+                }
+
+                return;
+            }
             $policy = app(GenerationFailurePolicy::class);
             if ($policy->shouldQueueRetry($exception, GenerationStage::Rewrite)) {
                 throw $exception;

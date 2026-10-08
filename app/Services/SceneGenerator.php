@@ -102,6 +102,8 @@ class SceneGenerator
             ...$this->sceneAllocation($scene, (int) $plan->target_words),
         ];
         $writerRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Writer);
+        $extractorRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Extractor);
+        $rewriteRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Rewrite);
         $context['generation_preferences']['model_capacity'] = $writerRoute['model_capacity'];
         $context['generation_preferences']['request_budgets'] = $writerRoute['request_budgets'];
         // Run 自身保留可直接观测的冻结路由，页面不应依赖之后可能变化的全局配置反推。
@@ -112,17 +114,23 @@ class SceneGenerator
             'source' => $settings->source,
             'prompt_version' => $promptVersion,
         ];
-        // 修复子请求也必须随父 Run 冻结，Resume 不能因部署时配置变化而改变实际发送参数。
-        $context['generation_preferences']['repair_budgets'] = [
-            'coverage_evidence' => ['initial' => (int) config('generation.coverage_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000)],
-            'foreshadowing_coverage' => ['initial' => (int) config('generation.coverage_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000)],
-            'scene_structure' => ['initial' => (int) config('generation.scene_structure_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.scene_structure_repair_retry_max_output_tokens', 4_000)],
-            'length_repair' => (int) config('generation.scene_length_repair_max_output_tokens', 4_000),
+        // Scene Run 同时冻结 Extractor 与 Rewrite 的修复预算，Resume 只能读取这些三元组。
+        $context['generation_preferences']['repair_request_budgets'] = [
+            ...collect($extractorRoute['repair_request_budgets'])
+                ->only(['scene_structure', 'coverage_evidence', 'foreshadowing_coverage'])
+                ->all(),
+            'length_repair' => data_get($rewriteRoute, 'repair_request_budgets.length_repair'),
         ];
+        $lengthRepairBudget = $this->requestBudget->repairTier(
+            $context['generation_preferences']['repair_request_budgets'],
+            'length_repair',
+            'initial',
+            AiStage::Rewrite,
+        );
         $context['generation_preferences']['substage_routes'] = [
             'prose' => $this->routeSnapshot($chapter, $settings, AiStage::Writer, $promptVersion, null),
             'structure_and_coverage' => $this->routeSnapshot($chapter, $extractorSettings, AiStage::Extractor, 'scene-support-repair-v2', null),
-            'length_repair' => $this->routeSnapshot($chapter, $rewriteSettings, AiStage::Rewrite, 'scene-length-repair-v2', (int) data_get($context, 'generation_preferences.repair_budgets.length_repair')),
+            'length_repair' => $this->routeSnapshot($chapter, $rewriteSettings, AiStage::Rewrite, 'scene-length-repair-v2', $lengthRepairBudget['max_completion_tokens']),
         ];
         $foreshadowingExpectations = ForeshadowingCoverage::expectationsForScene(
             data_get($context, 'l0.foreshadowing_contract', []),
@@ -243,7 +251,6 @@ class SceneGenerator
                     model: $rewriteSettings->model,
                     promptVersion: 'scene-length-repair-v2',
                     reasoningEffort: $this->sentReasoningEffort($rewriteSettings->reasoningEffort),
-                    maxTokens: (int) data_get($context, 'generation_preferences.substage_routes.length_repair.max_completion_tokens', 0),
                     metadata: $metadata,
                     beforeRequest: $beforeRequest,
                     extractorProvider: $extractorSettings->provider,
@@ -393,7 +400,11 @@ class SceneGenerator
         });
     }
 
-    /** @param array<string, mixed> $payload */
+    /**
+     * 保存不可变 Scene Draft，并把 Coverage 证据未验证标记交给后续 Judgment。
+     *
+     * @param  array<string, mixed>  $payload
+     */
     private function complete(GenerationRun $run, Scene $scene, array $payload, int $expectedStateVersion, array $writingConstraints, array $planExpectations, array $foreshadowingExpectations): GenerationArtifact
     {
         return DB::transaction(function () use ($run, $scene, $payload, $expectedStateVersion, $writingConstraints, $planExpectations, $foreshadowingExpectations): GenerationArtifact {
@@ -423,6 +434,7 @@ class SceneGenerator
                             $payload['self_check'],
                             $planExpectations,
                             'scene_self_check',
+                            (array) ($payload['coverage_evidence_unverified'] ?? []),
                         ),
                         ...ForeshadowingCoverage::findings(
                             $scene->getKey(),
@@ -495,7 +507,6 @@ class SceneGenerator
         string $model,
         string $promptVersion,
         ?string $reasoningEffort,
-        int $maxTokens,
         array $metadata,
         ?callable $beforeRequest = null,
         ?string $extractorProvider = null,
@@ -527,6 +538,14 @@ class SceneGenerator
                 (int) data_get($context, 'scene_task.sequence'),
             );
 
+            // 字数修复按自身尝试次数读取 Rewrite Route 下的精确冻结预算。
+            $repairContract = $this->outputCapacity->frozenRepairBudgetFromMetadata(
+                $metadata,
+                AiStage::Rewrite,
+                'length_repair',
+                $attempt === 1 ? 'initial' : 'retry',
+            );
+            $budget = $repairContract['budget'];
             $beforeRequest?->__invoke('length_repair', $provider);
             $request = new AiRequest(
                 model: $model,
@@ -547,13 +566,19 @@ class SceneGenerator
                     'draft' => $payload,
                 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
-                maxTokens: $maxTokens,
+                maxTokens: $budget['max_completion_tokens'],
                 responseSchema: SceneDraftPayload::schema(),
                 promptVersion: $promptVersion,
-                metadata: [...$metadata, 'stage' => AiStage::Rewrite->value, 'substage' => 'length_repair', 'route_key' => 'length_repair', 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
+                metadata: [...$metadata, 'stage' => AiStage::Rewrite->value, 'substage' => 'length_repair', 'route_key' => 'length_repair', 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand', 'repair_budget_tier' => $attempt === 1 ? 'initial' : 'retry'],
             );
             // 长度修复切换到 Rewrite Route 后，也必须按该 Route 的冻结模型容量重新门禁。
-            $this->outputCapacity->assertRequestFromMetadata($request, AiStage::Rewrite, 'length_repair');
+            $this->outputCapacity->assertRequestFromMetadata(
+                $request,
+                AiStage::Rewrite,
+                'length_repair',
+                $budget,
+                $repairContract['tiers'],
+            );
             $response = $this->provider->generate($request);
 
             $repairedPayload = $response->structuredData;
@@ -586,7 +611,7 @@ class SceneGenerator
     }
 
     /**
-     * Keep the generated prose unchanged and repair only invalid Coverage quotes.
+     * 保持正文不变，只修复 Coverage 引用；修复耗尽时保留“证据未验证”来源，不能伪装成语义缺失。
      *
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $context
@@ -598,6 +623,7 @@ class SceneGenerator
         $structureRepaired = false;
         $coverageRepaired = false;
         $foreshadowingCoverageRepaired = false;
+        $coverageUnverified = [];
         $foreshadowingExpectations = ForeshadowingCoverage::expectationsForScene(
             data_get($context, 'l0.foreshadowing_contract', []),
             (int) data_get($context, 'scene_task.sequence'),
@@ -608,7 +634,12 @@ class SceneGenerator
 
         while (true) {
             try {
-                return SceneDraftPayload::validate($payload, $foreshadowingExpectations);
+                $validated = SceneDraftPayload::validate($payload, $foreshadowingExpectations);
+
+                return [
+                    ...$validated,
+                    'coverage_evidence_unverified' => $coverageUnverified,
+                ];
             } catch (ValidationException $exception) {
                 if (! $structureRepaired && $this->containsOnlyStructureErrors($exception)) {
                     $payload = [
@@ -633,8 +664,9 @@ class SceneGenerator
                 }
 
                 if (! $coverageRepaired && $this->containsOnlyCoverageEvidenceErrors($exception)) {
+                    $reportedCoverage = is_array($payload['self_check'] ?? null) ? $payload['self_check'] : [];
                     $payload['self_check'] = $this->coverageEvidenceRepairer->repair(
-                        coverage: is_array($payload['self_check'] ?? null) ? $payload['self_check'] : [],
+                        coverage: $reportedCoverage,
                         content: is_string($payload['content'] ?? null) ? $payload['content'] : '',
                         provider: $provider,
                         model: $model,
@@ -651,6 +683,8 @@ class SceneGenerator
                             ]);
                         },
                     );
+                    // 修复耗尽后的 missing 只用于维持 Artifact Schema，原语义声明必须单独留痕等待复核。
+                    $coverageUnverified = PlanCoverage::unverifiedElements($reportedCoverage, $payload['self_check']);
                     $coverageRepaired = true;
 
                     continue;
@@ -885,7 +919,7 @@ class SceneGenerator
         return $reasoningEffort;
     }
 
-    /** @return array<string, mixed> */
+    /** 保存子阶段所使用的冻结 Route、容量和修复预算，供运行详情直接展示。 */
     private function routeSnapshot(Chapter $chapter, object $settings, AiStage $stage, string $promptVersion, ?int $maxTokens): array
     {
         $route = $this->outputCapacity->frozenRoute($chapter, $stage);
@@ -900,6 +934,7 @@ class SceneGenerator
             'max_completion_tokens' => $maxTokens,
             'model_capacity' => $route['model_capacity'],
             'request_budgets' => $route['request_budgets'],
+            'repair_request_budgets' => $route['repair_request_budgets'],
         ], static fn (mixed $value): bool => $value !== null);
     }
 }

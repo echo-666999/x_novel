@@ -24,6 +24,7 @@ use App\Models\Scene;
 use App\Models\UsageRecord;
 use App\Models\User;
 use App\Models\Volume;
+use App\Services\LegacyAdmissionRecoveryContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -160,6 +161,51 @@ test('generation run inspector separates frozen capacity budget gate and actual 
         ->and(data_get($usage->request_metadata, 'completion_limit_reason'))->toBe('reasoning_budget_exhausted')
         ->and(data_get($usage->request_metadata, 'reasoning_effort_sent'))->toBe('high')
         ->and(data_get($usage->request_metadata, 'sent_parameters.max_tokens'))->toBe(16_000);
+});
+
+test('generation run inspector exposes the complete legacy recovery contract and frozen sources', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scope_type' => LegacyAdmissionRecoveryContract::SCOPE,
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::ChapterRecovery,
+        'status' => RunStatus::Succeeded,
+        'provider' => 'deterministic',
+        'model_policy' => 'frozen-multi-stage-contract',
+        'context_snapshot' => [
+            'contract_version' => LegacyAdmissionRecoveryContract::CONTRACT_VERSION,
+            'contract_artifact_id' => 88,
+            'provider_request_count' => 0,
+        ],
+    ]);
+    GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::Context,
+        'data' => [
+            'contract_version' => LegacyAdmissionRecoveryContract::CONTRACT_VERSION,
+            'source' => [
+                'plan_id' => 12,
+                'draft_artifact_id' => 34,
+                'scene_artifacts' => [['artifact_id' => 56, 'checksum' => str_repeat('a', 64)]],
+            ],
+            'routes' => [
+                'extractor' => ['provider' => 'deepseek', 'model' => 'deepseek-flash'],
+                'reviewer' => ['provider' => 'openai', 'model' => 'gpt-review'],
+                'rewrite' => ['provider' => 'deepseek', 'model' => 'deepseek-rewrite'],
+                'summary' => ['provider' => 'deepseek', 'model' => 'deepseek-flash'],
+            ],
+        ],
+    ]);
+
+    Livewire::test(Generation::class)
+        ->mountTableAction('inspect', $run)
+        ->assertSchemaComponentExists('route_contract_source', null, fn ($component): bool => $component->getState() === LegacyAdmissionRecoveryContract::CONTRACT_VERSION)
+        ->assertSchemaComponentExists('recovery_contract_run_id', null, fn ($component): bool => $component->getState() === '#'.$run->getKey())
+        ->assertSchemaComponentExists('provider_request_count', null, fn ($component): bool => $component->getState() === 0)
+        ->assertSchemaComponentExists('frozen_source_lineage', null, fn ($component): bool => str_contains($component->getState(), 'draft_artifact_id')
+            && str_contains($component->getState(), '34'))
+        ->assertSchemaComponentExists('frozen_recovery_routes', null, fn ($component): bool => str_contains($component->getState(), 'deepseek-rewrite')
+            && str_contains($component->getState(), 'gpt-review'));
 });
 
 test('generation page distinguishes a successful stage from its unresolved progression failure', function () {

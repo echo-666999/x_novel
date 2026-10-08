@@ -52,8 +52,12 @@ test('stage fingerprints ignore map order and runtime delivery fields', function
 test('the declarative graph exposes only legal chapter downstream stages', function () {
     $graph = app(GenerationStageGraph::class);
 
-    expect($graph->next(GenerationStage::ChapterAssembly))->toBe([GenerationStage::EventExtraction])
-        ->and($graph->downstream(GenerationStage::SceneGeneration))->toContain(GenerationStage::ChapterAssembly, GenerationStage::Review, GenerationStage::Commit)
+    expect($graph->next(GenerationStage::ChapterAssembly))->toBe([GenerationStage::CoverageJudgment, GenerationStage::EventExtraction])
+        ->and($graph->next(GenerationStage::ChapterRecovery))->toContain(GenerationStage::ChapterAssembly, GenerationStage::CoverageJudgment, GenerationStage::EventExtraction, GenerationStage::Review, GenerationStage::Rewrite)
+        ->and($graph->next(GenerationStage::CoverageJudgment))->toBe([GenerationStage::CoverageJudgment, GenerationStage::EventExtraction])
+        ->and($graph->downstream(GenerationStage::SceneGeneration))->toContain(GenerationStage::ChapterAssembly, GenerationStage::CoverageJudgment, GenerationStage::Review, GenerationStage::Commit)
+        ->and($graph->artifactsProducedBy(GenerationStage::CoverageJudgment))->toBe([ArtifactType::Context])
+        ->and($graph->artifactsProducedBy(GenerationStage::ChapterRecovery))->toBe([ArtifactType::Context])
         ->and($graph->artifactsProducedBy(GenerationStage::Review))->toBe([ArtifactType::ReviewResult]);
 
     $graph->assertTransition(GenerationStage::Review, GenerationStage::Commit);

@@ -204,6 +204,8 @@ function freezeChapterRouteContractsForTest(ChapterPlan $plan): ChapterPlan
             'prompt_version' => app(PromptVersionResolver::class)->resolve($stage),
             'model_capacity' => $profile?->capacitySnapshot(),
             'request_budgets' => app(GenerationRequestBudget::class)->configured($stage),
+            // 单阶段测试同样冻结修复预算，避免夹具绕过生产环境的子阶段合同。
+            'repair_request_budgets' => app(GenerationRequestBudget::class)->configuredRepairs($stage),
         ];
     }
 

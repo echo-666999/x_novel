@@ -62,6 +62,7 @@ GenerateNextChapterAction
 → ContextBuilder
 → GenerateSceneJob × N（顺序）
 → AssembleChapterJob（Laravel Deterministic Assembly）
+→ AdjudicatePlanCoverageJob（存在 Coverage Finding 时逐 Scene 执行）
 → ExtractStoryEventsJob
 → StatePatchBuilder
 → StateValidator
@@ -86,7 +87,7 @@ GenerateNextChapterAction
 
 `PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 只在 Review Artifact 对应当前 Draft、小说未暂停、`settings.auto_commit_configured=true` 且 `settings.auto_commit=true` 时自动派发 Commit；遗留的未确认 `auto_commit` 键保持惰性。关闭时只允许用户确认动作启动 Commit。两条路径都调用同一 `CommitChapterJob → CanonicalCommitService`，不得复制或绕过提交门禁。
 
-`AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan Admission、Scene、Deterministic Assembly、Event Extraction、Review 和局部 Rewrite 成功后都调用该动作，不再各自维护后续分支。
+`AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan Admission、Scene、Deterministic Assembly、Coverage Judgment、Event Extraction、Review 和局部 Rewrite 成功后都调用该动作，不再各自维护后续分支。
 
 阶段执行结果与流程推进结果分开记录。Provider 或确定性阶段完成并写入有效 Artifact 后，Run 保持 `succeeded`；随后 `AdvanceChapterPipelineAction` 的选择、校验或派发异常写入该 Run 的 `progression_failure` JSONB，不覆盖 `error_code / error_message`，也不把 Scene 或 Chapter 的成功阶段反向改成失败。所有章节生成 Job 通过同一推进边界记录错误并停止自动续写；Generation 页面、章节运行记录、场景运行详情和流水线时间轴显示“阶段成功 · 推进异常”。同一成功 Run 再次推进成功时只写入 `resolved_at`，保留原始故障证据且不重复调用 Provider。
 
@@ -156,8 +157,10 @@ Filament 的章节生成和长跑入口必须捕获可预期的 Preflight、Budg
 
 ```text
 chapter_planning
+chapter_recovery
 scene_generation
 chapter_assembly
+coverage_judgment
 event_extraction
 review
 rewrite
@@ -303,9 +306,13 @@ Plan Admission Gate 在 Scene 1 前确定性拒绝缺失 Primary、Outline 父�
 
 Plan Admission v2 在同一 `admission_snapshot` 中冻结 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五条完整合同。每条合同包含 Provider、Model、Reasoning Effort、Prompt Version、匹配的模型价格记录容量，以及按顺序保存的 `initial / retry / final` 请求预算；Reviewer 当前只有 `initial`。每档预算保存 `output_tokens + reasoning_reserve_tokens = max_completion_tokens`，档位不得降低任一组成部分。Admission 先校验全部合同，再允许 Scene 1；任何一个 Stage 缺少容量或能力时，整个 Plan 不得进入运行态。Chapter Planner 在 Admission 之前执行，因此把同结构合同冻结到自己的首个 Run，技术 Retry 从失败 Run 还原。
 
-Admission v1 不得静默改写为 v2。若旧章已经持久化完整 Plan、Scene 和 Chapter Draft，章节工作台提供独立的事件提取恢复动作：事务内锁定 Chapter，核实没有活动 Run，以当前 Extractor 配置创建新的 `queued` Event Extraction Run，并把恢复来源、Provider、Model、Reasoning Effort、Prompt Version、模型容量和三档预算完整冻结到该 Run。Job 只携带恢复 Run ID，不能重新解析当前路由；执行前再次比对 Plan、旧 Admission 快照、Scene Artifact、Chapter Draft、Bible 与 State。来源不变时只执行 Event Extraction 及其正常下游，Planner、Writer、旧 Plan 快照和历史 Run/Artifact 均不修改；来源变化时零 Provider 请求失败。
+Admission v1 不得静默改写为 v2。若旧章已经持久化完整 Plan、Scene 和 Chapter Draft，章节工作台提供独立的完整章节恢复动作：事务内锁定 Chapter，核实没有活动 Run，以当前配置解析 Extractor、Reviewer、Rewrite、Summary 四条独立合同，创建已经完成且零 Provider 请求的 `chapter_recovery` Run，并把来源与全部阶段合同写入不可变 Context Artifact。恢复合同成功后调用唯一 `AdvanceChapterPipelineAction`，由持久化状态选择 Coverage Judgment、Event Extraction、Review、Rewrite 或确定性 Assembly；Planner 和 Writer 永远不进入这条恢复链。每个后续 Provider Run 复制恢复合同 ID、阶段路由、容量、主预算和修复预算，Resume 只读取这些冻结值。局部 Rewrite 产生的 Scene Artifact 必须携带同一合同 ID，确定性 Assembly 只接受原冻结 Scene 或该合同的 Rewrite 来源；Canonical Commit 后 Summary 允许 Canonical State 前进并继续使用同一合同。Plan、旧 Admission、Bible、State 或 Artifact 来源漂移时零 Provider 请求失败，旧 Plan 快照和历史 Run/Artifact 均不修改。
+
+审校页面的自动修复统一调用 `StartChapterRewriteAction`，不再直接构造 `RewriteChapterJob`。该动作只接受当前 Draft 的 `REWRITE` Review，目标 Scene 必须由不可变 `rewrite_scope` 解析；`NEEDS_ATTENTION`、次数耗尽、来源缺失和非 Coverage Block 在派发前停止。Admission v1 先调用完整恢复动作；旧 Coverage Review 可以且只能在确认 Judgment 尚未覆盖时解除旧 `blocked` 状态，再由统一推进器选择 Coverage Judgment 或新 Review。整章自动 Rewrite 与页面任意选择 Scene 均不属于合法路径。
 
 常规“提取事件 / 重新提取事件”按钮在调用 `GenerationJobDispatcher` 前执行同步合同预检：只接受 Admission v2，Extractor Route 必须完整，模型容量必须匹配 Provider/Model 并支持结构化输出，`initial / retry / final` 三档预算必须有序、算式正确且不超过冻结容量。任何确定性失败都由 Filament 直接显示，不能写入 pending 标记、派发 Job 或先显示“已加入队列”。Worker 端容量门禁继续保留，作为并发变化和非 UI 调用的第二道校验。
+
+Provider 层无法仅凭部分 `content` 判断总完成预算耗在推理还是可见输出。Event Extraction 捕获 `length` 后使用当前 Run 的冻结预算复核：若实际 `reasoning_tokens > reasoning_reserve_tokens`，即使已有少量 JSON，也按推理挤占分类并只升级推理预留；否则已有不完整内容才按可见输出截断分类。Usage 的 `provider_completion_limit_reason` 保存适配器原始判断，`completion_limit_reason` 保存阶段合同复核结果，历史 Run 不回写。
 
 所有章节 Provider 调用都在发送前执行同一个容量门禁：估算输入加 `max_completion_tokens` 不得超过冻结上下文窗口，本次完成预算不得超过冻结模型最大输出，也不得超过该 Stage 的冻结最高请求预算。Run 保存本次 `selected_request_budget`、`request_budget_tier`、`request_budget_trigger` 和容量门禁快照；Provider 返回后，Usage 保存 Provider 实际发送参数。OpenAI 映射为 `max_completion_tokens`，DeepSeek 映射为 `max_tokens`，计划值不得冒充实际请求值。确定性的 Chapter Assembly 不读取这些合同，也不调用 Provider。
 
@@ -334,7 +341,9 @@ chapter_budget
 
 字数控制使用统一的多字节字符计数，并排除所有 Unicode 空白和换行。非末尾 Scene 可以按叙事需要短于平均值，未使用预算由后续 Scene 承接；最后一个待生成 Scene 负责补足章节下限。确定性拼章后若总字数不合格，Laravel 根据 Scene 实际字数、计划权重和剩余空间选择具体 Scene 做一次有界扩写或压缩，不得把全部正文交给模型。局部修复必须保留该 Scene 冻结的 Coverage 身份，由 Laravel 校验补丁方向、字数硬边界和来源链；修复后仍不合格则进入 `NEEDS_ATTENTION`。人工接受超限版本必须保留原 Finding、实际字数、严格上限和原因。
 
-Scene Draft 的正文、临时状态、声明事件和 Coverage 先经过本地校验。`temporary_state_delta` 或 `declared_events` 仅发生 JSON 语法或对象结构错误时，流水线最多执行两次 `scene-support-fields-repair-v1` 定向修复；该修复不得改写正文和 Coverage，也不得引入输入之外的新事实。无法可靠结构化的临时状态返回空对象，无法可靠结构化的声明事件丢弃。Coverage 引用先执行空白、引号和高置信连续重合片段的确定性归位，再执行独立的证据修复。证据修复耗尽后，不得把未经验证的引用当成事实，也不得仅因引用格式阻塞整章；系统将对应 Coverage 保守降为 `missing`，生成可自动 Rewrite 的计划覆盖 Finding。
+Scene Draft 的正文、临时状态、声明事件和 Coverage 先经过本地校验。`temporary_state_delta` 或 `declared_events` 仅发生 JSON 语法或对象结构错误时，流水线最多执行两次 `scene-support-fields-repair-v1` 定向修复；该修复不得改写正文和 Coverage，也不得引入输入之外的新事实。无法可靠结构化的临时状态返回空对象，无法可靠结构化的声明事件丢弃。Coverage 引用先执行空白、引号和高置信连续重合片段的确定性归位，再执行独立的证据修复。证据修复耗尽后，不得把未经验证的引用当成事实，也不得仅因引用格式阻塞整章；系统为满足 Artifact Schema 保守保存 `missing`，同时持久化 `coverage_evidence_unverified` 并生成 `SCENE_PLAN_COVERAGE_EVIDENCE_UNVERIFIED`，该 Finding 不能直接触发 Rewrite。
+
+所有修复 Provider 子请求都从 Admission Route 的 `repair_request_budgets` 读取独立分档。分档固定保存可见输出额度、隐藏推理预留和实际 `max_completion_tokens`；Scene、Event、Review、Rewrite 与独立 Coverage Judgment Run 把所需子集复制到 `generation_preferences.repair_request_budgets`，并使其进入 Input Hash。发送前容量门禁使用子阶段完整分档的最大值和本次选中档位做精确校验，不能退回父阶段 `request_budgets`。每次请求在 `provider_requests` 中保存 `substage`、`output_tokens`、`reasoning_reserve_tokens` 与 `max_completion_tokens`。旧的 `repair_budgets` 整数快照不具备推理预留和档位身份，不得被当作新合同继续执行。
 
 Schema 校验实体引用、Scene 数量和目标字数；业务校验 Arc 推进、Critical Foreshadowing、Locked Fact、Knowledge Boundary 和 Current State。
 
@@ -410,7 +419,7 @@ MVP 不新增表。建议每个 Scene Artifact 的 `data` 保存 `temporary_stat
 
 `declared_events` 仅辅助，不是正式 Story Event。
 
-`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用；仅有空白或外层引号差异时，将 evidence 映射回正文中的连续原句，仍无法逐字命中时只修复 Coverage evidence，不重新生成正文，也不得改变原 status。轻量修复响应因输出 Token 用尽而没有正文时，使用提高后的修复预算重试一次；错误信息必须区分输出截断与 Schema 非法。修复后仍不能逐字命中则本次 Scene Run 失败。缺失或反转项写为 Scene Artifact 的稳定 `plan_findings`；这些结果是结构化自报证据，不是不可推翻的语义事实或 Canonical Fact，也不单独决定最终 Review Decision。
+`self_check` 的四项状态只能是 `fulfilled`、`missing` 或 `contradicted`。`fulfilled` 与 `contradicted` 必须引用当前 Scene 正文中的原句，`missing` 的 evidence 必须为 `null`。Laravel 校验固定结构与原文引用；仅有空白或外层引号差异时，将 evidence 映射回正文中的连续原句，仍无法逐字命中时只修复 Coverage evidence，不重新生成正文，也不得改变原 status。轻量修复响应因输出 Token 用尽而没有正文时，使用提高后的修复预算重试一次；错误信息必须区分输出截断与 Schema 非法。修复后仍不能逐字命中时保留原始 status 来源并标记证据未验证，不得把技术失败解释成正文缺失。缺失、反转或证据未验证项写为 Scene Artifact 的稳定 `plan_findings`；这些结果是结构化自报证据，不是不可推翻的语义事实或 Canonical Fact，也不单独决定最终 Review Decision。
 
 `foreshadowing_coverage` 按冻结契约顺序列出分配给当前 Scene 的全部动作，每项固定包含 `foreshadowing_id`、`action`、`status` 和 `evidence`。Laravel 对照 `target_scene_sequence` 校验 ID、动作、顺序与 Scene 归属，并执行同样的逐字证据规则。只有正文具体结果满足 `acceptance_criteria` 时才允许模型声明 fulfilled；主题相近但缺少动作结果时必须声明 missing。证据修复只允许替换 evidence，不得改变 ID、动作、顺序或 status；修复耗尽时，将无法验证证据的声明降为 missing 并生成 `FORESHADOWING_COVERAGE_MISSING` Finding，不伪造正文结果。
 
@@ -440,11 +449,13 @@ MVP 不做 Scene Parallel。
 
 1. 按 Scene Sequence 读取当前 `scene_draft`/局部 `rewrite_draft`；缺失、跨章、状态错误或 Checksum 变化立即停止。
 2. 对每个 Scene Content 执行 `trim`，使用固定的两个换行连接；不改写字句、不生成桥接段落、不删除内容。
-3. 从 Scene Artifact 已验证的 `self_check` 聚合 `scene_coverage`；Scene ID、Sequence 和 Plan 身份由 Laravel 恢复。
+3. 从 Scene Artifact 已验证的 `self_check` 聚合 `scene_coverage`，并原样传递 `coverage_evidence_unverified`；Scene ID、Sequence 和 Plan 身份由 Laravel 恢复。
 4. 按冻结契约聚合 `foreshadowing_coverage`，不得重新判定、提升或修复状态。
 5. 保存 Ordered Scene IDs、Artifact IDs、Checksums、Assembly Algorithm Version、Assembly Hash、字数和聚合 Findings。
 
 衔接责任属于相邻 Scene Plan 的 `transition_from_previous` 和后一 Scene Writer。连续性或字数检查失败时，从最早受影响 Scene 做有界 Rewrite/级联重生成，再重新 Assembly；不得将整章发给模型。新增重大事实继续由 Event Extraction、State Validation 和 Review 判断。
+
+Assembly 产生计划 Coverage Finding 时，推进器先按 Scene 顺序派发独立 `AdjudicatePlanCoverageJob`。每个 Job 最多一次 Provider 请求，并创建独立 `coverage_judgment` Run 与不可变 Context Artifact；Run 冻结 Reviewer Provider、Model、Reasoning、模型容量、Coverage Judgment 的完整修复预算分档、所选档位、Draft/Scene checksum 和 Input Hash。首次使用 `initial`；只有完成预算分类确认存在更高合法档位时才允许 Queue Retry 选择 `retry`，普通临时故障沿用原档。复核为 `fulfilled` 时移除自报 Finding，只有复核确认的 `missing/contradicted` 才可进入 Review 并成为 Rewrite 来源。Provider、预算、Schema 或来源链失败只记录 Judgment 失败 Run 并停止推进，不得创建内容 Review 或把 Chapter 改为 `REWRITE`。相同 Input Hash 必须复用成功 Artifact。历史错误 Review 早于当前 Judgment 时不再具有推进资格；页面的局部重写入口必须同步转入正确 Judgment；已经排队的旧 Rewrite Job 也必须零 Provider 请求调用同一领域入口，先完成 Judgment 和新 Review。
 
 幂等键：
 
@@ -746,9 +757,9 @@ Plan 已完成 → Scene 1
 
 Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v4 主批次，旧 v4 批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
 
-章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。技术 Retry 与 Resume 复用原 Run 或 Plan Admission 冻结的 Route、Prompt、容量和分档预算；尤其 Chapter Planner 位于 Admission 之前，必须从最近一个同来源、可重试的失败 Run 还原合同，不能在 Queue Retry 时重新解析后台配置。Provider 配置失败或冻结最高档的完成预算失败返回不可恢复点，修复后通过显式 Restart 创建新的来源链。Generation 运行详情分别显示冻结路由、静态容量、预算档位及升档原因、容量门禁、实际发送参数、Usage 和完成预算分类。章节工作台同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
+章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。技术 Retry 与 Resume 复用原 Run 或 Plan Admission 冻结的 Route、Prompt、容量和分档预算；尤其 Chapter Planner 位于 Admission 之前，必须从最近一个同来源、可重试的失败 Run 还原合同，不能在 Queue Retry 时重新解析后台配置。Provider 配置失败或冻结最高档的完成预算失败返回不可恢复点，修复后通过显式 Restart 创建新的来源链。Generation 运行详情分别显示冻结路由、静态容量、预算档位及升档原因、容量门禁、实际发送参数、Usage 和完成预算分类；恢复链额外显示路由合同来源、恢复合同 Run ID、冻结来源 Artifact、实际 Provider 请求数，以及 `chapter_recovery` Artifact 中的四条完整阶段路由。章节工作台把章节恢复合同显示为独立时间轴节点，同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
 
-旧 Admission v1 的事件提取恢复属于显式 Restart 的受限形式：它只在 Plan、Scene 和 Chapter Draft 已成功且未变化时创建新的 Event Extraction Run 合同，不创建新 Plan、不重新生成 Scene，也不覆盖任何历史记录。恢复 Run 在入队前持久化；Queue 派发失败、来源漂移或合同缺失都必须写入该 Run 并停止，不能留下无期限 `queued` 状态。
+旧 Admission v1 的完整章节恢复属于显式 Restart 的受限形式：它只在 Plan、Scene 和 Chapter Draft 已成功且可验证时创建新的 `chapter_recovery` 合同，不创建新 Plan、不重新生成 Scene，也不覆盖任何历史记录。合同 Run 与不可变 Context Artifact 必须在下一阶段派发前持久化；统一推进器根据现有 Artifact 从正确节点继续。派发失败写入合同 Run 的 `progression_failure` 并阻断章节，来源漂移或合同缺失在 Provider 请求前失败。相同来源再次恢复必须直接复用已冻结的成功合同，不重新解析后来变化的后台配置，并关闭已解决的推进异常。
 
 不要根据 Redis Queue 中是否还有 Job 判断业务进度。
 

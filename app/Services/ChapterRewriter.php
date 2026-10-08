@@ -25,10 +25,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
+/** 执行最小安全范围 Rewrite，并拒绝使用未经 Coverage Judgment 复核的审校来源。 */
 class ChapterRewriter
 {
-    public function __construct(private readonly AiProvider $provider, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly PlanAdmissionService $planAdmission, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget) {}
+    /** 注入 Rewrite、Coverage 复核、冻结路由和失败策略依赖。 */
+    public function __construct(private readonly AiProvider $provider, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget, private readonly PlanCoverageJudgmentRepairer $coverageJudgment, private readonly ChapterStageRouteResolver $routeResolver) {}
 
+    /** 执行当前 Review 指定的局部 Rewrite，任何错误 Coverage 来源都先退回 Judgment。 */
     public function rewrite(int $chapterId, ?int $sceneId = null, bool $singleProviderCall = false): ?GenerationArtifact
     {
         $providerCalls = 0;
@@ -38,6 +41,21 @@ class ChapterRewriter
         }
 
         $review = $this->latestReview($chapter);
+        $reviewedDraftId = (int) data_get($review->artifact?->data, 'source_artifact_id');
+        $reviewedDraft = $reviewedDraftId > 0 ? GenerationArtifact::query()->find($reviewedDraftId) : null;
+        $hasCoverageFinding = collect($review->findings)->contains(
+            fn (mixed $finding): bool => is_array($finding)
+                && str_starts_with((string) ($finding['code'] ?? ''), 'SCENE_PLAN_COVERAGE_'),
+        );
+        if ($hasCoverageFinding
+            && ($reviewedDraft === null
+                || ! $this->coverageJudgment->reviewCoversCurrentJudgments($review, $chapter, $reviewedDraft))) {
+            throw new AiProviderException(
+                'coverage_judgment_required',
+                '当前 Rewrite 来源使用了尚未完成独立 Coverage Judgment 的旧 Review，必须先复核后重新审校。',
+                false,
+            );
+        }
         $resolvedScope = $this->rewriteScopeResolver->resolveReview($chapter, $review);
         if (! $resolvedScope->isResolved()) {
             throw new AiProviderException('rewrite_scope_unresolved', '当前问题需要重建 Plan/Scene，不能执行整章自动 Rewrite。', false);
@@ -82,8 +100,10 @@ class ChapterRewriter
         if (! is_array($chapter->latestPlan?->admission_snapshot)) {
             throw new AiProviderException('rewrite_capacity_contract_missing', 'Rewrite 缺少已冻结的 Plan Admission 合同。', false);
         }
-        $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Rewrite);
-        $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Rewrite);
+        // Rewrite 必须沿用同一 Admission 或显式恢复合同，不能在执行时重新解析后台路由。
+        $resolvedRoute = $this->routeResolver->resolve($chapter, AiStage::Rewrite, $source);
+        $settings = $resolvedRoute['settings'];
+        $promptVersion = $resolvedRoute['prompt_version'];
         $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
         $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $brief = [
@@ -124,27 +144,12 @@ class ChapterRewriter
             ],
             'content' => $source->content,
         ];
-        $rewriteRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Rewrite);
-        $brief['generation_preferences']['model_capacity'] = $rewriteRoute['model_capacity'];
-        $brief['generation_preferences']['request_budgets'] = $rewriteRoute['request_budgets'];
-        // Rewrite 的恢复必须沿用原 Route，并让运行详情直接展示冻结的推理配置。
-        $brief['generation_preferences']['frozen_route'] = [
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'source' => $settings->source,
-            'prompt_version' => $promptVersion,
-        ];
-        // 长度修复同样会发送完整正文，固定使用本次 Run 已冻结的 Rewrite 初始预算。
-        $brief['generation_preferences']['length_repair_budget'] = $this->requestBudget->tier(
-            $rewriteRoute['request_budgets'],
-            'initial',
-            AiStage::Rewrite,
-        );
-        $brief['generation_preferences']['repair_budgets'] = [
-            'coverage_evidence' => ['initial' => (int) config('generation.coverage_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.coverage_repair_retry_max_output_tokens', 4_000)],
-            'length_repair' => (int) data_get($brief, 'generation_preferences.length_repair_budget.max_completion_tokens'),
-        ];
+        $rewriteRoute = $resolvedRoute['route'];
+        $brief['generation_preferences'] = $this->routeResolver->generationPreferences($resolvedRoute);
+        // Rewrite 的证据与长度修复各自冻结完整分档，不能再用主 Rewrite 初始预算冒充子阶段合同。
+        $brief['generation_preferences']['repair_request_budgets'] = collect($rewriteRoute['repair_request_budgets'])
+            ->only(['coverage_evidence', 'length_repair'])
+            ->all();
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::Rewrite,
             $brief,
@@ -152,8 +157,10 @@ class ChapterRewriter
             frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
             contractVersion: $promptVersion,
         );
-        $baseKey = "rewrite:{$source->getKey()}:{$findingHash}:{$attempt}:{$promptVersion}";
-        [$run, $reused] = $this->startRun($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $settings->provider, $settings->model, $promptVersion);
+        $recoveryContractId = (int) data_get($brief, 'generation_preferences.recovery_contract_run_id', 0);
+        $baseKey = "rewrite:{$source->getKey()}:{$findingHash}:{$attempt}:{$promptVersion}".
+            ($recoveryContractId > 0 ? ":recovery:{$recoveryContractId}" : '');
+        [$run, $reused] = $this->startRun($chapter, $sceneId, $source, $findingHash, $attempt, $inputHash, $brief, $settings->provider, $settings->model, $promptVersion, $baseKey);
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::RewriteDraft)->first();
         }
@@ -372,6 +379,8 @@ class ChapterRewriter
     }
 
     /**
+     * 校验局部重写响应；Coverage 证据修复耗尽时保留技术失败来源，避免再次触发错误重写。
+     *
      * @param  array<string, mixed>|null  $structuredData
      * @return array<string, mixed>
      */
@@ -389,8 +398,9 @@ class ChapterRewriter
             }
         }
 
+        $reportedCoverage = is_array($structuredData['self_check'] ?? null) ? $structuredData['self_check'] : [];
         $structuredData['self_check'] = $this->coverageEvidenceRepairer->repair(
-            coverage: is_array($structuredData['self_check'] ?? null) ? $structuredData['self_check'] : [],
+            coverage: $reportedCoverage,
             content: is_string($structuredData['content'] ?? null) ? $structuredData['content'] : '',
             provider: (string) $provider,
             model: $model,
@@ -410,7 +420,11 @@ class ChapterRewriter
         );
 
         try {
-            return SceneRewritePayload::validate($structuredData);
+            return [
+                ...SceneRewritePayload::validate($structuredData),
+                // 该字段只描述证据校验状态，不修改正文和模型原始语义声明。
+                'coverage_evidence_unverified' => PlanCoverage::unverifiedElements($reportedCoverage, $structuredData['self_check']),
+            ];
         } catch (ValidationException $exception) {
             throw new AiProviderException('rewrite_schema_invalid', $exception->getMessage(), false, null, $exception);
         }
@@ -466,7 +480,17 @@ class ChapterRewriter
             }
 
             $beforeRequest?->__invoke('rewrite_length_repair');
-            $repairBudget = (array) data_get($brief, 'generation_preferences.length_repair_budget', []);
+            if (! $chapter instanceof Chapter || ! $run instanceof GenerationRun) {
+                throw new AiProviderException('rewrite_capacity_contract_missing', '长度修复缺少冻结请求合同。', false);
+            }
+            // 每次长度修复按自己的 attempt 选择冻结档位，并把完整子阶段合同交给容量门禁。
+            $repairContract = $this->outputCapacity->frozenRepairBudget(
+                $run,
+                AiStage::Rewrite,
+                'length_repair',
+                $attempt === 1 ? 'initial' : 'retry',
+            );
+            $repairBudget = $repairContract['budget'];
             $request = new AiRequest(
                 model: $model,
                 provider: $provider,
@@ -493,9 +517,6 @@ class ChapterRewriter
                 promptVersion: $promptVersion,
                 metadata: [...$metadata, 'length_repair_attempt' => $attempt, 'length_repair_mode' => $tooLong ? 'compress' : 'expand'],
             );
-            if (! $chapter instanceof Chapter || ! $run instanceof GenerationRun) {
-                throw new AiProviderException('rewrite_capacity_contract_missing', '长度修复缺少冻结请求合同。', false);
-            }
             $this->outputCapacity->assertRequestWithinFrozenRoute(
                 $chapter,
                 $run,
@@ -503,6 +524,7 @@ class ChapterRewriter
                 $request,
                 'rewrite_length_repair',
                 $repairBudget,
+                $repairContract['tiers'],
             );
             $response = $this->provider->generate($request);
             $structured = $response->structuredData;
@@ -599,9 +621,9 @@ class ChapterRewriter
         ]);
     }
 
-    private function startRun(Chapter $chapter, int $sceneId, GenerationArtifact $source, string $findingHash, int $rewriteAttempt, string $inputHash, array $brief, string $provider, string $model, string $promptVersion): array
+    private function startRun(Chapter $chapter, int $sceneId, GenerationArtifact $source, string $findingHash, int $rewriteAttempt, string $inputHash, array $brief, string $provider, string $model, string $promptVersion, string $baseKey): array
     {
-        return DB::transaction(function () use ($chapter, $sceneId, $source, $findingHash, $rewriteAttempt, $inputHash, $brief, $provider, $model, $promptVersion) {
+        return DB::transaction(function () use ($chapter, $sceneId, $findingHash, $inputHash, $brief, $provider, $model, $promptVersion, $baseKey) {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::Rewrite);
             $resolution = $this->runCoordinator->resolve($runs->getQuery(), $inputHash, 'Rewrite Run 超时未完成，已由后续投递恢复。');
@@ -609,7 +631,6 @@ class ChapterRewriter
                 return [$resolution['run'], true];
             }
             $runAttempt = $resolution['attempt'];
-            $baseKey = "rewrite:{$source->getKey()}:{$findingHash}:{$rewriteAttempt}:{$promptVersion}";
             $key = $runAttempt === 1 ? $baseKey : $baseKey.':attempt:'.$runAttempt;
 
             return [GenerationRun::query()->create([
@@ -654,6 +675,7 @@ class ChapterRewriter
         return $budget;
     }
 
+    /** 保存新的不可变局部 Rewrite Artifact，并保留 Coverage 证据验证来源。 */
     private function complete(GenerationRun $run, Chapter $chapter, int $sceneId, GenerationArtifact $source, Review $review, array $payload, string $findingHash, int $attempt, int $expectedStateVersion): GenerationArtifact
     {
         return DB::transaction(function () use ($run, $chapter, $sceneId, $source, $review, $payload, $findingHash, $attempt, $expectedStateVersion) {
@@ -677,6 +699,8 @@ class ChapterRewriter
                     'plan_acceptance' => data_get($run->context_snapshot, 'plan_acceptance'),
                     ...(isset($payload['patch']) ? ['paragraph_patch' => $payload['patch']] : []),
                     'self_check' => $payload['self_check'],
+                    // 证据修复耗尽不能抹掉模型原始语义声明，Assembly 需要据此触发独立复核。
+                    'coverage_evidence_unverified' => (array) ($payload['coverage_evidence_unverified'] ?? []),
                     // 确定性 Assembly 只读取当前 Scene Artifact；局部 Rewrite 必须继续携带
                     // 冻结的伏笔 Coverage 身份，不能让章节拼装回退到模型重建该数组。
                     'foreshadowing_coverage' => data_get($source->data, 'foreshadowing_coverage', []),
@@ -685,6 +709,7 @@ class ChapterRewriter
                         $payload['self_check'],
                         data_get($run->context_snapshot, 'plan_acceptance.coverage_expectations', []),
                         'scene_rewrite_self_check',
+                        (array) ($payload['coverage_evidence_unverified'] ?? []),
                     ),
                     'word_count' => $this->lengthPolicy->count($payload['content']),
                     'target_words' => (int) data_get($run->context_snapshot, 'length_requirement.target_words'),

@@ -1837,10 +1837,12 @@ test('outline dispatch query count remains nearly constant with 108 completed be
         ]);
     };
     $measureDispatchQueries = function () use ($pipeline, $batch): array {
+        // 两次测量都使用全新的 Batch 实例，避免第一次推进遗留的 Eloquent 关系缓存扭曲 SQL 差值。
+        $freshBatch = $batch->fresh();
         DB::enableQueryLog();
         DB::flushQueryLog();
         try {
-            $pipeline->dispatchNext($batch);
+            $pipeline->dispatchNext($freshBatch);
 
             return DB::getQueryLog();
         } finally {

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\AI\CompletionLimitClassifier;
+use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\AiStage;
 use App\Models\GenerationRun;
@@ -13,6 +14,34 @@ use Illuminate\Validation\ValidationException;
  */
 final class GenerationRequestBudget
 {
+    /**
+     * 解析指定 AI 路由下各修复子阶段的独立预算，避免子请求借用父阶段的大预算上限。
+     *
+     * @return array<string, array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>>
+     */
+    public function configuredRepairs(AiStage $stage): array
+    {
+        $configured = config("generation.chapter_repair_request_budgets.{$stage->value}", []);
+        if (! is_array($configured)) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[REPAIR_REQUEST_BUDGET_INVALID] {$stage->getLabel()} 的修复子阶段预算必须是数组。",
+            ]);
+        }
+
+        $budgets = [];
+        foreach ($configured as $substage => $tiers) {
+            if (! is_string($substage) || $substage === '' || ! is_array($tiers)) {
+                throw ValidationException::withMessages([
+                    "routes.{$stage->value}" => "[REPAIR_REQUEST_BUDGET_INVALID] {$stage->getLabel()} 包含无效的修复子阶段预算键。",
+                ]);
+            }
+
+            $budgets[$substage] = $this->normalizeConfiguredTiers($tiers, $stage, "修复子阶段 {$substage}");
+        }
+
+        return $budgets;
+    }
+
     /**
      * @return array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>
      */
@@ -25,6 +54,17 @@ final class GenerationRequestBudget
             ]);
         }
 
+        return $this->normalizeConfiguredTiers($configured, $stage, $stage->getLabel());
+    }
+
+    /**
+     * 将配置中的可见输出和推理预留规范化为 Provider 实际接收的完成预算。
+     *
+     * @param  array<string, mixed>  $configured
+     * @return array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>
+     */
+    private function normalizeConfiguredTiers(array $configured, AiStage $stage, string $label): array
+    {
         $budgets = [];
         $previousOutput = 0;
         $previousReasoningReserve = 0;
@@ -33,13 +73,13 @@ final class GenerationRequestBudget
             $reasoningReserve = is_array($budget) ? (int) ($budget['reasoning_reserve_tokens'] ?? -1) : -1;
             if ($outputTokens < 1 || $reasoningReserve < 0) {
                 throw ValidationException::withMessages([
-                    "routes.{$stage->value}" => "[REQUEST_BUDGET_INVALID] {$stage->getLabel()} 的 {$tier} 请求预算必须包含正数可见输出额度和非负推理预留。",
+                    "routes.{$stage->value}" => "[REQUEST_BUDGET_INVALID] {$label} 的 {$tier} 请求预算必须包含正数可见输出额度和非负推理预留。",
                 ]);
             }
 
             if ($outputTokens < $previousOutput || $reasoningReserve < $previousReasoningReserve) {
                 throw ValidationException::withMessages([
-                    "routes.{$stage->value}" => "[REQUEST_BUDGET_INVALID] {$stage->getLabel()} 的 {$tier} 可见输出额度和推理预留都不能低于前一档预算。",
+                    "routes.{$stage->value}" => "[REQUEST_BUDGET_INVALID] {$label} 的 {$tier} 可见输出额度和推理预留都不能低于前一档预算。",
                 ]);
             }
 
@@ -55,6 +95,35 @@ final class GenerationRequestBudget
         }
 
         return $budgets;
+    }
+
+    /**
+     * 从 Run 冻结快照读取一个修复子阶段的全部分档，旧整数预算不得继续冒充完整合同。
+     *
+     * @param  array<string, mixed>  $repairBudgets
+     * @return array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>
+     */
+    public function repairTiers(array $repairBudgets, string $substage, AiStage $stage): array
+    {
+        $tiers = $repairBudgets[$substage] ?? null;
+        if (! is_array($tiers)) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[REPAIR_REQUEST_BUDGET_MISSING] {$stage->getLabel()} 缺少 {$substage} 的冻结修复预算。",
+            ]);
+        }
+
+        return $this->validateFrozen($tiers, $stage);
+    }
+
+    /**
+     * 读取修复子阶段的精确档位，调用方必须把该三元组传给容量门禁。
+     *
+     * @param  array<string, mixed>  $repairBudgets
+     * @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}
+     */
+    public function repairTier(array $repairBudgets, string $substage, string $tier, AiStage $stage): array
+    {
+        return $this->tier($this->repairTiers($repairBudgets, $substage, $stage), $tier, $stage);
     }
 
     /**
@@ -152,6 +221,7 @@ final class GenerationRequestBudget
         string $errorPrefix,
         string $label,
         ?string $currentTier = null,
+        ?AiResponse $response = null,
     ): AiProviderException {
         if (! $this->matchesStageError($exception->errorCode, $errorPrefix)) {
             return $exception;
@@ -161,6 +231,15 @@ final class GenerationRequestBudget
         if ($category === null) {
             return $exception;
         }
+
+        [$category, $exception] = $this->classifyAgainstFrozenBudget(
+            $category,
+            $exception,
+            $current,
+            $errorPrefix,
+            $label,
+            $response,
+        );
 
         $tiers = $this->validateFrozen($budgets, $stage);
         if ($this->nextHigherTier($tiers, $current, $category, $currentTier) !== null) {
@@ -181,6 +260,60 @@ final class GenerationRequestBudget
             $current,
             $exception,
         );
+    }
+
+    /**
+     * Provider 只知道总完成预算；阶段合同同时知道推理预留，二者结合后才能判断少量可见内容是否被推理挤占。
+     *
+     * @param  array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}  $current
+     * @return array{0: string, 1: AiProviderException}
+     */
+    private function classifyAgainstFrozenBudget(
+        string $category,
+        AiProviderException $exception,
+        array $current,
+        string $errorPrefix,
+        string $label,
+        ?AiResponse $response,
+    ): array {
+        if ($response === null || data_get($response->metadata, 'finish_reason') !== 'length') {
+            return [$category, $exception];
+        }
+
+        $reasoningTokens = max(0, $response->reasoningTokens);
+        $reasoningReserve = max(0, (int) $current['reasoning_reserve_tokens']);
+        $visibleTokens = max(0, $response->outputTokens - $reasoningTokens);
+        if ($reasoningTokens > $reasoningReserve) {
+            $message = "AI 的 {$label} 请求在完成前耗尽总预算；实际推理消耗 {$reasoningTokens} Token，超过本档冻结推理预留 {$reasoningReserve} Token，仅留下约 {$visibleTokens} Token 可见输出。未保存不完整结果。";
+
+            return [
+                CompletionLimitClassifier::REASONING_BUDGET_EXHAUSTED,
+                new AiProviderException(
+                    $errorPrefix.'_reasoning_budget_exhausted',
+                    $message,
+                    false,
+                    $exception->statusCode,
+                    $exception,
+                    $response->providerRequestId ?? $exception->providerRequestId,
+                ),
+            ];
+        }
+
+        if (trim($response->content) !== '') {
+            return [
+                CompletionLimitClassifier::VISIBLE_OUTPUT_TRUNCATED,
+                new AiProviderException(
+                    $errorPrefix.'_output_truncated',
+                    "AI 已开始返回 {$label}，实际推理消耗 {$reasoningTokens} Token 未超过冻结预留 {$reasoningReserve} Token，但可见输出仍在完成前耗尽请求预算；未保存不完整结果。",
+                    false,
+                    $exception->statusCode,
+                    $exception,
+                    $response->providerRequestId ?? $exception->providerRequestId,
+                ),
+            ];
+        }
+
+        return [$category, $exception];
     }
 
     public function completionLimitCategory(string $errorCode): ?string

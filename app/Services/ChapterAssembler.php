@@ -105,6 +105,8 @@ class ChapterAssembler
     }
 
     /**
+     * 确定性聚合当前 Scene Artifact，并原样传递 Coverage 证据未验证标记供独立复核使用。
+     *
      * @param  Collection<int, array{scene: Scene, artifact: GenerationArtifact}>  $sources
      * @return array<string, mixed>
      */
@@ -140,13 +142,21 @@ class ChapterAssembler
                 "scene_coverage.{$index}.foreshadowing_coverage",
             );
             $scenePlan = data_get($chapter->latestPlan?->scene_plans, $index, []);
-            $coverage[] = ['scene_id' => $scene->getKey(), ...$selfCheck, 'foreshadowing_coverage' => $foreshadowing];
+            $unverifiedElements = (array) data_get($artifact->data, 'coverage_evidence_unverified', []);
+            $coverage[] = [
+                'scene_id' => $scene->getKey(),
+                ...$selfCheck,
+                // 该元数据解释 missing 的技术来源，不参与 PlanCoverage Schema 本身。
+                'coverage_evidence_unverified' => $unverifiedElements,
+                'foreshadowing_coverage' => $foreshadowing,
+            ];
             $findings = [
                 ...$findings,
                 ...PlanCoverage::findings(
                     $scene->getKey(), $selfCheck,
                     PlanCoverage::expectations($scene->only(PlanCoverage::ELEMENTS), is_array($scenePlan) ? $scenePlan : []),
                     'assembly_coverage',
+                    $unverifiedElements,
                 ),
                 ...ForeshadowingCoverage::findings($scene->getKey(), $foreshadowing, $expectations, 'assembly_foreshadowing_coverage'),
                 ...$this->continuityFindings($artifact, $scene),

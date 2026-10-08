@@ -13,6 +13,7 @@ use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
+use App\Jobs\AdjudicatePlanCoverageJob;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\CommitChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
@@ -28,15 +29,19 @@ use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationOutputCapacityGuard;
 use App\Services\GenerationRunLease;
 use App\Services\GenerationStageGate;
+use App\Services\LegacyAdmissionRecoveryContract;
 use App\Services\PlanAdmissionService;
+use App\Services\PlanCoverageJudgmentRepairer;
 use App\Services\RewriteScopeResolver;
 use App\Services\StatePatchBuilder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Validation\ValidationException;
 
+/** 章节流水线唯一推进器，所有下一阶段选择都以 PostgreSQL 持久化状态为准。 */
 class AdvanceChapterPipelineAction
 {
+    /** 注入阶段门禁、统一调度器和各确定性来源解析服务。 */
     public function __construct(
         private readonly GenerationStageGate $stageGate,
         private readonly GenerationJobDispatcher $dispatcher,
@@ -47,8 +52,11 @@ class AdvanceChapterPipelineAction
         private readonly BudgetService $budgetService,
         private readonly AutoStopService $autoStop,
         private readonly PlanAdmissionService $planAdmission,
+        private readonly PlanCoverageJudgmentRepairer $coverageJudgment,
+        private readonly LegacyAdmissionRecoveryContract $legacyRecovery,
     ) {}
 
+    /** 按持久化来源链选择唯一下一阶段，Coverage 复核必须先于任何内容 Rewrite 决策。 */
     public function handle(int $chapterId, ?string $regenerationBatchId = null): ?GenerationStage
     {
         $nextStage = null;
@@ -62,14 +70,29 @@ class AdvanceChapterPipelineAction
             }
 
             $latestDraft = $this->latestChapterDraft($chapter);
+            $draft = $this->currentDraft($chapter, $latestDraft);
+            if ($draft !== null) {
+                $pendingCoverageSceneId = $this->coverageJudgment->pendingSceneId($chapter, $draft);
+                if ($pendingCoverageSceneId !== null) {
+                    $nextStage = GenerationStage::CoverageJudgment;
+                    $nextJob = new AdjudicatePlanCoverageJob(
+                        chapterId: $chapter->getKey(),
+                        draftArtifactId: $draft->getKey(),
+                        sceneId: $pendingCoverageSceneId,
+                    );
+
+                    return;
+                }
+            }
+
             $review = $latestDraft === null ? null : $this->latestReviewForDraft($chapter, $latestDraft);
-            if ($review !== null && $this->reviewStillCurrent($chapter, $latestDraft, $review)) {
+            if ($review !== null
+                && $this->reviewStillCurrent($chapter, $latestDraft, $review)
+                && $this->coverageJudgment->reviewCoversCurrentJudgments($review, $chapter, $latestDraft)) {
                 [$nextStage, $nextJob] = $this->advanceReviewDecision($chapter, $latestDraft, $review);
 
                 return;
             }
-
-            $draft = $this->currentDraft($chapter, $latestDraft);
 
             if ($draft === null) {
                 [$nextStage, $nextJob] = $this->nextBeforeDraft($chapter, $regenerationBatchId);
@@ -116,9 +139,15 @@ class AdvanceChapterPipelineAction
             return [GenerationStage::ChapterPlanning, new PlanChapterJob($chapter->getKey())];
         }
 
-        $this->planAdmission->admit($chapter->latestPlan);
+        $usesLegacyRecovery = $this->legacyRecovery->appliesTo($chapter);
+        if (! $usesLegacyRecovery) {
+            $this->planAdmission->admit($chapter->latestPlan);
+        }
 
         if ($chapter->scenes->isEmpty()) {
+            if ($usesLegacyRecovery) {
+                throw ValidationException::withMessages(['scenes' => 'Admission v1 恢复合同不能补建或重新生成 Scene。']);
+            }
             $this->syncScenes->execute($chapter);
             $chapter = $this->chapter($chapter->getKey());
         }
@@ -131,6 +160,11 @@ class AdvanceChapterPipelineAction
             || ! in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true));
 
         if ($incomplete !== null) {
+            if ($usesLegacyRecovery) {
+                throw ValidationException::withMessages([
+                    'scenes' => 'Admission v1 恢复发现未完成 Scene；为避免重新请求 Writer，流程已停止。',
+                ]);
+            }
             $batchId = $regenerationBatchId ?? $this->regenerationBatchIdBefore($chapter, $incomplete->sequence);
 
             return [GenerationStage::SceneGeneration, new GenerateSceneJob(
@@ -138,6 +172,11 @@ class AdvanceChapterPipelineAction
                 cascade: $batchId !== null,
                 regenerationBatchId: $batchId,
             )];
+        }
+
+        if ($usesLegacyRecovery) {
+            // 局部 Rewrite 后允许确定性重组，但每个 Scene 必须来自原冻结来源或本恢复合同。
+            $this->legacyRecovery->assertCanAssembleCurrentScenes($chapter);
         }
 
         return [GenerationStage::ChapterAssembly, new AssembleChapterJob($chapter->getKey())];
