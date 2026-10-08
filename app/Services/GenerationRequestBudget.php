@@ -97,7 +97,7 @@ final class GenerationRequestBudget
      */
     public function resolveForAttempt(array $budgets, AiStage $stage, iterable $priorRuns, string $errorPrefix, string $label): array
     {
-        $tiers = $this->validatedTiers($budgets, $stage);
+        $tiers = $this->validateFrozen($budgets, $stage);
         $failures = collect($priorRuns)
             ->filter(fn (GenerationRun $run): bool => $this->matchesStageError((string) $run->error_code, $errorPrefix)
                 && $this->completionLimitCategory((string) $run->error_code) !== null)
@@ -162,7 +162,7 @@ final class GenerationRequestBudget
             return $exception;
         }
 
-        $tiers = $this->validatedTiers($budgets, $stage);
+        $tiers = $this->validateFrozen($budgets, $stage);
         if ($this->nextHigherTier($tiers, $current, $category, $currentTier) !== null) {
             return new AiProviderException(
                 $exception->errorCode,
@@ -215,8 +215,14 @@ final class GenerationRequestBudget
      * @param  array<string, mixed>  $budgets
      * @return array<string, array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}>
      */
-    private function validatedTiers(array $budgets, AiStage $stage): array
+    public function validateFrozen(array $budgets, AiStage $stage, array $requiredTiers = []): array
     {
+        if ($requiredTiers !== [] && array_keys($budgets) !== $requiredTiers) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => '[REQUEST_BUDGET_INVALID] '.$stage->getLabel().' 必须按顺序冻结 '.implode(' / ', $requiredTiers).' 请求预算。',
+            ]);
+        }
+
         $validated = [];
         $previousOutput = 0;
         $previousReasoningReserve = 0;

@@ -5,9 +5,11 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
+use App\Actions\Chapters\RecoverLegacyEventExtractionAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\AI\AiSettingsService;
+use App\AI\Exceptions\AiProviderException;
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
@@ -37,6 +39,7 @@ use App\Services\ChapterRepairRecommendation;
 use App\Services\DraftLengthPolicy;
 use App\Services\DraftRewriteDiff;
 use App\Services\GenerationJobDispatcher;
+use App\Services\GenerationOutputCapacityGuard;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
@@ -1884,6 +1887,20 @@ class ViewNovelChapter extends ViewRecord
                         ->requiresConfirmation($artifact !== null)
                         ->modalDescription($artifact === null ? null : '将创建新的不可变候选产物版本，现有候选不会被覆盖。')
                         ->action(function () use ($artifact): void {
+                            try {
+                                // 旧 Admission、容量缺失和预算错误都是确定性失败，必须在写入队列标记前直接阻断。
+                                app(GenerationOutputCapacityGuard::class)
+                                    ->assertEventExtractionDispatchable($this->chapter());
+                            } catch (AiProviderException|ValidationException $exception) {
+                                Notification::make()
+                                    ->title($artifact === null ? '无法提取事件' : '无法重新提取事件')
+                                    ->body($exception->getMessage())
+                                    ->danger()
+                                    ->send();
+
+                                return;
+                            }
+
                             if (! $this->dispatchGenerationJob(new ExtractStoryEventsJob($this->chapterId, $artifact !== null, true))) {
                                 return;
                             }
@@ -1893,6 +1910,27 @@ class ViewNovelChapter extends ViewRecord
                                 ->body($artifact === null
                                     ? '完成后将自动生成状态补丁并执行审校；正式故事状态只会在提交正式版本时更新。'
                                     : '完成后将自动重建状态补丁并重新审校；正式故事状态只会在提交正式版本时更新。')
+                                ->success()
+                                ->send();
+                        }),
+                    Action::make('recoverLegacyEventExtraction')
+                        ->label('恢复事件提取（旧合同）')
+                        ->icon('heroicon-o-lifebuoy')
+                        ->color('warning')
+                        ->visible(fn (): bool => $this->usesLegacyEventExtractionAdmission())
+                        ->disabled($this->chapterDraftArtifacts()->isEmpty() || $this->generationWorkPending())
+                        ->requiresConfirmation()
+                        ->modalHeading('使用当前 Extractor 合同恢复事件提取')
+                        ->modalDescription('系统会保留现有 Plan、Scene、Chapter Draft 和历史 Run，仅创建新的事件提取 Run，并冻结当前 Extractor 路由、模型容量与三档请求预算。旧 Admission v1 快照不会被修改。')
+                        ->action(function (): void {
+                            $run = app(RecoverLegacyEventExtractionAction::class)->handle($this->chapter());
+                            $this->cachedGenerationWorkPending = null;
+                            $this->cachedChapter = null;
+                            $this->cacheSchema('content', null);
+
+                            Notification::make()
+                                ->title('旧合同事件提取恢复已加入队列')
+                                ->body("已创建 Run #{$run->getKey()}；Planner、Writer 和现有正文不会重新生成。")
                                 ->success()
                                 ->send();
                         }),
@@ -2534,5 +2572,10 @@ class ViewNovelChapter extends ViewRecord
             ->where('status', RunStatus::Succeeded)
             ->latest('id')
             ->value('id');
+    }
+
+    private function usesLegacyEventExtractionAdmission(): bool
+    {
+        return (int) data_get($this->chapter()->latestPlan?->admission_snapshot, 'schema_version') === 1;
     }
 }

@@ -1862,6 +1862,10 @@ Chapter Plan
 
 章节技术 Retry 和 Resume 必须复用失败 Run 或 Plan Admission 已冻结的 Provider、Model、推理程度、Prompt Version、模型容量与分档请求预算；后台配置变化不得改变同一恢复链。Provider 配置失败或冻结最高档的推理耗尽、可见输出截断、完成预算耗尽不得 Resume，必须修复配置后显式重建章节来源链。运行详情必须把冻结路由、静态容量、本次预算档位与触发原因、容量门禁快照、Provider 实际发送参数、`reasoning_tokens`、`finish_reason` 和完成预算分类分开显示。
 
+历史 Admission v1 已经完成 Planner、Scene 和 Chapter Draft 时，允许使用显式“恢复事件提取（旧合同）”动作建立新的事件提取来源链。该动作不得修改旧 Plan Admission，不得重新请求 Planner 或 Writer；它必须先创建 `queued` Generation Run，冻结当前 Extractor 的 Provider、Model、Reasoning Effort、Prompt Version、模型容量与三档请求预算，再派发 Event Extraction Job。Worker 必须核对 Plan、Admission 快照、Scene 当前 Artifact、Chapter Draft、Bible Version 和 Canonical State Version 与恢复合同一致；任一来源变化时在 Provider 请求前失败。
+
+章节工作台的“提取事件 / 重新提取事件”常规动作必须在设置队列标记和派发 Job 前同步预检 Extractor 冻结合同。旧 Admission、Provider Route 不完整、模型容量缺失、三档预算无效或预算超过冻结容量时，页面直接显示具体错误码与修复方向，并保持零 Job 派发；Admission v1 应引导使用独立的旧合同恢复动作。
+
 ---
 
 # 23. Failure Recovery

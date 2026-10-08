@@ -303,6 +303,10 @@ Plan Admission Gate 在 Scene 1 前确定性拒绝缺失 Primary、Outline 父�
 
 Plan Admission v2 在同一 `admission_snapshot` 中冻结 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五条完整合同。每条合同包含 Provider、Model、Reasoning Effort、Prompt Version、匹配的模型价格记录容量，以及按顺序保存的 `initial / retry / final` 请求预算；Reviewer 当前只有 `initial`。每档预算保存 `output_tokens + reasoning_reserve_tokens = max_completion_tokens`，档位不得降低任一组成部分。Admission 先校验全部合同，再允许 Scene 1；任何一个 Stage 缺少容量或能力时，整个 Plan 不得进入运行态。Chapter Planner 在 Admission 之前执行，因此把同结构合同冻结到自己的首个 Run，技术 Retry 从失败 Run 还原。
 
+Admission v1 不得静默改写为 v2。若旧章已经持久化完整 Plan、Scene 和 Chapter Draft，章节工作台提供独立的事件提取恢复动作：事务内锁定 Chapter，核实没有活动 Run，以当前 Extractor 配置创建新的 `queued` Event Extraction Run，并把恢复来源、Provider、Model、Reasoning Effort、Prompt Version、模型容量和三档预算完整冻结到该 Run。Job 只携带恢复 Run ID，不能重新解析当前路由；执行前再次比对 Plan、旧 Admission 快照、Scene Artifact、Chapter Draft、Bible 与 State。来源不变时只执行 Event Extraction 及其正常下游，Planner、Writer、旧 Plan 快照和历史 Run/Artifact 均不修改；来源变化时零 Provider 请求失败。
+
+常规“提取事件 / 重新提取事件”按钮在调用 `GenerationJobDispatcher` 前执行同步合同预检：只接受 Admission v2，Extractor Route 必须完整，模型容量必须匹配 Provider/Model 并支持结构化输出，`initial / retry / final` 三档预算必须有序、算式正确且不超过冻结容量。任何确定性失败都由 Filament 直接显示，不能写入 pending 标记、派发 Job 或先显示“已加入队列”。Worker 端容量门禁继续保留，作为并发变化和非 UI 调用的第二道校验。
+
 所有章节 Provider 调用都在发送前执行同一个容量门禁：估算输入加 `max_completion_tokens` 不得超过冻结上下文窗口，本次完成预算不得超过冻结模型最大输出，也不得超过该 Stage 的冻结最高请求预算。Run 保存本次 `selected_request_budget`、`request_budget_tier`、`request_budget_trigger` 和容量门禁快照；Provider 返回后，Usage 保存 Provider 实际发送参数。OpenAI 映射为 `max_completion_tokens`，DeepSeek 映射为 `max_tokens`，计划值不得冒充实际请求值。确定性的 Chapter Assembly 不读取这些合同，也不调用 Provider。
 
 Beat `must_include` 表示 Beat 完成前至少一次具有 Canonical 证据；Milestone `must_include` 表示该 Milestone 完成前至少一次具有 Canonical 证据；Chapter `must_reveal` 只包含本章承担的项目。已经由前序 Canonical Chapter 满足的内容不得继续强制每章重复，Beat/Milestone 的 `must_not_include` 在其整个生命周期持续生效。
@@ -743,6 +747,8 @@ Plan 已完成 → Scene 1
 Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v4 主批次，旧 v4 批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
 
 章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。技术 Retry 与 Resume 复用原 Run 或 Plan Admission 冻结的 Route、Prompt、容量和分档预算；尤其 Chapter Planner 位于 Admission 之前，必须从最近一个同来源、可重试的失败 Run 还原合同，不能在 Queue Retry 时重新解析后台配置。Provider 配置失败或冻结最高档的完成预算失败返回不可恢复点，修复后通过显式 Restart 创建新的来源链。Generation 运行详情分别显示冻结路由、静态容量、预算档位及升档原因、容量门禁、实际发送参数、Usage 和完成预算分类。章节工作台同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
+
+旧 Admission v1 的事件提取恢复属于显式 Restart 的受限形式：它只在 Plan、Scene 和 Chapter Draft 已成功且未变化时创建新的 Event Extraction Run 合同，不创建新 Plan、不重新生成 Scene，也不覆盖任何历史记录。恢复 Run 在入队前持久化；Queue 派发失败、来源漂移或合同缺失都必须写入该 Run 并停止，不能留下无期限 `queued` 状态。
 
 不要根据 Redis Queue 中是否还有 Job 判断业务进度。
 

@@ -10,6 +10,7 @@ use App\Enums\PlanStatus;
 use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
+use App\Models\Novel;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -63,50 +64,7 @@ class PlanAdmissionService
 
         $routes = [];
         foreach (self::PIPELINE_STAGES as $stage) {
-            try {
-                $settings = $this->settingsResolver->resolve($stage, $novel);
-                $promptVersion = $this->promptVersionResolver->resolve($stage);
-            } catch (Throwable $exception) {
-                throw ValidationException::withMessages([
-                    "routes.{$stage->value}" => "[PROVIDER_ROUTE_NOT_FROZEN] {$stage->getLabel()} Route 无法冻结：{$exception->getMessage()}；请在 AI 设置中修复 Provider、Model 和 Prompt Version。",
-                ]);
-            }
-
-            $profile = AIModelPrice::findEnabledForRoute($settings->provider, $settings->model);
-            if ($profile === null) {
-                throw ValidationException::withMessages([
-                    "routes.{$stage->value}" => "[MODEL_CAPACITY_NOT_VERIFIED] {$stage->getLabel()} Route {$settings->provider}/{$settings->model} 缺少已启用的模型价格记录，无法冻结容量与能力。",
-                ]);
-            }
-            $capabilityErrors = $profile->generationSuitabilityErrors($stage, $settings->reasoningEffort);
-            if ($capabilityErrors !== []) {
-                throw ValidationException::withMessages([
-                    "routes.{$stage->value}" => "[MODEL_CAPABILITY_NOT_VERIFIED] {$stage->getLabel()} Route {$settings->provider}/{$settings->model} 不适用：".implode(' ', $capabilityErrors),
-                ]);
-            }
-
-            $requestBudgets = $this->requestBudget->configured($stage);
-            $modelCapacity = $profile->capacitySnapshot();
-            $maximumBudget = $this->requestBudget->maximum($requestBudgets);
-            $staticMaximum = min(
-                (int) $modelCapacity['context_window_tokens'],
-                (int) $modelCapacity['max_output_tokens'],
-            );
-            if ($maximumBudget > $staticMaximum) {
-                throw ValidationException::withMessages([
-                    "routes.{$stage->value}" => "[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY] {$stage->getLabel()} 最大完成预算 {$maximumBudget} Token 超过模型静态容量 {$staticMaximum} Token。",
-                ]);
-            }
-
-            $routes[$stage->value] = [
-                'provider' => $settings->provider,
-                'model' => $settings->model,
-                'reasoning_effort' => $settings->reasoningEffort,
-                'prompt_version' => $promptVersion,
-                // 模型容量与请求预算必须分别冻结，避免把工作流预算误当成模型硬上限。
-                'model_capacity' => $modelCapacity,
-                'request_budgets' => $requestBudgets,
-            ];
+            $routes[$stage->value] = $this->currentStageContract($novel, $stage)['route'];
         }
 
         $scenePlans = array_values($plan->scene_plans ?? []);
@@ -179,6 +137,62 @@ class PlanAdmissionService
             'input_hash' => $inputHash,
             'admission_snapshot' => $snapshot,
             'admitted_at' => now(),
+        ];
+    }
+
+    /**
+     * 为新 Admission 或显式恢复动作解析当前 Stage 合同；调用方必须把返回结果持久化后才能派发 Provider Job。
+     *
+     * @return array{route: array<string, mixed>, source: string}
+     */
+    public function currentStageContract(Novel $novel, AiStage $stage): array
+    {
+        try {
+            $settings = $this->settingsResolver->resolve($stage, $novel);
+            $promptVersion = $this->promptVersionResolver->resolve($stage);
+        } catch (Throwable $exception) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[PROVIDER_ROUTE_NOT_FROZEN] {$stage->getLabel()} Route 无法冻结：{$exception->getMessage()}；请在 AI 设置中修复 Provider、Model 和 Prompt Version。",
+            ]);
+        }
+
+        $profile = AIModelPrice::findEnabledForRoute($settings->provider, $settings->model);
+        if ($profile === null) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[MODEL_CAPACITY_NOT_VERIFIED] {$stage->getLabel()} Route {$settings->provider}/{$settings->model} 缺少已启用的模型价格记录，无法冻结容量与能力。",
+            ]);
+        }
+        $capabilityErrors = $profile->generationSuitabilityErrors($stage, $settings->reasoningEffort);
+        if ($capabilityErrors !== []) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[MODEL_CAPABILITY_NOT_VERIFIED] {$stage->getLabel()} Route {$settings->provider}/{$settings->model} 不适用：".implode(' ', $capabilityErrors),
+            ]);
+        }
+
+        $requestBudgets = $this->requestBudget->configured($stage);
+        $modelCapacity = $profile->capacitySnapshot();
+        $maximumBudget = $this->requestBudget->maximum($requestBudgets);
+        $staticMaximum = min(
+            (int) $modelCapacity['context_window_tokens'],
+            (int) $modelCapacity['max_output_tokens'],
+        );
+        if ($maximumBudget > $staticMaximum) {
+            throw ValidationException::withMessages([
+                "routes.{$stage->value}" => "[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY] {$stage->getLabel()} 最大完成预算 {$maximumBudget} Token 超过模型静态容量 {$staticMaximum} Token。",
+            ]);
+        }
+
+        return [
+            'source' => $settings->source,
+            'route' => [
+                'provider' => $settings->provider,
+                'model' => $settings->model,
+                'reasoning_effort' => $settings->reasoningEffort,
+                'prompt_version' => $promptVersion,
+                // 模型容量与请求预算必须分别冻结，避免把工作流预算误当成模型硬上限。
+                'model_capacity' => $modelCapacity,
+                'request_budgets' => $requestBudgets,
+            ],
         ];
     }
 

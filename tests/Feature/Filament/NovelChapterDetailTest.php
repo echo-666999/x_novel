@@ -799,7 +799,7 @@ test('events workspace shows candidates and can dispatch extraction', function (
 
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
-    ChapterPlan::factory()->for($chapter)->create();
+    freezeChapterRouteContractsForTest(ChapterPlan::factory()->for($chapter)->create());
     $assemblyRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'stage' => GenerationStage::ChapterAssembly,
         'status' => RunStatus::Succeeded,

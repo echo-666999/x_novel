@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
+use App\AI\Data\ResolvedAiSettings;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\StructuredOutput;
 use App\Data\StoryEventCandidate;
@@ -38,7 +39,7 @@ class StoryEventExtractor
         private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
-    public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false): ?GenerationArtifact
+    public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false, ?int $recoveryRunId = null): ?GenerationArtifact
     {
         $providerCalls = 0;
         $chapter = Chapter::query()->with([
@@ -54,36 +55,80 @@ class StoryEventExtractor
             throw new AiProviderException('novel_paused', '小说已暂停，不能开始 Story Event Extraction。', false);
         }
 
-        $draft = $this->latestChapterDraft($chapter);
-        $context = $this->context($chapter, $draft);
-        if ($chapter->latestPlan === null) {
-            throw new AiProviderException('event_capacity_contract_missing', 'Story Event Extraction 缺少 Chapter Plan。', false);
+        try {
+            $draft = $this->latestChapterDraft($chapter);
+            $context = $this->context($chapter, $draft);
+            if ($chapter->latestPlan === null) {
+                throw new AiProviderException('event_capacity_contract_missing', 'Story Event Extraction 缺少 Chapter Plan。', false);
+            }
+            $recoveryRun = $recoveryRunId === null
+                ? null
+                : $this->legacyRecoveryRun($recoveryRunId, $chapter, $draft, $context);
+            if ($recoveryRun !== null) {
+                $extractorRoute = $this->outputCapacity->frozenRouteForRun($chapter, $recoveryRun, AiStage::Extractor);
+                $frozenRoute = (array) data_get($recoveryRun->context_snapshot, 'generation_preferences.frozen_route', []);
+                $settings = new ResolvedAiSettings(
+                    stage: AiStage::Extractor,
+                    provider: (string) $extractorRoute['provider'],
+                    model: (string) $extractorRoute['model'],
+                    reasoningEffort: $extractorRoute['reasoning_effort'] ?? null,
+                    source: (string) ($frozenRoute['source'] ?? 'legacy_event_extraction_recovery'),
+                );
+                $promptVersion = (string) $extractorRoute['prompt_version'];
+                // 恢复 Run 的来源与路由合同必须进入 Stage 指纹，避免与旧 Admission v1 的失败链混用。
+                $context['recovery'] = data_get($recoveryRun->context_snapshot, 'recovery');
+            } else {
+                $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Extractor);
+                $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Extractor);
+                $extractorRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Extractor);
+            }
+            $context['generation_preferences']['model_capacity'] = $extractorRoute['model_capacity'];
+            $context['generation_preferences']['request_budgets'] = $extractorRoute['request_budgets'];
+            // Run 自身保存冻结路由，恢复和页面诊断都不再读取当前后台配置来猜测历史请求。
+            $context['generation_preferences']['frozen_route'] = [
+                'provider' => $settings->provider,
+                'model' => $settings->model,
+                'reasoning_effort' => $settings->reasoningEffort,
+                'source' => $settings->source,
+                'prompt_version' => $promptVersion,
+            ];
+            $context['generation_preferences']['route_contract_source'] = $recoveryRun === null
+                ? 'plan_admission'
+                : GenerationOutputCapacityGuard::LEGACY_EVENT_RECOVERY_CONTRACT;
+            $context['generation_preferences']['repair_budgets'] = $recoveryRun === null
+                ? ['event_evidence' => ['initial' => (int) config('generation.event_evidence_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.event_evidence_repair_retry_max_output_tokens', 4_000)]]
+                : (array) data_get($recoveryRun->context_snapshot, 'generation_preferences.repair_budgets', []);
+            $inputHash = app(GenerationStageFingerprint::class)->make(
+                GenerationStage::EventExtraction,
+                $context,
+                upstreamChecksums: [$draft->checksum],
+                frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
+                contractVersion: $promptVersion,
+            );
+            $baseKey = $recoveryRun === null
+                ? "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}"
+                : (string) data_get($recoveryRun->context_snapshot, 'recovery.base_key');
+            if ($baseKey === '') {
+                throw new AiProviderException('extractor_recovery_contract_missing', '事件提取恢复 Run 缺少幂等链标识。', false);
+            }
+            [$run, $reused] = $this->startRun(
+                $chapter,
+                $baseKey,
+                $inputHash,
+                $context,
+                $settings->provider,
+                $settings->model,
+                $promptVersion,
+                $regenerate,
+                $recoveryRun?->getKey(),
+            );
+        } catch (Throwable $exception) {
+            if ($recoveryRunId !== null) {
+                $this->failPreparedRecoveryRun($recoveryRunId, $chapter->getKey(), $exception);
+            }
+
+            throw $exception;
         }
-        $settings = $this->planAdmission->historicalRouteFor($chapter->latestPlan, AiStage::Extractor);
-        $promptVersion = $this->planAdmission->historicalPromptVersionFor($chapter->latestPlan, AiStage::Extractor);
-        $extractorRoute = $this->outputCapacity->frozenRoute($chapter, AiStage::Extractor);
-        $context['generation_preferences']['model_capacity'] = $extractorRoute['model_capacity'];
-        $context['generation_preferences']['request_budgets'] = $extractorRoute['request_budgets'];
-        // Run 自身保存冻结路由，恢复和页面诊断都不再读取当前后台配置来猜测历史请求。
-        $context['generation_preferences']['frozen_route'] = [
-            'provider' => $settings->provider,
-            'model' => $settings->model,
-            'reasoning_effort' => $settings->reasoningEffort,
-            'source' => $settings->source,
-            'prompt_version' => $promptVersion,
-        ];
-        $context['generation_preferences']['repair_budgets'] = [
-            'event_evidence' => ['initial' => (int) config('generation.event_evidence_repair_max_output_tokens', 1_000), 'retry' => (int) config('generation.event_evidence_repair_retry_max_output_tokens', 4_000)],
-        ];
-        $inputHash = app(GenerationStageFingerprint::class)->make(
-            GenerationStage::EventExtraction,
-            $context,
-            upstreamChecksums: [$draft->checksum],
-            frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
-            contractVersion: $promptVersion,
-        );
-        $baseKey = "events:{$draft->checksum}:{$context['state_version']}:{$promptVersion}";
-        [$run, $reused] = $this->startRun($chapter, $baseKey, $inputHash, $context, $settings->provider, $settings->model, $promptVersion, $regenerate);
 
         if ($reused) {
             return $run->artifacts()->where('type', ArtifactType::EventCandidate)->latest('version')->first();
@@ -258,10 +303,43 @@ class StoryEventExtractor
     }
 
     /** @return array{0: GenerationRun, 1: bool} */
-    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate): array
+    private function startRun(Chapter $chapter, string $baseKey, string $inputHash, array $context, string $provider, string $model, string $promptVersion, bool $regenerate, ?int $recoveryRunId = null): array
     {
-        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion): array {
+        return DB::transaction(function () use ($chapter, $baseKey, $inputHash, $context, $provider, $model, $promptVersion, $recoveryRunId): array {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
+            if ($recoveryRunId !== null) {
+                $prepared = GenerationRun::query()->lockForUpdate()->findOrFail($recoveryRunId);
+                if ($prepared->status === RunStatus::Queued) {
+                    if ($prepared->chapter_id !== $chapter->getKey()
+                        || $prepared->stage !== GenerationStage::EventExtraction
+                        || $prepared->idempotency_key !== $baseKey) {
+                        throw new AiProviderException('extractor_recovery_contract_mismatch', '排队中的事件提取恢复 Run 与当前章节或幂等链不一致。', false);
+                    }
+                    if ($chapter->status === ChapterStatus::Blocked) {
+                        $chapter->update(['status' => ChapterStatus::Generating]);
+                    }
+                    // Worker 激活页面预先持久化的 Run；Route、容量和预算来自该 Run，绝不回写旧 Plan Admission。
+                    $prepared->update([
+                        'status' => RunStatus::Running,
+                        'input_hash' => $inputHash,
+                        'state_version' => $context['state_version'],
+                        'bible_version' => $context['bible_version'],
+                        'context_snapshot' => [
+                            ...$context,
+                            'chapter_draft' => collect($context['chapter_draft'])->except('content')->all(),
+                        ],
+                        'started_at' => now(),
+                        'finished_at' => null,
+                        'error_code' => null,
+                        'error_message' => null,
+                        'error_retryable' => null,
+                        'error_metadata' => null,
+                    ]);
+
+                    return [$prepared->refresh(), false];
+                }
+            }
+
             $runs = $chapter->generationRuns()->where('stage', GenerationStage::EventExtraction);
             $resolution = $this->runCoordinator->resolve($runs->getQuery(), $inputHash, 'Event Extraction Run 超时未完成，已由后续投递恢复。');
             if ($resolution['reused']) {
@@ -296,6 +374,80 @@ class StoryEventExtractor
                 'started_at' => now(),
             ]), false];
         });
+    }
+
+    /** @param array<string, mixed> $context */
+    private function legacyRecoveryRun(int $runId, Chapter $chapter, GenerationArtifact $draft, array $context): GenerationRun
+    {
+        $run = GenerationRun::query()->findOrFail($runId);
+        $source = data_get($run->context_snapshot, 'recovery.source');
+        $plan = $chapter->latestPlan;
+        $currentScenes = $chapter->scenes->map(fn ($scene): array => [
+            'scene_id' => $scene->getKey(),
+            'sequence' => $scene->sequence,
+            'current_artifact_id' => $scene->current_artifact_id,
+        ])->values()->all();
+        $currentPlanChecksum = $plan?->checksum ?: $plan?->semanticChecksum();
+        $currentAdmissionChecksum = hash('sha256', json_encode(
+            app(GenerationStageFingerprint::class)->normalize($plan?->admission_snapshot),
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+        ));
+
+        if ($run->chapter_id !== $chapter->getKey()
+            || $run->stage !== GenerationStage::EventExtraction
+            || data_get($run->context_snapshot, 'generation_preferences.route_contract_source') !== GenerationOutputCapacityGuard::LEGACY_EVENT_RECOVERY_CONTRACT
+            || ! is_array($source)
+            || (int) ($source['plan_id'] ?? 0) !== $plan?->getKey()
+            || (int) ($source['plan_version'] ?? 0) !== $plan?->version
+            || (string) ($source['plan_checksum'] ?? '') !== (string) $currentPlanChecksum
+            || (int) data_get($plan?->admission_snapshot, 'schema_version') !== 1
+            || (string) ($source['admission_snapshot_checksum'] ?? '') !== $currentAdmissionChecksum
+            || (int) ($source['draft_artifact_id'] ?? 0) !== $draft->getKey()
+            || (string) ($source['draft_checksum'] ?? '') !== $draft->checksum
+            || (int) ($source['state_version'] ?? -1) !== (int) $context['state_version']
+            || (int) ($source['bible_version'] ?? -1) !== (int) $context['bible_version']
+            || ($source['scene_artifacts'] ?? null) !== $currentScenes) {
+            $exception = new AiProviderException(
+                'extractor_recovery_source_changed',
+                '事件提取恢复合同冻结后，Plan、Scene、Chapter Draft、Bible 或 Canonical State 已变化；未发起 Provider 请求。',
+                false,
+            );
+            // 预检发生在 Provider Run 激活前，也必须把失败写回预创建 Run，避免页面永久显示 queued。
+            if (in_array($run->status, [RunStatus::Queued, RunStatus::Running], true)) {
+                $run->update([
+                    'status' => RunStatus::Failed,
+                    'error_code' => $exception->errorCode,
+                    'error_message' => $exception->getMessage(),
+                    'error_retryable' => false,
+                    'error_metadata' => [
+                        'category' => 'recovery_source_changed',
+                        'stage' => GenerationStage::EventExtraction->value,
+                        'next_action' => '重新创建事件提取恢复合同',
+                    ],
+                    'finished_at' => now(),
+                ]);
+            }
+
+            throw $exception;
+        }
+
+        return $run;
+    }
+
+    private function failPreparedRecoveryRun(int $runId, int $chapterId, Throwable $exception): void
+    {
+        $run = GenerationRun::query()
+            ->whereKey($runId)
+            ->where('chapter_id', $chapterId)
+            ->where('stage', GenerationStage::EventExtraction)
+            ->first();
+
+        if ($run === null || ! in_array($run->status, [RunStatus::Queued, RunStatus::Running], true)) {
+            return;
+        }
+
+        // 恢复合同先于 Provider 请求持久化，因此任何预检失败也必须结束该 Run，不能留下虚假的排队状态。
+        $this->failurePolicy->record($run, $exception, 'event_recovery_preflight_failed');
     }
 
     /** @return array{0: array<int, StoryEventCandidate>, 1: array<string, mixed>} */

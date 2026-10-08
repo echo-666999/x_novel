@@ -87,9 +87,10 @@ return [
             'final' => ['output_tokens' => (int) env('SCENE_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000), 'reasoning_reserve_tokens' => (int) env('SCENE_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('SCENE_RETRY_REASONING_RESERVE_TOKENS', env('SCENE_REASONING_RESERVE_TOKENS', 0)))],
         ],
         'extractor' => [
-            'initial' => ['output_tokens' => (int) env('EVENT_EXTRACTION_MAX_OUTPUT_TOKENS', 4_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 0)],
-            'retry' => ['output_tokens' => (int) env('EVENT_EXTRACTION_RETRY_MAX_OUTPUT_TOKENS', 8_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_RETRY_REASONING_RESERVE_TOKENS', env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 0))],
-            'final' => ['output_tokens' => (int) env('EVENT_EXTRACTION_FINAL_RETRY_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('EVENT_EXTRACTION_RETRY_REASONING_RESERVE_TOKENS', env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 0)))],
+            // DeepSeek 已出现 4,000 Token 全部用于隐藏推理的真实响应；三档递增预留让推理耗尽可以安全升级，而不是原参数重试。
+            'initial' => ['output_tokens' => (int) env('EVENT_EXTRACTION_MAX_OUTPUT_TOKENS', 4_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_REASONING_RESERVE_TOKENS', 8_000)],
+            'retry' => ['output_tokens' => (int) env('EVENT_EXTRACTION_RETRY_MAX_OUTPUT_TOKENS', 8_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_RETRY_REASONING_RESERVE_TOKENS', 16_000)],
+            'final' => ['output_tokens' => (int) env('EVENT_EXTRACTION_FINAL_RETRY_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('EVENT_EXTRACTION_FINAL_RETRY_REASONING_RESERVE_TOKENS', 24_000)],
         ],
         'reviewer' => [
             'initial' => ['output_tokens' => (int) env('REVIEW_MAX_OUTPUT_TOKENS', 12_000), 'reasoning_reserve_tokens' => (int) env('REVIEW_REASONING_RESERVE_TOKENS', 0)],

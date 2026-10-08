@@ -898,6 +898,10 @@ test('event extraction increases frozen output budgets and stops before a fourth
     config()->set('generation.chapter_request_budgets.extractor.initial.output_tokens', 100);
     config()->set('generation.chapter_request_budgets.extractor.retry.output_tokens', 200);
     config()->set('generation.chapter_request_budgets.extractor.final.output_tokens', 300);
+    // 本用例只验证可见输出截断的升级路径，显式清零推理预留，避免生产默认值改变测试目标。
+    config()->set('generation.chapter_request_budgets.extractor.initial.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.extractor.retry.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.extractor.final.reasoning_reserve_tokens', 0);
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedEventExtractionResponse())

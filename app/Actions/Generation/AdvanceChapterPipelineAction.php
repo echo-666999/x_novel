@@ -25,6 +25,7 @@ use App\Models\GenerationArtifact;
 use App\Models\Review;
 use App\Services\AutoStopService;
 use App\Services\GenerationJobDispatcher;
+use App\Services\GenerationOutputCapacityGuard;
 use App\Services\GenerationRunLease;
 use App\Services\GenerationStageGate;
 use App\Services\PlanAdmissionService;
@@ -81,7 +82,11 @@ class AdvanceChapterPipelineAction
                 || (int) data_get($candidate->data, 'source_artifact_id') !== $draft->getKey()
                 || $candidate->generationRun->state_version !== $chapter->novel->canonicalStateVersion?->version) {
                 $nextStage = GenerationStage::EventExtraction;
-                $nextJob = new ExtractStoryEventsJob($chapter->getKey());
+                // Worker 丢失后的统一推进仍要携带旧 Admission 恢复 Run，不能退回 Plan v1 读取容量。
+                $nextJob = new ExtractStoryEventsJob(
+                    chapterId: $chapter->getKey(),
+                    recoveryRunId: $this->legacyEventRecoveryRunId($chapter, $draft),
+                );
 
                 return;
             }
@@ -334,6 +339,20 @@ class AdvanceChapterPipelineAction
         $batchId = data_get($artifact?->generationRun?->context_snapshot, 'regeneration_batch_id');
 
         return is_string($batchId) && $batchId !== '' ? $batchId : null;
+    }
+
+    private function legacyEventRecoveryRunId(Chapter $chapter, GenerationArtifact $draft): ?int
+    {
+        $run = $chapter->generationRuns()
+            ->where('stage', GenerationStage::EventExtraction)
+            ->latest('id')
+            ->first();
+
+        return data_get($run?->context_snapshot, 'generation_preferences.route_contract_source')
+            === GenerationOutputCapacityGuard::LEGACY_EVENT_RECOVERY_CONTRACT
+            && (int) data_get($run?->context_snapshot, 'recovery.source.draft_artifact_id') === $draft->getKey()
+            ? $run?->getKey()
+            : null;
     }
 
     private function canAdvance(Chapter $chapter): bool

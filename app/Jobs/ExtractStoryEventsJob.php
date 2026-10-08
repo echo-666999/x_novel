@@ -36,8 +36,12 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
         return app(GenerationFailurePolicy::class)->backoff(GenerationStage::EventExtraction);
     }
 
-    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false, public readonly bool $continueRewrite = false)
-    {
+    public function __construct(
+        public readonly int $chapterId,
+        public readonly bool $regenerate = false,
+        public readonly bool $continueRewrite = false,
+        public readonly ?int $recoveryRunId = null,
+    ) {
         $this->onQueue('generation');
     }
 
@@ -55,7 +59,12 @@ class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
         $advance ??= app(AdvanceChapterPipelineAction::class);
 
         try {
-            $artifact = $extractor->extract($this->chapterId, $this->regenerate, singleProviderCall: true);
+            $artifact = $extractor->extract(
+                $this->chapterId,
+                $this->regenerate,
+                singleProviderCall: true,
+                recoveryRunId: $this->recoveryRunId,
+            );
             if ($artifact !== null) {
                 if (! $this->advanceAfterSuccessfulStage(
                     $advance,

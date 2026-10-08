@@ -23,6 +23,7 @@ use App\Models\GenerationRun;
 use App\Models\Review as ReviewModel;
 use App\Models\Scene;
 use App\Services\GenerationFailurePolicy;
+use App\Services\GenerationOutputCapacityGuard;
 use App\Services\StalledRunRecoveryService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -644,7 +645,13 @@ class Generation extends Page implements HasTable
                 // 技术 Retry 与 Resume 都沿用原来源链；只有显式 Restart 才能读取新的 Route 或预算配置。
                 GenerationStage::ChapterPlanning => PlanChapterJob::dispatch($run->chapter_id, false),
                 GenerationStage::ChapterAssembly => AssembleChapterJob::dispatch($run->chapter_id, false),
-                GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch($run->chapter_id, false),
+                // 旧 Admission 的恢复 Job 必须继续携带预创建 Run ID，否则 Worker 会回到缺少容量的 Plan v1。
+                GenerationStage::EventExtraction => ExtractStoryEventsJob::dispatch(
+                    $run->chapter_id,
+                    false,
+                    false,
+                    $this->legacyEventRecoveryRunId($run),
+                ),
                 GenerationStage::Review => ReviewChapterJob::dispatch($run->chapter_id, false),
                 GenerationStage::Rewrite => RewriteChapterJob::dispatch($run->chapter_id, $run->scene_id),
                 GenerationStage::MemorySummary => GenerateCanonicalChapterSummaryJob::dispatch(
@@ -660,6 +667,14 @@ class Generation extends Page implements HasTable
             ->body($run->stage->getLabel().' 将从已持久化的 Run / Artifact 状态继续。')
             ->success()
             ->send();
+    }
+
+    private function legacyEventRecoveryRunId(GenerationRun $run): ?int
+    {
+        return data_get($run->context_snapshot, 'generation_preferences.route_contract_source')
+            === GenerationOutputCapacityGuard::LEGACY_EVENT_RECOVERY_CONTRACT
+            ? $run->getKey()
+            : null;
     }
 
     /** @return array{failed: int, blocked: int, recoverable: int, needs_attention: int} */
