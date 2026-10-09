@@ -479,6 +479,8 @@ assemble:{chapter_id}:{ordered_scene_checksums}:{assembly_algorithm_version}
 
 Extractor Context 同时冻结 `current_scene_references`，每项明确区分数据库 `scene_id`、章内 `sequence` 和当前 Scene Draft Artifact。Provider 只能把前者写入 `evidence.scene_id`。当模型误把 sequence 或其他章节 Scene ID 写入该字段时，Laravel 只在 evidence quote 逐字且唯一命中当前章节某个 Scene Draft 时纠正为该 Scene 的数据库 ID。零命中或多命中时不猜测，仍以 `event_validation_failed` 拒绝。
 
+`event-extractor-v9` 保留上述完整 Context Snapshot 作为 Input Hash、恢复和审计依据，但 Provider 输入压缩为正文、候选实体、Scene ID 映射、Canonical State、授权伏笔动作、Outline 完成条件和事件主体规则。Provider 不再接收 Locked Facts、完整 Plan/伏笔合同、Artifact ID、Checksum、路由或预算诊断字段。输出 evidence 不再要求 Artifact ID 与字符偏移，Outline Completion 也不再复述条件文本、数据库身份、Scene ID 或汇总状态；Laravel 根据数组顺序、逐字证据和冻结合同恢复后，再执行原有完整校验。冻结为 `event-extractor-v8` 的历史 Run 仍走旧输入输出合同。
+
 幂等键：
 
 ```text
@@ -700,7 +702,9 @@ Auto Generate 不能预先 Queue 100 章。
 
 Auto Generate 自动推进当前章到 Review PASS。`auto_commit=false` 时等待用户提交；`auto_commit=true` 时安全派发 Canonical Commit。Chapter N 提交成功并完成 Post-Commit 后，才启动 Chapter N+1。
 
-Filament 的“生成下一章”会创建或恢复当前目标章，并立即调用 `AdvanceChapterPipelineAction`；“开始自动生成”完成相同的创建或恢复与推进，确认没有前置或断点错误后再开启 `auto_generate`。`auto_generate` 表示 Canonical Commit 成功后允许续接下一章；`auto_commit` 单独控制 PASS 后是否自动发起该 Commit，默认关闭并在小说设置中显式展示。
+Filament 的“启动章节生成”会创建或恢复当前目标章，确认没有前置或断点错误后保存所选模式，并立即调用 `AdvanceChapterPipelineAction`。`auto_generate` 表示 Canonical Commit 成功后允许续接下一章；`auto_commit` 单独控制 PASS 后是否自动发起该 Commit，默认关闭并由启动模式显式设置。
+
+Filament 将上述两个内部布尔值收敛为一个“启动章节生成”入口的三种显式模式：`review_only=false/false`、`continuous_manual=true/false`、`full_auto=true/true`，顺序分别对应 `auto_generate / auto_commit`。入口先完成下一章预检，再保存所选模式并调用统一推进器；手工停止把两个值同时恢复为 `false`。独立的自动提交 Toggle 和重复的“生成下一章”入口不再存在，避免产生页面没有说明的组合。
 
 ```text
 Chapter N Commit
@@ -710,7 +714,7 @@ Chapter N Commit
 → Chapter N+1
 ```
 
-手动“生成下一章”同样要求上一正式章节摘要已就绪；缺失时返回 `previous_chapter_summary_missing` 并引导到摘要恢复操作。
+“当前章生成到审校”模式同样要求上一正式章节摘要已就绪；缺失时返回 `previous_chapter_summary_missing` 并引导到摘要恢复操作。
 
 下一章必须基于上一章最新 Canonical State。
 
@@ -834,7 +838,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 chapter-planner-v10+natural-prose-v1
 scene-writer-v15+natural-prose-v1
 assembly-algorithm-v1
-event-extractor-v8
+event-extractor-v9
 reviewer-v16+natural-prose-v1
 rewrite-v14+natural-prose-v1
 review-schema-repair-v3
@@ -892,7 +896,7 @@ stage:{stage}
 
 ### 23.1 操作与恢复
 
-正常操作从小说概览启动“生成下一章”，Laravel 自动推进 Plan、顺序 Scene、Assembly、Event Candidate、State Patch、Review 和必要的 Rewrite。`auto_commit=false` 时到 Review PASS 后停止，操作人员确认当前草稿、事件和状态变化后在章节工作台点击“提交正式章节”；`auto_commit=true` 时由系统安全派发同一提交作业。PASS 本身不会写入正式 Story State、Story Event 或 Memory，只有 Canonical Commit 事务成功才会写入。
+正常操作从小说概览点击“启动章节生成”并选择运行模式，Laravel 自动推进 Plan、顺序 Scene、Assembly、Event Candidate、State Patch、Review 和必要的 Rewrite。`auto_commit=false` 时到 Review PASS 后停止，操作人员确认当前草稿、事件和状态变化后在章节工作台点击“提交正式章节”；`auto_commit=true` 时由系统安全派发同一提交作业。PASS 本身不会写入正式 Story State、Story Event 或 Memory，只有 Canonical Commit 事务成功才会写入。
 
 常见停止原因按以下方式处理：
 
@@ -906,7 +910,7 @@ stage:{stage}
 | Review PASS | `auto_commit=false` 时等待提交；开启时仅在未暂停且来源链有效时派发 Canonical Commit | 关闭时在章节工作台点击“提交正式章节”；开启时查看 Commit 结果；小说暂停时不会自动提交 |
 | NEEDS_ATTENTION / BLOCK | 自动推进停止；Hard Finding 不允许普通 Override | 按 Findings 修订正文或修复状态前置条件，再重新审校；历史 Review 和 Artifact 保留 |
 
-“生成下一章”的前置检查会先对当前小说执行一次原子化停滞清理：只把超过 `stalled_run_after_seconds` 的 `running` Run 标记为 `failed / worker_lost`，再判断是否仍有 `queued / running` Run 或其他活跃章节；近期 Run 与仍在排队的任务不得误清理。该清理独立提交，即使后续因另一个真实活跃工作流而拒绝生成，过期 Run 也不会回滚成 `running`。`php artisan generation:mark-stalled` 继续承担全局定时清理，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
+“启动章节生成”的前置检查会先对当前小说执行一次原子化停滞清理：只把超过 `stalled_run_after_seconds` 的 `running` Run 标记为 `failed / worker_lost`，再判断是否仍有 `queued / running` Run 或其他活跃章节；近期 Run 与仍在排队的任务不得误清理。该清理独立提交，即使后续因另一个真实活跃工作流而拒绝生成，过期 Run 也不会回滚成 `running`。`php artisan generation:mark-stalled` 继续承担全局定时清理，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
 
 Bible 变更恢复命令默认只读：
 

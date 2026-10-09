@@ -24,7 +24,9 @@ class CreateNovel extends CreateRecord
             'generation' => [
                 'chapter_target_words' => (int) $data['generation_chapter_target_words'],
             ],
-            'auto_commit' => (bool) ($data['workflow_auto_commit'] ?? false),
+            // 新小说默认使用“当前章生成到审校”，正式启动时再由三种运行模式覆盖。
+            'auto_generate' => false,
+            'auto_commit' => false,
             'auto_commit_configured' => true,
         ];
         // Select 提交的是价格记录 ID，必须在创建 Novel 前转换并持久化完整的 Provider + Model 路由。
@@ -34,7 +36,7 @@ class CreateNovel extends CreateRecord
         );
 
         unset($data['generation_chapter_target_words']);
-        unset($data['ai_model_overrides'], $data['budget_limits'], $data['workflow_auto_commit']);
+        unset($data['ai_model_overrides'], $data['budget_limits']);
 
         return $data;
     }

@@ -11,7 +11,6 @@ use App\Models\Novel;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
@@ -102,15 +101,6 @@ class NovelForm
                             ->minValue(0)
                             ->step(0.000001)
                             ->placeholder(fn (): string => self::globalBudgetPlaceholder('chapter_max_cost')),
-                    ]),
-                Section::make('Canonical Workflow')
-                    ->description('控制 Review PASS 后是否自动进入正式提交。')
-                    ->icon('heroicon-o-shield-check')
-                    ->schema([
-                        Toggle::make('workflow_auto_commit')
-                            ->label('Review 通过后自动提交正式章节')
-                            ->helperText('默认关闭。开启后，只有当前 Draft、PASS Review、Event Candidate、State Patch 与 Expected State Version 全部一致时才会提交；提交会更新 Canonical Story State 并启动现有后置任务。')
-                            ->default(false),
                     ]),
             ]);
     }

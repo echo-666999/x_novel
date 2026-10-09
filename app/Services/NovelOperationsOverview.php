@@ -31,6 +31,16 @@ final readonly class NovelOperationsOverview
     public function progress(Novel $novel): array
     {
         $volume = $novel->volumes()->where('status', VolumeStatus::Active)->orderBy('sequence')->first();
+        $autoGenerate = (bool) data_get($novel->settings, 'auto_generate', false);
+        $autoCommit = data_get($novel->settings, 'auto_commit_configured') === true
+            && data_get($novel->settings, 'auto_commit') === true;
+        // 页面直接显示真实停止边界，让操作者无需推断两个布尔配置的组合。
+        $automationMode = match (true) {
+            data_get($novel->settings, 'auto_stop') !== null => '自动生成已停止',
+            $autoGenerate && $autoCommit => '全自动连续生成',
+            $autoGenerate => '连续生成 · 逐章确认',
+            default => '当前章生成到审校',
+        };
 
         return [
             'target_words' => $novel->target_words,
@@ -39,7 +49,7 @@ final readonly class NovelOperationsOverview
             'current_chapter' => $novel->current_chapter_sequence > 0 ? "第 {$novel->current_chapter_sequence} 章" : '尚无正式章节',
             'current_state_version' => $novel->canonicalStateVersion === null ? '故事状态: 未初始化' : '当前版本: '.$novel->canonicalStateVersion->version,
             'generation_status' => $novel->status->getLabel(),
-            'auto_generation_status' => (bool) data_get($novel->settings, 'auto_generate', false) ? 'Auto: ON' : 'Auto: OFF',
+            'auto_generation_status' => $automationMode,
             'pause_position' => 'Paused at: '.data_get($novel->settings, 'pause.label', '等待下一阶段'),
             'auto_stop_reason' => data_get($novel->settings, 'auto_stop.reason') ?: '—',
             'auto_stop_recommended_action' => data_get($novel->settings, 'auto_stop.recommended_action') ?: '—',

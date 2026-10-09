@@ -89,6 +89,5 @@ test('a passing audit can complete the novel while keeping the audit visible', f
         ->assertActionHidden('completeNovel');
 
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertActionDisabled('generateNextChapter')
-        ->assertActionDisabled('startAutoGenerate');
+        ->assertActionHidden('startAutoGenerate');
 });

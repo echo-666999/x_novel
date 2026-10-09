@@ -149,16 +149,20 @@ test('completion budget failures enter queue retry only after a stage marks a re
     'plan_completion_budget_exhausted',
 ]);
 
-test('unexpected code failures are terminal while database failures remain retryable', function () {
+test('unexpected code failures are terminal while database and redis failures remain retryable', function () {
     $policy = app(GenerationFailurePolicy::class);
     $codeFailure = $policy->fromException(new ErrorException('Undefined array key 0'), 'generation_code_failure');
     $databaseFailure = $policy->fromException(
         new QueryException('pgsql', 'select 1', [], new RuntimeException('connection lost')),
         'generation_code_failure',
     );
+    $redisFailure = $policy->fromException(new RedisException('connection lost'), 'generation_code_failure');
 
+    // 只有临时基础设施故障可重试，本地代码错误必须立即停止，避免重复副作用。
     expect($codeFailure->retryable)->toBeFalse()
         ->and($codeFailure->metadata['category'])->toBe('manual_attention')
         ->and($databaseFailure->retryable)->toBeTrue()
-        ->and($databaseFailure->metadata['category'])->toBe('infrastructure_temporary');
+        ->and($databaseFailure->metadata['category'])->toBe('infrastructure_temporary')
+        ->and($redisFailure->retryable)->toBeTrue()
+        ->and($redisFailure->metadata['category'])->toBe('infrastructure_temporary');
 });

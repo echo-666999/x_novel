@@ -1882,7 +1882,7 @@ RAG 调参有固定基准，不凭感觉。
 
 # M10 — 自动生成 / Pause / Resume / Recovery
 
-## TASK-100 — Auto Generate 开关
+## TASK-100 — 章节生成运行模式
 
 **Skills：** `filament-ui`, `generation-pipeline`
 
@@ -1900,17 +1900,17 @@ CheckNextAction
 ### UI
 Novel Overview：
 ```text
-[Start Auto Generate]
+[启动章节生成：当前章到审校 / 连续生成逐章确认 / 全自动连续生成]
 [Stop Auto Generate]
 ```
 
 显示当前：
 ```text
-Auto: ON/OFF
+当前章生成到审校 / 连续生成 · 逐章确认 / 全自动连续生成
 ```
 
 ### 验收
-每次只在上一章 Canonical 后生成下一章。
+三种模式显式映射 auto_generate / auto_commit；需要续章时，每次只在上一章 Canonical 后生成下一章。
 
 ---
 

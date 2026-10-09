@@ -632,7 +632,7 @@ test('the outline workspace guides a draft through ai planning and generation re
         ->assertActionVisible('startNovelGeneration')
         ->callAction('startNovelGeneration')
         ->assertNotified('小说已进入生成阶段')
-        ->assertActionVisible('generateNextChapter');
+        ->assertActionVisible('startAutoGenerate');
 });
 
 test('duplicate outline starts reuse the queued batch and dispatch one coordinator job', function () {

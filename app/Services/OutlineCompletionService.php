@@ -44,6 +44,116 @@ class OutlineCompletionService
     }
 
     /** @return array<string, mixed> */
+    public static function compactExtractionSchema(): array
+    {
+        // 模型只判断逐项语义状态并引用原文；条件身份、Scene ID 与汇总状态由 Laravel 恢复。
+        $audit = [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['status', 'evidence'],
+            'properties' => [
+                'status' => ['type' => 'string', 'enum' => ['fulfilled', 'not_met', 'contradicted']],
+                'evidence' => ['type' => ['string', 'null']],
+            ],
+        ];
+        $handoffAudit = $audit;
+        $handoffAudit['properties']['status']['enum'][] = 'not_applicable';
+
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['milestone_completion', 'beat_exit', 'handoff_readiness'],
+            'properties' => [
+                'milestone_completion' => ['type' => 'array', 'items' => $audit],
+                'beat_exit' => ['type' => 'array', 'items' => $audit],
+                'handoff_readiness' => ['type' => 'array', 'items' => $handoffAudit],
+            ],
+        ];
+    }
+
+    /** @param array<string, mixed> $payload @return array<string, mixed> */
+    public function expandCompactExtraction(array $payload, Chapter $chapter): array
+    {
+        if (! $this->hasExactKeys($payload, ['milestone_completion', 'beat_exit', 'handoff_readiness'])) {
+            throw ValidationException::withMessages(['outline_completion' => 'Event Extraction 精简审计结构无效。']);
+        }
+
+        $chapter->loadMissing('scenes.currentArtifact');
+        $contract = $this->contract($chapter);
+        $sceneIdForEvidence = function (mixed $evidence) use ($chapter): ?int {
+            if (! is_string($evidence) || trim($evidence) === '') {
+                return null;
+            }
+
+            $matches = $chapter->scenes->filter(
+                fn ($scene): bool => str_contains((string) $scene->currentArtifact?->content, $evidence),
+            );
+
+            return $matches->count() === 1 ? (int) $matches->first()->getKey() : null;
+        };
+        $expand = function (mixed $audits, array $items, callable $identity, string $field) use ($sceneIdForEvidence): array {
+            if (! is_array($audits) || count($audits) !== count($items)) {
+                throw ValidationException::withMessages([$field => "{$field} 必须按冻结契约逐项完整返回。"]);
+            }
+
+            return collect(array_values($audits))->map(function (mixed $audit, int $index) use ($items, $identity, $field, $sceneIdForEvidence): array {
+                if (! is_array($audit)
+                    || ! $this->hasExactKeys($audit, ['status', 'evidence'])
+                    || ! in_array($audit['status'], ['fulfilled', 'not_met', 'contradicted', 'not_applicable'], true)) {
+                    throw ValidationException::withMessages([$field => "{$field} 的逐项审计结构无效。"]);
+                }
+
+                return [
+                    ...$identity($items[$index]),
+                    'status' => $audit['status'],
+                    'evidence' => $audit['evidence'],
+                    'scene_id' => $sceneIdForEvidence($audit['evidence']),
+                ];
+            })->all();
+        };
+        $aggregate = fn (array $audits): string => collect($audits)->contains(
+            fn (array $audit): bool => $audit['status'] === 'contradicted',
+        ) ? 'contradicted' : (collect($audits)->every(
+            fn (array $audit): bool => $audit['status'] === 'fulfilled',
+        ) ? 'fulfilled' : 'not_met');
+
+        $milestone = $expand(
+            $payload['milestone_completion'],
+            array_values($contract['milestone_criteria']),
+            fn (string $criterion): array => ['criterion' => $criterion],
+            'milestone_completion',
+        );
+        $beatExit = $expand(
+            $payload['beat_exit'],
+            array_values($contract['beat_exit_criteria']),
+            fn (string $criterion): array => ['criterion' => $criterion],
+            'beat_exit',
+        );
+        $handoffContracts = array_values($contract['handoff_checks']);
+        $handoff = $expand(
+            $payload['handoff_readiness'],
+            $handoffContracts,
+            fn (array $check): array => ['key' => $check['key'], 'requirement' => $check['requirement']],
+            'handoff_readiness',
+        );
+
+        if ($contract['handoff_next_beat_id'] === null && $handoff !== []) {
+            throw ValidationException::withMessages(['handoff_readiness' => '最终 Beat 不应返回 Handoff 检查。']);
+        }
+
+        return [
+            'milestone_completion' => ['status' => $aggregate($milestone), 'criteria' => $milestone],
+            'beat_exit' => ['status' => $aggregate($beatExit), 'criteria' => $beatExit],
+            'handoff_readiness' => [
+                'status' => $contract['handoff_next_beat_id'] === null
+                    ? 'not_applicable'
+                    : (collect($handoff)->every(fn (array $audit): bool => $audit['status'] === 'fulfilled') ? 'ready' : 'not_ready'),
+                'checks' => $handoff,
+            ],
+        ];
+    }
+
+    /** @return array<string, mixed> */
     public function contract(Chapter $chapter): array
     {
         $chapter = Chapter::query()->with([

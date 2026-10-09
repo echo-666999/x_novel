@@ -10,6 +10,7 @@ use App\Exceptions\ChapterPipelineProgressionException;
 use App\Models\GenerationRun;
 use Illuminate\Database\QueryException;
 use Illuminate\Validation\ValidationException;
+use RedisException;
 use Throwable;
 
 final class GenerationFailurePolicy
@@ -35,7 +36,7 @@ final class GenerationFailurePolicy
         $code = $exception instanceof AiProviderException ? $exception->errorCode : $fallbackCode;
         $retryable = $exception instanceof AiProviderException
             ? $exception->retryable
-            : $exception instanceof QueryException;
+            : $exception instanceof QueryException || $exception instanceof RedisException;
         $status = $exception instanceof AiProviderException ? $exception->statusCode : null;
         $requestId = $exception instanceof AiProviderException ? $exception->providerRequestId : null;
 
@@ -220,8 +221,11 @@ final class GenerationFailurePolicy
         if ($status === 401 || $status === 403 || in_array($code, ['provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_authentication_failed', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'outline_route_not_configured', 'model_run_mismatch'], true)) {
             return 'provider_configuration';
         }
-        if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException) {
-            return $exception instanceof QueryException ? 'infrastructure_temporary' : 'external_temporary';
+        if ($this->legacyRetryable($code, $status) || $exception instanceof QueryException || $exception instanceof RedisException) {
+            // PostgreSQL 与 Redis 短暂断连都属于基础设施故障，可以安全交给幂等 Job 退避重试。
+            return $exception instanceof QueryException || $exception instanceof RedisException
+                ? 'infrastructure_temporary'
+                : 'external_temporary';
         }
         if ($status === 400 || str_contains($code, 'schema') || str_contains($code, 'structured_output') || str_contains($code, 'truncated') || str_contains($code, 'invalid_json') || str_contains($code, 'output_budget_exhausted') || str_contains($code, 'evidence')) {
             return 'structured_output';

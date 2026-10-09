@@ -4,10 +4,12 @@ namespace App\Jobs;
 
 use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
+use App\Enums\GenerationStage;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\GenerationArtifact;
 use App\Models\Review;
 use App\Services\CanonicalCommitService;
+use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -15,14 +17,26 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
+/** Canonical Commit 只重试临时基础设施故障，确定性校验失败必须立即停止。 */
 class CommitChapterJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
-    public int $tries = 1;
-
     public int $timeout = 60;
+
+    /** 使用正式提交阶段的统一最大尝试次数。 */
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::Commit);
+    }
+
+    /** 使用正式提交阶段的统一退避间隔。 */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::Commit);
+    }
 
     public function __construct(public readonly int $chapterId, public readonly int $reviewId)
     {
@@ -42,6 +56,12 @@ class CommitChapterJob implements ShouldBeUnique, ShouldQueue
 
         try {
             $canonicalCommit->commit($this->commitData());
+        } catch (Throwable $exception) {
+            if (app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::Commit)) {
+                throw $exception;
+            }
+
+            $this->fail($exception);
         } finally {
             $this->releaseGenerationDispatch();
         }

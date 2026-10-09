@@ -207,7 +207,9 @@ Chapter
 → Canonical Commit
 ```
 
-`auto_commit` 是小说级运行策略，默认关闭。恢复该设置前遗留的同名键不自动生效；只有设置页显式保存并写入 `auto_commit_configured=true` 后，运行时才读取 `auto_commit`。PASS 只表示章节通过审校；在 Canonical Commit 事务成功前仍不是 Canonical Chapter，也不得更新 Story State、Story Events 或正式 Memory。关闭时流水线停在 PASS 等待用户确认；开启时 Laravel 只能把真实 PASS 的当前 Draft 派发给现有 `CanonicalCommitService`，并继续执行 Pause、State Version、Artifact 来源、事务和幂等门禁。
+`auto_commit` 是小说级运行策略，默认关闭。恢复该设置前遗留的同名键不自动生效；新建小说的默认模式或章节启动入口会写入 `auto_commit_configured=true`，运行时才读取 `auto_commit`。PASS 只表示章节通过审校；在 Canonical Commit 事务成功前仍不是 Canonical Chapter，也不得更新 Story State、Story Events 或正式 Memory。关闭时流水线停在 PASS 等待用户确认；开启时 Laravel 只能把真实 PASS 的当前 Draft 派发给现有 `CanonicalCommitService`，并继续执行 Pause、State Version、Artifact 来源、事务和幂等门禁。
+
+章节启动入口明确提供三种模式，并直接写入既有 `auto_generate / auto_commit`：当前章生成到审校为 `false / false`；连续生成且逐章确认提交为 `true / false`；全自动连续生成为 `true / true`。模式必须在章节预检成功后保存，不能通过独立 Toggle 组合出未展示的运行方式；手工停止连续生成时回到当前章生成到审校模式。
 
 除等待提交或安全自动提交外，只有以下异常才提前进入人工处理：
 
@@ -1742,6 +1744,8 @@ Scene Writer 必须按目标 Scene 返回契约中每条伏笔动作的 `fulfill
 Deterministic Assembler 必须按 Scene Sequence 拼接正文，并从 Scene Artifact 聚合伏笔 Coverage。它不得改写正文、重新判断或提升 Coverage，也不得新增动作结果；缺失、冲突、错误顺序、跨章来源或字数问题必须返回最早受影响 Scene 修复。跨多个 Scene 的动作仍按各目标 Scene 保存 Coverage，由 Chapter Draft 聚合后交给后续 Event Extraction 和 Review 判断整体是否满足契约。
 
 Story Event Extractor 只能为冻结契约中已授权且最终 Coverage 为 fulfilled 的伏笔动作生成候选事件。事件类型必须与动作一一对应，事件 evidence 必须覆盖该动作的 Coverage 原文并引用目标 Scene；未选中伏笔、未来伏笔、missing/contradicted 动作、动作类型不匹配和主题相似内容都不得生成伏笔事件。`defer` 不产生正文 Story Event；`abandon` 只有在冻结契约包含与 State Version 一致的人工授权时才能生成事件候选。
+
+Extractor 的 Provider 合同只发送正文、候选实体、Scene ID 映射、Canonical State、授权伏笔动作、Outline 完成条件和事件主体规则。完整 Chapter Plan、伏笔合同、Locked Facts、Artifact 身份、Checksum、路由和预算继续冻结在 Generation Run，不重复发送给模型。模型输出只包含事件语义、逐字证据以及按冻结顺序返回的完成审计；Artifact ID、字符偏移、完成条件身份、完成审计的 Scene 归属和汇总状态由 Laravel 确定性恢复，事件证据仍须引用输入提供的 Scene ID。历史 `event-extractor-v8` Run 继续使用原合同，不得在 Resume 时被静默改写。
 
 伏笔候选事件必须按正文和动作契约顺序执行确定性生命周期校验：`idea → planted`、`planted/reinforced → reinforced`、`planted/reinforced → paid_off`，同章允许依次 `plant → reinforce` 或 `plant → pay_off`。除尚未进入正文的新 `idea` 可以从领域记录开始铺设外，已有 `planted/reinforced/terminal` 状态必须来自冻结 Canonical Story State，不能只凭可能漂移的领域投影生成事件。`paid_off/abandoned` 终态不能被生成事件重新开启。Extractor 在保存 Event Candidate 前执行该规则，StateValidator 再使用 Event Candidate Run 中冻结的契约独立复核；失败只产生候选校验错误或 Hard Finding，不修改 Canonical State。
 

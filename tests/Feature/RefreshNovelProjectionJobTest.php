@@ -7,6 +7,8 @@ use App\Models\Foreshadowing;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use App\Services\ProjectionRebuilder;
+use Illuminate\Contracts\Queue\Job as QueueJob;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -52,12 +54,29 @@ test('a stale projection refresh job cannot overwrite a newer projection', funct
 test('projection refresh failure leaves canonical pointers and versions intact for retry', function () {
     $novel = Novel::factory()->create();
     $version = app(InitializeNovelStateAction::class)->handle($novel);
+    $exception = new RuntimeException('projection failed');
     $rebuilder = Mockery::mock(ProjectionRebuilder::class);
-    $rebuilder->shouldReceive('rebuild')->once()->andThrow(new RuntimeException('projection failed'));
+    $rebuilder->shouldReceive('rebuild')->once()->andThrow($exception);
+    $queueJob = Mockery::mock(QueueJob::class);
+    $queueJob->shouldReceive('fail')->once()->with($exception);
+    $job = new RefreshNovelProjectionJob($novel->getKey(), $version->getKey());
+    $job->setJob($queueJob);
 
-    expect(fn () => (new RefreshNovelProjectionJob($novel->getKey(), $version->getKey()))->handle($rebuilder))
-        ->toThrow(RuntimeException::class, 'projection failed');
+    // 本地代码错误立即标记失败，不能消耗基础设施故障专用的重试次数。
+    $job->handle($rebuilder);
 
     expect($novel->fresh()->canonical_state_version_id)->toBe($version->getKey())
         ->and($novel->storyStateVersions()->whereKey($version->getKey())->exists())->toBeTrue();
+});
+
+test('projection refresh rethrows a temporary database failure for queue retry', function () {
+    $novel = Novel::factory()->create();
+    $version = app(InitializeNovelStateAction::class)->handle($novel);
+    $exception = new QueryException('pgsql', 'select 1', [], new RuntimeException('connection lost'));
+    $rebuilder = Mockery::mock(ProjectionRebuilder::class);
+    $rebuilder->shouldReceive('rebuild')->once()->andThrow($exception);
+
+    // 投影由当前 State Version 幂等重建，数据库短暂故障可以安全退避重试。
+    expect(fn () => (new RefreshNovelProjectionJob($novel->getKey(), $version->getKey()))->handle($rebuilder))
+        ->toThrow(QueryException::class, 'connection lost');
 });

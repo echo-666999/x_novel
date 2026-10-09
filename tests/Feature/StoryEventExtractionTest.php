@@ -61,13 +61,13 @@ function eventExtractionFixture(): array
     return compact('novel', 'state', 'chapter', 'character', 'draft');
 }
 
-function eventExtractionResponse(array $fixture, array $overrides = []): AiResponse
+function eventExtractionResponse(array $fixture, array $overrides = [], bool $legacyContract = false): AiResponse
 {
     $event = [
         'event_type' => EventType::CharacterMoved->value,
         'subject_type' => 'character',
         'subject_id' => (string) $fixture['character']->getKey(),
-        'payload' => ['from' => '长安', 'to' => '洛阳'],
+        'payload' => '{"from":"长安","to":"洛阳"}',
         'evidence' => [[
             'artifact_id' => $fixture['draft']->getKey(),
             'scene_id' => null,
@@ -79,30 +79,31 @@ function eventExtractionResponse(array $fixture, array $overrides = []): AiRespo
         'confidence' => 0.96,
         ...$overrides,
     ];
+    if (is_array($event['payload'])) {
+        $event['payload'] = json_encode($event['payload'], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+    }
+    if (! $legacyContract) {
+        // v9 测试响应必须遵守真实 Provider Schema，不能依赖 Fake Provider 接受已删除字段。
+        $event['evidence'] = collect($event['evidence'])->map(
+            fn (array $evidence): array => collect($evidence)->only(['scene_id', 'quote'])->all(),
+        )->all();
+    }
 
     return new AiResponse(
         content: json_encode([
             'events' => [$event],
             'outline_completion' => [
-                'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
-                    'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
-                ]]],
-                'beat_exit' => ['status' => 'not_met', 'criteria' => [[
-                    'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
-                ]]],
-                'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+                'milestone_completion' => [['status' => 'not_met', 'evidence' => null]],
+                'beat_exit' => [['status' => 'not_met', 'evidence' => null]],
+                'handoff_readiness' => [],
             ],
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
         structuredData: [
             'events' => [$event],
             'outline_completion' => [
-                'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
-                    'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
-                ]]],
-                'beat_exit' => ['status' => 'not_met', 'criteria' => [[
-                    'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
-                ]]],
-                'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+                'milestone_completion' => [['status' => 'not_met', 'evidence' => null]],
+                'beat_exit' => [['status' => 'not_met', 'evidence' => null]],
+                'handoff_readiness' => [],
             ],
         ],
         inputTokens: 200,
@@ -212,25 +213,18 @@ function foreshadowingEventResponse(array $fixture, array $events): AiResponse
             'event_type' => $event['event_type'],
             'subject_type' => 'foreshadowing',
             'subject_id' => (string) $fixture['foreshadowing']->getKey(),
-            'payload' => [],
-            'evidence' => $event['evidence'] ?? [[
-                'artifact_id' => $fixture['draft']->getKey(),
+            'payload' => '{}',
+            'evidence' => collect($event['evidence'] ?? [[
                 'scene_id' => array_key_exists('scene_id', $event) ? $event['scene_id'] : $fixture['scene']->getKey(),
                 'quote' => $event['quote'],
-                'start_offset' => null,
-                'end_offset' => null,
-            ]],
+            ]])->map(fn (array $evidence): array => collect($evidence)->only(['scene_id', 'quote'])->all())->all(),
             'story_time' => null,
             'confidence' => 0.98,
         ])->all(),
         'outline_completion' => [
-            'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
-                'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
-            ]]],
-            'beat_exit' => ['status' => 'not_met', 'criteria' => [[
-                'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
-            ]]],
-            'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+            'milestone_completion' => [['status' => 'not_met', 'evidence' => null]],
+            'beat_exit' => [['status' => 'not_met', 'evidence' => null]],
+            'handoff_readiness' => [],
         ],
     ];
 
@@ -248,7 +242,7 @@ function foreshadowingEventResponse(array $fixture, array $events): AiResponse
 
 test('story event candidate validates the documented event shape', function () {
     $fixture = eventExtractionFixture();
-    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event = eventExtractionResponse($fixture, legacyContract: true)->structuredData['events'][0];
     $candidate = StoryEventCandidate::fromArray($event);
 
     expect($candidate->eventType)->toBe(EventType::CharacterMoved)
@@ -259,7 +253,7 @@ test('story event candidate validates the documented event shape', function () {
 
 test('story event candidate schema supports strict output and restores a JSON payload', function () {
     $fixture = eventExtractionFixture();
-    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event = eventExtractionResponse($fixture, legacyContract: true)->structuredData['events'][0];
     $event['payload'] = '{"from":"长安","to":"洛阳"}';
 
     $candidate = StoryEventCandidate::fromArray($event);
@@ -507,7 +501,7 @@ test('extractor does not treat a non-idea domain projection as canonical lifecyc
 
 test('story event candidate rejects world entity subtypes with an actionable message', function () {
     $fixture = eventExtractionFixture();
-    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event = eventExtractionResponse($fixture, legacyContract: true)->structuredData['events'][0];
     $event['event_type'] = EventType::WorldRuleRevealed->value;
     $event['subject_type'] = 'concept';
 
@@ -519,7 +513,7 @@ test('story event candidate rejects world entity subtypes with an actionable mes
 
 test('story event candidate rejects an event and subject type mismatch', function () {
     $fixture = eventExtractionFixture();
-    $event = eventExtractionResponse($fixture)->structuredData['events'][0];
+    $event = eventExtractionResponse($fixture, legacyContract: true)->structuredData['events'][0];
     $event['event_type'] = EventType::ForeshadowingReinforced->value;
 
     expect(fn () => StoryEventCandidate::fromArray($event))
@@ -533,23 +527,74 @@ test('extractor creates a candidate artifact without changing canonical story st
 
     $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
     $run = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->sole();
+    $request = $fake->requests()[0];
+    $providerContext = json_decode(substr($request->prompt, strlen('请从以下章节草稿和权威上下文中提取故事事件候选：')), true, 512, JSON_THROW_ON_ERROR);
 
     expect($artifact->type)->toBe(ArtifactType::EventCandidate)
         ->and($artifact->data['status'])->toBe('candidate')
         ->and($artifact->data['source_artifact_id'])->toBe($fixture['draft']->getKey())
         ->and($artifact->data['events'][0]['event_type'])->toBe(EventType::CharacterMoved->value)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v8')
-        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
-        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('内部 type（例如 concept、rule、location、faction）不能作为 subject_type')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('没有有效主体时必须省略该事件')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得把 sequence 当作 scene_id')
+        ->and($run->idempotency_key)->toStartWith('events:'.$fixture['draft']->checksum.':'.$fixture['state']->version.':event-extractor-v9')
+        ->and(data_get($request->responseSchema, 'properties.events.items.additionalProperties'))->toBeFalse()
+        ->and(data_get($request->responseSchema, 'properties.events.items.properties.payload.type'))->toBe('string')
+        ->and(data_get($request->responseSchema, 'properties.events.items.properties.evidence.items.required'))->toBe(['scene_id', 'quote'])
+        ->and(data_get($request->responseSchema, 'properties.events.items.properties.evidence.items.properties.artifact_id'))->toBeNull()
+        ->and(data_get($request->responseSchema, 'properties.outline_completion.properties.milestone_completion.items.required'))->toBe(['status', 'evidence'])
+        ->and($request->systemPrompt)->toContain('模型不要复述数据库身份、条件文本、汇总状态、Artifact ID 或字符偏移')
+        ->and($request->systemPrompt)->toContain('没有有效主体时省略事件')
+        ->and($request->systemPrompt)->toContain('不能使用 sequence')
+        ->and(array_keys($providerContext))->toBe([
+            'chapter_draft', 'chapter_plan_candidates', 'scenes', 'current_state',
+            'foreshadowing_actions', 'outline_completion', 'event_subject_type_rules',
+        ])
+        ->and($providerContext)->not->toHaveKey('locked_facts')
+        ->and(data_get($providerContext, 'chapter_draft'))->toBe($fixture['draft']->content)
         ->and(data_get($run->context_snapshot, 'event_subject_type_rules.promise_made'))->toBe(['relationship'])
+        ->and($run->context_snapshot)->toHaveKeys(['locked_facts', 'chapter_plan', 'foreshadowing_contract'])
         ->and(data_get($run->context_snapshot, 'foreshadowing_contract_checksum'))->toBe(data_get($run->context_snapshot, 'foreshadowing_contract.checksum'))
         ->and($fixture['novel']->fresh()->canonical_state_version_id)->toBe($fixture['state']->getKey())
         ->and($fixture['novel']->storyStateVersions()->count())->toBe(1);
+});
+
+test('extractor preserves the frozen v8 input and output contract for historical runs', function () {
+    $fixture = eventExtractionFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $snapshot = $plan->admission_snapshot;
+    data_set($snapshot, 'routes.extractor.prompt_version', 'event-extractor-v8');
+    $plan->update(['admission_snapshot' => $snapshot]);
+    $response = eventExtractionResponse($fixture, legacyContract: true);
+    $legacyPayload = $response->structuredData;
+    $legacyPayload['outline_completion'] = [
+        'milestone_completion' => ['status' => 'not_met', 'criteria' => [[
+            'criterion' => '完整父链存在。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ]]],
+        'beat_exit' => ['status' => 'not_met', 'criteria' => [[
+            'criterion' => '计划引用已保存。', 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ]]],
+        'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+    ];
+    $fake = (new FakeAiProvider)->enqueue(new AiResponse(
+        content: json_encode($legacyPayload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $legacyPayload,
+        inputTokens: 200,
+        outputTokens: 100,
+        cachedTokens: 0,
+        latencyMs: 300,
+        providerRequestId: 'legacy-event-request',
+        model: 'extractor-test',
+    ));
+    app()->instance(AiProvider::class, $fake);
+
+    $artifact = app(StoryEventExtractor::class)->extract($fixture['chapter']->getKey());
+    $request = $fake->requests()[0];
+
+    // 历史 Admission 的版本就是合同边界，Resume 不得套用 v9 的精简结构。
+    expect($artifact)->not->toBeNull()
+        ->and($request->promptVersion)->toBe('event-extractor-v8')
+        ->and(data_get($request->responseSchema, 'properties.events.items.properties.evidence.items.properties.artifact_id.type'))->toBe('integer')
+        ->and(data_get($request->responseSchema, 'properties.outline_completion.properties.milestone_completion.type'))->toBe('object')
+        ->and($request->prompt)->toContain('"chapter_plan"', '"locked_facts"');
 });
 
 test('extractor repairs a foreign scene id when the verbatim evidence uniquely identifies a current scene', function () {
@@ -663,15 +708,12 @@ test('the event workflow automatically builds the matching state patch before re
     Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $fixture['chapter']->getKey() && ! $job->regenerate);
 });
 
-test('extractor binds evidence to the authoritative chapter draft instead of trusting a model artifact id', function () {
+test('extractor adds the authoritative chapter draft identity to compact evidence', function () {
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)->enqueue(eventExtractionResponse($fixture, [
         'evidence' => [[
-            'artifact_id' => 999999,
             'scene_id' => null,
             'quote' => '林舟终于抵达洛阳城下。',
-            'start_offset' => 0,
-            'end_offset' => 12,
         ]],
     ]));
     app()->instance(AiProvider::class, $fake);

@@ -44,6 +44,7 @@ use App\Models\Volume;
 use App\Models\WorldEntity;
 use App\Services\CanonicalCommitService;
 use App\Services\EmergencyStopService;
+use App\Services\GenerationFailurePolicy;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\MemoryInvalidator;
 use App\Services\OutlineCompletionService;
@@ -52,6 +53,7 @@ use App\Services\StateValidator;
 use App\Services\StoryArcProgressProjector;
 use App\Services\StoryStateRebuilder;
 use App\Services\StoryStateService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -1022,6 +1024,51 @@ test('commit chapter job uses the canonical service and duplicate delivery has e
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical)
         ->and(StoryEvent::query()->count())->toBe(1)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
+});
+
+test('commit and post commit jobs use the configured recoverable retry policy', function () {
+    $jobs = [
+        [new CommitChapterJob(1, 1), GenerationStage::Commit],
+        [new UpdateMemoryJob(1), GenerationStage::MemorySummary],
+        [new GenerateCanonicalChapterSummaryJob(1, 1), GenerationStage::MemorySummary],
+        [new RefreshNovelProjectionJob(1, 1), GenerationStage::MemorySummary],
+        [new ContinueAutoGenerationJob(1, 1, 1), GenerationStage::MemorySummary],
+    ];
+
+    foreach ($jobs as [$job, $stage]) {
+        // 所有提交链 Job 共用阶段配置，避免某个环节仍只有一次执行机会。
+        expect($job->tries())->toBe(app(GenerationFailurePolicy::class)->maxAttempts($stage))
+            ->and($job->backoff())->toBe(app(GenerationFailurePolicy::class)->backoff($stage));
+    }
+});
+
+test('commit job rethrows a temporary database failure for queue retry', function () {
+    $fixture = canonicalCommitFixture();
+    $exception = new QueryException('pgsql', 'select 1', [], new RuntimeException('connection lost'));
+    $service = Mockery::mock(CanonicalCommitService::class);
+    $service->shouldReceive('commit')->once()->andThrow($exception);
+
+    // Canonical Commit 事务具备幂等保护，临时数据库故障应交回 Queue 退避重试。
+    expect(fn () => (new CommitChapterJob(
+        $fixture['chapter']->getKey(),
+        $fixture['review']->getKey(),
+    ))->handle($service))->toThrow(QueryException::class, 'connection lost');
+});
+
+test('automatic continuation rethrows a temporary database failure for queue retry', function () {
+    $fixture = canonicalCommitFixture();
+    $version = app(CanonicalCommitService::class)->commit($fixture['data']);
+    $fixture['chapter']->update(['summary' => '正式章节摘要。']);
+    $exception = new QueryException('pgsql', 'select 1', [], new RuntimeException('connection lost'));
+    $next = Mockery::mock(CheckNextAction::class);
+    $next->shouldReceive('handle')->once()->andThrow($exception);
+
+    // 续章入口自身具备行锁和幂等检查，数据库短暂故障应保留 Chain 并交回 Queue 重试。
+    expect(fn () => (new ContinueAutoGenerationJob(
+        $fixture['chapter']->getKey(),
+        $fixture['draft']->getKey(),
+        $version->getKey(),
+    ))->handle($next))->toThrow(QueryException::class, 'connection lost');
 });
 
 test('canonical commit dispatches memory update after the formal transaction', function () {

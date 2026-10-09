@@ -76,8 +76,6 @@ test('novel budget overrides can be saved without replacing other settings', fun
 
     expect($novel->refresh()->settings)->toBe([
         'temperature' => 0.5,
-        'auto_commit' => false,
-        'auto_commit_configured' => true,
         'budget' => [
             'novel_total_limit' => 12.5,
             'chapter_max_cost' => 1.25,

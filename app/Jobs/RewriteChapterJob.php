@@ -14,15 +14,15 @@ use App\Services\ChapterRewriter;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationProgressionFailureRecorder;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Throwable;
 
-/** 执行局部 Rewrite；发现旧 Coverage 误判来源时改由统一推进器先派发 Judgment。 */
-class RewriteChapterJob implements ShouldBeUnique, ShouldQueue
+/** 执行局部 Rewrite；提前释放唯一锁，确保 deferred 后可由统一推进器续派同类任务。 */
+class RewriteChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 

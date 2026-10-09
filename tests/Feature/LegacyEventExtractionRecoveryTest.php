@@ -126,32 +126,20 @@ function legacyEventRecoveryFixture(): array
 function successfulLegacyEventRecoveryResponse(Chapter $chapter): AiResponse
 {
     $contract = app(OutlineCompletionService::class)->contract($chapter);
-    $criteria = static fn (array $items): array => [
-        'status' => $items === [] ? 'fulfilled' : 'not_met',
-        'criteria' => collect($items)->map(fn (string $criterion): array => [
-            'criterion' => $criterion,
-            'status' => 'not_met',
-            'evidence' => null,
-            'scene_id' => null,
-        ])->all(),
-    ];
-    $handoff = $contract['handoff_next_beat_id'] === null
-        ? ['status' => 'not_applicable', 'checks' => []]
-        : [
-            'status' => 'not_ready',
-            'checks' => collect($contract['handoff_checks'])->map(fn (array $check): array => [
-                ...$check,
-                'status' => 'not_met',
-                'evidence' => null,
-                'scene_id' => null,
-            ])->all(),
-        ];
+    // 恢复链同样使用 v9 精简输出，冻结身份和汇总状态由 Laravel 恢复。
+    $criteria = static fn (array $items): array => collect($items)->map(fn (): array => [
+        'status' => 'not_met',
+        'evidence' => null,
+    ])->all();
     $payload = [
         'events' => [],
         'outline_completion' => [
             'milestone_completion' => $criteria($contract['milestone_criteria']),
             'beat_exit' => $criteria($contract['beat_exit_criteria']),
-            'handoff_readiness' => $handoff,
+            'handoff_readiness' => collect($contract['handoff_checks'])->map(fn (): array => [
+                'status' => 'not_met',
+                'evidence' => null,
+            ])->all(),
         ],
     ];
 
@@ -221,32 +209,20 @@ function legacyRewriteSceneResponse(string $content): AiResponse
 function legacyRewriteEventResponse(Chapter $chapter, string $evidence): AiResponse
 {
     $contract = app(OutlineCompletionService::class)->contract($chapter);
-    $sceneId = $chapter->scenes()->orderBy('sequence')->valueOrFail('id');
-    $criteria = static fn (array $items): array => [
+    // 精简合同只返回逐项语义结论，Scene ID 由逐字证据唯一定位。
+    $criteria = static fn (array $items): array => collect($items)->map(fn (): array => [
         'status' => 'fulfilled',
-        'criteria' => collect($items)->map(fn (string $criterion): array => [
-            'criterion' => $criterion,
-            'status' => 'fulfilled',
-            'evidence' => $evidence,
-            'scene_id' => $sceneId,
-        ])->all(),
-    ];
+        'evidence' => $evidence,
+    ])->all();
     $payload = [
         'events' => [],
         'outline_completion' => [
             'milestone_completion' => $criteria($contract['milestone_criteria']),
             'beat_exit' => $criteria($contract['beat_exit_criteria']),
-            'handoff_readiness' => $contract['handoff_next_beat_id'] === null
-                ? ['status' => 'not_applicable', 'checks' => []]
-                : [
-                    'status' => 'ready',
-                    'checks' => collect($contract['handoff_checks'])->map(fn (array $check): array => [
-                        ...$check,
-                        'status' => 'fulfilled',
-                        'evidence' => $evidence,
-                        'scene_id' => $sceneId,
-                    ])->all(),
-                ],
+            'handoff_readiness' => collect($contract['handoff_checks'])->map(fn (): array => [
+                'status' => 'fulfilled',
+                'evidence' => $evidence,
+            ])->all(),
         ],
     ];
 

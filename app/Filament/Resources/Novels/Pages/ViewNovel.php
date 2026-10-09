@@ -18,12 +18,20 @@ use App\Services\NovelGenerationReadiness;
 use App\Services\ResumeResolver;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
+use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Validation\ValidationException;
 
 class ViewNovel extends ViewRecord
 {
+    /** 三种运行模式直接映射现有 auto_generate 与 auto_commit，不增加新的状态来源。 */
+    private const AUTOMATION_REVIEW_ONLY = 'review_only';
+
+    private const AUTOMATION_CONTINUOUS_MANUAL = 'continuous_manual';
+
+    private const AUTOMATION_FULL = 'full_auto';
+
     /** @var array<int, array{key: string, label: string, ready: bool, repair_hint: string}>|null */
     private ?array $generationReadiness = null;
 
@@ -114,53 +122,47 @@ class ViewNovel extends ViewRecord
                         ->success()
                         ->send();
                 }),
-            Action::make('generateNextChapter')
-                ->label('生成下一章')
-                ->icon('heroicon-o-play')
-                ->visible(fn (): bool => in_array($this->getRecord()->status, [NovelStatus::Generating, NovelStatus::Completing], true))
-                ->action(function (GenerateNextChapterAction $generateNextChapter, AdvanceChapterPipelineAction $advanceChapterPipeline): void {
-                    try {
-                        $chapter = $generateNextChapter->handle($this->getRecord());
-                        $stage = $advanceChapterPipeline->handle($chapter->getKey());
-                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
-                        Notification::make()
-                            ->title('无法生成下一章')
-                            ->body($exception->getMessage())
-                            ->danger()
-                            ->send();
-
-                        return;
-                    }
-
-                    Notification::make()
-                        ->title($stage === null ? '章节已恢复，等待后续操作' : '章节流水线已启动')
-                        ->body($stage === null
-                            ? "第 {$chapter->sequence} 章已恢复，当前没有可自动执行的阶段。"
-                            : "第 {$chapter->sequence} 章已创建或恢复，当前阶段：{$stage->getLabel()}。")
-                        ->success()
-                        ->send();
-
-                    $this->redirect(NovelResource::getUrl('chapter', [
-                        'record' => $this->getRecord(),
-                        'chapter' => $chapter,
-                    ]));
-                }),
             Action::make('startAutoGenerate')
-                ->label('开始自动生成')
+                ->label('启动章节生成')
                 ->icon('heroicon-o-bolt')
                 ->visible(fn (): bool => in_array($this->getRecord()->status, [NovelStatus::Generating, NovelStatus::Completing], true)
                     && ! (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
+                ->modalHeading('选择章节生成模式')
+                ->modalDescription('三种模式共用同一条安全流水线；Review 与 Canonical Commit 门禁不会被绕过。')
+                ->fillForm(fn (): array => [
+                    // 弹窗默认值必须反映页面显示的当前模式，不能用遗留 auto_commit 猜测用户意图。
+                    'automation_mode' => self::AUTOMATION_REVIEW_ONLY,
+                ])
+                ->schema([
+                    Select::make('automation_mode')
+                        ->label('运行模式')
+                        ->options([
+                            self::AUTOMATION_REVIEW_ONLY => '当前章生成到审校 · PASS 后等待人工提交',
+                            self::AUTOMATION_CONTINUOUS_MANUAL => '连续生成 · 每章 PASS 后人工确认提交',
+                            self::AUTOMATION_FULL => '全自动连续生成 · PASS 后自动提交并进入下一章',
+                        ])
+                        ->native(false)
+                        ->required(),
+                ])
                 ->action(function (
+                    array $data,
                     GenerateNextChapterAction $generateNextChapter,
                     SetAutoGenerationAction $setAutoGeneration,
                     AdvanceChapterPipelineAction $advanceChapterPipeline,
                 ): void {
+                    // 模式只决定 PASS 后是否提交和提交后是否续章，其余阶段仍由统一推进器选择。
+                    [$autoGenerate, $autoCommit, $modeLabel] = match ($data['automation_mode'] ?? null) {
+                        self::AUTOMATION_REVIEW_ONLY => [false, false, '当前章生成到审校'],
+                        self::AUTOMATION_CONTINUOUS_MANUAL => [true, false, '连续生成 · 逐章确认'],
+                        self::AUTOMATION_FULL => [true, true, '全自动连续生成'],
+                        default => throw ValidationException::withMessages(['automation_mode' => '请选择有效的章节生成模式。']),
+                    };
+
                     try {
                         $chapter = $generateNextChapter->handle($this->getRecord());
-                        $stage = $advanceChapterPipeline->handle($chapter->getKey());
                     } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
                         Notification::make()
-                            ->title('无法开始自动生成')
+                            ->title('无法启动章节生成')
                             ->body($exception->getMessage())
                             ->danger()
                             ->send();
@@ -168,10 +170,22 @@ class ViewNovel extends ViewRecord
                         return;
                     }
 
-                    $setAutoGeneration->handle($this->getRecord(), true);
+                    $setAutoGeneration->handle($this->getRecord(), $autoGenerate, $autoCommit);
                     $this->getRecord()->refresh();
+                    try {
+                        $stage = $advanceChapterPipeline->handle($chapter->getKey());
+                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        Notification::make()
+                            ->title('运行模式已保存，但章节无法启动')
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
                     Notification::make()
-                        ->title($stage === null ? '自动生成已开启，当前章等待后续操作' : '自动生成已开启，章节流水线已启动')
+                        ->title($stage === null ? "{$modeLabel}已设置，当前章等待后续操作" : "{$modeLabel}已启动")
                         ->body($stage === null
                             ? "第 {$chapter->sequence} 章当前没有可自动执行的阶段。"
                             : "第 {$chapter->sequence} 章当前阶段：{$stage->getLabel()}。")
@@ -190,7 +204,8 @@ class ViewNovel extends ViewRecord
                 ->visible(fn (): bool => $this->getRecord()->status !== NovelStatus::Paused
                     && (bool) data_get($this->getRecord()->settings, 'auto_generate', false))
                 ->action(function (SetAutoGenerationAction $setAutoGeneration): void {
-                    $setAutoGeneration->handle($this->getRecord(), false);
+                    // 手工停止回到“当前章生成到审校”，避免残留 auto_commit 形成未展示的第四种组合。
+                    $setAutoGeneration->handle($this->getRecord(), false, false);
                     $this->getRecord()->refresh();
                     Notification::make()->title('自动生成已停止')->success()->send();
                 }),

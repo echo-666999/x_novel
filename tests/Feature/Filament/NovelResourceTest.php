@@ -104,6 +104,9 @@ test('the owner can create a novel and enters its workbench', function () {
         ->and($novel->genre)->toBe('玄幻奇幻')
         ->and($novel->status)->toBe(NovelStatus::Draft)
         ->and(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(3_500)
+        ->and(data_get($novel->settings, 'auto_generate'))->toBeFalse()
+        ->and(data_get($novel->settings, 'auto_commit'))->toBeFalse()
+        ->and(data_get($novel->settings, 'auto_commit_configured'))->toBeTrue()
         ->and(data_get($novel->settings, 'editorial'))->toBeNull();
 
     $this->get(NovelResource::getUrl('view', ['record' => $novel]))
@@ -300,7 +303,6 @@ test('draft novels leave planning in the outline workspace and generating novels
 
     Livewire::test(ViewNovel::class, ['record' => $draft->getRouteKey()])
         ->assertActionDoesNotExist('generateNovelBlueprint')
-        ->assertActionHidden('generateNextChapter')
         ->assertActionHidden('startAutoGenerate');
 
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
@@ -311,13 +313,11 @@ test('draft novels leave planning in the outline workspace and generating novels
 
     $component = Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertSee('尚无正式章节')
-        ->assertSee('Auto: OFF')
-        ->assertActionExists('generateNextChapter')
-        ->assertActionEnabled('generateNextChapter')
+        ->assertSee('当前章生成到审校')
         ->assertActionVisible('startAutoGenerate')
         ->assertActionHidden('stopAutoGenerate')
-        ->callAction('startAutoGenerate')
-        ->assertNotified('自动生成已开启，章节流水线已启动')
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'continuous_manual'])
+        ->assertNotified('连续生成 · 逐章确认已启动')
         ->assertRedirect();
 
     $chapter = $novel->chapters()->sole();
@@ -327,13 +327,17 @@ test('draft novels leave planning in the outline workspace and generating novels
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->assertActionHidden('startAutoGenerate')
         ->assertActionVisible('stopAutoGenerate')
-        ->assertSee('Auto: ON')
+        ->assertSee('连续生成 · 逐章确认')
         ->callAction('stopAutoGenerate')
         ->assertNotified('自动生成已停止')
-        ->assertSee('Auto: OFF')
+        ->assertSee('当前章生成到审校')
         ->assertActionVisible('pause')
         ->assertActionHidden('resume')
         ->assertActionExists('edit');
+
+    $novel->refresh();
+    expect(data_get($novel->settings, 'auto_generate'))->toBeFalse()
+        ->and(data_get($novel->settings, 'auto_commit'))->toBeFalse();
 });
 
 test('a generating novel can enter completing mode from the overview', function () {
@@ -373,7 +377,7 @@ test('a generating novel can be paused from the overview with its current stage 
         ->assertActionHidden('pause')
         ->assertActionVisible('resume')
         ->assertActionEnabled('resume')
-        ->assertActionHidden('generateNextChapter')
+        ->assertActionHidden('startAutoGenerate')
         ->callAction('resume');
 
     expect($novel->fresh()->status)->toBe(NovelStatus::Generating);

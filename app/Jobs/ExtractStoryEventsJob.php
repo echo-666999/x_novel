@@ -11,7 +11,7 @@ use App\Services\AutoStopService;
 use App\Services\GenerationFailurePolicy;
 use App\Services\StoryEventExtractor;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -19,7 +19,8 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
-class ExtractStoryEventsJob implements ShouldBeUnique, ShouldQueue
+/** deferred 续跑会在当前 Job 内派发同类任务，因此唯一锁必须在开始处理时释放。 */
+class ExtractStoryEventsJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 

@@ -397,7 +397,6 @@ test('a novel created from an empty database reaches the next beat handoff throu
             'target_words' => 200000,
             'generation_chapter_target_words' => 500,
             'premise' => '失忆测绘师寻找被删除的太阳。',
-            'workflow_auto_commit' => false,
         ])
         ->call('create')
         ->assertHasNoFormErrors();
@@ -426,8 +425,8 @@ test('a novel created from an empty database reaches the next beat handoff throu
     Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
         ->callAction('startNovelGeneration')
         ->assertNotified('小说已进入生成阶段')
-        ->callAction('startAutoGenerate')
-        ->assertNotified('自动生成已开启，章节流水线已启动');
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'continuous_manual'])
+        ->assertNotified('连续生成 · 逐章确认已启动');
 
     runQueuedChapterPipeline();
     $chapter = $novel->chapters()->where('sequence', 1)->sole();
@@ -497,8 +496,8 @@ test('one trigger reaches pass then manual commit creates canonical state memory
     Queue::fake();
 
     Livewire::test(ViewNovel::class, ['record' => $fixture['novel']->getRouteKey()])
-        ->callAction('startAutoGenerate')
-        ->assertNotified('自动生成已开启，章节流水线已启动');
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'continuous_manual'])
+        ->assertNotified('连续生成 · 逐章确认已启动');
 
     runQueuedChapterPipeline();
 
@@ -569,8 +568,8 @@ test('one trigger performs a targeted scene rewrite and revalidates fresh downst
     Queue::fake();
 
     Livewire::test(ViewNovel::class, ['record' => $fixture['novel']->getRouteKey()])
-        ->callAction('generateNextChapter')
-        ->assertNotified('章节流水线已启动');
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'review_only'])
+        ->assertNotified('当前章生成到审校已启动');
 
     runQueuedChapterPipeline();
 
@@ -623,8 +622,8 @@ test('one foreshadowing crosses the full chapter pipeline from idea to paid off 
     $handled = null;
 
     Livewire::test(ViewNovel::class, ['record' => $fixture['novel']->getRouteKey()])
-        ->callAction('startAutoGenerate')
-        ->assertNotified('自动生成已开启，章节流水线已启动');
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'continuous_manual'])
+        ->assertNotified('连续生成 · 逐章确认已启动');
 
     $expected = [
         1 => [EventType::ForeshadowingPlanted, ForeshadowingStatus::Planted, 0],
@@ -879,11 +878,6 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     {
         $chapter = Chapter::query()->with('latestPlan')->findOrFail($chapterId);
         $characterId = $this->characterId($chapter);
-        $draft = GenerationArtifact::query()
-            ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapterId)->whereNull('scene_id'))
-            ->latest('id')
-            ->firstOrFail();
         $quote = (string) Scene::query()
             ->where('chapter_id', $chapterId)
             ->with('currentArtifact')
@@ -900,16 +894,13 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                     'subject_id' => (string) $this->foreshadowingId,
                     'payload' => '{}',
                     'evidence' => [[
-                        'artifact_id' => $draft->getKey(),
                         'scene_id' => $scene->getKey(),
                         'quote' => $this->foreshadowingEvidence($chapter->sequence),
-                        'start_offset' => null,
-                        'end_offset' => null,
                     ]],
                     'story_time' => "第{$chapter->sequence}日夜晚",
                     'confidence' => 0.98,
                 ]],
-                'outline_completion' => $this->outlineCompletion($chapter),
+                'outline_completion' => $this->outlineCompletion($chapter, true),
             ];
         }
 
@@ -918,18 +909,15 @@ final class ChapterPipelineFixtureProvider implements AiProvider
                 'event_type' => EventType::CharacterMoved->value,
                 'subject_type' => 'character',
                 'subject_id' => (string) $characterId,
-                'payload' => ['from' => '城内', 'to' => '灯塔'],
+                'payload' => '{"from":"城内","to":"灯塔"}',
                 'evidence' => [[
-                    'artifact_id' => $draft->getKey(),
                     'scene_id' => null,
                     'quote' => $quote,
-                    'start_offset' => null,
-                    'end_offset' => null,
                 ]],
                 'story_time' => '第一日夜晚',
                 'confidence' => 0.98,
             ]],
-            'outline_completion' => $this->outlineCompletion($chapter),
+            'outline_completion' => $this->outlineCompletion($chapter, true),
         ];
     }
 
@@ -1014,17 +1002,29 @@ final class ChapterPipelineFixtureProvider implements AiProvider
     }
 
     /** @return array<string, mixed> */
-    private function outlineCompletion(Chapter $chapter): array
+    private function outlineCompletion(Chapter $chapter, bool $compact = false): array
     {
         $contract = app(OutlineCompletionService::class)->contract($chapter);
         $scene = $chapter->scenes()->with('currentArtifact')->orderBy('sequence')->firstOrFail();
         $evidence = (string) $scene->currentArtifact?->content;
         $criteria = fn (array $items): array => collect($items)->map(fn (string $criterion): array => [
-            'criterion' => $criterion,
+            ...($compact ? [] : ['criterion' => $criterion]),
             'status' => 'fulfilled',
             'evidence' => $evidence,
-            'scene_id' => $scene->getKey(),
+            ...($compact ? [] : ['scene_id' => $scene->getKey()]),
         ])->all();
+
+        if ($compact) {
+            // Extractor v9 只返回按冻结顺序排列的语义审计，身份和 Scene ID 由服务端恢复。
+            return [
+                'milestone_completion' => $criteria($contract['milestone_criteria']),
+                'beat_exit' => $criteria($contract['beat_exit_criteria']),
+                'handoff_readiness' => collect($contract['handoff_checks'])->map(fn (): array => [
+                    'status' => 'fulfilled',
+                    'evidence' => $evidence,
+                ])->all(),
+            ];
+        }
 
         return [
             'milestone_completion' => ['status' => 'fulfilled', 'criteria' => $criteria($contract['milestone_criteria'])],

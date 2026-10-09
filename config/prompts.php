@@ -4,7 +4,7 @@ return [
     'versions' => [
         'planner' => 'chapter-planner-v10',
         'writer' => 'scene-writer-v15',
-        'extractor' => 'event-extractor-v8',
+        'extractor' => 'event-extractor-v9',
         'reviewer' => 'reviewer-v16',
         'rewrite' => 'rewrite-v14',
         'summary' => 'summary-v2',

@@ -18,6 +18,7 @@ use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Services\MemoryUpdater;
 use App\Services\StoryStateService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
@@ -103,6 +104,17 @@ test('duplicate memory job delivery reuses memories and the successful run', fun
     expect(Memory::query()->count())->toBe(1)
         ->and(GenerationRun::query()->where('stage', GenerationStage::MemorySummary)->count())->toBe(1)
         ->and(GenerationRun::query()->where('stage', GenerationStage::MemorySummary)->sole()->status)->toBe(RunStatus::Succeeded);
+});
+
+test('memory update job rethrows a temporary database failure for queue retry', function () {
+    $chapter = Chapter::factory()->create();
+    $exception = new QueryException('pgsql', 'select 1', [], new RuntimeException('connection lost'));
+    $updater = Mockery::mock(MemoryUpdater::class);
+    $updater->shouldReceive('update')->once()->with($chapter->getKey())->andThrow($exception);
+
+    // Memory 使用 Canonical 来源和幂等键，可在数据库短暂故障后安全重试。
+    expect(fn () => (new UpdateMemoryJob($chapter->getKey()))->handle($updater))
+        ->toThrow(QueryException::class, 'connection lost');
 });
 
 test('draft chapters cannot create formal memories', function () {

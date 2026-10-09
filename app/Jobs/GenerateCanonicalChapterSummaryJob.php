@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\GenerationStage;
 use App\Models\Chapter;
 use App\Services\CanonicalChapterSummaryService;
 use App\Services\GenerationFailurePolicy;
@@ -19,12 +20,19 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries = 3;
-
     public int $timeout = 180;
 
-    /** @var array<int> */
-    public array $backoff = [10, 30];
+    /** 摘要生成复用提交后阶段的统一最大尝试次数。 */
+    public function tries(): int
+    {
+        return app(GenerationFailurePolicy::class)->maxAttempts(GenerationStage::MemorySummary);
+    }
+
+    /** 摘要生成复用提交后阶段的统一退避间隔。 */
+    public function backoff(): array
+    {
+        return app(GenerationFailurePolicy::class)->backoff(GenerationStage::MemorySummary);
+    }
 
     public function __construct(
         public readonly int $chapterId,

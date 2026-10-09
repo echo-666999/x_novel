@@ -177,8 +177,6 @@ test('saving novel model overrides preserves unrelated settings and removes blan
                 'planner' => ['provider' => 'openai', 'model' => 'new-planner'],
             ],
         ],
-        'auto_commit' => false,
-        'auto_commit_configured' => true,
     ]);
 });
 
@@ -265,16 +263,15 @@ test('existing outline reasoning survives an unrelated save and resets only when
     ]);
 });
 
-test('novel settings exposes explicit automatic canonical commit and ignores the legacy key', function () {
+test('novel settings preserves an unconfirmed legacy auto commit key until a launch mode is selected', function () {
     $novel = Novel::factory()->create(['settings' => ['auto_commit' => true]]);
 
     Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
-        ->assertSee('Review 通过后自动提交正式章节')
-        ->assertFormSet(['workflow_auto_commit' => false])
-        ->fillForm(['workflow_auto_commit' => true])
+        ->assertDontSee('Review 通过后自动提交正式章节')
+        ->fillForm(['title' => '保留旧运行配置'])
         ->call('save')
         ->assertHasNoFormErrors();
 
     expect(data_get($novel->refresh()->settings, 'auto_commit'))->toBeTrue()
-        ->and(data_get($novel->settings, 'auto_commit_configured'))->toBeTrue();
+        ->and(data_get($novel->settings, 'auto_commit_configured'))->toBeNull();
 });
