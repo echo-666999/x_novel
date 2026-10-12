@@ -21,7 +21,7 @@ class NovelOverview
 {
     public static function configure(Schema $schema): Schema
     {
-        return $schema->components([
+        return $schema->columns(1)->components([
             Section::make('小说概览')
                 ->description('当前小说的核心定位与正式状态。')
                 ->columns([
