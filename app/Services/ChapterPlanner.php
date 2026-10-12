@@ -428,6 +428,20 @@ class ChapterPlanner
             $runs = GenerationRun::query()->where('chapter_id', $chapter->getKey())->where('stage', GenerationStage::ChapterPlanning);
 
             $resolution = $this->runCoordinator->resolve($runs, $inputHash, '规划 Run 超时未完成，已由后续投递恢复。');
+            if ($resolution['reused']
+                && $resolution['run']?->status === RunStatus::Succeeded
+                && ! ChapterPlan::query()
+                    ->whereKey(data_get($resolution['run']->context_snapshot, 'chapter_plan_id'))
+                    ->where('status', PlanStatus::Ready)
+                    ->exists()) {
+                // Outline 重建会先将旧 Plan 标记为 superseded。同一输入哈希只能复用仍为 Ready 的 Plan，
+                // 否则队列会“成功”结束但既不创建新 Run，也不恢复章节来源链。
+                $resolution = [
+                    'run' => null,
+                    'reused' => false,
+                    'attempt' => ((int) (clone $runs)->max('attempt')) + 1,
+                ];
+            }
             if ($resolution['reused']) {
                 return [$resolution['run'], true];
             }

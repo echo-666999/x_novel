@@ -336,13 +336,20 @@ test('needs attention review exposes manual edit and override actions instead of
         'findings' => [['severity' => 'warning', 'message' => '需要人工判断。']],
     ]);
 
+    $editPlanAction = TestAction::make('editRepairPlan')
+        ->schemaComponent('repair-recommendations', 'content');
+
     Livewire::test(ViewNovelChapter::class, [
         'record' => $novel->getRouteKey(),
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
         ->assertSee('人工修复建议')
-        ->assertSee('Chapter Plan')
+        ->assertSee('编辑当前 Chapter Plan')
+        ->assertActionExists($editPlanAction, fn ($action): bool => $action->getUrl() === null && $action->isModalSlideOver())
+        ->mountAction($editPlanAction)
+        ->assertActionMounted($editPlanAction)
+        ->assertSchemaStateSet(fn (array $state): bool => $state['chapter_function'] === $chapter->latestPlan->chapter_function)
         ->assertSee('建议字段')
         ->assertSee('影响范围')
         ->assertSee('恢复入口')

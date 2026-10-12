@@ -223,6 +223,15 @@ class PlanningReviewAudit
             if ($missing && $audit['scene_id'] === null) {
                 $audit['scene_id'] = $expectedSceneId;
                 $audits[$index] = $audit;
+            } elseif ($audit['scene_id'] !== $expectedSceneId
+                && in_array($audit[$statusKey], ['fulfilled', 'introduced'], true)
+                && in_array('missing', $statuses, true)) {
+                // 模型在其他 Scene 找到相似内容时，不能把它当作目标 Scene 已完成；
+                // 降级为 missing 交给正常 Review Finding，而不是把整次 Review 记为技术失败。
+                $audit[$statusKey] = 'missing';
+                $audit['evidence'] = null;
+                $audit['scene_id'] = $expectedSceneId;
+                $audits[$index] = $audit;
             } elseif ($audit['scene_id'] !== $expectedSceneId) {
                 throw ValidationException::withMessages([$key => '规划契约验收的标识、顺序或目标 Scene 不一致。']);
             }

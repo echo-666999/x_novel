@@ -94,38 +94,54 @@ final class CompactReviewPayload
             throw ValidationException::withMessages(['review' => 'Review 缺少冻结 Chapter Plan。']);
         }
 
-        $expandOrdered = function (mixed $audits, array $contracts, callable $identity, string $field) use ($chapter): array {
+        $normalizeEvidence = fn (mixed $evidence): mixed => is_string($evidence)
+            ? PlanCoverage::resolveRepresentativeExactEvidence((string) $draft->content, $evidence)
+            : $evidence;
+        $expandOrdered = function (mixed $audits, array $contracts, callable $identity, string $field, ?string $unboundStatus = null) use ($chapter, $normalizeEvidence): array {
             if (! is_array($audits) || count($audits) !== count($contracts)) {
                 throw ValidationException::withMessages([$field => "{$field} 必须按冻结契约逐项完整返回。"]);
             }
 
-            return collect(array_values($audits))->map(function (mixed $audit, int $index) use ($contracts, $identity, $field, $chapter): array {
+            return collect(array_values($audits))->map(function (mixed $audit, int $index) use ($contracts, $identity, $field, $chapter, $normalizeEvidence, $unboundStatus): array {
                 self::assertAudit($audit, $field);
+                $evidence = $normalizeEvidence($audit['evidence']);
+                $sceneId = self::sceneIdForEvidence($chapter, $evidence);
+                $status = $audit['status'];
+
+                if ($unboundStatus !== null
+                    && in_array($status, ['fulfilled', 'introduced', 'contradicted'], true)
+                    && $sceneId === null) {
+                    // 过短或跨 Scene 重复的证据不能证明某个 Scene 已完成条件。
+                    // 保守降级为未完成，让业务 Review 产生可执行 Finding。
+                    $status = $unboundStatus;
+                    $evidence = null;
+                }
 
                 return [
                     ...$identity($contracts[$index], $index),
-                    'status' => $audit['status'],
-                    'evidence' => $audit['evidence'],
-                    'scene_id' => self::sceneIdForEvidence($chapter, $audit['evidence']),
+                    'status' => $status,
+                    'evidence' => $evidence,
+                    'scene_id' => $sceneId,
                 ];
             })->all();
         };
 
         self::assertAudit($payload['chapter_plan_completion'], 'chapter_plan_completion');
+        $payload['chapter_plan_completion']['evidence'] = $normalizeEvidence($payload['chapter_plan_completion']['evidence']);
         $payload['chapter_plan_completion']['scene_id'] = self::sceneIdForEvidence($chapter, $payload['chapter_plan_completion']['evidence']);
 
         foreach ([
             'milestone_completion' => $outlineContract['milestone_criteria'] ?? [],
             'beat_exit' => $outlineContract['beat_exit_criteria'] ?? [],
         ] as $field => $criteria) {
-            $items = $expandOrdered($payload[$field], array_values($criteria), fn (string $criterion): array => ['criterion' => $criterion], $field);
+            $items = $expandOrdered($payload[$field], array_values($criteria), fn (string $criterion): array => ['criterion' => $criterion], $field, 'not_met');
             $payload[$field] = ['status' => self::aggregateCriteriaStatus($items), 'criteria' => $items];
         }
 
         $handoffChecks = array_values($outlineContract['handoff_checks'] ?? []);
         $checks = $expandOrdered($payload['handoff_readiness'], $handoffChecks, fn (array $check): array => [
             'key' => $check['key'], 'requirement' => $check['requirement'],
-        ], 'handoff_readiness');
+        ], 'handoff_readiness', 'not_met');
         $payload['handoff_readiness'] = [
             'status' => ($outlineContract['handoff_next_beat_id'] ?? null) === null
                 ? 'not_applicable'
@@ -157,15 +173,15 @@ final class CompactReviewPayload
 
         $payload['arc_beat_audits'] = $expandOrdered($payload['arc_beat_audits'], array_values($plan->arc_contributions ?? []), fn (array $row): array => [
             'arc_id' => (int) $row['arc_id'], 'beat_key' => (string) $row['beat_key'],
-        ], 'arc_beat_audits');
+        ], 'arc_beat_audits', 'missing');
         $arcIds = collect($plan->arc_contributions ?? [])->pluck('arc_id')->map(fn ($id): int => (int) $id)->unique()->values()->all();
         $payload['arc_completion_audits'] = $expandOrdered($payload['arc_completion_audits'], $arcIds, fn (int $arcId): array => ['arc_id' => $arcId], 'arc_completion_audits');
         foreach ($payload['arc_completion_audits'] as &$audit) {
             unset($audit['scene_id']);
         }
         unset($audit);
-        $payload['character_candidate_audits'] = $expandOrdered($payload['character_candidate_audits'], array_values($plan->character_candidates ?? []), fn (array $row): array => ['candidate_key' => (string) $row['candidate_key']], 'character_candidate_audits');
-        $payload['world_entity_candidate_audits'] = $expandOrdered($payload['world_entity_candidate_audits'], array_values($plan->world_entity_candidates ?? []), fn (array $row): array => ['candidate_key' => (string) $row['candidate_key']], 'world_entity_candidate_audits');
+        $payload['character_candidate_audits'] = $expandOrdered($payload['character_candidate_audits'], array_values($plan->character_candidates ?? []), fn (array $row): array => ['candidate_key' => (string) $row['candidate_key']], 'character_candidate_audits', 'missing');
+        $payload['world_entity_candidate_audits'] = $expandOrdered($payload['world_entity_candidate_audits'], array_values($plan->world_entity_candidates ?? []), fn (array $row): array => ['candidate_key' => (string) $row['candidate_key']], 'world_entity_candidate_audits', 'missing');
 
         foreach (['unapproved_characters', 'unapproved_world_entities', 'findings'] as $field) {
             if (! is_array($payload[$field])) {
@@ -175,9 +191,21 @@ final class CompactReviewPayload
                 if (! is_array($item)) {
                     throw ValidationException::withMessages([$field => "{$field} 结构无效。"]);
                 }
+                $payload[$field][$index]['evidence'] = $normalizeEvidence($item['evidence'] ?? null);
                 $payload[$field][$index]['scene_id'] = ($item['scope'] ?? 'scene') === 'chapter'
                     ? null
-                    : self::sceneIdForEvidence($chapter, $item['evidence'] ?? null);
+                    : self::sceneIdForEvidence($chapter, $payload[$field][$index]['evidence']);
+
+                if ($field === 'findings'
+                    && ($item['severity'] ?? null) === 'error'
+                    && ($item['auto_fixable'] ?? null) === false
+                    && ($item['requires_human_decision'] ?? null) === false) {
+                    // Error 必须有明确处置路径。Chapter 级问题只进入确定性的
+                    // Plan/Scene 重建建议；局部问题在模型未确认可自动修复时交给人工。
+                    $chapterScope = ($item['scope'] ?? null) === 'chapter';
+                    $payload[$field][$index]['auto_fixable'] = $chapterScope;
+                    $payload[$field][$index]['requires_human_decision'] = ! $chapterScope;
+                }
             }
         }
 

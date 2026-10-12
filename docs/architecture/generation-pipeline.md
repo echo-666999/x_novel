@@ -836,7 +836,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 
 ```text
 chapter-planner-v10+natural-prose-v1
-scene-writer-v15+natural-prose-v1
+scene-writer-v16+natural-prose-v1
 assembly-algorithm-v1
 event-extractor-v9
 reviewer-v16+natural-prose-v1
@@ -851,6 +851,8 @@ summary-v2+natural-prose-v1
 `NarrativeProsePolicy::VERSION = natural-prose-v1` 是规划、Scene 正文、局部 Rewrite 和审校共用的自然表达契约。Novel Planner 与 Chapter Planner 要把抽象主题落成可验证的人物行动、阻力和后果；Scene Writer 与局部 Rewrite 通过动作、对白、POV 感知和具体后果呈现信息；Reviewer 只在这些特征反复出现或实质损害叙事时生成 `STYLE_MISMATCH`；Canonical Summary 只记录事件、状态变化和未决后果。Deterministic Assembler 不读取该策略。
 
 `PromptVersionResolver` 为 Provider 阶段的 Planner、Writer、Reviewer、Local Rewrite 和 Summary 返回 `{stage_prompt_version}+{narrative_policy_version}`。该有效版本同时进入 Run、Context Snapshot、Input Hash、Idempotency Key 和 Provider 请求诊断；修改任一组成部分都会形成新的复用边界。Assembly 使用独立算法版本，不注册 Prompt Version，也不产生 Provider Usage。Extractor 等不注入自然文风策略的结构化阶段保持独立版本。
+
+Scene Writer 的 Run Snapshot 保留完整路由、容量、预算和 Memory 查询诊断，但正文请求只发送 `l0/l1/l2/l4`、已选中的长期记忆、临时状态、前场尾部、当前 Scene 任务和写作约束。`generation_preferences`、Token 分配、Checksum、ID 列表及 `l3.query_text` 不进入 Provider Prompt。Writer 的完成预算必须分别冻结可见输出与推理预留；Provider 默认启用推理时，即使 `reasoning_effort` 为空也不能把推理预留设为零。
 
 每个 Provider Job 最多发出一次认知请求。Story Event 提取、Evidence/Schema 修复和 Coverage 判定若仍需 Provider，必须成为具有独立输入指纹、Run 和 Artifact 的子阶段；不得在 Planner、Writer、Reviewer 或 Rewriter 的同一 `handle()` 中循环请求。`AiDebugService` 原样执行用户输入，便于诊断 Provider，不注入小说文风。
 

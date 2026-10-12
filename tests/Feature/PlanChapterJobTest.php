@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
@@ -38,6 +39,7 @@ use App\Models\StoryStateVersion;
 use App\Models\Volume;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterPlanPayload;
+use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationStageFingerprint;
 use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
@@ -1042,6 +1044,64 @@ test('explicit regeneration of a void chapter preserves the successful same fing
         ->and($scene->fresh()->status->value)->toBe('draft')
         ->and($scene->fresh()->current_artifact_id)->toBe($oldArtifact->getKey())
         ->and($oldArtifact->fresh())->not->toBeNull();
+});
+
+test('outline restart creates a new planning run when the matching successful plan was superseded', function () {
+    [$chapter, $character] = plannerChapter();
+    $fake = (new FakeAiProvider)
+        ->enqueue(plannerResponse(plannerPayload($character->getKey())))
+        ->enqueue(plannerResponse(plannerPayload($character->getKey(), ['tone' => '压抑'])));
+    app()->instance(AiProvider::class, $fake);
+    $planner = app(ChapterPlanner::class);
+
+    $firstPlan = $planner->generate($chapter->getKey());
+    $firstPlan->update(['status' => PlanStatus::Superseded]);
+    $chapter->update(['status' => ChapterStatus::Void]);
+
+    $secondPlan = $planner->generate($chapter->getKey(), true);
+
+    expect($secondPlan?->version)->toBe(2)
+        ->and($secondPlan?->status)->toBe(PlanStatus::Ready)
+        ->and($firstPlan->fresh()->status)->toBe(PlanStatus::Superseded)
+        ->and($chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->count())->toBe(2)
+        ->and($fake->requests())->toHaveCount(2);
+});
+
+test('outline restart can redispatch when an earlier dispatch completed without creating a planning run', function () {
+    [$chapter, , $outline] = outlinePlannerChapter();
+    GenerationRun::factory()->for($chapter)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $dispatcher = Mockery::mock(GenerationJobDispatcher::class);
+    $dispatcher->shouldReceive('dispatch')
+        ->twice()
+        ->with(Mockery::type(PlanChapterJob::class))
+        ->andReturnTrue();
+    app()->instance(GenerationJobDispatcher::class, $dispatcher);
+    $action = app(RestartChapterFromOutlineAction::class);
+
+    $first = $action->handle($chapter->novel, $outline->getKey(), $outline->checksum, 1);
+    $novel = $chapter->novel->fresh();
+    $settings = $novel->settings;
+    data_forget($settings, "outline_restarts.{$outline->getKey()}.{$chapter->getKey()}.planning_run_id_before");
+    $novel->update(['settings' => $settings]);
+    $second = $action->handle($chapter->novel, $outline->getKey(), $outline->checksum, 1);
+
+    expect($first['status'])->toBe('applied')
+        ->and($first['dispatched'])->toBeTrue()
+        ->and($second['status'])->toBe('already_applied')
+        ->and($second['dispatched'])->toBeTrue();
+
+    GenerationRun::factory()->for($chapter)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Running,
+    ]);
+
+    $third = $action->handle($chapter->novel->fresh(), $outline->getKey(), $outline->checksum, 1);
+
+    expect($third['status'])->toBe('already_applied')
+        ->and($third['dispatched'])->toBeFalse();
 });
 
 test('invalid structured output fails the run without writing a plan or artifact', function () {

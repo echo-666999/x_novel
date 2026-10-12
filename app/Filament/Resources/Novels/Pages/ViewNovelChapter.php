@@ -8,6 +8,7 @@ use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Chapters\RecoverLegacyChapterPipelineAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Chapters\RestartChapterFromOutlineAction;
+use App\Actions\Chapters\SaveManualChapterPlanAction;
 use App\Actions\Chapters\StartChapterRewriteAction;
 use App\AI\AiSettingsService;
 use App\AI\Exceptions\AiProviderException;
@@ -21,6 +22,7 @@ use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
 use App\Filament\Pages\Memory as MemoryPage;
 use App\Filament\Resources\Novels\NovelResource;
+use App\Filament\Resources\Novels\Support\ChapterPlanEditorSchema;
 use App\Filament\Support\ContextInspectorSchema;
 use App\Jobs\AdjudicatePlanCoverageJob;
 use App\Jobs\AssembleChapterJob;
@@ -365,6 +367,9 @@ class ViewNovelChapter extends ViewRecord
                                 auth()->id(),
                             );
                             $this->cachedChapter = null;
+                            $this->cachedPlanningRunId = null;
+                            $this->cachedGenerationWorkPending = null;
+                            $this->cacheSchema('content', null);
 
                             Notification::make()
                                 ->title('局部人工修订稿已保存')
@@ -467,16 +472,37 @@ class ViewNovelChapter extends ViewRecord
                         ->columnSpanFull(),
                 ]),
             Section::make('人工修复建议')
+                ->key('repair-recommendations')
                 ->description('建议由已持久化的错误码和 Findings 确定性生成，不调用 AI。按层级入口操作可保留历史产物并失效旧来源链。')
                 ->visible(fn (): bool => $this->repairRecommendations() !== [])
                 ->headerActions([
                     Action::make('editRepairPlan')
-                        ->label('打开 Chapter Plan')
+                        ->label('编辑当前 Chapter Plan')
                         ->icon('heroicon-o-clipboard-document-list')
                         ->visible(fn (): bool => collect($this->repairRecommendations())->contains(
                             fn (array $row): bool => $row['recovery_key'] === 'edit_plan',
                         ))
-                        ->url(fn (): string => NovelResource::getUrl('chapters', ['record' => $this->getRecord()])),
+                        ->modalHeading(fn (): string => "第 {$this->chapter()->sequence} 章 · Chapter Plan")
+                        ->modalDescription('保存会创建新的 Plan Version；若下游 Scene 已生成，将从最早受影响 Scene 开始级联重建。')
+                        ->modalWidth('7xl')
+                        ->slideOver()
+                        ->fillForm(fn (): array => app(ChapterPlanEditorSchema::class)->formData($this->chapter()))
+                        ->schema(fn (): array => app(ChapterPlanEditorSchema::class)->schema(
+                            $this->getRecord(),
+                            fn (): Chapter => $this->chapter(),
+                        ))
+                        ->action(function (array $data, SaveManualChapterPlanAction $savePlan): void {
+                            $result = $savePlan->handle($this->chapter(), $data, auth()->id());
+                            $this->cachedChapter = null;
+                            $this->cacheSchema('content', null);
+
+                            Notification::make()
+                                ->title($result['status'] === 'reused'
+                                    ? 'Chapter Plan 输入未变化，已复用当前 Ready Plan'
+                                    : 'Chapter Plan 已保存')
+                                ->success()
+                                ->send();
+                        }),
                     Action::make('repairCanonicalState')
                         ->label('查看正式状态')
                         ->icon('heroicon-o-shield-exclamation')
@@ -506,6 +532,9 @@ class ViewNovelChapter extends ViewRecord
                                 auth()->id(),
                             );
                             $this->cachedChapter = null;
+                            $this->cachedPlanningRunId = null;
+                            $this->cachedGenerationWorkPending = null;
+                            $this->cacheSchema('content', null);
 
                             Notification::make()
                                 ->title('章节已从 Current Outline 开始重建')

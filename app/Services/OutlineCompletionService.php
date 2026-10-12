@@ -15,7 +15,10 @@ use Illuminate\Validation\ValidationException;
  */
 class OutlineCompletionService
 {
-    public function __construct(private readonly OutlineHandoffContract $handoffContract) {}
+    public function __construct(
+        private readonly OutlineHandoffContract $handoffContract,
+        private readonly StoryEventEvidenceQuoteResolver $evidenceQuoteResolver,
+    ) {}
 
     /** @return array<string, mixed> */
     public static function reviewSchema(): array
@@ -72,7 +75,7 @@ class OutlineCompletionService
     }
 
     /** @param array<string, mixed> $payload @return array<string, mixed> */
-    public function expandCompactExtraction(array $payload, Chapter $chapter): array
+    public function expandCompactExtraction(array $payload, Chapter $chapter, ?GenerationArtifact $draft = null): array
     {
         if (! $this->hasExactKeys($payload, ['milestone_completion', 'beat_exit', 'handoff_readiness'])) {
             throw ValidationException::withMessages(['outline_completion' => 'Event Extraction 精简审计结构无效。']);
@@ -80,6 +83,9 @@ class OutlineCompletionService
 
         $chapter->loadMissing('scenes.currentArtifact');
         $contract = $this->contract($chapter);
+        $normalizeEvidence = fn (mixed $evidence): mixed => is_string($evidence) && $draft !== null
+            ? $this->evidenceQuoteResolver->resolve((string) $draft->content, $evidence)
+            : $evidence;
         $sceneIdForEvidence = function (mixed $evidence) use ($chapter): ?int {
             if (! is_string($evidence) || trim($evidence) === '') {
                 return null;
@@ -91,23 +97,25 @@ class OutlineCompletionService
 
             return $matches->count() === 1 ? (int) $matches->first()->getKey() : null;
         };
-        $expand = function (mixed $audits, array $items, callable $identity, string $field) use ($sceneIdForEvidence): array {
+        $expand = function (mixed $audits, array $items, callable $identity, string $field) use ($normalizeEvidence, $sceneIdForEvidence): array {
             if (! is_array($audits) || count($audits) !== count($items)) {
                 throw ValidationException::withMessages([$field => "{$field} 必须按冻结契约逐项完整返回。"]);
             }
 
-            return collect(array_values($audits))->map(function (mixed $audit, int $index) use ($items, $identity, $field, $sceneIdForEvidence): array {
+            return collect(array_values($audits))->map(function (mixed $audit, int $index) use ($items, $identity, $field, $normalizeEvidence, $sceneIdForEvidence): array {
                 if (! is_array($audit)
                     || ! $this->hasExactKeys($audit, ['status', 'evidence'])
                     || ! in_array($audit['status'], ['fulfilled', 'not_met', 'contradicted', 'not_applicable'], true)) {
                     throw ValidationException::withMessages([$field => "{$field} 的逐项审计结构无效。"]);
                 }
 
+                $evidence = $normalizeEvidence($audit['evidence']);
+
                 return [
                     ...$identity($items[$index]),
                     'status' => $audit['status'],
-                    'evidence' => $audit['evidence'],
-                    'scene_id' => $sceneIdForEvidence($audit['evidence']),
+                    'evidence' => $evidence,
+                    'scene_id' => $sceneIdForEvidence($evidence),
                 ];
             })->all();
         };

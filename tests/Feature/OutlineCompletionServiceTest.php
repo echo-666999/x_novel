@@ -167,6 +167,37 @@ test('chapter completion remains independent when the current milestone is incom
         ->and($service->eventCandidates($extraction, $fixture['chapter'], $fixture['draft']))->toBe([]);
 });
 
+test('compact completion evidence restores paragraph whitespace from the authoritative draft', function () {
+    $fixture = outlineCompletionFixture();
+    $content = "第一条件已经满足。\n\n第二条件也完成。";
+    $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $fixture['draft'] = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'content' => $content,
+        'checksum' => hash('sha256', $content),
+    ]);
+    $fixture['scene']->update(['current_artifact_id' => $fixture['draft']->getKey()]);
+    $service = app(OutlineCompletionService::class);
+    $contract = $service->contract($fixture['chapter']);
+    $audit = fn (array $items): array => collect($items)->map(fn (): array => [
+        'status' => 'fulfilled',
+        'evidence' => '第一条件已经满足。第二条件也完成。',
+    ])->all();
+
+    $expanded = $service->expandCompactExtraction([
+        'milestone_completion' => $audit($contract['milestone_criteria']),
+        'beat_exit' => $audit($contract['beat_exit_criteria']),
+        'handoff_readiness' => [],
+    ], $fixture['chapter'], $fixture['draft']->fresh());
+    $validated = $service->validateExtraction($expanded, $fixture['chapter'], $fixture['draft']->fresh());
+
+    expect(data_get($validated, 'milestone_completion.criteria.0.evidence'))->toBe($content)
+        ->and(data_get($validated, 'milestone_completion.criteria.0.scene_id'))->toBe($fixture['scene']->getKey());
+});
+
 test('a completed milestone does not complete its beat without every beat exit condition', function () {
     $fixture = outlineCompletionFixture();
     $service = app(OutlineCompletionService::class);

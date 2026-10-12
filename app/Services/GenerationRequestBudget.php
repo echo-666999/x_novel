@@ -14,6 +14,9 @@ use Illuminate\Validation\ValidationException;
  */
 final class GenerationRequestBudget
 {
+    /** @var array<int, string> */
+    private const TIER_ORDER = ['initial', 'retry', 'final'];
+
     /**
      * 解析指定 AI 路由下各修复子阶段的独立预算，避免子请求借用父阶段的大预算上限。
      *
@@ -350,7 +353,8 @@ final class GenerationRequestBudget
      */
     public function validateFrozen(array $budgets, AiStage $stage, array $requiredTiers = []): array
     {
-        if ($requiredTiers !== [] && array_keys($budgets) !== $requiredTiers) {
+        $tierKeys = $this->orderedTierKeys($budgets);
+        if ($requiredTiers !== [] && $tierKeys !== $requiredTiers) {
             throw ValidationException::withMessages([
                 "routes.{$stage->value}" => '[REQUEST_BUDGET_INVALID] '.$stage->getLabel().' 必须按顺序冻结 '.implode(' / ', $requiredTiers).' 请求预算。',
             ]);
@@ -359,7 +363,7 @@ final class GenerationRequestBudget
         $validated = [];
         $previousOutput = 0;
         $previousReasoningReserve = 0;
-        foreach (array_keys($budgets) as $tier) {
+        foreach ($tierKeys as $tier) {
             $budget = $this->tier($budgets, (string) $tier, $stage);
             if ($budget['output_tokens'] < $previousOutput
                 || $budget['reasoning_reserve_tokens'] < $previousReasoningReserve) {
@@ -381,6 +385,27 @@ final class GenerationRequestBudget
         }
 
         return $validated;
+    }
+
+    /**
+     * PostgreSQL jsonb 不保留对象键顺序；预算档位必须按业务顺序解释，不能依赖数据库回读顺序。
+     *
+     * @param  array<string, mixed>  $budgets
+     * @return array<int, string>
+     */
+    private function orderedTierKeys(array $budgets): array
+    {
+        $keys = array_keys($budgets);
+        $known = array_values(array_filter(
+            self::TIER_ORDER,
+            fn (string $tier): bool => array_key_exists($tier, $budgets),
+        ));
+        $unknown = array_values(array_filter(
+            $keys,
+            fn (string|int $tier): bool => ! in_array((string) $tier, self::TIER_ORDER, true),
+        ));
+
+        return [...$known, ...array_map('strval', $unknown)];
     }
 
     /**
@@ -460,7 +485,7 @@ final class GenerationRequestBudget
         ?AiProviderException $previous = null,
     ): AiProviderException {
         $message = match ($category) {
-            CompletionLimitClassifier::REASONING_BUDGET_EXHAUSTED => "{$label} 已耗尽冻结的最高推理预留 {$budget['reasoning_reserve_tokens']} Token；请提高推理预留或降低推理程度后重新开始。",
+            CompletionLimitClassifier::REASONING_BUDGET_EXHAUSTED => "{$label} 已耗尽冻结的最高推理预留 {$budget['reasoning_reserve_tokens']} Token；请提高推理预留，或为支持的模型显式选择更低推理程度后重新开始。未配置推理程度时，Provider 仍可能启用默认推理。",
             CompletionLimitClassifier::VISIBLE_OUTPUT_TRUNCATED => "{$label} 已在冻结的最高可见输出额度 {$budget['output_tokens']} Token 下被截断；请提高输出预算或调整模型后重新开始。",
             default => "{$label} 已耗尽冻结的最高完成预算 {$budget['max_completion_tokens']} Token，且 Provider 证据不足以判断消耗位置；请检查 Usage 后调整预算。",
         };

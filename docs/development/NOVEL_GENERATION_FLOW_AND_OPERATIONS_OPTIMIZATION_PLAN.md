@@ -149,7 +149,7 @@ needs_attention = 0
 - `DeepSeekProvider` 当前不会把统一的 `reasoningEffort` 转换为供应商请求参数，因此后台配置的 Writer 推理程度对这条 DeepSeek 请求没有实际约束力。
 - Run #393 的压缩请求没有 Provider 响应或 Provider 异常日志，时间位置与 330 秒 Job 上限一致。由现有日志可推断 Worker 在请求中被 Job 超时终止，但数据库不可达，无法读取持久化状态作最终确认。
 - 后续 Queue 重试在重新读取 Scene 44 时遇到 PostgreSQL `192.168.44.131:5432 No route to host`，失败记录本身也无法写入数据库。这是独立的基础设施故障，放大了恢复问题，但不是前三次 AI 调用耗时过长的原因。
-- Run 使用 `scene-writer-v13`，当前配置已经是 `scene-writer-v15`，说明执行该 Run 的长驻 Worker 当时仍持有旧配置。
+- Run 使用 `scene-writer-v13`，当时配置已经是 `scene-writer-v15`，说明执行该 Run 的长驻 Worker 仍持有旧配置。
 
 结论：不能只提高 Job Timeout。需要同时限制子阶段成本、建立累计时间预算，并让每个已成功子阶段可以恢复复用。
 
@@ -231,7 +231,7 @@ error_metadata    nullable jsonb
 例如：
 
 ```text
-scene-writer-v15+natural-prose-v1
+scene-writer-v16+natural-prose-v1
 reviewer-v16+natural-prose-v1
 summary-v2+natural-prose-v1
 ```

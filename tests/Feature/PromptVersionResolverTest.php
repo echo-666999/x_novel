@@ -8,7 +8,7 @@ use App\Enums\AiStage;
 test('prompt versions follow the documented convention', function () {
     expect(app(PromptVersionResolver::class)->all())->toBe([
         'planner' => 'chapter-planner-v10+natural-prose-v1',
-        'writer' => 'scene-writer-v15+natural-prose-v1',
+        'writer' => 'scene-writer-v16+natural-prose-v1',
         'extractor' => 'event-extractor-v9',
         'reviewer' => 'reviewer-v16+natural-prose-v1',
         'rewrite' => 'rewrite-v14+natural-prose-v1',
@@ -20,7 +20,7 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
     expect(app(PromptVersionResolver::class)->resolve($stage))->toBe($version);
 })->with([
     'planner' => [AiStage::Planner, 'chapter-planner-v10+natural-prose-v1'],
-    'writer' => [AiStage::Writer, 'scene-writer-v15+natural-prose-v1'],
+    'writer' => [AiStage::Writer, 'scene-writer-v16+natural-prose-v1'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v9'],
     'reviewer' => [AiStage::Reviewer, 'reviewer-v16+natural-prose-v1'],
     'rewrite' => [AiStage::Rewrite, 'rewrite-v14+natural-prose-v1'],
@@ -31,8 +31,8 @@ test('effective prose versions include the narrative policy version while base v
     $resolver = app(PromptVersionResolver::class);
 
     expect($resolver->resolve(AiStage::Writer))
-        ->toBe('scene-writer-v15+'.NarrativeProsePolicy::VERSION)
-        ->and($resolver->resolveBase(AiStage::Writer))->toBe('scene-writer-v15')
+        ->toBe('scene-writer-v16+'.NarrativeProsePolicy::VERSION)
+        ->and($resolver->resolveBase(AiStage::Writer))->toBe('scene-writer-v16')
         ->and($resolver->resolve(AiStage::Extractor))->toBe($resolver->resolveBase(AiStage::Extractor));
 });
 

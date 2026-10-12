@@ -314,9 +314,25 @@ final class PlanCoverage
     private static function resolveWhitespaceEquivalentEvidence(string $content, string $evidence): ?string
     {
         $contentCharacters = preg_split('//u', $content, -1, PREG_SPLIT_NO_EMPTY);
-        $evidenceWithoutWhitespace = preg_replace('/\s+/u', '', $evidence);
+        $evidenceCharacters = preg_split('//u', $evidence, -1, PREG_SPLIT_NO_EMPTY);
 
-        if (! is_array($contentCharacters) || ! is_string($evidenceWithoutWhitespace) || $evidenceWithoutWhitespace === '') {
+        if (! is_array($contentCharacters) || ! is_array($evidenceCharacters)) {
+            return null;
+        }
+
+        $normalizeCharacter = static fn (string $character): string => in_array(
+            $character,
+            ['“', '”', '‘', '’', '「', '」', '『', '』', '"', "'"],
+            true,
+        ) ? '"' : $character;
+        $evidenceWithoutWhitespace = '';
+        foreach ($evidenceCharacters as $character) {
+            if (preg_match('/\s/u', $character) !== 1) {
+                $evidenceWithoutWhitespace .= $normalizeCharacter($character);
+            }
+        }
+
+        if ($evidenceWithoutWhitespace === '') {
             return null;
         }
 
@@ -328,13 +344,17 @@ final class PlanCoverage
                 continue;
             }
 
-            $contentWithoutWhitespace .= $character;
+            $contentWithoutWhitespace .= $normalizeCharacter($character);
             $contentOffsets[] = $offset;
         }
 
         $normalizedPosition = mb_strpos($contentWithoutWhitespace, $evidenceWithoutWhitespace);
 
         if ($normalizedPosition === false) {
+            return null;
+        }
+
+        if (mb_strpos($contentWithoutWhitespace, $evidenceWithoutWhitespace, $normalizedPosition + 1) !== false) {
             return null;
         }
 

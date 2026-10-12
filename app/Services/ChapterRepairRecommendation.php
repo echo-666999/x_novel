@@ -119,7 +119,7 @@ final class ChapterRepairRecommendation
                     ? ['chapter_function', 'reader_promise', 'required_facts', 'scene_plans']
                     : ["scene_plans[Scene {$sceneId}]", 'goal', 'conflict', 'turn', 'outcome'],
                 affected: ['Scene', 'Assembly', 'Event', 'Patch', 'Review'],
-                entry: '章节列表 → 编辑计划；保存后同步 Scene 并从受影响 Scene 重建',
+                entry: '当前章节审校页 → 编辑当前 Chapter Plan；保存后同步 Scene 并从受影响 Scene 重建',
                 recoveryKey: 'edit_plan',
                 code: $code,
                 sceneId: $sceneId,
@@ -160,7 +160,7 @@ final class ChapterRepairRecommendation
             action: '先调整计划并从最早受影响 Scene 重建',
             fields: ['chapter_function', 'scene_plans', 'required_facts', 'forbidden_conflicts'],
             affected: ['Scene', 'Assembly', 'Event', 'Patch', 'Review'],
-            entry: '章节列表 → 编辑计划',
+            entry: '当前章节审校页 → 编辑当前 Chapter Plan',
             recoveryKey: 'edit_plan',
             code: $code,
         );
@@ -171,6 +171,36 @@ final class ChapterRepairRecommendation
     {
         $stage = $run->stage;
         $sceneId = $run->scene_id;
+
+        if ($run->error_code === 'review_capacity_mismatch') {
+            return $this->row(
+                'Chapter Plan',
+                $run->error_message ?: $run->error_code,
+                '提高 Reviewer Context 或输出预算后创建新的 Plan Version',
+                ['admission_snapshot.capacity.review'],
+                ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'],
+                '当前章节审校页 → 编辑当前 Chapter Plan；原样保存即可按当前配置重新 Admission',
+                'edit_plan',
+                $run->error_code,
+            );
+        }
+
+        if (in_array($stage, [GenerationStage::SceneGeneration, GenerationStage::Rewrite], true)
+            && $this->isFrozenBudgetExhausted((string) $run->error_code)) {
+            $route = $stage === GenerationStage::SceneGeneration ? 'writer' : 'rewrite';
+
+            return $this->row(
+                'Chapter Plan',
+                $run->error_message ?: $run->error_code,
+                '按当前 Prompt 与请求预算创建新的 Plan Version',
+                ["admission_snapshot.routes.{$route}.request_budgets"],
+                ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'],
+                '当前章节审校页 → 编辑当前 Chapter Plan；原样保存即可重新冻结 Route、Prompt 和预算并级联重建 Scene',
+                'edit_plan',
+                $run->error_code,
+                $sceneId,
+            );
+        }
 
         return match ($stage) {
             GenerationStage::ChapterPlanning => $this->row('Chapter Plan', $run->error_message ?: $run->error_code, '修复计划输入后重新规划', ['Chapter Plan', 'Outline Target'], ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'], 'Generation → 恢复中心；或“从 Outline 重建章节”', 'restart_from_outline', $run->error_code),
@@ -237,6 +267,14 @@ final class ChapterRepairRecommendation
             || str_contains($code, 'CANDIDATE')
             || str_contains($code, 'UNAPPROVED_')
             || str_starts_with($code, 'CHAPTER_LENGTH_');
+    }
+
+    private function isFrozenBudgetExhausted(string $code): bool
+    {
+        return str_contains($code, '_reasoning_budget_exhausted')
+            || str_contains($code, '_output_truncated')
+            || str_contains($code, '_completion_budget_exhausted')
+            || str_contains($code, '_output_budget_exhausted');
     }
 
     /**

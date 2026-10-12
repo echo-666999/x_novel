@@ -32,6 +32,7 @@ use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Services\ArcCompletionAuditRepairer;
 use App\Services\ChapterReviewer;
+use App\Services\CompactReviewPayload;
 use App\Services\OutlineCompletionService;
 use App\Services\PlanningReviewAudit;
 use App\Services\StateValidator;
@@ -288,8 +289,11 @@ test('planning review binds a missing arc audit to its frozen target scene witho
         'scene_id' => $otherScene->getKey(),
     ];
 
-    expect(fn () => app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']))
-        ->toThrow(ValidationException::class, '规划契约验收的标识、顺序或目标 Scene 不一致');
+    $downgraded = app(PlanningReviewAudit::class)->validate($payload, $fixture['chapter']->fresh(), $fixture['draft']);
+
+    expect(data_get($downgraded, 'arc_beat_audits.0.status'))->toBe('missing')
+        ->and(data_get($downgraded, 'arc_beat_audits.0.evidence'))->toBeNull()
+        ->and(data_get($downgraded, 'arc_beat_audits.0.scene_id'))->toBe($targetScene->getKey());
 });
 
 test('planning review audits normalize quoted evidence with an omission marker to a verbatim excerpt', function () {
@@ -587,8 +591,9 @@ test('compact review restores frozen contract order and database identities in L
     ]]]);
     $response = compactReviewResponse();
     $data = $response->structuredData;
-    $data['arc_beat_audits'] = [['status' => 'fulfilled', 'evidence' => '林舟守住城门']];
+    $data['arc_beat_audits'] = [['status' => 'fulfilled', 'evidence' => "“林舟\n\n守住城门”"]];
     $data['arc_completion_audits'] = [['status' => 'not_met', 'evidence' => null]];
+    $data['unapproved_characters'] = [['name' => '守门人', 'evidence' => "“林舟\n\n守住城门”"]];
     $response = new AiResponse(content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100, providerRequestId: 'compact-order', model: 'review-test');
     bindStateValidation(new StateValidationResult([]));
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue($response));
@@ -598,7 +603,40 @@ test('compact review restores frozen contract order and database identities in L
     expect(data_get($review->artifact->data, 'arc_beat_audits.0.arc_id'))->toBe($arc->getKey())
         ->and(data_get($review->artifact->data, 'arc_beat_audits.0.beat_key'))->toBe($plan->primaryOutlineBeat->beat_key)
         ->and(data_get($review->artifact->data, 'arc_beat_audits.0.scene_id'))->toBe($scene->getKey())
-        ->and(data_get($review->artifact->data, 'arc_completion_audits.0.arc_id'))->toBe($arc->getKey());
+        ->and(data_get($review->artifact->data, 'arc_completion_audits.0.arc_id'))->toBe($arc->getKey())
+        ->and(data_get($review->artifact->data, 'unapproved_characters.0.evidence'))->toBe('林舟守住城门')
+        ->and(data_get($review->artifact->data, 'unapproved_characters.0.scene_id'))->toBe($scene->getKey());
+});
+
+test('compact review downgrades fulfilled outline evidence that cannot bind one scene', function () {
+    $fixture = reviewFixture();
+    foreach ([1, 2] as $sequence) {
+        $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => $sequence]);
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scene_id' => $scene->getKey(), 'scope_type' => 'scene', 'scope_id' => $scene->getKey(),
+            'stage' => GenerationStage::SceneGeneration, 'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft, 'content' => $fixture['draft']->content,
+            'checksum' => hash('sha256', $fixture['draft']->content),
+        ]);
+        $scene->update(['current_artifact_id' => $artifact->getKey()]);
+    }
+
+    $payload = compactReviewResponse()->structuredData;
+    $payload['milestone_completion'][0] = ['status' => 'fulfilled', 'evidence' => '林舟守住城门'];
+    $expanded = CompactReviewPayload::expand(
+        $payload,
+        $fixture['chapter']->fresh(['latestPlan', 'scenes.currentArtifact']),
+        $fixture['draft'],
+        app(OutlineCompletionService::class)->contract($fixture['chapter']),
+        [],
+    );
+
+    expect(data_get($expanded, 'milestone_completion.status'))->toBe('not_met')
+        ->and(data_get($expanded, 'milestone_completion.criteria.0.status'))->toBe('not_met')
+        ->and(data_get($expanded, 'milestone_completion.criteria.0.evidence'))->toBeNull()
+        ->and(data_get($expanded, 'milestone_completion.criteria.0.scene_id'))->toBeNull();
 });
 
 test('deterministic review failure skips the reviewer and persists executable repair advice', function () {
@@ -639,7 +677,7 @@ test('chapter structural finding produces plan scene repair advice and never dis
     bindStateValidation(new StateValidationResult([]));
     $finding = [
         'code' => 'PLAN_DEVIATION', 'dimension' => 'plan', 'severity' => 'error',
-        'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false,
+        'scope' => 'chapter', 'auto_fixable' => false, 'requires_human_decision' => false,
         'message' => '章节功能与 Milestone 结果不一致。', 'evidence' => '林舟守住城门',
     ];
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(compactReviewResponse([$finding])));
@@ -648,6 +686,7 @@ test('chapter structural finding produces plan scene repair advice and never dis
     $review = Review::query()->latest('id')->firstOrFail();
 
     expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(data_get($review->artifact->data, 'findings.0.auto_fixable'))->toBeTrue()
         ->and(data_get($review->artifact->data, 'rewrite_scope'))->toBeNull()
         ->and(data_get($review->artifact->data, 'repair_advice.action'))->toBe('rebuild_plan_or_scenes');
     Queue::assertNotPushed(RewriteChapterJob::class);

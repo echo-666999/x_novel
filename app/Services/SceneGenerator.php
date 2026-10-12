@@ -205,7 +205,10 @@ class SceneGenerator
                     provider: $settings->provider,
                     reasoningEffort: $this->sentReasoningEffort($settings->reasoningEffort),
                     systemPrompt: '你是 XNovel 场景写作器。只写当前场景。l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约；只能执行 actions 中 target_scene_sequence 等于当前 Scene 序号的动作，未列入 actions 的伏笔不能在本章主动铺设、强化、兑现、延期或放弃。plan_constraints.arc_contributions 和 world_entity_candidates 同样是冻结契约：只推进目标 Scene 等于当前序号的 Arc Beat，只能引入其中批准的重大世界实体，并在正文中使用 candidate_key 对应的名称与定义；不得自由创造未登记的重大地点、物品、阵营、组织、规则或概念。promised_payoff 是作者侧约束，不代表允许向读者直接揭晓；必须同时遵守 plan_constraints.must_not_reveal，并按 plan_action.action 与 acceptance_criteria 控制揭示程度。foreshadowing_coverage 必须按契约顺序返回当前 Scene 的全部伏笔动作；只有正文证据足以证明 acceptance_criteria 已实现时才能标记 fulfilled，主题相近但没有动作结果必须标记 missing，反转既定动作则标记 contradicted。fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。l4 是唯一的 Style Contract；严格保持其中的 POV、时态和主文风，只使用指定辅助文风补充特征，不得让辅助文风覆盖主文风，并执行 expanded_parameters。第一场景必须从 previous_chapter_ending 连续展开，并把 scene_task.transition_from_previous 指定的时间、地点与行动过渡写进正文；不得从上一章结尾直接跳到次日或新地点而省略关键过程。scene_task.continuity_requirements 中 establish 只负责首次建立，persist 只写本场新增影响或必要的最短提醒，change 必须写出状态变化，callback 只在章末自然回扣；不得逐 Scene 重复解释同一伤势、限制、等待状态或监管边界。goal、conflict、turn、outcome 都是不可省略的验收项，尤其不得反转 outcome；正文行为必须位于 outcome_allowed 内且不得出现 outcome_forbidden。self_check 必须逐项返回 fulfilled、missing 或 contradicted；fulfilled 和 contradicted 的 evidence 必须逐字引用 content，missing 的 evidence 必须为 null。scene_target_words 是当前场景目标字数，maximum_scene_words 是不可超过的硬上限；字数统计排除空白和换行。当 required_scene_words 大于 0 时，正文还必须至少达到该字数，使各场景总量达到章节下限。场景可以短于目标，未使用的字数由后续场景承接。通过完整的动作、对话、环境、感官和人物反应展开既定场景，不得用提纲、摘要、无意义重复或新增重大事实凑字。返回符合 Schema 的 JSON；除固定字段和枚举值外，正文及所有自然语言内容必须使用简体中文。草稿不得修改正式故事状态。'.NarrativeProsePolicy::writing(),
-                    prompt: '请根据以下权威上下文生成当前场景：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    prompt: '请根据以下权威上下文生成当前场景：'.json_encode(
+                        $this->prosePromptContext($context),
+                        JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
+                    ),
                     temperature: 0.7,
                     maxTokens: $budget['max_completion_tokens'],
                     responseSchema: SceneDraftPayload::schema(),
@@ -917,6 +920,34 @@ class SceneGenerator
     {
         // 当前已注册的文本 Provider 都会发送显式 reasoning_effort；留空仍表示采用 Provider 默认值。
         return $reasoningEffort;
+    }
+
+    /**
+     * Run 快照保留完整路由、预算和召回诊断；正文模型只接收写作所需的权威内容。
+     * l3.query_text 是检索输入且与 Plan 重复，不能再次作为生成上下文发送。
+     *
+     * @param  array<string, mixed>  $context
+     * @return array<string, mixed>
+     */
+    private function prosePromptContext(array $context): array
+    {
+        $promptContext = [
+            'l0' => (array) ($context['l0'] ?? []),
+            'l1' => (array) ($context['l1'] ?? []),
+            'l2' => (array) ($context['l2'] ?? []),
+            'l4' => (array) ($context['l4'] ?? []),
+            'temporary_state' => (array) ($context['temporary_state'] ?? []),
+            'previous_scene_tail' => $context['previous_scene_tail'] ?? null,
+            'scene_task' => (array) ($context['scene_task'] ?? []),
+            'writing_constraints' => (array) ($context['writing_constraints'] ?? []),
+        ];
+
+        $memories = data_get($context, 'l3.memories', []);
+        if (is_array($memories) && $memories !== []) {
+            $promptContext['l3'] = ['memories' => $memories];
+        }
+
+        return $promptContext;
     }
 
     /** 保存子阶段所使用的冻结 Route、容量和修复预算，供运行详情直接展示。 */

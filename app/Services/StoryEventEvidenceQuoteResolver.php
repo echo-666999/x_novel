@@ -19,6 +19,11 @@ final class StoryEventEvidenceQuoteResolver
             return $match[0];
         }
 
+        $ignoringWhitespace = $this->uniqueMatchIgnoringWhitespace($content, $quote);
+        if ($ignoringWhitespace !== null) {
+            return $ignoringWhitespace;
+        }
+
         $fragments = preg_split('/(?:…+|\.{3,})/u', $quote);
 
         if (is_array($fragments) && count($fragments) > 1) {
@@ -44,6 +49,45 @@ final class StoryEventEvidenceQuoteResolver
         }
 
         return $this->highConfidenceOverlap($content, $quote) ?? $quote;
+    }
+
+    private function uniqueMatchIgnoringWhitespace(string $content, string $quote): ?string
+    {
+        $contentCharacters = preg_split('//u', $content, -1, PREG_SPLIT_NO_EMPTY);
+        $quoteWithoutWhitespace = preg_replace('/\s+/u', '', $quote);
+        if (! is_array($contentCharacters)
+            || ! is_string($quoteWithoutWhitespace)
+            || mb_strlen($quoteWithoutWhitespace) < 8) {
+            return null;
+        }
+
+        $normalizedContent = '';
+        $sourceIndexes = [];
+        foreach ($contentCharacters as $sourceIndex => $character) {
+            if (preg_match('/\s/u', $character) === 1) {
+                continue;
+            }
+
+            $normalizedContent .= $character;
+            $sourceIndexes[] = $sourceIndex;
+        }
+
+        $start = mb_strpos($normalizedContent, $quoteWithoutWhitespace);
+        if ($start === false
+            || mb_strpos($normalizedContent, $quoteWithoutWhitespace, $start + 1) !== false) {
+            return null;
+        }
+
+        $end = $start + mb_strlen($quoteWithoutWhitespace) - 1;
+        if (! isset($sourceIndexes[$start], $sourceIndexes[$end])) {
+            return null;
+        }
+
+        return mb_substr(
+            $content,
+            $sourceIndexes[$start],
+            $sourceIndexes[$end] - $sourceIndexes[$start] + 1,
+        );
     }
 
     private function highConfidenceOverlap(string $content, string $quote): ?string

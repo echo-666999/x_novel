@@ -3,6 +3,7 @@
 namespace App\Actions\Chapters;
 
 use App\Enums\ChapterStatus;
+use App\Enums\GenerationStage;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
@@ -45,11 +46,21 @@ class RestartChapterFromOutlineAction
             $settingPath = "outline_restarts.{$outline->getKey()}.{$chapter->getKey()}";
             $existing = data_get($lockedNovel->settings, $settingPath);
             if (is_array($existing)) {
+                $sourceChainRestored = $chapter->plans()
+                    ->where('novel_outline_id', $outline->getKey())
+                    ->where('status', PlanStatus::Ready)
+                    ->exists();
+                $planningRunActive = $chapter->generationRuns()
+                    ->where('stage', GenerationStage::ChapterPlanning)
+                    ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
+                    ->exists();
+
                 return [
                     'status' => 'already_applied',
                     'chapter_id' => $chapter->getKey(),
                     'outline_id' => $outline->getKey(),
-                    'should_dispatch' => blank($existing['dispatched_at'] ?? null),
+                    // dispatched_at 只能证明曾尝试投递；Ready Plan 或运行中的 Planner 才能证明来源链正在恢复。
+                    'should_dispatch' => ! $sourceChainRestored && ! $planningRunActive,
                 ];
             }
 
@@ -78,6 +89,9 @@ class RestartChapterFromOutlineAction
                 'actor_id' => $actorId,
                 'executed_at' => now()->toISOString(),
                 'dispatched_at' => null,
+                'planning_run_id_before' => (int) $chapter->generationRuns()
+                    ->where('stage', GenerationStage::ChapterPlanning)
+                    ->max('id'),
             ]);
             $lockedNovel->update(['settings' => $settings]);
 

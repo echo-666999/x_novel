@@ -666,7 +666,7 @@ test('scene prose evidence repair and length repair use independent routes and b
     expect($artifact?->content)->toBe(str_repeat('短', 10))
         ->and($fake->requests())->toHaveCount(3)
         ->and($fake->requests()[0]->model)->toBe('writer-route-model')
-        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[0]->maxTokens)->toBe(20_000)
         ->and($fake->requests()[1]->model)->toBe('extractor-route-model')
         ->and($fake->requests()[1]->maxTokens)->toBe(9_000)
         ->and($fake->requests()[1]->promptVersion)->toBe(PlanCoverageEvidenceRepairer::PROMPT_VERSION)
@@ -676,6 +676,7 @@ test('scene prose evidence repair and length repair use independent routes and b
         ->and($usage)->toHaveCount(3)
         ->and(data_get($usage[0]->request_metadata, 'substage'))->toBe('prose_generation')
         ->and(data_get($usage[0]->request_metadata, 'route_key'))->toBe('prose')
+        ->and(data_get($artifact?->generationRun?->context_snapshot, 'generation_preferences.provider_requests.0.reasoning_reserve_tokens'))->toBe(8_000)
         ->and(data_get($usage[1]->request_metadata, 'substage'))->toBe('coverage_evidence_repair')
         ->and(data_get($usage[1]->request_metadata, 'route_key'))->toBe('structure_and_coverage')
         ->and(data_get($usage[2]->request_metadata, 'substage'))->toBe('length_repair')
@@ -831,7 +832,9 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日')
         ->and($fake->requests()[0]->systemPrompt)->toContain('l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and($fake->requests()[0]->systemPrompt)->toContain('正文必须像人物正在经历事件')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得在每段末尾总结意义');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得在每段末尾总结意义')
+        ->and($fake->requests()[0]->prompt)->toContain('"l0"', '"l1"', '"l4"', '"scene_task"', '"writing_constraints"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"generation_preferences"', '"query_text"', '"token_allocation"');
 });
 
 test('scene snapshots keep the bible version frozen for the current chapter plan', function () {
@@ -1170,10 +1173,10 @@ test('retryable provider failures are recorded and rethrown for queue retry', fu
     expect($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
         ->and($fixture['scenes']->first()->generationRuns()->count())->toBe(2)
         ->and($fixture['scenes']->first()->generationRuns()->latest('id')->first()->attempt)->toBe(2)
-        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
-        ->and($fake->requests()[1]->maxTokens)->toBe(12_000)
-        ->and(data_get($fixture['scenes']->first()->generationRuns()->oldest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
-        ->and(data_get($fixture['scenes']->first()->generationRuns()->latest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
+        ->and($fake->requests()[0]->maxTokens)->toBe(20_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(20_000)
+        ->and(data_get($fixture['scenes']->first()->generationRuns()->oldest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(20_000)
+        ->and(data_get($fixture['scenes']->first()->generationRuns()->latest('id')->first()->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(20_000)
         ->and($fake->requests())->toHaveCount(2);
 });
 
@@ -1208,8 +1211,14 @@ test('scene truncation escalates to the final budget and then stops before anoth
     config()->set('generation.scene_retry_max_output_tokens', 16_000);
     config()->set('generation.scene_final_retry_max_output_tokens', 24_000);
     config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 12_000);
+    config()->set('generation.chapter_request_budgets.writer.initial.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.writer.initial.max_completion_tokens', 12_000);
     config()->set('generation.chapter_request_budgets.writer.retry.output_tokens', 16_000);
+    config()->set('generation.chapter_request_budgets.writer.retry.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.writer.retry.max_completion_tokens', 16_000);
     config()->set('generation.chapter_request_budgets.writer.final.output_tokens', 24_000);
+    config()->set('generation.chapter_request_budgets.writer.final.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.writer.final.max_completion_tokens', 24_000);
     $fixture = sceneGenerationFixture(1);
     $scene = $fixture['scenes']->first();
     $fake = (new FakeAiProvider)

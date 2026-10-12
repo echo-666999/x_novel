@@ -231,3 +231,22 @@ test('configured chapter budgets reject a decreasing output or reasoning tier', 
     expect(fn () => (new GenerationRequestBudget)->configured(AiStage::Writer))
         ->toThrow(ValidationException::class, '不能低于前一档预算');
 });
+
+test('frozen budgets survive postgres jsonb tier key reordering', function () {
+    // PostgreSQL jsonb 会把对象键重排为 final / retry / initial；业务语义仍是 initial → retry → final。
+    $jsonbOrder = [
+        'final' => ['output_tokens' => 4_000, 'reasoning_reserve_tokens' => 24_000, 'max_completion_tokens' => 28_000],
+        'retry' => ['output_tokens' => 2_000, 'reasoning_reserve_tokens' => 16_000, 'max_completion_tokens' => 18_000],
+        'initial' => ['output_tokens' => 1_000, 'reasoning_reserve_tokens' => 8_000, 'max_completion_tokens' => 9_000],
+    ];
+
+    $validated = (new GenerationRequestBudget)->validateFrozen(
+        $jsonbOrder,
+        AiStage::Extractor,
+        ['initial', 'retry', 'final'],
+    );
+
+    expect(array_keys($validated))->toBe(['initial', 'retry', 'final'])
+        ->and($validated['initial']['max_completion_tokens'])->toBe(9_000)
+        ->and($validated['final']['max_completion_tokens'])->toBe(28_000);
+});

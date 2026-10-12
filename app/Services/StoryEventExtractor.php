@@ -524,6 +524,7 @@ class StoryEventExtractor
             $payload['outline_completion'] = $this->outlineCompletion->expandCompactExtraction(
                 $payload['outline_completion'],
                 $chapter,
+                $draft,
             );
         }
         $outlineCompletion = $this->outlineCompletion->validateExtraction($payload['outline_completion'], $chapter, $draft);
