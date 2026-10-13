@@ -28,6 +28,7 @@ use App\Models\NovelBible;
 use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Services\DeterministicStoryEventApplier;
+use App\Services\GenerationFailurePolicy;
 use App\Services\StoryEventExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -932,6 +933,37 @@ test('retryable provider failure is recorded and retried from event extraction',
 
     expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->count())->toBe(2)
         ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->status)->toBe(RunStatus::Succeeded);
+});
+
+test('invalid provider json is retried only once for the same event extraction input', function () {
+    $fixture = eventExtractionFixture();
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiProviderException('provider_invalid_json_response', 'invalid json', false))
+        ->enqueue(new AiProviderException('provider_invalid_json_response', 'invalid json again', false));
+    app()->instance(AiProvider::class, $fake);
+    $extractor = app(StoryEventExtractor::class);
+
+    try {
+        $extractor->extract($fixture['chapter']->getKey());
+        $this->fail('Expected invalid JSON response.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_invalid_json_response')
+            ->and($exception->retryable)->toBeTrue()
+            ->and(app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::EventExtraction))->toBeTrue();
+    }
+
+    try {
+        $extractor->extract($fixture['chapter']->getKey());
+        $this->fail('Expected the second invalid JSON response.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_invalid_json_response')
+            ->and($exception->retryable)->toBeFalse()
+            ->and(app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::EventExtraction))->toBeFalse();
+    }
+
+    expect($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->count())->toBe(2)
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->oldest('id')->first()->error_retryable)->toBeTrue()
+        ->and($fixture['chapter']->generationRuns()->where('stage', GenerationStage::EventExtraction)->latest('id')->first()->error_retryable)->toBeFalse();
 });
 
 test('event extraction increases frozen output budgets and stops before a fourth provider call', function () {

@@ -6,6 +6,8 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\DeepSeekProvider;
+use App\AI\Providers\TrackingAiProvider;
+use App\AI\UsageRecorder;
 use App\Enums\AiStage;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
@@ -106,6 +108,48 @@ test('deepseek structured output failures are non retryable', function (string $
     'invalid json' => ['{invalid', 'provider_invalid_json_response'],
     'schema mismatch' => ['{"answer":12}', 'provider_schema_validation_failed'],
 ]);
+
+test('deepseek malformed json still records provider usage and request id', function () {
+    Http::fake(['deepseek.example/*' => Http::response([
+        'id' => 'deepseek-invalid-json-usage',
+        'model' => 'deepseek-chat',
+        'choices' => [['finish_reason' => 'stop', 'message' => ['content' => '{"answer":"OK"}}']]],
+        'usage' => [
+            'prompt_tokens' => 120,
+            'completion_tokens' => 230,
+            'completion_tokens_details' => ['reasoning_tokens' => 180],
+            'prompt_cache_hit_tokens' => 80,
+        ],
+    ])]);
+    $provider = new TrackingAiProvider(app(DeepSeekProvider::class), app(UsageRecorder::class));
+
+    try {
+        $provider->generate(new AiRequest(
+            model: 'deepseek-chat',
+            provider: 'deepseek',
+            responseSchema: [
+                'type' => 'object',
+                'required' => ['answer'],
+                'properties' => ['answer' => ['type' => 'string']],
+                'additionalProperties' => false,
+            ],
+            metadata: ['stage' => AiStage::Extractor->value],
+        ));
+        $this->fail('Expected malformed JSON response.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_invalid_json_response')
+            ->and($exception->providerRequestId)->toBe('deepseek-invalid-json-usage');
+    }
+
+    $usage = UsageRecord::query()->sole();
+    expect($usage->provider)->toBe('deepseek')
+        ->and($usage->model)->toBe('deepseek-chat')
+        ->and($usage->input_tokens)->toBe(120)
+        ->and($usage->output_tokens)->toBe(230)
+        ->and($usage->reasoning_tokens)->toBe(180)
+        ->and($usage->request_id)->toBe('deepseek-invalid-json-usage')
+        ->and(data_get($usage->request_metadata, 'finish_reason'))->toBe('stop');
+});
 
 test('deepseek returns usage metadata for truncated structured output', function () {
     Http::fake(['deepseek.example/*' => Http::response([

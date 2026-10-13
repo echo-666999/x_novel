@@ -262,11 +262,45 @@ class StoryEventExtractor
                     $response,
                 );
                 $this->recordCompletionLimitClassification($run, $exception);
+                $exception = $this->classifyInvalidJsonRetry($run, $baseKey, $exception);
             }
             $this->failRun($run, $exception);
 
             throw $exception;
         }
+    }
+
+    private function classifyInvalidJsonRetry(GenerationRun $run, string $baseKey, AiProviderException $exception): AiProviderException
+    {
+        if ($exception->errorCode !== 'provider_invalid_json_response') {
+            return $exception;
+        }
+
+        $alreadyRetried = GenerationRun::query()
+            ->where('chapter_id', $run->chapter_id)
+            ->where('stage', GenerationStage::EventExtraction)
+            ->where('provider', $run->provider)
+            ->where('model_policy', $run->model_policy)
+            ->where('id', '<', $run->getKey())
+            ->where('error_code', 'provider_invalid_json_response')
+            ->where(fn ($query) => $query
+                ->where('idempotency_key', $baseKey)
+                ->orWhere('idempotency_key', 'like', $baseKey.':attempt:%'))
+            ->exists();
+
+        if ($alreadyRetried) {
+            return $exception;
+        }
+
+        return new AiProviderException(
+            $exception->errorCode,
+            $exception->getMessage().' 将按同一冻结输入受控重试一次。',
+            true,
+            $exception->statusCode,
+            $exception,
+            $exception->providerRequestId,
+            $exception->usageResponse,
+        );
     }
 
     public function markTerminalFailure(int $chapterId): void

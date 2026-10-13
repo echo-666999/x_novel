@@ -109,20 +109,20 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.context_window_tokens'))->toBe(1_050_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.max_output_tokens'))->toBe(128_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.output_tokens'))->toBe(4_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.reasoning_reserve_tokens'))->toBe(8_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.max_completion_tokens'))->toBe(12_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.reasoning_reserve_tokens'))->toBe(16_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.max_completion_tokens'))->toBe(24_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.reasoning_reserve_tokens'))->toBe(24_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.max_completion_tokens'))->toBe(36_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.reasoning_reserve_tokens'))->toBe(24_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.max_completion_tokens'))->toBe(28_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.reasoning_reserve_tokens'))->toBe(32_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.max_completion_tokens'))->toBe(40_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.reasoning_reserve_tokens'))->toBe(48_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.max_completion_tokens'))->toBe(60_000)
         // 修复子阶段必须独立冻结输出、推理预留和 Provider 总完成预算。
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.repair_request_budgets.event_evidence.initial.output_tokens'))->toBe(1_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.repair_request_budgets.event_evidence.initial.reasoning_reserve_tokens'))->toBe(8_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.repair_request_budgets.event_evidence.initial.max_completion_tokens'))->toBe(9_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.reviewer.repair_request_budgets.coverage_judgment.retry.max_completion_tokens'))->toBe(19_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.rewrite.repair_request_budgets.length_repair.retry.max_completion_tokens'))->toBe(24_000)
-        // Admission 必须冻结最高档 12k 可见输出与 24k 推理预留的总完成预算，避免运行时重新读取配置。
-        ->and(data_get($admitted->admission_snapshot, 'capacity.event_extraction.max_completion_tokens'))->toBe(36_000)
+        // Admission 必须冻结最高档 12k 可见输出与 48k 推理预留的总完成预算，避免运行时重新读取配置。
+        ->and(data_get($admitted->admission_snapshot, 'capacity.event_extraction.max_completion_tokens'))->toBe(60_000)
         ->and(data_get($admitted->admission_snapshot, 'capacity.rewrite.max_completion_tokens'))->toBeGreaterThan(0)
         ->and($plan->chapter->generationRuns()->count())->toBe(0)
         ->and($provider->requests())->toBe([]);

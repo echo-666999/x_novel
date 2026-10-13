@@ -88,13 +88,13 @@ final class GenerationFailurePolicy
         $failure = $this->fromException($exception, "{$stage->value}_failed");
 
         return $failure->retryable
-            && in_array($failure->metadata['category'] ?? null, [
+            && ($failure->code === 'provider_invalid_json_response' || in_array($failure->metadata['category'] ?? null, [
                 'external_temporary',
                 'infrastructure_temporary',
                 'reasoning_budget_exhausted',
                 'visible_output_truncated',
                 'completion_budget_exhausted',
-            ], true);
+            ], true));
     }
 
     public function shouldMarkTerminal(GenerationStage $stage, ?Throwable $exception): bool

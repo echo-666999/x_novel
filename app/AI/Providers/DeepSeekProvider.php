@@ -150,23 +150,62 @@ class DeepSeekProvider implements AiProvider
 
         $content = is_string($content) ? $content : '';
         $completionLimitReason = CompletionLimitClassifier::classify($finishReason, $content, $reasoningTokens);
+        $usageResponse = new AiResponse(
+            content: $content,
+            structuredData: null,
+            inputTokens: (int) $response->json('usage.prompt_tokens', 0),
+            outputTokens: (int) $response->json('usage.completion_tokens', 0),
+            cachedTokens: (int) $response->json('usage.prompt_cache_hit_tokens', $response->json('usage.prompt_tokens_details.cached_tokens', 0)),
+            latencyMs: $latencyMs,
+            providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
+            model: $model,
+            metadata: [
+                'finish_reason' => $finishReason,
+                'refusal' => $refusal,
+                'completion_limit_reason' => $completionLimitReason,
+                'sent_parameters' => $this->observableSentParameters($sentPayload),
+            ],
+            reasoningTokens: $reasoningTokens,
+        );
 
         $structuredData = null;
         if ($schema !== null) {
             if (! $structuredOutputTruncated) {
                 if (trim($content) === '') {
-                    throw new AiProviderException('provider_empty_json_response', 'DeepSeek JSON Output 返回了空内容。', false, $response->status());
+                    throw new AiProviderException(
+                        'provider_empty_json_response',
+                        'DeepSeek JSON Output 返回了空内容。',
+                        false,
+                        $response->status(),
+                        providerRequestId: $usageResponse->providerRequestId,
+                        usageResponse: $usageResponse,
+                    );
                 }
 
                 try {
                     $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
                     $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
                 } catch (JsonException $exception) {
-                    throw new AiProviderException('provider_invalid_json_response', 'DeepSeek JSON Output 不是合法 JSON。', false, $response->status(), $exception);
+                    throw new AiProviderException(
+                        'provider_invalid_json_response',
+                        'DeepSeek JSON Output 不是合法 JSON。',
+                        false,
+                        $response->status(),
+                        $exception,
+                        $usageResponse->providerRequestId,
+                        $usageResponse,
+                    );
                 }
 
                 if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
-                    throw new AiProviderException('provider_schema_validation_failed', 'DeepSeek JSON Output 不符合响应 Schema。', false, $response->status());
+                    throw new AiProviderException(
+                        'provider_schema_validation_failed',
+                        'DeepSeek JSON Output 不符合响应 Schema。',
+                        false,
+                        $response->status(),
+                        providerRequestId: $usageResponse->providerRequestId,
+                        usageResponse: $usageResponse,
+                    );
                 }
                 $structuredData = $decoded;
             }

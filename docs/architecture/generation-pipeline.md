@@ -481,6 +481,8 @@ Extractor Context 同时冻结 `current_scene_references`，每项明确区分�
 
 `event-extractor-v9` 保留上述完整 Context Snapshot 作为 Input Hash、恢复和审计依据，但 Provider 输入压缩为正文、候选实体、Scene ID 映射、Canonical State、授权伏笔动作、Outline 完成条件和事件主体规则。Provider 不再接收 Locked Facts、完整 Plan/伏笔合同、Artifact ID、Checksum、路由或预算诊断字段。输出 evidence 不再要求 Artifact ID 与字符偏移，Outline Completion 也不再复述条件文本、数据库身份、Scene ID 或汇总状态；Laravel 根据数组顺序、逐字证据和冻结合同恢复后，再执行原有完整校验。冻结为 `event-extractor-v8` 的历史 Run 仍走旧输入输出合同。
 
+Extractor 的默认三档预算分别保留 4k / 8k / 12k 可见输出，并基于实际 Usage 为隐藏推理预留 24k / 32k / 48k；预算只在创建新 Plan Version 时冻结，旧 Plan 不回写。DeepSeek 返回 HTTP 200 但 JSON 语法无效时仍记录 Usage 与 Provider Request ID，同一 Input Hash 只允许沿用当前冻结档位自动重试一次；再次返回非法 JSON 即停止并要求人工处理，不把语法错误误分类为完成预算不足。
+
 幂等键：
 
 ```text
