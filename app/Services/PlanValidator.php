@@ -611,7 +611,15 @@ class PlanValidator
             $inboundChecksum = $target->inboundHandoff === null
                 ? null
                 : hash('sha256', json_encode($target->inboundHandoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
-            if (($snapshot['inbound_handoff'] ?? null) !== $target->inboundHandoff
+            $snapshotInbound = $snapshot['inbound_handoff'] ?? null;
+            $sameInbound = $snapshotInbound === null && $target->inboundHandoff === null;
+            if (is_array($snapshotInbound) && is_array($target->inboundHandoff)) {
+                $sameInbound = hash_equals(
+                    $this->outlineChecksum->for($snapshotInbound),
+                    $this->outlineChecksum->for($target->inboundHandoff),
+                );
+            }
+            if (! $sameInbound
                 || ($snapshot['inbound_handoff_checksum'] ?? null) !== $inboundChecksum) {
                 $findings[] = $this->blocked(
                     'ADMISSION_HANDOFF_MISMATCH',
@@ -1202,7 +1210,9 @@ class PlanValidator
     ): PlanFinding {
         $field ??= 'chapter_plan';
         $relatedRecord ??= $this->validatingRecord;
-        $repairAction ??= '修正对应 Plan 字段后重新执行 Plan Admission。';
+        $repairAction ??= $this->validatingRecord === 'chapter_plan:candidate'
+            ? '重新生成章节计划后再次执行 Plan Admission。'
+            : '修正对应 Plan 字段后重新执行 Plan Admission。';
 
         return new PlanFinding(PlanFindingSeverity::Blocked, $code, $message, $field, $relatedRecord, $repairAction);
     }

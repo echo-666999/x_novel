@@ -216,7 +216,7 @@ class OutlineProgressResolver
 
         if ($event === null
             || ! is_array($stored)
-            || $stored !== $expected
+            || ! hash_equals($this->checksum->for($stored), $this->checksum->for($expected))
             || $readiness !== 'ready'
             || $expected['next_beat_id'] !== $beat->getKey()
             || ! is_array($event->evidence)

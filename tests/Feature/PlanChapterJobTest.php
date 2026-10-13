@@ -1121,6 +1121,64 @@ test('invalid structured output fails the run without writing a plan or artifact
     }
 });
 
+test('business-invalid plan candidate and all validation errors remain traceable for explicit regeneration', function () {
+    [$chapter, $character] = plannerChapter();
+    $payload = plannerPayload($character->getKey());
+    $scene = $payload['scene_plans'][0];
+    $payload['scene_plans'] = [
+        [
+            ...$scene,
+            'continuity_requirements' => [],
+        ],
+        [
+            ...$scene,
+            'goal' => '核验照料经过',
+            'conflict' => '口头说法不一致',
+            'turn' => '当面查验乳盏',
+            'outcome' => '确认继续守看',
+            'outcome_allowed' => [],
+            'outcome_forbidden' => [],
+            'continuity_requirements' => [
+                ['key' => '照料处置状态', 'mode' => 'change', 'description' => '由暂缓乳食变化为继续守看。'],
+                ['key' => '卫子夫的探视身份', 'mode' => 'establish', 'description' => '首次建立卫子夫亲自探视。'],
+            ],
+            'transition_from_previous' => '承接上一场景的回报。',
+        ],
+        [
+            ...$scene,
+            'goal' => '完成守夜观察',
+            'conflict' => '短暂安静掩盖病况',
+            'turn' => '再次出现吞咽不稳',
+            'outcome' => '保留乳食继续观察',
+            'outcome_allowed' => [],
+            'outcome_forbidden' => [],
+            'continuity_requirements' => [
+                ['key' => '照料处置状态', 'mode' => 'persist', 'description' => '继续维持守看安排。'],
+                ['key' => '刘据对宫中位置的初步辨认', 'mode' => 'callback', 'description' => '章末回扣初步辨认。'],
+            ],
+            'transition_from_previous' => '承接当面核验结束。',
+        ],
+    ];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(plannerResponse($payload)));
+
+    try {
+        app(ChapterPlanner::class)->generate($chapter->getKey());
+        $this->fail('Expected continuity validation to fail.');
+    } catch (ValidationException $exception) {
+        $run = $chapter->generationRuns()->sole();
+
+        expect($exception->errors()['plan'])->toHaveCount(2)
+            ->and($run->error_message)->toContain('照料处置状态', '刘据对宫中位置的初步辨认')
+            ->and($run->error_message)->not->toContain('(and 1 more error)')
+            ->and(data_get($run->error_metadata, 'validation_errors.plan'))->toHaveCount(2)
+            ->and(data_get($run->error_metadata, 'plan_candidate.scene_plans.1.continuity_requirements.0.mode'))->toBe('change')
+            ->and(data_get($run->error_metadata, 'plan_candidate_checksum'))->not->toBeEmpty()
+            ->and($exception->errors()['plan'][0])->toContain('重新生成章节计划')
+            ->and($chapter->plans()->count())->toBe(0)
+            ->and($run->artifacts()->count())->toBe(0);
+    }
+});
+
 test('the queue job does not retry schema or business validation failures', function () {
     [$chapter, $character] = plannerChapter();
     $payload = plannerPayload($character->getKey());

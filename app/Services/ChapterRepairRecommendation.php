@@ -202,6 +202,19 @@ final class ChapterRepairRecommendation
             );
         }
 
+        if ($stage === GenerationStage::ChapterPlanning && $run->error_code === 'plan_validation_failed') {
+            return $this->row(
+                'Chapter Plan',
+                $run->error_message ?: $run->error_code,
+                '根据完整校验错误重新生成章节计划',
+                ['Chapter Plan Candidate'],
+                ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'],
+                '当前章节页 → “重新生成章节计划”',
+                'regenerate_plan',
+                $run->error_code,
+            );
+        }
+
         return match ($stage) {
             GenerationStage::ChapterPlanning => $this->row('Chapter Plan', $run->error_message ?: $run->error_code, '修复计划输入后重新规划', ['Chapter Plan', 'Outline Target'], ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'], 'Generation → 恢复中心；或“从 Outline 重建章节”', 'restart_from_outline', $run->error_code),
             GenerationStage::SceneGeneration, GenerationStage::Rewrite => $this->row('Scene', $run->error_message ?: $run->error_code, '从失败 Scene 级联重建', [$sceneId === null ? '失败 Scene' : "Scene {$sceneId}"], ['Scene', 'Assembly', 'Event', 'Patch', 'Review'], 'Generation → 恢复中心；或场景页签重新生成', 'regenerate_scene', $run->error_code, $sceneId),

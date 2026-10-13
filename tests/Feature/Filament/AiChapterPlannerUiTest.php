@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\PlanChapterJob;
@@ -48,6 +49,26 @@ test('chapter detail queues explicit plan regeneration and shows run status', fu
         ->assertSee('chapter-planner-v2')
         ->callAction('regeneratePlan')
         ->assertNotified('章节计划重新生成已排队');
+
+    Bus::assertDispatched(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey() && $job->regenerate);
+});
+
+test('chapter detail explicitly regenerates a failed plan candidate', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Failed,
+        'error_code' => 'plan_validation_failed',
+        'error_retryable' => false,
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, ['record' => $novel->getRouteKey(), 'chapter' => $chapter->getRouteKey()])
+        ->assertActionVisible('generatePlan')
+        ->assertActionHidden('regeneratePlan')
+        ->assertSee('重新生成章节计划')
+        ->callAction('generatePlan')
+        ->assertNotified('章节计划重新生成已加入队列');
 
     Bus::assertDispatched(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey() && $job->regenerate);
 });

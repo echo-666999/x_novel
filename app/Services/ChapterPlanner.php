@@ -126,6 +126,7 @@ class ChapterPlanner
         }
 
         $budget = null;
+        $failedCandidate = null;
         try {
             $budget = $this->resolveRequestBudget($run, $baseKey);
             $request = new AiRequest(
@@ -170,6 +171,7 @@ class ChapterPlanner
             );
             $payload = $this->applyOutlineContract($payload, $context['current_outline_target']);
             $payload['target_words'] = (int) data_get($novel->settings, 'generation.chapter_target_words', $payload['target_words']);
+            $failedCandidate = $payload;
             $candidate = new ChapterPlan($payload);
             $candidate->setRelation('chapter', $chapter);
             $this->planValidator->validate($candidate)->assertCanGenerate();
@@ -188,7 +190,7 @@ class ChapterPlanner
                     data_get($run->fresh()->context_snapshot, 'generation_preferences.request_budget_tier'),
                 );
             }
-            $this->fail($run, $exception);
+            $this->fail($run, $exception, $failedCandidate);
             throw $exception;
         }
     }
@@ -540,13 +542,39 @@ class ChapterPlanner
         });
     }
 
-    private function fail(GenerationRun $run, Throwable $exception): void
+    /** @param array<string, mixed>|null $candidate */
+    private function fail(GenerationRun $run, Throwable $exception, ?array $candidate = null): void
     {
         $this->failurePolicy->record(
             $run,
             $exception,
             $exception instanceof ValidationException ? 'plan_validation_failed' : 'plan_generation_failed',
         );
+
+        if (! $exception instanceof ValidationException) {
+            return;
+        }
+
+        $messages = collect($exception->errors())
+            ->flatten()
+            ->filter(fn (mixed $message): bool => is_string($message) && filled($message))
+            ->unique()
+            ->values()
+            ->all();
+        $metadata = $run->fresh()->error_metadata ?? [];
+        $metadata['validation_errors'] = $exception->errors();
+        if ($candidate !== null) {
+            $metadata['plan_candidate'] = $candidate;
+            $metadata['plan_candidate_checksum'] = hash('sha256', json_encode(
+                $candidate,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
+            ));
+        }
+
+        $run->update([
+            'error_message' => $messages === [] ? $run->error_message : implode(' | ', $messages),
+            'error_metadata' => $metadata,
+        ]);
     }
 
     /** @return array<string, mixed> */

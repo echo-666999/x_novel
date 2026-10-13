@@ -192,6 +192,23 @@ test('a fully completed beat advances to the next beat entry milestone', functio
         ->and(data_get($target->inboundHandoff, 'evidence.0.quote'))->toBe('正式交接证据');
 });
 
+test('handoff comparison ignores json object key order after persistence', function () {
+    $fixture = ngc003ProgressFixture();
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 0);
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 1);
+    $event = ngc003CompletionEvent($fixture, EventType::StoryArcBeatCompleted, 0);
+    $payload = $event->payload;
+    $payload['handoff_contract'] = array_reverse($payload['handoff_contract'], true);
+    DB::table('story_events')->where('id', $event->getKey())->update([
+        'payload' => json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+    ]);
+
+    $target = app(OutlineProgressResolver::class)->resolve($fixture['novel']->fresh());
+
+    expect($target?->beat['key'])->toBe('factory-beat-2')
+        ->and(data_get($target?->inboundHandoff, 'contract.next_beat_key'))->toBe('factory-beat-2');
+});
+
 test('the next beat is blocked when its canonical completion event lacks the frozen handoff', function () {
     $fixture = ngc003ProgressFixture();
     ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 0);

@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
+use App\Actions\Chapters\ReconcileChapterReviewAction;
 use App\Actions\Generation\CheckNextAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\CanonicalCommitData;
@@ -992,7 +993,118 @@ test('a pass review exposes a canonical commit preview and action', function () 
         ->callAction('commitCanonical')
         ->assertNotified('章节已提交为正式版本');
 
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertSee('正式章节已提交')
+        ->assertSee('已完成正式提交')
+        ->assertSee('已正式采用');
+
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
+});
+
+test('canonical commit validation failure is shown without leaving partial state', function () {
+    $this->actingAs(User::factory()->create());
+    $fixture = canonicalCommitFixture();
+    $reviewData = $fixture['review']->artifact->fresh()->data;
+    $reviewData['beat_exit']['status'] = 'fulfilled';
+    $reviewData['beat_exit']['criteria'] = collect($reviewData['beat_exit']['criteria'])
+        ->map(fn (array $criterion): array => [
+            ...$criterion,
+            'status' => 'fulfilled',
+            'evidence' => '沈澜走进灯塔',
+        ])->all();
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($reviewData),
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertActionEnabled('commitCanonical')
+        ->callAction('commitCanonical')
+        ->assertNotified('无法提交正式章节');
+
+    expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
+        ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
+        ->and(StoryEvent::query()->count())->toBe(0)
+        ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1);
+});
+
+test('duplicate planning audit reconciliation creates a new immutable pass review', function () {
+    $fixture = canonicalCommitFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create([
+        'sequence' => 1,
+        'current_artifact_id' => $fixture['draft']->getKey(),
+    ]);
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $completionContract = app(OutlineCompletionService::class)->contract($fixture['chapter']);
+    $criterion = $completionContract['milestone_criteria'][0];
+    $plan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $plan->primaryOutlineBeat->beat_key,
+        'beat_index' => 1,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => $criterion,
+    ]]]);
+    $sourceData = $fixture['review']->artifact->fresh()->data;
+    $sourceData['milestone_completion']['criteria'][0] = [
+        'criterion' => $criterion,
+        'status' => 'fulfilled',
+        'evidence' => '沈澜走进灯塔',
+        'scene_id' => $scene->getKey(),
+    ];
+    $sourceData['milestone_completion']['status'] = collect($sourceData['milestone_completion']['criteria'])
+        ->every(fn (array $audit): bool => $audit['status'] === 'fulfilled') ? 'fulfilled' : 'not_met';
+    $sourceData['arc_beat_audits'] = [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $plan->primaryOutlineBeat->beat_key,
+        'status' => 'missing',
+        'evidence' => null,
+        'scene_id' => $scene->getKey(),
+    ]];
+    $sourceData['arc_completion_audits'] = [[
+        'arc_id' => $arc->getKey(),
+        'status' => 'not_met',
+        'evidence' => null,
+    ]];
+    $sourceData['character_candidate_audits'] = [];
+    $sourceData['world_entity_candidate_audits'] = [];
+    $sourceData['unapproved_characters'] = [];
+    $sourceData['unapproved_world_entities'] = [];
+    $sourceData['findings'] = [[
+        'code' => 'ARC_BEAT_NOT_FULFILLED',
+        'severity' => 'error',
+        'source' => 'planning_contract_review',
+    ], [
+        'code' => 'REWRITE_SCOPE_UNRESOLVED',
+        'severity' => 'ambiguous',
+        'requires_human_decision' => true,
+    ]];
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($sourceData),
+    ]);
+    $fixture['review']->update([
+        'decision' => ReviewDecision::NeedsAttention,
+        'score' => 90,
+        'findings' => $sourceData['findings'],
+    ]);
+
+    $reconciled = app(ReconcileChapterReviewAction::class)->execute(
+        $fixture['chapter'],
+        '相同验收条件复用已验证的 Milestone 证据。',
+        7,
+    );
+
+    expect($reconciled->decision)->toBe(ReviewDecision::Pass)
+        ->and($reconciled->getKey())->not->toBe($fixture['review']->getKey())
+        ->and(data_get($reconciled->artifact->data, 'arc_beat_audits.0.status'))->toBe('fulfilled')
+        ->and(data_get($reconciled->artifact->data, 'planning_audit_reconciliation.source_review_id'))->toBe($fixture['review']->getKey())
+        ->and($fixture['review']->fresh()->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and(GenerationArtifact::query()->where('type', ArtifactType::ReviewResult)->count())->toBe(2);
 });
 
 test('a legacy pass review with an unaccepted arc completion cannot expose an enabled commit action', function () {

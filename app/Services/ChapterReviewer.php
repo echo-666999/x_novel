@@ -137,7 +137,9 @@ class ChapterReviewer
             'reasoning_effort' => $settings->reasoningEffort,
             'prompt_version' => $promptVersion,
             'pass_score' => config('generation.review_pass_score', 80),
-            ...($reviewOperationId === null ? [] : ['operation_id' => $reviewOperationId]),
+            // A user-requested fresh review is a new semantic execution. Keep its request
+            // identity in the fingerprint while retries of the same queued job still reuse it.
+            ...($reviewOperationId === null ? [] : ['regeneration_request_id' => $reviewOperationId]),
         ];
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::Review,
@@ -372,6 +374,7 @@ class ChapterReviewer
             'artifact_id' => $artifact->getKey(),
             'source_artifact_id' => (int) data_get($artifact->data, 'source_artifact_id'),
             'foreshadowing_contract_checksum' => data_get($artifact->data, 'foreshadowing_contract_checksum'),
+            'outline_completion' => data_get($artifact->data, 'outline_completion'),
             'events' => data_get($artifact->data, 'events', []),
         ];
     }

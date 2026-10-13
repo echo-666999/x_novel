@@ -110,18 +110,19 @@ class ViewNovelChapter extends ViewRecord
     {
         return [
             Action::make('generatePlan')
-                ->label('AI 生成章节计划')
+                ->label(fn (): string => $this->hasFailedPlanCandidate() ? '重新生成章节计划' : 'AI 生成章节计划')
                 ->icon('heroicon-o-sparkles')
                 ->visible(fn (): bool => $this->chapter()->latestPlan === null)
                 ->disabled(fn (): bool => $this->generationWorkPending())
                 ->tooltip(fn (): ?string => $this->generationWorkPending() ? '当前生成任务尚未完成，请等待。' : null)
                 ->action(function (): void {
-                    if (! $this->dispatchGenerationJob(new PlanChapterJob($this->chapterId))) {
+                    $regenerate = $this->hasFailedPlanCandidate();
+                    if (! $this->dispatchGenerationJob(new PlanChapterJob($this->chapterId, $regenerate))) {
                         return;
                     }
 
                     Notification::make()
-                        ->title('章节计划已加入生成队列')
+                        ->title($regenerate ? '章节计划重新生成已加入队列' : '章节计划已加入生成队列')
                         ->body('可在“运行记录”页签查看执行状态。')
                         ->success()
                         ->send();
@@ -191,7 +192,18 @@ class ViewNovelChapter extends ViewRecord
                         throw ValidationException::withMessages(['commit' => '正式提交所需数据尚未准备完成。']);
                     }
 
-                    $stateVersion = $canonicalCommit->commit($context);
+                    try {
+                        $stateVersion = $canonicalCommit->commit($context);
+                    } catch (ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法提交正式章节')
+                            ->body((string) collect($exception->errors())->flatten()->first())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
                     $this->cachedChapter = null;
 
                     Notification::make()
@@ -706,6 +718,14 @@ class ViewNovelChapter extends ViewRecord
         $budget = "已使用 {$used} / {$maximum} 次";
         $afterPass = '等待提交正式章节';
         $flow = '局部重写 → 重新组装章节 → 重新提取事件 → 重建状态补丁 → 重新审校。';
+
+        if ($this->chapter()->status === ChapterStatus::Canonical) {
+            return [
+                'action' => '正式章节已提交', 'color' => 'success', 'budget' => $budget, 'after_pass' => '已完成正式提交',
+                'explanation' => '本章已通过 Canonical Commit，正式事件和故事状态版本均已写入。',
+                'flow' => 'Canonical Chapter → Story Events → Story State → Summary / Memory。',
+            ];
+        }
 
         if ($review === null) {
             return [
@@ -1337,7 +1357,9 @@ class ViewNovelChapter extends ViewRecord
                         ->label('计划检查结果')
                         ->state(fn () => $this->chapter()->latestPlan === null
                             ? null
-                            : app(PlanValidator::class)->validate($this->chapter()->latestPlan)->status())
+                            : ($this->chapter()->status === ChapterStatus::Canonical
+                                ? '已正式采用'
+                                : app(PlanValidator::class)->validate($this->chapter()->latestPlan)->status()))
                         ->badge(),
                 ]),
         ];
@@ -2654,6 +2676,21 @@ class ViewNovelChapter extends ViewRecord
             ->where('status', RunStatus::Succeeded)
             ->latest('id')
             ->value('id');
+    }
+
+    private function hasFailedPlanCandidate(): bool
+    {
+        if ($this->chapter()->latestPlan !== null) {
+            return false;
+        }
+
+        $latest = $this->chapter()->generationRuns()
+            ->where('stage', GenerationStage::ChapterPlanning)
+            ->latest('id')
+            ->first(['status', 'error_code']);
+
+        return $latest?->status === RunStatus::Failed
+            && $latest->error_code === 'plan_validation_failed';
     }
 
     private function usesLegacyEventExtractionAdmission(): bool

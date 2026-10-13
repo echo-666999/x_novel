@@ -89,3 +89,20 @@ test('scene budget exhaustion requires a new plan admission instead of replaying
         ->and($recommendation['target_fields'])->toBe(['admission_snapshot.routes.writer.request_budgets'])
         ->and($recommendation['recommended_action'])->toContain('新的 Plan Version');
 });
+
+test('plan candidate validation failure recommends explicit regeneration instead of outline restart', function () {
+    $run = new GenerationRun([
+        'stage' => GenerationStage::ChapterPlanning,
+        'status' => RunStatus::Failed,
+        'error_code' => 'plan_validation_failed',
+        'error_message' => '持续状态缺少 establish。',
+    ]);
+    $method = new ReflectionMethod(ChapterRepairRecommendation::class, 'fromRun');
+
+    $recommendation = $method->invoke(app(ChapterRepairRecommendation::class), $run);
+
+    expect($recommendation['problem_layer'])->toBe('Chapter Plan')
+        ->and($recommendation['recovery_key'])->toBe('regenerate_plan')
+        ->and($recommendation['recommended_action'])->toContain('重新生成章节计划')
+        ->and($recommendation['recovery_entry'])->toContain('重新生成章节计划');
+});

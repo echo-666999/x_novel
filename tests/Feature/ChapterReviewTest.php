@@ -296,6 +296,62 @@ test('planning review binds a missing arc audit to its frozen target scene witho
         ->and(data_get($downgraded, 'arc_beat_audits.0.scene_id'))->toBe($targetScene->getKey());
 });
 
+test('planning review reuses an identical fulfilled outline criterion for the arc contribution', function () {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create([
+        'sequence' => 1,
+        'current_artifact_id' => $fixture['draft']->getKey(),
+    ]);
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $contract = app(OutlineCompletionService::class)->contract($fixture['chapter']);
+    $criterion = $contract['milestone_criteria'][0];
+    $plan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $plan->primaryOutlineBeat->beat_key,
+        'beat_index' => 1,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => $criterion,
+    ]]]);
+    $payload = [
+        ...outlineCompletionReviewDefaults($fixture['chapter']),
+        'arc_beat_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'beat_key' => $plan->primaryOutlineBeat->beat_key,
+            'status' => 'missing',
+            'evidence' => null,
+            'scene_id' => $scene->getKey(),
+        ]],
+        'arc_completion_audits' => [[
+            'arc_id' => $arc->getKey(),
+            'status' => 'not_met',
+            'evidence' => null,
+        ]],
+        'character_candidate_audits' => [],
+        'world_entity_candidate_audits' => [],
+        'unapproved_characters' => [],
+        'unapproved_world_entities' => [],
+    ];
+    $payload['milestone_completion']['criteria'][0] = [
+        'criterion' => $criterion,
+        'status' => 'fulfilled',
+        'evidence' => '林舟守住城门',
+        'scene_id' => $scene->getKey(),
+    ];
+    $payload['milestone_completion']['status'] = collect($payload['milestone_completion']['criteria'])
+        ->every(fn (array $audit): bool => $audit['status'] === 'fulfilled') ? 'fulfilled' : 'not_met';
+
+    $validated = app(PlanningReviewAudit::class)->validate(
+        $payload,
+        $fixture['chapter']->fresh(['latestPlan', 'scenes']),
+        $fixture['draft'],
+    );
+
+    expect(data_get($validated, 'arc_beat_audits.0.status'))->toBe('fulfilled')
+        ->and(data_get($validated, 'arc_beat_audits.0.evidence'))->toBe('林舟守住城门')
+        ->and(data_get($validated, 'arc_beat_audits.0.scene_id'))->toBe($scene->getKey());
+});
+
 test('planning review audits normalize quoted evidence with an omission marker to a verbatim excerpt', function () {
     $fixture = reviewFixture();
     $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
@@ -569,6 +625,44 @@ test('compact narrative review schema excludes decisions database identities ord
         ->and($encoded)->not->toContain('target_scene_sequence')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得返回推荐 Decision')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得复述数据库 ID');
+});
+
+test('forced review creates a fresh run and includes the extractor completion audit', function () {
+    $fixture = reviewFixture();
+    $state = $fixture['novel']->fresh()->canonicalStateVersion;
+    $completion = [
+        'milestone_completion' => ['status' => 'not_met'],
+        'beat_exit' => ['status' => 'not_met'],
+        'handoff_readiness' => ['status' => 'not_applicable'],
+    ];
+    $eventRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => $state->version,
+    ]);
+    GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => [
+            'source_artifact_id' => $fixture['draft']->getKey(),
+            'outline_completion' => $completion,
+            'events' => [],
+        ],
+    ]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)
+        ->enqueue(compactReviewResponse())
+        ->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+    $reviewer = app(ChapterReviewer::class);
+
+    $first = $reviewer->review($fixture['chapter']->getKey());
+    $second = $reviewer->review($fixture['chapter']->getKey(), true, 'fresh-review-request');
+
+    expect($fake->requests())->toHaveCount(2)
+        ->and($second->getKey())->not->toBe($first->getKey())
+        ->and($second->generation_run_id)->not->toBe($first->generation_run_id)
+        ->and(data_get($second->generationRun->context_snapshot, 'operation_id'))->toBe('fresh-review-request')
+        ->and($fake->requests()[1]->prompt)->toContain('"outline_completion":{"milestone_completion":{"status":"not_met"');
 });
 
 test('compact review restores frozen contract order and database identities in Laravel', function () {

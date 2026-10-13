@@ -88,7 +88,13 @@ class PlanningReviewAudit
             throw ValidationException::withMessages(['planning_audits' => '规划验收缺少 Chapter Plan。']);
         }
 
+        $payload = $this->outlineCompletion->validateReview($payload, $chapter, $draft);
         $sceneIds = $chapter->scenes->keyBy('sequence')->map->getKey();
+        $payload['arc_beat_audits'] = $this->reuseMatchingOutlineAudits(
+            $payload['arc_beat_audits'] ?? null,
+            $plan->arc_contributions ?? [],
+            $payload,
+        );
         $payload['arc_beat_audits'] = $this->validateContractAudits(
             $payload['arc_beat_audits'] ?? null,
             $plan->arc_contributions ?? [],
@@ -160,7 +166,49 @@ class PlanningReviewAudit
             }
         }
 
-        return $this->outlineCompletion->validateReview($payload, $chapter, $draft);
+        return $payload;
+    }
+
+    /**
+     * @param  array<int, mixed>|null  $audits
+     * @param  array<int, mixed>  $contracts
+     * @param  array<string, mixed>  $payload
+     * @return array<int, mixed>|null
+     */
+    private function reuseMatchingOutlineAudits(?array $audits, array $contracts, array $payload): ?array
+    {
+        if ($audits === null || count($audits) !== count($contracts)) {
+            return $audits;
+        }
+
+        $outlineAudits = collect([
+            ...data_get($payload, 'milestone_completion.criteria', []),
+            ...data_get($payload, 'beat_exit.criteria', []),
+        ])->groupBy(fn (array $audit): string => (string) ($audit['criterion'] ?? ''));
+
+        foreach (array_values($contracts) as $index => $contract) {
+            $criterion = (string) ($contract['acceptance_criteria'] ?? '');
+            $matches = $outlineAudits->get($criterion, collect());
+            $decisions = $matches->map(fn (array $audit): array => [
+                'status' => $audit['status'] ?? null,
+                'evidence' => $audit['evidence'] ?? null,
+                'scene_id' => $audit['scene_id'] ?? null,
+            ])->uniqueStrict();
+            $outlineAudit = $matches->first();
+            if ($criterion === '' || $decisions->count() !== 1 || ! is_array($outlineAudit) || ! is_array($audits[$index] ?? null)) {
+                continue;
+            }
+
+            $audits[$index]['status'] = match ($outlineAudit['status'] ?? null) {
+                'fulfilled' => 'fulfilled',
+                'contradicted' => 'contradicted',
+                default => 'missing',
+            };
+            $audits[$index]['evidence'] = $outlineAudit['evidence'] ?? null;
+            $audits[$index]['scene_id'] = $outlineAudit['scene_id'] ?? null;
+        }
+
+        return $audits;
     }
 
     /** @param array<string, mixed> $payload @return array<int, array<string, mixed>> */
