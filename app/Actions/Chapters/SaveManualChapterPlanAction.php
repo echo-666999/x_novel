@@ -114,7 +114,12 @@ final class SaveManualChapterPlanAction
 
         $plan = DB::transaction(function () use ($chapter, $data, $version, $admission, $fromSceneSequence): ChapterPlan {
             $chapter->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
-            $plan = $chapter->plans()->create(['version' => $version, ...$data, ...$admission]);
+            $plan = $chapter->plans()->create([
+                'version' => $version,
+                ...$data,
+                ...$admission,
+                'status' => PlanStatus::Ready,
+            ]);
             $attempt = (int) $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->max('attempt') + 1;
             $run = GenerationRun::query()->create([
                 'novel_id' => $chapter->novel_id,

@@ -1365,6 +1365,7 @@ class ViewNovelChapter extends ViewRecord
         $run = $scene->generationRuns->sortByDesc('id')->first();
         $artifact = $scene->currentArtifact;
         $artifacts = $this->sceneArtifacts($scene);
+        $requiresNewPlan = app(RegenerateSceneSequenceAction::class)->requiresNewPlanBeforeRetry($scene);
 
         return Section::make('场景 '.$scene->sequence)
             ->key('scene-'.$scene->getKey())
@@ -1386,10 +1387,11 @@ class ViewNovelChapter extends ViewRecord
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
                     ->visible($scene->status === SceneStatus::Failed)
-                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene))
+                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene) || $requiresNewPlan)
                     ->tooltip(match (true) {
                         $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                         ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
+                        $requiresNewPlan => '当前 Plan 的冻结请求预算已耗尽，请先使用“编辑当前 Chapter Plan”原样保存。',
                         default => null,
                     })
                     ->requiresConfirmation()
@@ -1404,10 +1406,11 @@ class ViewNovelChapter extends ViewRecord
                     ->visible($artifact !== null
                         && in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true)
                         && $this->chapter()->status !== ChapterStatus::Canonical)
-                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene))
+                    ->disabled($this->generationWorkPending() || ! $this->canGenerateScene($scene) || $requiresNewPlan)
                     ->tooltip(match (true) {
                         $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                         ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
+                        $requiresNewPlan => '当前 Plan 的冻结请求预算已耗尽，请先使用“编辑当前 Chapter Plan”原样保存。',
                         default => null,
                     })
                     ->requiresConfirmation()

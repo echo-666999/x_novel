@@ -1,6 +1,7 @@
 <?php
 
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
+use App\Actions\Chapters\SaveManualChapterPlanAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
@@ -1034,6 +1035,81 @@ test('cascade regeneration resets the selected and later scenes while preserving
     Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $fixture['scenes'][1]->getKey()
         && $job->cascade
         && $job->regenerationBatchId !== null);
+});
+
+test('cascade regeneration rejects a terminal budget failure frozen by the current plan', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(2);
+    $scene = $fixture['scenes']->first();
+    $scene->update(['status' => SceneStatus::Failed]);
+    $fixture['chapter']->update(['status' => ChapterStatus::Blocked]);
+    GenerationRun::factory()
+        ->for($fixture['novel'])
+        ->for($fixture['chapter'])
+        ->for($scene)
+        ->create([
+            'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Failed,
+            'error_code' => 'scene_reasoning_budget_exhausted',
+            'context_snapshot' => ['chapter_plan_id' => $fixture['plan']->getKey()],
+        ]);
+
+    $action = app(RegenerateSceneSequenceAction::class);
+
+    expect($action->requiresNewPlanBeforeRetry($scene))->toBeTrue()
+        ->and(fn () => $action->handle($scene))
+        ->toThrow(ValidationException::class, '请先使用“编辑当前 Chapter Plan”原样保存');
+
+    expect($scene->fresh()->status)->toBe(SceneStatus::Failed)
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked);
+    Queue::assertNothingPushed();
+});
+
+test('a terminal budget failure from a superseded plan does not block regeneration', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(2);
+    $scene = $fixture['scenes']->first();
+    $scene->update(['status' => SceneStatus::Failed]);
+    $fixture['chapter']->update(['status' => ChapterStatus::Blocked]);
+    GenerationRun::factory()
+        ->for($fixture['novel'])
+        ->for($fixture['chapter'])
+        ->for($scene)
+        ->create([
+            'stage' => GenerationStage::SceneGeneration,
+            'status' => RunStatus::Failed,
+            'error_code' => 'scene_reasoning_budget_exhausted',
+            'context_snapshot' => ['chapter_plan_id' => $fixture['plan']->getKey()],
+        ]);
+    $fixture['plan']->update(['status' => PlanStatus::Superseded]);
+    ChapterPlan::factory()->for($fixture['chapter'])->create([
+        'version' => $fixture['plan']->version + 1,
+        'status' => PlanStatus::Ready,
+    ]);
+
+    $action = app(RegenerateSceneSequenceAction::class);
+
+    expect($action->requiresNewPlanBeforeRetry($scene))->toBeFalse()
+        ->and($action->handle($scene))->toBe(2);
+
+    Queue::assertPushed(GenerateSceneJob::class);
+});
+
+test('manual plan save marks the admitted version ready', function () {
+    Queue::fake();
+    $fixture = sceneGenerationFixture(2);
+    $target = app(OutlineProgressResolver::class)->resolve($fixture['novel']->fresh());
+    $fixture['chapter']->update(['volume_id' => $target->volumeId]);
+
+    $result = app(SaveManualChapterPlanAction::class)->handle(
+        $fixture['chapter'],
+        $fixture['plan']->semanticPayload(),
+        null,
+    );
+
+    expect($result['status'])->toBe('saved')
+        ->and($result['plan']->fresh()->status)->toBe(PlanStatus::Ready)
+        ->and($fixture['plan']->fresh()->status)->toBe(PlanStatus::Superseded);
 });
 
 test('scene two cannot execute before scene one succeeds', function () {
