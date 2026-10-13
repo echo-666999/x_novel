@@ -692,7 +692,11 @@ UpdateMemoryJob
 
 Memory、摘要或 Projection 失败不回滚正文，但阻止本次自动续写并在 Generation 恢复中心留下恢复点。Embedding 独立重试，不阻塞下一章。Summary Job 必须核对任务携带的 Canonical Artifact ID；来源已经变化时安全结束，不覆盖新摘要。
 
+Summary 分别冻结可见输出和隐藏推理预留；默认三档推理预留为 `8,000 / 16,000 / 24,000` Token。已经 Canonical 的章节仍沿用原 Plan Admission，普通 Retry 不读取新配置。若最高冻结预算耗尽，Generation 恢复中心提供显式 `Restart`：它以失败 Summary Run 和当前 Canonical Artifact 为来源，读取一次当前 Summary Route/预算，并把完整合同冻结进新的 Summary Run；同一 Restart 的 Queue 重试只读取该 Run 快照。旧 Plan、旧 Run 和 Canonical Artifact 均不修改。
+
 下一章准备度和 Filament 展示调用同一个 `NovelGenerationReadiness::nextChapter()`：重新解析 Current Main Beat、最早未完成 Milestone、Handoff、上一 Canonical Artifact/Summary、State Version、暂停/停止条件和 Post-Commit 派生状态。`GenerateNextChapterAction` 在 Novel 行锁内再次消费该结果；Summary 缺失会阻断，Memory/Embedding 缺失或失败不会阻断。
+
+审校门禁只读取每章最新 Review。历史 `NEEDS_ATTENTION` 已被同章后续 `PASS` 或人工 Override 取代时，不得继续阻塞；上一正式章 Summary 缺失仍是独立阻塞条件。
 
 若 Current Beat 尚未满足退出条件，下一章继续选择该 Beat 最早未完成 Milestone；若 Beat Completion 已提交，则下一章选择 Handoff 指向 Beat 的 Entry Milestone，并读取上一章结尾、Handoff Carried States/Open Threads 和新的 Canonical State。首版一章只能有一个 Main Primary Beat：前一 Beat 最后一章可建立 Next Trigger，但下一 Beat 的正式 Milestone Progress 从下一章开始。
 

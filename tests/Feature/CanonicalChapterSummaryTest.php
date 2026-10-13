@@ -151,6 +151,9 @@ test('canonical summary increases frozen output budgets and stops before a fourt
     config()->set('generation.chapter_request_budgets.summary.initial.output_tokens', 100);
     config()->set('generation.chapter_request_budgets.summary.retry.output_tokens', 200);
     config()->set('generation.chapter_request_budgets.summary.final.output_tokens', 300);
+    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 0);
     [$chapter] = canonicalSummaryChapter();
     $truncated = new AiResponse(
         content: '',
@@ -183,6 +186,42 @@ test('canonical summary increases frozen output budgets and stops before a fourt
     expect($fake->requests())->toHaveCount(3)
         ->and(GenerationRun::query()->where('scope_type', 'chapter_summary')->latest('id')->first()->error_code)
         ->toBe('summary_output_truncated');
+});
+
+test('explicit summary restart freezes the current budget without mutating the canonical plan', function () {
+    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 0);
+    [$chapter, $source] = canonicalSummaryChapter();
+    $plan = $chapter->latestPlan;
+    $failed = GenerationRun::factory()->for($chapter->novel)->for($chapter)->create([
+        'scope_type' => 'chapter_summary',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::MemorySummary,
+        'status' => RunStatus::Failed,
+        'prompt_version' => 'summary-v2+natural-prose-v1',
+        'error_code' => 'summary_reasoning_budget_exhausted',
+        'context_snapshot' => [
+            'canonical_artifact_id' => $source->getKey(),
+            'canonical_artifact_checksum' => $source->checksum,
+        ],
+    ]);
+    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 8_000);
+    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 16_000);
+    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 24_000);
+    $fake = (new FakeAiProvider)->enqueue(summaryResponse());
+    app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
+
+    $result = app(CanonicalChapterSummaryService::class)->generate($chapter->getKey(), $failed->getKey());
+    $restart = GenerationRun::query()->where('stage', GenerationStage::MemorySummary)->latest('id')->firstOrFail();
+
+    expect($result['applied'])->toBeTrue()
+        ->and($chapter->fresh()->summary)->not->toBeNull()
+        ->and(data_get($plan->fresh()->admission_snapshot, 'routes.summary.request_budgets.initial.reasoning_reserve_tokens'))->toBe(0)
+        ->and(data_get($restart->context_snapshot, 'generation_preferences.route_contract_source'))->toBe(CanonicalChapterSummaryService::RESTART_CONTRACT_VERSION)
+        ->and(data_get($restart->context_snapshot, 'generation_preferences.restart_source_run_id'))->toBe($failed->getKey())
+        ->and(data_get($restart->context_snapshot, 'generation_preferences.selected_request_budget.reasoning_reserve_tokens'))->toBe(8_000)
+        ->and($fake->requests()[0]->maxTokens)->toBe(9_200);
 });
 
 test('summary job ignores a stale canonical artifact without calling the provider', function () {

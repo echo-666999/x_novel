@@ -37,13 +37,16 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public readonly int $chapterId,
         public readonly int $canonicalArtifactId,
+        public readonly ?int $restartSourceRunId = null,
     ) {
         $this->onQueue('default');
     }
 
     public function uniqueId(): string
     {
-        return "chapter-summary:{$this->chapterId}:{$this->canonicalArtifactId}";
+        $restart = $this->restartSourceRunId === null ? 'frozen' : 'restart:'.$this->restartSourceRunId;
+
+        return "chapter-summary:{$this->chapterId}:{$this->canonicalArtifactId}:{$restart}";
     }
 
     public function handle(CanonicalChapterSummaryService $summaries): void
@@ -59,7 +62,7 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
         }
 
         try {
-            $summaries->generate($this->chapterId);
+            $summaries->generate($this->chapterId, $this->restartSourceRunId);
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
                 $this->fail($exception);

@@ -107,6 +107,14 @@ class Generation extends Page implements HasTable
                 ->requiresConfirmation()
                 ->modalDescription('按失败 Run 已冻结的路由、容量和请求预算重试；已经成功的 Artifact 会保留。')
                 ->action(fn () => $this->retryNext()),
+            Action::make('restartNext')
+                ->label('Restart')
+                ->icon('heroicon-o-arrow-path-rounded-square')
+                ->color('warning')
+                ->visible(fn (): bool => $this->nextRestartableRun() !== null)
+                ->requiresConfirmation()
+                ->modalDescription('按当前 Summary Route 与请求预算创建新的冻结合同；旧 Run、旧 Plan 和 Canonical Artifact 保持不变。')
+                ->action(fn () => $this->restartNext()),
             Action::make('openReview')
                 ->label('Open Review')
                 ->icon('heroicon-o-inbox')
@@ -237,6 +245,15 @@ class Generation extends Page implements HasTable
                             ->success()
                             ->send();
                     }),
+                Action::make('restart')
+                    ->label('Restart')
+                    ->icon('heroicon-o-arrow-path-rounded-square')
+                    ->color('warning')
+                    ->visible(fn (GenerationRun $record): bool => $this->canRestart($record))
+                    ->requiresConfirmation()
+                    ->modalHeading('按当前 Summary 配置重新开始')
+                    ->modalDescription('创建新的 Summary 冻结合同并重新生成；不会修改旧 Plan、旧 Run 或 Canonical Artifact。')
+                    ->action(fn (GenerationRun $record) => $this->restartRun($record)),
                 Action::make('openChapter')
                     ->label('Open Chapter')
                     ->icon('heroicon-o-arrow-top-right-on-square')
@@ -417,7 +434,7 @@ class Generation extends Page implements HasTable
                         ->label('恢复合同')
                         ->state(fn (GenerationRun $record): string => $this->recoveryContract($record))
                         ->badge()
-                        ->color(fn (GenerationRun $record): string => $this->canRetry($record) ? 'warning' : 'gray'),
+                        ->color(fn (GenerationRun $record): string => $this->canRetry($record) || $this->canRestart($record) ? 'warning' : 'gray'),
                     TextEntry::make('error_message')->label('错误信息')->columnSpanFull(),
                 ]),
             Section::make('流程推进异常')
@@ -613,6 +630,23 @@ class Generation extends Page implements HasTable
             && $this->isLatestRunForScope($run);
     }
 
+    private function canRestart(GenerationRun $run): bool
+    {
+        $errorCode = (string) $run->error_code;
+
+        return $run->status === RunStatus::Failed
+            && $run->stage === GenerationStage::MemorySummary
+            && $run->scope_type === 'chapter_summary'
+            && $run->chapter_id !== null
+            && str_starts_with($errorCode, 'summary_')
+            && (str_contains($errorCode, '_reasoning_budget_exhausted')
+                || str_contains($errorCode, '_output_truncated')
+                || str_contains($errorCode, '_completion_budget_exhausted')
+                || str_contains($errorCode, '_output_budget_exhausted'))
+            && $this->isLatestRunForScope($run)
+            && Chapter::query()->whereKey($run->chapter_id)->whereNotNull('canonical_artifact_id')->exists();
+    }
+
     /** 判断停滞 Run 是否可由持久化来源链恢复。 */
     private function supportsRecovery(GenerationRun $run): bool
     {
@@ -796,7 +830,7 @@ class Generation extends Page implements HasTable
         return [
             'failed' => $runs->where('status', RunStatus::Failed)->count(),
             'blocked' => $this->latestReviews()->where('decision', ReviewDecision::Block)->count(),
-            'recoverable' => $runs->filter(fn (GenerationRun $run): bool => $this->canRetry($run) || $this->canResume($run) || $this->canRecover($run))->count(),
+            'recoverable' => $runs->filter(fn (GenerationRun $run): bool => $this->canRetry($run) || $this->canResume($run) || $this->canRecover($run) || $this->canRestart($run))->count(),
             'needs_attention' => $this->latestReviews()->where('decision', ReviewDecision::NeedsAttention)->count(),
         ];
     }
@@ -843,6 +877,11 @@ class Generation extends Page implements HasTable
         return $this->latestRuns()->first(fn (GenerationRun $run): bool => $this->canResume($run) || $this->canRecover($run));
     }
 
+    private function nextRestartableRun(): ?GenerationRun
+    {
+        return $this->latestRuns()->first(fn (GenerationRun $run): bool => $this->canRestart($run));
+    }
+
     private function contextRun(): ?GenerationRun
     {
         return GenerationRun::query()->whereNotNull('context_snapshot')->latest('id')->first();
@@ -871,5 +910,31 @@ class Generation extends Page implements HasTable
         }
 
         $this->dispatchRun($run, retry: false);
+    }
+
+    private function restartNext(): void
+    {
+        $run = $this->nextRestartableRun();
+        if ($run !== null) {
+            $this->restartRun($run);
+        }
+    }
+
+    private function restartRun(GenerationRun $run): void
+    {
+        $canonicalArtifactId = (int) Chapter::query()
+            ->whereKey($run->chapter_id)
+            ->value('canonical_artifact_id');
+        GenerateCanonicalChapterSummaryJob::dispatch(
+            (int) $run->chapter_id,
+            $canonicalArtifactId,
+            $run->getKey(),
+        );
+
+        Notification::make()
+            ->title('Summary Restart 已排队')
+            ->body('将按当前 Summary Route 与预算创建新的冻结合同。')
+            ->success()
+            ->send();
     }
 }

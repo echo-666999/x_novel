@@ -12,6 +12,7 @@ use App\Filament\Pages\Generation;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Jobs\AssembleChapterJob;
 use App\Jobs\ExtractStoryEventsJob;
+use App\Jobs\GenerateCanonicalChapterSummaryJob;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
@@ -415,6 +416,37 @@ test('terminal completion budget failure requires a new source chain instead of 
         ->unmountAction()
         ->assertTableActionHidden('retry', $run)
         ->assertTableActionHidden('resume', $run);
+});
+
+test('terminal canonical summary budget failure exposes an explicit restart with current configuration', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Canonical]);
+    $sourceRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $source = GenerationArtifact::factory()->for($sourceRun)->create(['type' => ArtifactType::ChapterDraft]);
+    $chapter->update(['canonical_artifact_id' => $source->getKey()]);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'scope_type' => 'chapter_summary',
+        'scope_id' => $chapter->getKey(),
+        'stage' => GenerationStage::MemorySummary,
+        'status' => RunStatus::Failed,
+        'error_code' => 'summary_reasoning_budget_exhausted',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'reasoning_budget_exhausted'],
+    ]);
+
+    Livewire::test(Generation::class)
+        ->assertTableActionVisible('restart', $run)
+        ->callTableAction('restart', $run)
+        ->assertNotified('Summary Restart 已排队');
+
+    Queue::assertPushed(GenerateCanonicalChapterSummaryJob::class, fn (GenerateCanonicalChapterSummaryJob $job): bool => $job->chapterId === $chapter->getKey()
+        && $job->canonicalArtifactId === $source->getKey()
+        && $job->restartSourceRunId === $run->getKey()
+    );
 });
 
 test('run inspector uses persisted provider failure facts instead of guessing from the error code', function () {

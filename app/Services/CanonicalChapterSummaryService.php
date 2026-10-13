@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
+use App\AI\Data\ResolvedAiSettings;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
 use App\AI\StructuredOutput;
@@ -23,12 +24,15 @@ use Throwable;
 
 class CanonicalChapterSummaryService
 {
+    public const RESTART_CONTRACT_VERSION = 'canonical-summary-restart-v1';
+
     public function __construct(
         private readonly AiProvider $provider,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly ChapterStageRouteResolver $routeResolver,
+        private readonly PlanAdmissionService $planAdmission,
     ) {}
 
     /** @return array{novel_id: int, novel_title: string, chapters: array<int, array<string, mixed>>, plan_hash: string} */
@@ -91,7 +95,7 @@ class CanonicalChapterSummaryService
     }
 
     /** @return array{artifact: GenerationArtifact, reused: bool, applied: bool} */
-    public function generate(int $chapterId): array
+    public function generate(int $chapterId, ?int $restartSourceRunId = null): array
     {
         $chapter = Chapter::query()->with(['novel', 'canonicalArtifact.generationRun'])->findOrFail($chapterId);
         $source = $this->canonicalArtifact($chapter);
@@ -100,7 +104,9 @@ class CanonicalChapterSummaryService
             throw new AiProviderException('summary_capacity_contract_missing', 'Canonical Chapter Summary 缺少已冻结的 Plan Admission 合同。', false);
         }
         // Post-Commit Summary 仍属于原章节合同；Admission v1 必须读取显式恢复 Artifact。
-        $resolvedRoute = $this->routeResolver->resolve($chapter, AiStage::Summary, $source);
+        $resolvedRoute = $restartSourceRunId === null
+            ? $this->routeResolver->resolve($chapter, AiStage::Summary, $source)
+            : $this->resolveRestartRoute($chapter, $source, $restartSourceRunId);
         $settings = $resolvedRoute['settings'];
         $promptVersion = $resolvedRoute['prompt_version'];
         $summaryRoute = $resolvedRoute['route'];
@@ -114,6 +120,7 @@ class CanonicalChapterSummaryService
                 // 恢复合同身份进入指纹，不能复用旧 Admission v1 的同模型摘要 Run。
                 'route_contract_source' => $resolvedRoute['contract_source'],
                 'recovery_contract_run_id' => $resolvedRoute['recovery_contract_run_id'],
+                'restart_source_run_id' => $resolvedRoute['restart_source_run_id'] ?? null,
             ],
             upstreamChecksums: [$source->checksum],
             frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
@@ -138,7 +145,11 @@ class CanonicalChapterSummaryService
 
         $snapshot = $run->context_snapshot ?? [];
         // Post-Commit 摘要同样复制完整合同，恢复时不再受后台配置变化影响。
-        data_set($snapshot, 'generation_preferences', $this->routeResolver->generationPreferences($resolvedRoute));
+        $generationPreferences = $this->routeResolver->generationPreferences($resolvedRoute);
+        if ($restartSourceRunId !== null) {
+            $generationPreferences['restart_source_run_id'] = $restartSourceRunId;
+        }
+        data_set($snapshot, 'generation_preferences', $generationPreferences);
         $run->update(['context_snapshot' => $snapshot]);
 
         $budget = null;
@@ -229,6 +240,120 @@ class CanonicalChapterSummaryService
 
             throw $exception;
         }
+    }
+
+    /**
+     * 显式 Restart 才能读取当前 Summary 配置；同一 Restart 的 Queue 重试继续复用首个 Run 已持久化的合同。
+     *
+     * @return array{settings: ResolvedAiSettings, prompt_version: string, route: array<string, mixed>, contract_source: string, recovery_contract_run_id: null, restart_source_run_id: int}
+     */
+    private function resolveRestartRoute(Chapter $chapter, GenerationArtifact $source, int $restartSourceRunId): array
+    {
+        $failed = $chapter->generationRuns()
+            ->whereKey($restartSourceRunId)
+            ->where('stage', GenerationStage::MemorySummary)
+            ->where('scope_type', 'chapter_summary')
+            ->where('status', RunStatus::Failed)
+            ->first();
+        $errorCode = (string) $failed?->error_code;
+        if ($failed === null
+            || ! str_starts_with($errorCode, 'summary_')
+            || ! $this->isFrozenBudgetExhaustion($errorCode)
+            || (int) data_get($failed->context_snapshot, 'canonical_artifact_id') !== $source->getKey()
+            || ! hash_equals((string) data_get($failed->context_snapshot, 'canonical_artifact_checksum'), $source->checksum)) {
+            throw ValidationException::withMessages([
+                'summary' => 'Summary Restart 来源 Run 不是当前 Canonical Artifact 的冻结预算耗尽失败。',
+            ]);
+        }
+
+        $laterRuns = $chapter->generationRuns()
+            ->where('stage', GenerationStage::MemorySummary)
+            ->where('scope_type', 'chapter_summary')
+            ->where('id', '>', $restartSourceRunId)
+            ->latest('id')
+            ->get();
+        $latestLaterRun = $laterRuns->first();
+        if ($latestLaterRun !== null
+            && data_get($latestLaterRun->context_snapshot, 'generation_preferences.route_contract_source') === self::RESTART_CONTRACT_VERSION
+            && (int) data_get($latestLaterRun->context_snapshot, 'generation_preferences.restart_source_run_id') === $restartSourceRunId
+            && (int) data_get($latestLaterRun->context_snapshot, 'canonical_artifact_id') === $source->getKey()) {
+            return $this->restartRouteFromRun($latestLaterRun, $restartSourceRunId);
+        }
+        if ($latestLaterRun !== null) {
+            throw ValidationException::withMessages([
+                'summary' => 'Summary Restart 来源 Run 已被后续 Run 取代，请从最新失败记录重新开始。',
+            ]);
+        }
+
+        $route = $this->planAdmission->currentStageContract($chapter->novel, AiStage::Summary)['route'];
+        $settings = new ResolvedAiSettings(
+            stage: AiStage::Summary,
+            provider: (string) $route['provider'],
+            model: (string) $route['model'],
+            reasoningEffort: $route['reasoning_effort'] ?? null,
+            source: self::RESTART_CONTRACT_VERSION,
+        );
+
+        return [
+            'settings' => $settings,
+            'prompt_version' => (string) $route['prompt_version'],
+            'route' => $route,
+            'contract_source' => self::RESTART_CONTRACT_VERSION,
+            'recovery_contract_run_id' => null,
+            'restart_source_run_id' => $restartSourceRunId,
+        ];
+    }
+
+    /**
+     * @return array{settings: ResolvedAiSettings, prompt_version: string, route: array<string, mixed>, contract_source: string, recovery_contract_run_id: null, restart_source_run_id: int}
+     */
+    private function restartRouteFromRun(GenerationRun $run, int $restartSourceRunId): array
+    {
+        $preferences = (array) data_get($run->context_snapshot, 'generation_preferences', []);
+        $frozen = (array) ($preferences['frozen_route'] ?? []);
+        $route = [
+            'provider' => $frozen['provider'] ?? null,
+            'model' => $frozen['model'] ?? null,
+            'reasoning_effort' => $frozen['reasoning_effort'] ?? null,
+            'prompt_version' => $frozen['prompt_version'] ?? null,
+            'model_capacity' => $preferences['model_capacity'] ?? null,
+            'request_budgets' => $preferences['request_budgets'] ?? null,
+            'repair_request_budgets' => $preferences['repair_request_budgets'] ?? null,
+        ];
+        if (blank($route['provider'])
+            || blank($route['model'])
+            || blank($route['prompt_version'])
+            || ! is_array($route['model_capacity'])
+            || ! is_array($route['request_budgets'])
+            || ! is_array($route['repair_request_budgets'])) {
+            throw ValidationException::withMessages([
+                'summary' => 'Summary Restart Run 缺少完整冻结路由或预算。',
+            ]);
+        }
+        $this->requestBudget->validateFrozen($route['request_budgets'], AiStage::Summary);
+
+        return [
+            'settings' => new ResolvedAiSettings(
+                stage: AiStage::Summary,
+                provider: (string) $route['provider'],
+                model: (string) $route['model'],
+                reasoningEffort: filled($route['reasoning_effort']) ? (string) $route['reasoning_effort'] : null,
+                source: self::RESTART_CONTRACT_VERSION,
+            ),
+            'prompt_version' => (string) $route['prompt_version'],
+            'route' => $route,
+            'contract_source' => self::RESTART_CONTRACT_VERSION,
+            'recovery_contract_run_id' => null,
+            'restart_source_run_id' => $restartSourceRunId,
+        ];
+    }
+
+    private function isFrozenBudgetExhaustion(string $errorCode): bool
+    {
+        return str_contains($errorCode, '_reasoning_budget_exhausted')
+            || str_contains($errorCode, '_output_truncated')
+            || str_contains($errorCode, '_completion_budget_exhausted')
+            || str_contains($errorCode, '_output_budget_exhausted');
     }
 
     /** @return array{0: GenerationRun, 1: bool} */

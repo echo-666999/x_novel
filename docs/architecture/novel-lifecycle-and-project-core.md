@@ -453,6 +453,8 @@ Canonical Commit 会：
 
 正式提交后的阻塞链为 `UpdateMemoryJob → GenerateCanonicalChapterSummaryJob → RefreshNovelProjectionJob → ContinueAutoGenerationJob`。前三项任一失败都不撤销正式章节，但会停止自动续写。Embedding 由 Memory 独立派发，可以单独重试，不阻塞下一章。摘要任务只在 Chapter 的 `canonical_artifact_id` 仍与任务来源一致时写入 `chapters.summary`。
 
+Summary 默认冻结 `8,000 / 16,000 / 24,000` Token 的递增推理预留。历史 Plan 的 Summary 预算耗尽后，普通 Retry 继续服从原冻结合同；显式 Restart 才能按当前配置创建新的 Summary Run 合同。新合同冻结失败 Run、Canonical Artifact、Provider、Model、Prompt、容量和请求预算，同一 Restart 的后续 Queue 重试不得重新解析配置。下一章准备度按每章最新 Review 判断，已被后续 PASS/Override 解决的历史 NEEDS_ATTENTION 不再阻塞。
+
 ### 8.2 下一章是否自动启动
 
 `CheckNextAction` 只有在下列条件满足时才创建下一章：

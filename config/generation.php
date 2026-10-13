@@ -95,9 +95,10 @@ return [
             'final' => ['output_tokens' => (int) env('REWRITE_FINAL_RETRY_MAX_OUTPUT_TOKENS', 24_000), 'reasoning_reserve_tokens' => (int) env('REWRITE_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('REWRITE_RETRY_REASONING_RESERVE_TOKENS', env('REWRITE_REASONING_RESERVE_TOKENS', 0)))],
         ],
         'summary' => [
-            'initial' => ['output_tokens' => (int) env('SUMMARY_MAX_OUTPUT_TOKENS', 1_200), 'reasoning_reserve_tokens' => (int) env('SUMMARY_REASONING_RESERVE_TOKENS', 0)],
-            'retry' => ['output_tokens' => (int) env('SUMMARY_RETRY_MAX_OUTPUT_TOKENS', 2_400), 'reasoning_reserve_tokens' => (int) env('SUMMARY_RETRY_REASONING_RESERVE_TOKENS', env('SUMMARY_REASONING_RESERVE_TOKENS', 0))],
-            'final' => ['output_tokens' => (int) env('SUMMARY_FINAL_RETRY_MAX_OUTPUT_TOKENS', 4_000), 'reasoning_reserve_tokens' => (int) env('SUMMARY_FINAL_RETRY_REASONING_RESERVE_TOKENS', env('SUMMARY_RETRY_REASONING_RESERVE_TOKENS', env('SUMMARY_REASONING_RESERVE_TOKENS', 0)))],
+            // DeepSeek 留空 reasoning_effort 时仍可能默认推理；Summary 同样需要冻结隐藏推理空间。
+            'initial' => ['output_tokens' => (int) env('SUMMARY_MAX_OUTPUT_TOKENS', 1_200), 'reasoning_reserve_tokens' => (int) env('SUMMARY_REASONING_RESERVE_TOKENS', 8_000)],
+            'retry' => ['output_tokens' => (int) env('SUMMARY_RETRY_MAX_OUTPUT_TOKENS', 2_400), 'reasoning_reserve_tokens' => (int) env('SUMMARY_RETRY_REASONING_RESERVE_TOKENS', 16_000)],
+            'final' => ['output_tokens' => (int) env('SUMMARY_FINAL_RETRY_MAX_OUTPUT_TOKENS', 4_000), 'reasoning_reserve_tokens' => (int) env('SUMMARY_FINAL_RETRY_REASONING_RESERVE_TOKENS', 24_000)],
         ],
     ],
     // 修复子请求拥有独立的可见输出与推理预留；父阶段大预算不能替代精确的子阶段合同。

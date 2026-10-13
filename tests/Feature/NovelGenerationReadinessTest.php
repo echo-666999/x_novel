@@ -3,16 +3,21 @@
 use App\Actions\Novels\StartNovelGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ChapterStatus;
+use App\Enums\GenerationStage;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
+use App\Enums\ReviewDecision;
+use App\Enums\RunStatus;
 use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Models\Chapter;
 use App\Models\Character;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\NovelOutline;
+use App\Models\Review;
 use App\Models\StoryArc;
 use App\Models\User;
 use App\Models\Volume;
@@ -98,6 +103,39 @@ test('a missing previous canonical summary blocks readiness', function () {
 
     expect($item['ready'])->toBeFalse()
         ->and($item['repair_hint'])->toContain('第 1 章');
+});
+
+test('a historical needs attention review resolved by a later pass does not block the next chapter', function () {
+    $novel = generationReadinessNovel();
+    $chapter = Chapter::factory()->for($novel)->create(['summary' => '正式摘要']);
+    $oldRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    Review::factory()->for($oldRun)->create(['decision' => ReviewDecision::NeedsAttention]);
+    $passRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    Review::factory()->for($passRun)->create(['decision' => ReviewDecision::Pass]);
+
+    $codes = collect(app(NovelGenerationReadiness::class)->nextChapter($novel->fresh())->blockers)->pluck('code');
+
+    expect($codes)->not->toContain('needs_attention_pending');
+});
+
+test('the latest needs attention review still blocks the next chapter', function () {
+    $novel = generationReadinessNovel();
+    $chapter = Chapter::factory()->for($novel)->create(['summary' => '正式摘要']);
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    Review::factory()->for($run)->create(['decision' => ReviewDecision::NeedsAttention]);
+
+    $codes = collect(app(NovelGenerationReadiness::class)->nextChapter($novel->fresh())->blockers)->pluck('code');
+
+    expect($codes)->toContain('needs_attention_pending');
 });
 
 function generationReadinessNovel(): Novel

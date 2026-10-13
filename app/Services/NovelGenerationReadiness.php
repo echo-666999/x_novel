@@ -184,10 +184,12 @@ final readonly class NovelGenerationReadiness
             $add('failed_chapter_exists', '存在 Scene 生成失败且尚未恢复的章节。', '从失败 Scene 恢复', 'chapter', $failedScene->getKey());
         }
 
+        // 历史 NEEDS_ATTENTION 可被同章后续 PASS / Override 解决；这里只看每章最新 Review。
         $attention = $novel->chapters()
-            ->whereHas('generationRuns.review', fn ($query) => $query->where('decision', ReviewDecision::NeedsAttention))
+            ->with('latestReview')
             ->orderBy('sequence')
-            ->first();
+            ->get()
+            ->first(fn ($chapter): bool => $chapter->latestReview?->decision === ReviewDecision::NeedsAttention);
         if ($attention !== null) {
             $add('needs_attention_pending', '存在尚未处理的 NEEDS_ATTENTION 审校。', '处理审校建议或人工覆盖', 'chapter', $attention->getKey());
         }

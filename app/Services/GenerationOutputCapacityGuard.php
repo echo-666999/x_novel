@@ -19,6 +19,8 @@ final class GenerationOutputCapacityGuard
 
     public const LEGACY_CHAPTER_RECOVERY_CONTRACT = LegacyAdmissionRecoveryContract::CONTRACT_VERSION;
 
+    public const CANONICAL_SUMMARY_RESTART_CONTRACT = CanonicalChapterSummaryService::RESTART_CONTRACT_VERSION;
+
     public function __construct(
         private readonly TokenBudget $tokenBudget,
         private readonly GenerationRequestBudget $requestBudget,
@@ -458,6 +460,20 @@ final class GenerationOutputCapacityGuard
 
             // 每个实际 Provider Run 都复制自身阶段的冻结合同，Resume 不需要重新读取当前后台配置。
             return $this->routeFromRunSnapshot($run, $stage, 'legacy_recovery_contract_invalid');
+        }
+        if ($contractSource === self::CANONICAL_SUMMARY_RESTART_CONTRACT) {
+            if ($stage !== AiStage::Summary
+                || $run->stage !== GenerationStage::MemorySummary
+                || $run->chapter_id !== $chapter->getKey()
+                || (int) data_get($run->context_snapshot, 'generation_preferences.restart_source_run_id') < 1) {
+                throw new AiProviderException(
+                    'summary_restart_contract_mismatch',
+                    'Summary Restart Run 的 Stage、Chapter 或来源失败 Run 身份不匹配。',
+                    false,
+                );
+            }
+
+            return $this->routeFromRunSnapshot($run, $stage, 'summary_restart_contract_invalid');
         }
         if ($contractSource !== self::LEGACY_EVENT_RECOVERY_CONTRACT) {
             return $this->frozenRoute($chapter, $stage);
