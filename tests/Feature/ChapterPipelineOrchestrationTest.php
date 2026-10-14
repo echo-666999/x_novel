@@ -80,6 +80,8 @@ function chapterPipelineBaseline(): array
 /** @return array<string, mixed> */
 function completeNovelPipelineBlueprint(): array
 {
+    $targetChapters = (int) ceil(200_000 / chapterPipelineBaseline()['chapter_target_words']);
+
     return [
         'bible' => [
             'logline' => '失忆测绘师在六环城寻找被删除的太阳。',
@@ -140,7 +142,7 @@ function completeNovelPipelineBlueprint(): array
                         'mainline_sequence' => $sequence,
                         'title' => $sequence === 1 ? '获得地图' : '穿过环墙',
                         'summary' => $sequence === 1 ? '林舟获得真实地图。' : '林舟穿过第一道环墙。',
-                        'chapter_budget' => ['min' => 1, 'max' => 2],
+                        'chapter_budget' => ['min' => 1, 'max' => (int) ceil($targetChapters / 2)],
                         'acceptance_criteria' => [$sequence === 1 ? '林舟取得真实地图' : '林舟穿过第一道环墙'],
                         'must_include' => [$sequence === 1 ? '地图来源可验证' : '跨环代价'],
                         'must_not_include' => [$sequence === 1 ? '直接抵达终点' : '无代价通行'],
@@ -176,6 +178,7 @@ function completeNovelPipelineOutlineResponses(): array
     $foundation = collect($blueprint)->only(['bible', 'characters', 'world_entities', 'foreshadowings'])->all();
     $skeleton = $blueprint['outline'];
     $structure = collect($skeleton)->only(['title', 'summary', 'must_include', 'must_not_include'])->all();
+    $structure['foreshadowing_owner_arc_keys'] = [];
     $structure['volumes'] = [];
     $arcBeats = [];
     $details = [];

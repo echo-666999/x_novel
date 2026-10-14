@@ -16,6 +16,7 @@ use App\Enums\ChapterStatus;
 use App\Enums\EventType;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
+use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
@@ -42,6 +43,8 @@ use App\Services\ChapterPlanner;
 use App\Services\ChapterPlanPayload;
 use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationStageFingerprint;
+use App\Services\NovelOutlineLengthContract;
+use App\Services\NovelOutlinePipeline;
 use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -205,13 +208,47 @@ function plannerOutlineContent(int $maximum = 2): array
     ];
 }
 
-function outlinePlannerChapter(int $maximum = 2, ?array $content = null): array
+function outlinePlannerChapter(int $maximum = 2, ?array $content = null, ?int $frozenChapterTargetWords = null): array
 {
     seedVerifiedChapterModelProfiles();
     $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
     NovelBible::factory()->for($novel)->create(['version' => 1]);
     $content ??= plannerOutlineContent($maximum);
-    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle($novel, $content);
+    $source = NovelOutlineSource::Manual;
+    $sourceArtifact = null;
+    if ($frozenChapterTargetWords !== null) {
+        $novelTargetWords = (int) collect($content['volumes'])->sum('target_words');
+        $novel->update([
+            'target_words' => $novelTargetWords,
+            'settings' => ['generation' => ['chapter_target_words' => $frozenChapterTargetWords]],
+        ]);
+        $lengthContract = app(NovelOutlineLengthContract::class)->complete(
+            $content,
+            app(NovelOutlineLengthContract::class)->freeze($novelTargetWords, $frozenChapterTargetWords, count($content['volumes'])),
+        );
+        $batchId = 999;
+        $run = GenerationRun::factory()->for($novel)->create([
+            'scope_type' => NovelOutlinePipeline::FINALIZE_SCOPE,
+            'scope_id' => $batchId,
+            'stage' => GenerationStage::ChapterPlanning,
+            'status' => RunStatus::Succeeded,
+        ]);
+        $sourceArtifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::OutlineBlueprint,
+            'data' => [
+                'outline' => $content,
+                'length_contract' => $lengthContract,
+                'lineage' => ['batch_run_id' => $batchId],
+            ],
+        ]);
+        $source = NovelOutlineSource::Ai;
+    }
+    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle(
+        novel: $novel,
+        outline: $content,
+        source: $source,
+        sourceArtifact: $sourceArtifact,
+    );
     $outline->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
     $novel->update(['current_outline_id' => $outline->getKey()]);
     $sourceVolume = $outline->volumes()->sole();
@@ -337,6 +374,62 @@ test('the planner restores authoritative outline constraints before validating t
         ->and($plan->must_reveal)->toBe(['地图来源可验证', '模型补充的本章揭示项'])
         ->and($plan->must_reveal)->not->toContain('完成取得地图 Beat 的全部目标')
         ->and($plan->must_not_reveal)->toBe(['直接穿过城门', '模型补充的禁止项']);
+});
+
+test('the chapter planner assigns an outline candidate to a scene in the current chapter', function () {
+    $content = plannerOutlineContent();
+    $content['volumes'][0]['arcs'][0]['beats'][0]['character_candidates'] = [[
+        'candidate_key' => 'gate-keeper',
+        'name' => '守门人',
+        'role' => '配角',
+        'motivation' => '阻止无证者出城',
+        'profile' => ['旧城守门人'],
+        'personality' => ['谨慎'],
+        'abilities' => ['核验通行凭证'],
+        'knowledge' => ['知道城门换岗规律'],
+        'deduplication_basis' => '现有人物中没有承担守门职责者',
+        'possible_duplicate_character_ids' => [],
+        'introduction_reason' => '为取得地图制造现场阻力',
+    ]];
+    [$chapter, $character, $outline, , $arc] = outlinePlannerChapter(content: $content);
+    $payload = outlinePlannerPayload($character, $outline, $arc);
+    $payload['character_candidates'] = [[
+        'candidate_key' => 'gate-keeper',
+        'name' => '模型改写的名称',
+        'role' => '配角',
+        'motivation' => '模型改写的动机',
+        'profile' => ['模型改写'],
+        'personality' => ['模型改写'],
+        'abilities' => ['模型改写'],
+        'knowledge' => ['模型改写'],
+        'deduplication_basis' => '模型改写',
+        'possible_duplicate_character_ids' => [],
+        'introduction_reason' => '模型改写',
+        'target_scene_sequence' => 2,
+    ]];
+    $payload['scene_plans'][] = [
+        'goal' => '从守门人口中核验地图',
+        'conflict' => '守门人拒绝透露换岗规律',
+        'turn' => '地图上的旧印记与守门记录吻合',
+        'outcome' => '守门人确认地图真实',
+        'outcome_allowed' => ['核验地图印记'],
+        'outcome_forbidden' => ['直接穿过城门'],
+        'continuity_requirements' => [],
+        'pov_character_id' => $character->getKey(),
+        'location' => '旧港城门',
+        'time_anchor' => '入夜前',
+        'transition_from_previous' => '承接取得地图后的核验行动。',
+    ];
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+
+    $plan = app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    expect(data_get($plan->character_candidates, '0.name'))->toBe('守门人')
+        ->and(data_get($plan->character_candidates, '0.target_scene_sequence'))->toBe(2)
+        ->and(data_get($plan->character_candidates, '0.introduction_reason'))->toBe('为取得地图制造现场阻力')
+        ->and(data_get($chapter->generationRuns()->sole()->context_snapshot, 'current_outline_target.character_candidates.0'))
+        ->not->toHaveKey('target_scene_sequence');
 });
 
 test('the planner advances to the next beat only after an active completion event', function () {
@@ -714,12 +807,14 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v10+natural-planning-v3')
-        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v10+natural-planning-v3')
+        ->and($run->prompt_version)->toBe('chapter-planner-v12+natural-planning-v3')
+        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v12+natural-planning-v3')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and(data_get($run->context_snapshot, 'generation_preferences'))->not->toHaveKey('style_profile')
+        ->and(data_get($run->context_snapshot, 'length_contract.chapter_target_words'))->toBe(4_200)
+        ->and(data_get($run->context_snapshot, 'length_contract.source'))->toBe('current_novel_settings')
         ->and($run->artifacts()->sole()->type)->toBe(ArtifactType::ChapterPlan)
         ->and($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->prompt)->toContain('通俗爽快')
@@ -728,7 +823,27 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($fake->requests()[0]->prompt)->toContain('outcome_allowed')
         ->and($fake->requests()[0]->prompt)->toContain('outcome_forbidden')
         ->and($fake->requests()[0]->prompt)->toContain('每个 key 按本章 Scene 顺序首次出现时必须使用 establish')
+        ->and($fake->requests()[0]->prompt)->toContain('target_words 必须逐字复制 length_contract.chapter_target_words')
         ->and($fake->requests()[0]->prompt)->toContain('即使该状态继承自 previous_chapter_ending 或 Canonical Story State');
+});
+
+test('the planner keeps the outline blueprint chapter target after novel settings change', function () {
+    $content = plannerOutlineContent(12);
+    $content['volumes'][0]['arcs'][0]['beats'][1]['chapter_budget']['max'] = 13;
+    [$chapter, $character] = outlinePlannerChapter(content: $content, frozenChapterTargetWords: 4_000);
+    $chapter->novel->update(['settings' => ['generation' => ['chapter_target_words' => 4_200]]]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterPlanner::class)->generate($chapter->getKey());
+
+    $plan = $chapter->plans()->sole();
+    $snapshot = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->latest('id')->firstOrFail()->context_snapshot;
+    expect($plan->target_words)->toBe(4_000)
+        ->and(data_get($snapshot, 'length_contract.chapter_target_words'))->toBe(4_000)
+        ->and(data_get($snapshot, 'length_contract.source'))->toBe('outline_blueprint')
+        ->and(data_get($plan->admission_snapshot, 'outline_length_contract.chapter_target_words'))->toBe(4_000)
+        ->and(data_get($plan->admission_snapshot, 'outline_length_contract.frozen'))->toBeTrue();
 });
 
 test('the planner selects foreshadowings by the shared target chapter timing rule', function () {

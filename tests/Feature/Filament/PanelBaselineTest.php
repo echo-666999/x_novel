@@ -109,14 +109,14 @@ test('the dashboard provides the initial operational shell', function () {
             '活跃小说',
             '运行中章节',
             '今日成本',
-            'Failed',
-            'Blocked',
-            'Needs Attention',
+            '已失败',
+            '已阻塞',
+            '需要关注',
             '最近生成',
             '待处理伏笔',
         ])
         ->assertSee('生成中、已暂停或收束中的小说')
-        ->assertSee('Queued / Running 的不同章节')
+        ->assertSee('排队中 / 运行中的不同章节')
         ->assertSee('暂无用量记录')
         ->assertSee('暂无生成活动')
         ->assertSee('暂无待处理伏笔')

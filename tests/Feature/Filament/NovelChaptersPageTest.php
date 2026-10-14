@@ -181,7 +181,9 @@ test('the chapter page stays inside the novel workspace', function () {
 });
 
 test('the owner can create a complete executable chapter plan without ai', function () {
-    $novel = Novel::factory()->create();
+    $novel = Novel::factory()->create([
+        'settings' => ['generation' => ['chapter_target_words' => 3_200]],
+    ]);
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $volume = Volume::factory()->for($novel)->create(['status' => 'active']);

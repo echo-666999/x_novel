@@ -40,10 +40,17 @@ final class NovelOutlineStageContract
 
     public function __construct(private readonly TokenBudget $tokenBudget) {}
 
-    /** Structure 只允许全书、Volume 与 Arc 字段；顺序由 Laravel 在校验后补入。 */
-    public function structureSchema(int $volumeCount): array
+    /** Structure 负责全书、Volume、Arc，以及 Foundation 伏笔到 Arc 的位置映射。 */
+    public function structureSchema(int $volumeCount, ?int $foreshadowingCount = null): array
     {
         $this->assertVolumeCount($volumeCount);
+
+        if ($foreshadowingCount !== null
+            && ($foreshadowingCount < 0 || $foreshadowingCount > self::MAX_FOUNDATION_FORESHADOWINGS)) {
+            throw ValidationException::withMessages([
+                'foreshadowing_owner_arc_keys' => 'Foundation 伏笔数量超出 Structure 合同允许范围。',
+            ]);
+        }
 
         $strings = $this->stringList();
         $arc = $this->object([
@@ -63,11 +70,25 @@ final class NovelOutlineStageContract
             'arcs' => ['type' => 'array', 'minItems' => 1, 'maxItems' => self::MAX_ARCS_PER_VOLUME, 'items' => $arc],
         ]);
 
+        $ownerArcKeys = [
+            'type' => 'array',
+            'maxItems' => $foreshadowingCount ?? self::MAX_FOUNDATION_FORESHADOWINGS,
+            'items' => [
+                'type' => ['string', 'null'],
+                'pattern' => '^arc-[0-9]{2,}$',
+                'maxLength' => 64,
+            ],
+        ];
+        if ($foreshadowingCount !== null) {
+            $ownerArcKeys['minItems'] = $foreshadowingCount;
+        }
+
         return $this->object([
             'title' => $this->shortText(),
             'summary' => $this->text(),
             'must_include' => $strings,
             'must_not_include' => $strings,
+            'foreshadowing_owner_arc_keys' => $ownerArcKeys,
             'volumes' => [
                 'type' => 'array',
                 'minItems' => $volumeCount,
@@ -85,7 +106,6 @@ final class NovelOutlineStageContract
             'name' => $this->shortText(),
             'deduplication_basis' => $this->text(),
             'introduction_reason' => $this->text(),
-            'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
         ];
         $characterCandidate = $this->object($candidateBase + [
             'role' => $this->shortText(),
@@ -124,10 +144,16 @@ final class NovelOutlineStageContract
      *
      * @return array<string, mixed>
      */
-    public function validateStructure(array $data, int $volumeCount): array
+    public function validateStructure(array $data, int $volumeCount, ?int $foreshadowingCount = null): array
     {
         $this->assertVolumeCount($volumeCount);
-        $this->assertSchemaShape($data, $this->structureSchema($volumeCount));
+        $this->assertSchemaShape($data, $this->structureSchema($volumeCount, $foreshadowingCount));
+
+        // Foundation 可以没有伏笔；字段仍必须存在，但空数组是合法的精确位置映射。
+        $ownerArcKeyRules = ['present', 'array', 'max:'.self::MAX_FOUNDATION_FORESHADOWINGS];
+        if ($foreshadowingCount !== null) {
+            $ownerArcKeyRules[] = 'size:'.$foreshadowingCount;
+        }
 
         $valid = Validator::make($data, [
             'title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
@@ -136,6 +162,8 @@ final class NovelOutlineStageContract
             'must_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
             'must_not_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
             'must_not_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
+            'foreshadowing_owner_arc_keys' => $ownerArcKeyRules,
+            'foreshadowing_owner_arc_keys.*' => ['present', 'nullable', 'string', 'max:64', 'regex:/^arc-[0-9]{2,}$/'],
             'volumes' => ['required', 'array', 'size:'.$volumeCount],
             'volumes.*' => ['array:key,title,goal,climax,target_words,arcs'],
             'volumes.*.key' => ['required', 'string', 'max:16', 'regex:/^vol-[0-9]{2}$/'],
@@ -166,6 +194,14 @@ final class NovelOutlineStageContract
             unset($arc);
         }
         unset($volume);
+
+        foreach ($valid['foreshadowing_owner_arc_keys'] as $index => $ownerArcKey) {
+            if ($ownerArcKey !== null && ! isset($arcKeys[$ownerArcKey])) {
+                throw ValidationException::withMessages([
+                    "foreshadowing_owner_arc_keys.{$index}" => "伏笔归属引用了当前 Structure 中不存在的 Arc Key {$ownerArcKey}。",
+                ]);
+            }
+        }
 
         return $valid;
     }
@@ -203,11 +239,10 @@ final class NovelOutlineStageContract
             'beats.*.must_not_include' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
             'beats.*.must_not_include.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
             'beats.*.character_candidates' => ['present', 'array', 'max:'.self::MAX_CANDIDATES_PER_BEAT],
-            'beats.*.character_candidates.*' => ['array:name,deduplication_basis,introduction_reason,target_scene_sequence,role,motivation,profile,personality,abilities,knowledge'],
+            'beats.*.character_candidates.*' => ['array:name,deduplication_basis,introduction_reason,role,motivation,profile,personality,abilities,knowledge'],
             'beats.*.character_candidates.*.name' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'beats.*.character_candidates.*.deduplication_basis' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.character_candidates.*.introduction_reason' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
-            'beats.*.character_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
             'beats.*.character_candidates.*.role' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'beats.*.character_candidates.*.motivation' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.character_candidates.*.profile' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
@@ -219,11 +254,10 @@ final class NovelOutlineStageContract
             'beats.*.character_candidates.*.knowledge' => ['present', 'array', 'max:'.self::MAX_LIST_ITEMS],
             'beats.*.character_candidates.*.knowledge.*' => ['string', 'max:'.self::MAX_LIST_ITEM_LENGTH],
             'beats.*.world_entity_candidates' => ['present', 'array', 'max:'.self::MAX_CANDIDATES_PER_BEAT],
-            'beats.*.world_entity_candidates.*' => ['array:name,deduplication_basis,introduction_reason,target_scene_sequence,type,description'],
+            'beats.*.world_entity_candidates.*' => ['array:name,deduplication_basis,introduction_reason,type,description'],
             'beats.*.world_entity_candidates.*.name' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'beats.*.world_entity_candidates.*.deduplication_basis' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'beats.*.world_entity_candidates.*.introduction_reason' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
-            'beats.*.world_entity_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
             'beats.*.world_entity_candidates.*.type' => ['required', Rule::in(['location', 'item', 'faction', 'organization', 'rule', 'concept'])],
             'beats.*.world_entity_candidates.*.description' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
         ])->validate();
@@ -247,23 +281,52 @@ final class NovelOutlineStageContract
     }
 
     /**
-     * 构建单 Arc 的最小输入：Foundation 摘要、完整 Structure、目标 Arc 与相邻 Arc 摘要。
-     * API 不接收历史 Arc Beats，因此不会把已生成 Beat 累积回每次 Prompt。
+     * 构建单 Arc 的最小输入：Foundation、全书、所属卷、目标 Arc 与相邻 Arc 的语义摘要。
+     * 完整 Structure 只用于 Laravel 定位父级和相邻关系，不重复发送给 Provider；API 也不接收历史 Arc Beats。
      *
      * @return array<string, mixed>
      */
-    public function arcBeatsContext(array $foundation, array $structure, string $targetArcKey): array
-    {
+    public function arcBeatsContext(
+        array $foundation,
+        array $structure,
+        string $targetArcKey,
+        array $lengthContract = [],
+    ): array {
         $arcs = $this->flattenArcs($structure);
         $targetIndex = array_search($targetArcKey, array_column($arcs, 'key'), true);
         if ($targetIndex === false) {
             throw ValidationException::withMessages(['arc_key' => "Structure 不包含目标 Arc {$targetArcKey}。"]);
         }
 
+        $targetArc = $arcs[$targetIndex];
+        $targetVolume = collect($structure['volumes'] ?? [])
+            ->firstWhere('key', $targetArc['volume_key']);
+        if (! is_array($targetVolume)) {
+            throw ValidationException::withMessages(['arc_key' => "Structure 无法定位目标 Arc {$targetArcKey} 的所属 Volume。"]);
+        }
+
+        $targetVolumeContract = collect($lengthContract['volumes'] ?? [])
+            ->firstWhere('volume_key', $targetArc['volume_key']);
+
         return [
-            'foundation_summary' => $this->foundationSummary($foundation),
-            'structure' => $structure,
-            'target_arc' => $arcs[$targetIndex],
+            'foundation_summary' => $this->foundationSummary(
+                $foundation,
+                (array) ($structure['foreshadowing_owner_arc_keys'] ?? []),
+            ),
+            'outline' => Arr::only($structure, ['title', 'summary', 'must_include', 'must_not_include']),
+            'target_volume' => Arr::only($targetVolume, [
+                'key', 'sequence', 'title', 'goal', 'climax', 'target_words',
+            ]),
+            'length_contract' => $lengthContract === [] ? null : [
+                ...Arr::except($lengthContract, ['volumes']),
+                'target_volume' => $targetVolumeContract,
+                'budget_accounting' => ($targetArc['type'] ?? null) === 'main'
+                    ? 'mainline_budget_must_cover_target_volume_chapters'
+                    : 'subplot_budget_may_share_mainline_chapters',
+            ],
+            'target_arc' => Arr::only($targetArc, [
+                'key', 'sequence', 'type', 'title', 'goal', 'stakes', 'completion_conditions',
+            ]),
             'adjacent_arcs' => [
                 'previous' => $targetIndex > 0 ? $this->arcSummary($arcs[$targetIndex - 1]) : null,
                 'next' => $targetIndex < count($arcs) - 1 ? $this->arcSummary($arcs[$targetIndex + 1]) : null,
@@ -332,7 +395,7 @@ final class NovelOutlineStageContract
     }
 
     /** @return array<string, mixed> */
-    private function foundationSummary(array $foundation): array
+    private function foundationSummary(array $foundation, array $ownerArcKeys): array
     {
         return [
             'bible' => Arr::only((array) ($foundation['bible'] ?? []), [
@@ -346,10 +409,12 @@ final class NovelOutlineStageContract
                 $entity,
                 ['type', 'name', 'description', 'rules', 'current_state'],
             ))->values()->all(),
-            'foreshadowings' => collect($foundation['foreshadowings'] ?? [])->map(fn (array $item): array => Arr::only(
-                $item,
-                ['title', 'description', 'promised_payoff', 'importance', 'owner_arc_key'],
-            ))->values()->all(),
+            'foreshadowings' => collect($foundation['foreshadowings'] ?? [])->map(function (array $item, int $index) use ($ownerArcKeys): array {
+                return [
+                    ...Arr::only($item, ['title', 'description', 'promised_payoff', 'importance']),
+                    'owner_arc_key' => $ownerArcKeys[$index] ?? null,
+                ];
+            })->values()->all(),
         ];
     }
 

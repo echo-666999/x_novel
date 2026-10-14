@@ -281,7 +281,9 @@ class NormalizedNovelOutlineValidator
             if (! $character && WorldEntityType::tryFrom((string) ($item['type'] ?? '')) === null) {
                 $errors[] = "{$candidatePath} type 无效。";
             }
-            if (! is_int($item['target_scene_sequence'] ?? null) || $item['target_scene_sequence'] < 1) {
+            // Scene 序号属于 Chapter Plan；这里只兼容读取旧 Outline 中已经保存的值。
+            if (array_key_exists('target_scene_sequence', $item)
+                && (! is_int($item['target_scene_sequence']) || $item['target_scene_sequence'] < 1)) {
                 $errors[] = "{$candidatePath} target_scene_sequence 必须是正整数。";
             }
         }

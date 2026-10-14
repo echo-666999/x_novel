@@ -678,7 +678,10 @@ final class NovelOutlineProgressResolver
             ];
         }
 
-        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_CONTRACT_VERSION) {
+        if (in_array($batch->prompt_version, [
+            NovelOutlinePipeline::MULTI_ROUTE_BATCH_CONTRACT_VERSION,
+            NovelOutlinePipeline::BATCH_CONTRACT_VERSION,
+        ], true)) {
             $routeKey = match ($currentStage) {
                 'foundation' => 'outline_foundation',
                 'structure' => 'outline_structure',

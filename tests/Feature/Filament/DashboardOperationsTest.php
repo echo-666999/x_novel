@@ -51,7 +51,7 @@ test('dashboard shows live operations metrics recent generation and primary acti
         ->assertActionExists('continueCurrentNovel')
         ->assertActionExists('openRecoveryCenter')
         ->assertSeeTextInOrder(['活跃小说', '1', '运行中章节', '0', '今日成本', 'USD 0.1250', '今日 Tokens', '1,500'])
-        ->assertSeeTextInOrder(['Failed', '1', 'Blocked', '0', 'Needs Attention', '1'])
+        ->assertSeeTextInOrder(['已失败', '1', '已阻塞', '0', '需要关注', '1'])
         ->assertSeeTextInOrder(['最近生成', '潮声未眠', '第 7 章', '审校', '失败', '12s', 'USD 0.1250'])
         ->assertSee('打开')
         ->assertDontSee('诊断与验收');

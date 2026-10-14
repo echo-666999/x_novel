@@ -36,6 +36,7 @@ class PlanValidator
         private readonly NovelOutlineChecksum $outlineChecksum,
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly NovelOutlineLengthContract $outlineLengthContract,
         private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
@@ -197,7 +198,12 @@ class PlanValidator
 
             $key = (string) ($candidate['candidate_key'] ?? '');
             $contract = $contracts->get($key);
-            if ($contract === null || $this->outlineChecksum->for($candidate) !== $this->outlineChecksum->for($contract)) {
+            $candidateOutlineFields = collect($candidate)->except('target_scene_sequence')->all();
+            $contractOutlineFields = is_array($contract)
+                ? collect($contract)->except('target_scene_sequence')->all()
+                : null;
+            if ($contractOutlineFields === null
+                || $this->outlineChecksum->for($candidateOutlineFields) !== $this->outlineChecksum->for($contractOutlineFields)) {
                 $findings[] = $this->blocked($code, "{$label} Candidate {$key} 不属于当前 Outline Beat 或内容与冻结契约不一致。");
             }
         }
@@ -496,15 +502,60 @@ class PlanValidator
                 );
             }
         }
-        if ((int) ($snapshot['schema_version'] ?? 0) !== 2) {
+        $schemaVersion = (int) ($snapshot['schema_version'] ?? 0);
+        if (! in_array($schemaVersion, [2, PlanAdmissionService::SCHEMA_VERSION], true)) {
             // v1 没有冻结真实模型容量和分档预算，继续执行会把运行时配置误当成历史合同。
             $findings[] = $this->blocked(
                 'ADMISSION_CONTRACT_VERSION_UNSUPPORTED',
-                '当前 Chapter Plan 使用旧版 Admission 合同，不能静默补写为容量合同 v2。',
+                '当前 Chapter Plan 使用不受支持的 Admission 合同，不能静默补写为当前合同。',
                 'admission_snapshot.schema_version',
                 $record,
                 '保留旧 Plan，并基于已验证内容创建新的 Plan Version 后重新 Admission。',
             );
+        }
+        if ($schemaVersion >= 3) {
+            foreach (['outline_length_contract', 'outline_length_contract_checksum'] as $field) {
+                if (! array_key_exists($field, $snapshot) || $snapshot[$field] === null || $snapshot[$field] === '') {
+                    $findings[] = $this->blocked(
+                        'ADMISSION_SOURCE_NOT_FROZEN',
+                        "Plan Admission 缺少冻结字段 {$field}。",
+                        "admission_snapshot.{$field}",
+                        $record,
+                        '基于 Current Outline 重新执行 Chapter Planning 或 Plan Admission。',
+                    );
+                }
+            }
+
+            $lengthContract = $snapshot['outline_length_contract'] ?? null;
+            $lengthChecksum = is_array($lengthContract) ? $this->outlineChecksum->for($lengthContract) : null;
+            $contractMatchesPlan = is_array($lengthContract)
+                && (int) ($lengthContract['chapter_target_words'] ?? 0) === (int) $plan->target_words
+                && (int) data_get($snapshot, 'capacity.chapter_target_words', 0) === (int) $plan->target_words
+                && ($snapshot['outline_length_contract_checksum'] ?? null) === $lengthChecksum;
+            if (! $contractMatchesPlan) {
+                $findings[] = $this->blocked(
+                    'ADMISSION_LENGTH_CONTRACT_MISMATCH',
+                    'Admission 冻结的 Outline 字数合同、Plan 目标字数与下游容量不一致。',
+                    'admission_snapshot.outline_length_contract',
+                    $record,
+                    '基于 Current Outline 的冻结字数合同重新规划本章。',
+                );
+            } elseif (($lengthContract['source'] ?? null) === 'outline_blueprint') {
+                try {
+                    $currentLengthContract = $this->outlineLengthContract->forNovel($novel);
+                    if (! hash_equals($lengthChecksum, $this->outlineChecksum->for($currentLengthContract))) {
+                        throw ValidationException::withMessages(['length_contract' => '字数合同已变化。']);
+                    }
+                } catch (ValidationException) {
+                    $findings[] = $this->blocked(
+                        'ADMISSION_LENGTH_CONTRACT_MISMATCH',
+                        'Admission 冻结的字数合同与 Current Outline Blueprint 不一致。',
+                        'admission_snapshot.outline_length_contract',
+                        $record,
+                        '修复 Current Outline 来源链并重新规划本章。',
+                    );
+                }
+            }
         }
         if (! array_key_exists('handoff_next_beat_id', $snapshot)) {
             $findings[] = $this->blocked(

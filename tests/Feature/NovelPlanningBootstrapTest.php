@@ -113,7 +113,7 @@ function novelBlueprint(): array
                     'completion_conditions' => ['确认档案位置'],
                     'beats' => [[
                         'key' => 'beat-01', 'sequence' => 1, 'mainline_sequence' => 1, 'title' => '获得地图', 'summary' => '林昼获得穿越环墙所需的地图。',
-                        'chapter_budget' => ['min' => 1, 'max' => 2], 'acceptance_criteria' => ['林昼取得真实地图'],
+                        'chapter_budget' => ['min' => 1, 'max' => 34], 'acceptance_criteria' => ['林昼取得真实地图'],
                         'must_include' => ['地图来源可验证'], 'must_not_include' => ['直接抵达终点'],
                         'character_candidates' => [], 'world_entity_candidates' => [],
                         'milestones' => [[
@@ -127,7 +127,7 @@ function novelBlueprint(): array
                         ],
                     ], [
                         'key' => 'beat-02', 'sequence' => 2, 'mainline_sequence' => 2, 'title' => '穿过环墙', 'summary' => '林昼付出代价穿过第一道环墙。',
-                        'chapter_budget' => ['min' => 1, 'max' => 3], 'acceptance_criteria' => ['林昼穿过第一道环墙'],
+                        'chapter_budget' => ['min' => 1, 'max' => 40], 'acceptance_criteria' => ['林昼穿过第一道环墙'],
                         'must_include' => ['跨环代价'], 'must_not_include' => ['无代价通行'],
                         'character_candidates' => [], 'world_entity_candidates' => [],
                         'milestones' => [[
@@ -168,8 +168,16 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
 {
     $blueprint ??= novelBlueprint();
     $foundation = collect($blueprint)->only(['bible', 'characters', 'world_entities', 'foreshadowings'])->all();
+    $foreshadowingOwnerArcKeys = collect($foundation['foreshadowings'])
+        ->pluck('owner_arc_key')
+        ->all();
+    foreach ($foundation['foreshadowings'] as &$foreshadowing) {
+        unset($foreshadowing['owner_arc_key']);
+    }
+    unset($foreshadowing);
     $skeleton = $blueprint['outline'];
     $structure = collect($skeleton)->only(['title', 'summary', 'must_include', 'must_not_include'])->all();
+    $structure['foreshadowing_owner_arc_keys'] = $foreshadowingOwnerArcKeys;
     $structure['volumes'] = [];
     $arcBeats = [];
     $details = [];
@@ -195,11 +203,11 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
                 }
                 unset($beat['key'], $beat['sequence'], $beat['mainline_sequence'], $beat['milestones'], $beat['handoff']);
                 foreach ($beat['character_candidates'] as &$candidate) {
-                    unset($candidate['candidate_key'], $candidate['possible_duplicate_character_ids']);
+                    unset($candidate['candidate_key'], $candidate['possible_duplicate_character_ids'], $candidate['target_scene_sequence']);
                 }
                 unset($candidate);
                 foreach ($beat['world_entity_candidates'] as &$candidate) {
-                    unset($candidate['candidate_key'], $candidate['possible_duplicate_entity_ids']);
+                    unset($candidate['candidate_key'], $candidate['possible_duplicate_entity_ids'], $candidate['target_scene_sequence']);
                 }
                 unset($candidate);
                 $arcResponse['beats'][] = $beat;
@@ -265,6 +273,7 @@ function novelBlueprintWithTwoArcs(): array
 function novelBlueprintWithBeatCount(int $beatCount): array
 {
     $blueprint = novelBlueprint();
+    $blueprint['outline']['volumes'][0]['target_words'] = max(200_000, $beatCount * 3_000);
     $templateArc = $blueprint['outline']['volumes'][0]['arcs'][0];
     $templateBeat = $templateArc['beats'][0];
     $beatsPerArc = NovelOutlineStageContract::MAX_BEATS_PER_ARC;
@@ -326,6 +335,20 @@ test('ai planning creates a reusable blueprint without changing planning tables'
 
     $first = app(NovelPlanner::class)->generate($novel, 1);
     $second = app(NovelPlanner::class)->generate($novel, 1);
+    $foundationContext = json_decode(str($fake->requests()[0]->prompt)->after('请根据小说信息生成 Foundation 候选：')->toString(), true, 512, JSON_THROW_ON_ERROR);
+    $firstArcBeatsContext = json_decode($fake->requests()[2]->prompt, true, 512, JSON_THROW_ON_ERROR);
+    $firstBeatDetailContext = json_decode($fake->requests()[3]->prompt, true, 512, JSON_THROW_ON_ERROR);
+    $modelPrompts = collect($fake->requests())->pluck('prompt')->implode("\n");
+    $structureRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::STRUCTURE_SCOPE)->sole();
+    $skeletonRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE)->sole();
+    $firstArcRun = $novel->generationRuns()
+        ->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)
+        ->where('context_snapshot->discriminator', 'arc-01')
+        ->sole();
+    $firstBeatRun = $novel->generationRuns()
+        ->where('scope_type', NovelOutlinePipeline::BEAT_DETAIL_SCOPE)
+        ->where('context_snapshot->discriminator', 'beat-01')
+        ->sole();
 
     expect($first->is($second))->toBeTrue()
         ->and($novel->fresh()->status)->toBe(NovelStatus::Planning)
@@ -340,10 +363,80 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($fake->requests()[3]->promptVersion)->toBe(app(PromptVersionResolver::class)->resolve(AiStage::OutlineBeatDetail))
         ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BEAT_DETAIL_SCOPE)->orderBy('id')->pluck('attempt')->all())->toBe([1, 1])
         ->and($fake->requests()[0]->systemPrompt)->toContain('规划内容必须写清：谁要做什么、受到什么阻力、作出什么选择、造成什么可观察结果')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('所有 foreshadowings[].owner_arc_key 必须返回 null')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得返回 owner_arc_key')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('primary_style 是唯一主导文风')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('language_era 只控制措辞与句式的时代感')
+        ->and($foundationContext)->toHaveKey('style_guide')
+        ->and(data_get($foundationContext, 'style_guide.style_options.0'))->toBe([
+            'code' => 'accessible_brisk',
+            'name' => '通俗爽快',
+            'instruction' => '语言直接易读，以短句和自然对白推动冲突，减少冗长解释与修辞。',
+            'default_parameters' => [
+                'ornateness' => 2,
+                'dialogue_ratio' => 4,
+                'description_density' => 2,
+                'psychology_density' => 2,
+                'humor_level' => 2,
+                'literary_level' => 1,
+            ],
+        ])
+        ->and(data_get($foundationContext, 'style_guide.language_era_options'))->toContain([
+            'code' => 'modern_spoken',
+            'label' => '现代口语',
+        ])
+        ->and(data_get($foundationContext, 'style_guide.pacing_options'))->toContain([
+            'code' => 'fast',
+            'label' => '快节奏',
+        ])
+        ->and(data_get($foundationContext, 'style_guide.parameter_definitions.ornateness'))->toContain('不等同于文学质量')
         ->and($fake->requests()[1]->systemPrompt)->toContain('相邻 Volume 不得只是规模更大的同类事件')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('全部 Volume target_words 之和必须精确等于')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('foreshadowing_owner_arc_keys 必须与输入 foundation.foreshadowings 保持完全相同的顺序和数量')
+        ->and($fake->requests()[1]->prompt)->toContain('"length_contract":{"schema_version":1')
         ->and($fake->requests()[2]->systemPrompt)->toContain('拆成完成该冲突所需的最少且充分的 Beats')
+        ->and($fake->requests()[2]->systemPrompt)->toContain('target_arc 是唯一需要细化的 Arc')
+        ->and($fake->requests()[2]->systemPrompt)->toContain('主线 Arc 的 Beat 预算会在 Skeleton Assembly 按卷相加')
+        ->and($fake->requests()[2]->prompt)->toContain('"target_chapter_count":67')
+        ->and($firstArcBeatsContext)->toHaveKeys(['outline', 'target_volume', 'target_arc', 'adjacent_arcs'])
+        ->and($firstArcBeatsContext)->not->toHaveKey('structure')
+        ->and($firstArcBeatsContext['target_volume'])->not->toHaveKey('arcs')
         ->and($fake->requests()[3]->systemPrompt)->toContain('拆成按因果顺序推进的最少且充分的 Milestones')
+        ->and($fake->requests()[3]->systemPrompt)->toContain('target_volume 和 target_arc 是 target_beat 在冻结 Skeleton 中的所属父级')
+        ->and($fake->requests()[3]->systemPrompt)->toContain('当 expected_next_beat_key 为 null 时，target_beat 是全书最后一个 Main Beat')
+        ->and($modelPrompts)->not->toContain('"source_artifacts"')
+        ->and($modelPrompts)->not->toContain('"foundation_artifact"')
+        ->and($modelPrompts)->not->toContain('"checksum"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"novel":{"id"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"source":"default_config"')
+        ->and(data_get($structureRun->context_snapshot, 'source_artifacts'))->toHaveCount(1)
+        ->and(data_get($firstArcRun->context_snapshot, 'source_artifacts'))->toHaveCount(2)
+        ->and(data_get($firstBeatRun->context_snapshot, 'source_artifacts'))->toHaveCount(2)
+        ->and(data_get($structureRun->context_snapshot, 'input'))->not->toHaveKey('foundation_artifact')
+        ->and(data_get($firstArcRun->context_snapshot, 'input'))->not->toHaveKey('source_artifacts')
+        ->and(data_get($firstBeatRun->context_snapshot, 'input'))->not->toHaveKey('source_artifacts')
+        ->and(data_get($structureRun->artifacts()->sole()->data, 'source_artifacts'))->toHaveCount(1)
+        ->and(data_get($skeletonRun->artifacts()->sole()->data, 'payload'))->not->toHaveKey('foreshadowing_owner_arc_keys')
+        ->and($firstBeatDetailContext['target_volume'])->toMatchArray([
+            'key' => 'vol-01',
+            'sequence' => 1,
+            'title' => '余光',
+            'goal' => '越过第一道环墙',
+            'climax' => '发现太阳档案',
+            'target_words' => 200000,
+        ])
+        ->and($firstBeatDetailContext['target_volume'])->not->toHaveKey('arcs')
+        ->and($firstBeatDetailContext['target_arc'])->toMatchArray([
+            'key' => 'arc-01',
+            'sequence' => 1,
+            'mainline_sequence' => 1,
+            'type' => 'main',
+            'title' => '失落太阳',
+            'goal' => '寻找太阳档案',
+            'stakes' => '城市将永远失去光',
+            'completion_conditions' => ['确认档案位置'],
+        ])
+        ->and($firstBeatDetailContext['target_arc'])->not->toHaveKey('beats')
+        ->and($firstBeatDetailContext['target_beat']['key'])->toBe('beat-01')
         ->and($fake->requests()[0]->maxTokens)->toBe(20_000)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.reasoning_effort'))->toBeNull()
@@ -359,6 +452,22 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.maxItems'))->toBe(1)
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
         ->and(data_get($fake->requests()[2]->responseSchema, 'properties.beats.items.required'))->toContain('chapter_budget');
+    expect(data_get($first->data, 'length_contract'))->toMatchArray([
+        'schema_version' => 1,
+        'novel_target_words' => 200_000,
+        'chapter_target_words' => 3_000,
+        'target_chapter_count' => 67,
+    ])
+        ->and(data_get($first->data, 'length_contract.volumes.0.target_chapter_count'))->toBe(67)
+        ->and(data_get($first->data, 'length_contract.volumes.0.mainline_chapter_budget'))->toBe([
+            'min' => 2,
+            'max' => 74,
+        ])
+        ->and(data_get($first->data, 'foreshadowings.0.owner_arc_key'))->toBe('arc-01')
+        ->and(data_get($fake->requests()[0]->responseSchema, 'properties.foreshadowings.items.properties'))->not->toHaveKey('owner_arc_key')
+        ->and(data_get($fake->requests()[1]->responseSchema, 'properties.foreshadowing_owner_arc_keys.minItems'))->toBe(1)
+        ->and(data_get($fake->requests()[1]->responseSchema, 'properties.foreshadowing_owner_arc_keys.maxItems'))->toBe(1)
+        ->and(data_get($firstArcBeatsContext, 'foundation_summary.foreshadowings.0.owner_arc_key'))->toBe('arc-01');
 });
 
 test('ai planning honors another valid configured default target platform', function () {
@@ -504,6 +613,7 @@ test('ai planning response schema contains only strict objects accepted by the p
         ->and(data_get($schemas[1], 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
         ->and(data_get($schemas[2], 'properties.beats.items.properties'))->not->toHaveKey('key')
         ->and(data_get($schemas[2], 'properties.beats.items.properties.character_candidates.items.properties'))->not->toHaveKey('candidate_key')
+        ->and(data_get($schemas[2], 'properties.beats.items.properties.character_candidates.items.properties'))->not->toHaveKey('target_scene_sequence')
         ->and(data_get($schemas[3], 'properties'))->not->toHaveKey('beat_key')
         ->and(data_get($schemas[3], 'properties.milestones.items.properties'))->not->toHaveKeys(['key', 'sequence'])
         ->and(data_get($schemas[3], 'properties.handoff.properties'))->not->toHaveKey('next_beat_key');
@@ -546,6 +656,7 @@ test('adopting a blueprint creates coherent planning data and refreshes an early
         ->and($novel->volumes()->count())->toBe(1)
         ->and($novel->storyArcs()->count())->toBe(1)
         ->and($novel->foreshadowings()->count())->toBe(1)
+        ->and($novel->foreshadowings()->sole()->owner_arc_id)->toBe($novel->storyArcs()->sole()->getKey())
         ->and($novel->currentOutline->status->value)->toBe('current')
         ->and($novel->volumes()->sole()->sourceOutlineVolume->volume_key)->toBe('vol-01')
         ->and($novel->storyArcs()->sole()->sourceOutlineArc->arc_key)->toBe('arc-01')
@@ -1048,11 +1159,11 @@ test('editing an ai outline preserves its artifact and local regeneration create
     $revisedData['volumes'][0]['arcs'][0]['beats'][0]['summary'] = '林昼通过旧档案保管人取得真实地图。';
     $revisedNode = $revisedData['volumes'][0]['arcs'][0]['beats'][0];
     foreach ($revisedNode['character_candidates'] as &$candidate) {
-        unset($candidate['possible_duplicate_character_ids']);
+        unset($candidate['possible_duplicate_character_ids'], $candidate['target_scene_sequence']);
     }
     unset($candidate);
     foreach ($revisedNode['world_entity_candidates'] as &$candidate) {
-        unset($candidate['possible_duplicate_entity_ids']);
+        unset($candidate['possible_duplicate_entity_ids'], $candidate['target_scene_sequence']);
     }
     unset($candidate);
     $regenerationResponse = new AiResponse(
@@ -1086,6 +1197,7 @@ test('editing an ai outline preserves its artifact and local regeneration create
         ->and($fake->requests()[5]->prompt)->not->toContain('"volumes"')
         ->and(data_get($fake->requests()[5]->responseSchema, 'required'))->toBe(['node'])
         ->and(data_get($fake->requests()[5]->responseSchema, 'properties.node.properties.character_candidates.items.properties'))->not->toHaveKey('possible_duplicate_character_ids')
+        ->and(data_get($fake->requests()[5]->responseSchema, 'properties.node.properties.character_candidates.items.properties'))->not->toHaveKey('target_scene_sequence')
         ->and($novel->generationRuns()->count())->toBe(9)
         ->and($novel->generationRuns()->withCount('artifacts')->get()->sum('artifacts_count'))->toBe(8);
 });
@@ -1314,6 +1426,23 @@ test('outline request budgets are frozen into the batch hash', function () {
     expect($second->input_hash)->not->toBe($first->input_hash)
         ->and(data_get($first->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(20_000)
         ->and(data_get($second->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(17_000);
+});
+
+test('a succeeded v4 outline batch is not reused as a v5 length contract batch', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $historical = $pipeline->prepareBatch($novel, 1);
+    $historical->update([
+        'status' => RunStatus::Succeeded,
+        'prompt_version' => NovelOutlinePipeline::MULTI_ROUTE_BATCH_CONTRACT_VERSION,
+        'finished_at' => now(),
+    ]);
+
+    $current = $pipeline->prepareBatch($novel, 1);
+
+    expect($current->getKey())->not->toBe($historical->getKey())
+        ->and($current->prompt_version)->toBe(NovelOutlinePipeline::BATCH_CONTRACT_VERSION)
+        ->and(data_get($current->context_snapshot, 'length_contract.schema_version'))->toBe(1);
 });
 
 test('outline request budget exceeding model capacity is rejected before batch creation', function () {
@@ -1556,7 +1685,6 @@ test('skeleton assembly requires every arc and is deterministic without a provid
         'name' => '巡墙人',
         'deduplication_basis' => 'Foundation 中无同名角色',
         'introduction_reason' => '承担环墙线索',
-        'target_scene_sequence' => 1,
         'role' => '配角',
         'motivation' => '守住环墙',
         'profile' => ['巡墙人'],
@@ -1661,6 +1789,7 @@ test('a deserialized legacy skeleton job can finish only a legacy batch', functi
         ->and($legacyRun->artifacts()->where('type', ArtifactType::OutlineSkeleton)->count())->toBe(1)
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->promptVersion)->toBe(NovelOutlinePipeline::LEGACY_SKELETON_PROMPT_VERSION)
+        ->and($fake->requests()[1]->prompt)->toContain('"foundation_artifact"')
         ->and($fake->requests()[1]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化')
         ->and($fake->requests()[1]->systemPrompt)->not->toContain('规划内容必须写清：谁要做什么');
     Queue::assertPushed(GenerateNovelBeatDetailJob::class, fn (GenerateNovelBeatDetailJob $job): bool => $job->beatKey === 'beat-01');
@@ -1701,6 +1830,41 @@ test('a failed beat detail resumes only that beat and reuses successful stage ar
         ->and($fake->requests())->toHaveCount(6)
         ->and($novel->outlines()->count())->toBe(1);
 });
+
+test('the final main beat rejects text or list content in its handoff', function (callable $mutate) {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $responses = stagedNovelBlueprintResponses();
+    $finalDetail = $responses[4]->structuredData;
+    $mutate($finalDetail['handoff']);
+    $fake = (new FakeAiProvider)
+        ->enqueue($responses[0])
+        ->enqueue($responses[1])
+        ->enqueue($responses[2])
+        ->enqueue(outlineStageResponse($finalDetail, 'invalid-final-handoff'));
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+    $pipeline->generateStructure($batch);
+    $pipeline->generateArcBeats($batch, 'arc-01');
+    $pipeline->assembleSkeleton($batch);
+
+    expect(fn () => $pipeline->generateBeatDetail($batch, 'beat-02'))
+        ->toThrow(ValidationException::class, '最终 Main Beat 的 Handoff 必须显式为空');
+    expect(GenerationArtifact::query()
+        ->where('type', ArtifactType::OutlineBeatDetail)
+        ->whereHas('generationRun', fn ($query) => $query
+            ->where('novel_id', $novel->getKey())
+            ->where('context_snapshot->discriminator', 'beat-02'))
+        ->count())->toBe(0);
+})->with([
+    'text field' => [function (array &$handoff): void {
+        $handoff['next_trigger'] = '继续进入不存在的下一主线节点。';
+    }],
+    'list field' => [function (array &$handoff): void {
+        $handoff['open_threads'] = ['保留不存在的后续主线。'];
+    }],
+]);
 
 test('outline dispatch selects the next beat from one batched successful discriminator query', function () {
     Queue::fake();
@@ -1781,7 +1945,10 @@ test('outline dispatch query count remains nearly constant with 108 completed be
     }
     app()->instance(AiProvider::class, $fake);
 
-    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Draft,
+        'target_words' => $blueprint['outline']['volumes'][0]['target_words'],
+    ]);
     $pipeline = app(NovelOutlinePipeline::class);
     $batch = $pipeline->startOrResume($novel, 1);
     $foundation = $pipeline->generateFoundation($batch);
@@ -1864,10 +2031,10 @@ test('outline dispatch query count remains nearly constant with 108 completed be
         ->filter(fn (array $query): bool => in_array(NovelOutlinePipeline::BEAT_DETAIL_SCOPE, $query['bindings'], true))
         ->count();
 
-    // 从 1 个增加到 108 个成功节点后，只允许 Finalize 存在性检查带来一个常量级查询差异。
+    // 全部节点完成时会多出 Finalize 存在性检查；耗时跨过租约心跳边界时还可能多一次常量更新。
     expect(count($oneCompletedQueries))->toBeLessThanOrEqual(10)
-        ->and(count($allCompletedQueries))->toBeLessThanOrEqual(count($oneCompletedQueries) + 1)
-        ->and(abs(count($allCompletedQueries) - count($oneCompletedQueries)))->toBeLessThanOrEqual(1)
+        ->and(count($allCompletedQueries))->toBeLessThanOrEqual(count($oneCompletedQueries) + 2)
+        ->and(abs(count($allCompletedQueries) - count($oneCompletedQueries)))->toBeLessThanOrEqual(2)
         ->and($beatQueryCount($oneCompletedQueries))->toBe(1)
         ->and($beatQueryCount($allCompletedQueries))->toBe(1);
     Queue::assertPushed(FinalizeNovelOutlineJob::class);

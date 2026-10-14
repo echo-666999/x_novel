@@ -313,6 +313,20 @@ test('outline progress reports not started and queued states without invented to
         ->and($queued->isActive())->toBeTrue();
 });
 
+test('historical v4 outline progress still reads its frozen per stage route', function () {
+    $novel = Novel::factory()->create();
+    ogrProgressBatch($novel, RunStatus::Queued, [
+        'prompt_version' => NovelOutlinePipeline::MULTI_ROUTE_BATCH_CONTRACT_VERSION,
+    ]);
+
+    $progress = app(NovelOutlineProgressResolver::class)->resolve($novel);
+
+    expect($progress->currentStage)->toBe('foundation')
+        ->and($progress->provider)->toBe('openai')
+        ->and($progress->model)->toBe('gpt-test')
+        ->and($progress->reasoningEffort)->toBe('medium');
+});
+
 test('outline progress exposes structure and arc denominators only after their sources exist', function () {
     $novel = Novel::factory()->create();
     $batch = ogrProgressBatch($novel);

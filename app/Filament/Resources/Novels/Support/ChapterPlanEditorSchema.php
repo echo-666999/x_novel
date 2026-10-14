@@ -10,6 +10,7 @@ use App\Models\Chapter;
 use App\Models\Foreshadowing;
 use App\Models\Novel;
 use App\Services\ForeshadowingLifecycleResolver;
+use App\Services\NovelOutlineLengthContract;
 use App\Services\PlanValidator;
 use Closure;
 use Filament\Forms\Components\Repeater;
@@ -55,9 +56,11 @@ final class ChapterPlanEditorSchema
                 ->schema([
                     TextInput::make('target_words')
                         ->label('目标字数')
+                        ->helperText('由 Current Outline 字数合同决定；如需调整，请重新生成或修订全书大纲合同。')
                         ->integer()
                         ->minValue(1)
-                        ->default(3_000)
+                        ->default(fn (): int => $this->chapterTargetWords($novel))
+                        ->readOnly()
                         ->required(),
                     Select::make('pov_character_id')
                         ->label('POV 角色')
@@ -222,7 +225,7 @@ final class ChapterPlanEditorSchema
 
         if ($plan === null) {
             return [
-                'target_words' => 3_000,
+                'target_words' => $this->chapterTargetWords($chapter->novel),
                 'must_reveal' => [],
                 'may_hint' => [],
                 'must_not_reveal' => [],
@@ -235,25 +238,37 @@ final class ChapterPlanEditorSchema
             ];
         }
 
-        return $plan->only([
-            'chapter_function',
-            'arc_contribution',
-            'reader_promise',
-            'target_words',
-            'pov_character_id',
-            'tone',
-            'time_anchor',
-            'hook_type',
-            'must_reveal',
-            'may_hint',
-            'must_not_reveal',
-            'required_facts',
-            'forbidden_conflicts',
-            'due_foreshadowings',
-            'foreshadowing_actions',
-            'scene_plans',
-            'status',
-        ]);
+        return [
+            ...$plan->only([
+                'chapter_function',
+                'arc_contribution',
+                'reader_promise',
+                'target_words',
+                'pov_character_id',
+                'tone',
+                'time_anchor',
+                'hook_type',
+                'must_reveal',
+                'may_hint',
+                'must_not_reveal',
+                'required_facts',
+                'forbidden_conflicts',
+                'due_foreshadowings',
+                'foreshadowing_actions',
+                'scene_plans',
+                'status',
+            ]),
+            'target_words' => $this->chapterTargetWords($chapter->novel),
+        ];
+    }
+
+    private function chapterTargetWords(Novel $novel): int
+    {
+        if ($novel->current_outline_id === null) {
+            return (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000);
+        }
+
+        return (int) app(NovelOutlineLengthContract::class)->forNovel($novel)['chapter_target_words'];
     }
 
     /**

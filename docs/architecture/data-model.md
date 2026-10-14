@@ -1281,6 +1281,8 @@ style_parameters
 
 其中 `tone`、`pov`、`tense` 继续作为现有叙事基线；其余内容由 Bible 的可空 JSONB `style_profile` 承载。新创建的 Bible Version 必须保存通过结构校验的完整对象；历史版本允许为 `null`，不得用当前默认值伪造历史设置。
 
+Foundation 选择文风时，Prompt 必须把 `config/narrative.php` 的稳定 code 展开为中文名称、写作指令与主文风默认参数，并明确字段职责：`tone` 管情绪基线，`pov` 管信息边界，`tense` 管语法时态；`primary_style` 是唯一主导文风，`secondary_styles` 只补充，`language_era` 只管措辞与句式时代感，`pacing` 管推进密度，六项 `parameters` 是 1 至 5 的独立微调值。默认参数仅是选择主文风后的参考起点，模型可以按作品需要调整。枚举说明只属于请求上下文，不写入 `style_profile`，后者仍只保存稳定 code 与显式参数。
+
 叙事与文风发生变化时必须创建新 Bible Version，不得原地修改历史版本。`novels.settings.editorial` 只允许在迁移窗口中用于迁移预览、冲突对照和数据复制；章节生成不得把它作为回退来源。迁移完成后应清理旧来源，但不得改写历史 Run、Artifact 或 Context Snapshot。
 
 Foundation 发生在 Current Bible 创建前，可以生成完整 Bible 候选；用户采用并创建 Current Bible 后，Planner、Writer、Reviewer、Local Rewriter 和长度修复必须读取同一个冻结 Bible Version。Deterministic Assembler 不调用 Provider或读取文风 Prompt，只按 Scene Artifact 拼接。
@@ -1342,11 +1344,11 @@ novel_outline_milestones
   acceptance_criteria / must_include / must_not_include
 ```
 
-所有子表通过非空外键、组合唯一键和组合外键保证完整父链属于同一 Outline Version。各层 Key 和同级 Sequence 唯一；Main Arc/Beat 的 `mainline_sequence` 在同一 Outline 内唯一；每个 Main Beat 至少一个 Milestone；除最终 Main Beat 外，`handoff_next_beat_id` 必须指向同版本相邻 Main Beat。Handoff 首版与 Beat 一对一，不新增表。
+所有子表通过非空外键、组合唯一键和组合外键保证完整父链属于同一 Outline Version。各层 Key 和同级 Sequence 唯一；Main Arc/Beat 的 `mainline_sequence` 在同一 Outline 内唯一；每个 Main Beat 至少一个 Milestone；除最终 Main Beat 外，`handoff_next_beat_id` 必须指向同版本相邻 Main Beat。最终 Main Beat 的 `handoff_next_beat_id`、过渡模式、退出结果和下一触发必须为 null，四个状态/约束 JSONB 列表必须为空数组。Handoff 首版与 Beat 一对一，不新增表。
 
 首版 Milestone/Handoff 只属于 Main Beat；Subplot 使用 Arc Completion Conditions 和 Chapter Plan Secondary Contribution，不创建独立 Milestone Completion。
 
-`chapter_budget_min >= 1`，`chapter_budget_max` 为空或不小于最小值。Min 只用于规模提示和偏差观测，Max 只用于异常停留保护；二者都不是完成条件。
+`chapter_budget_min >= 1`，`chapter_budget_max` 为空或不小于最小值。Min 只用于规模提示和偏差观测，Max 只用于异常停留保护；二者都不是 Canonical 完成条件。AI Outline 创建时另执行一次规划一致性门禁：各 Volume `target_words` 总和必须等于批次冻结的小说目标字数；每卷按冻结单章目标向上折算预计章节数；顺序执行的 Main Arc Beat 预算合计区间必须覆盖该值。Subplot 可与主线共用章节，不重复相加。
 
 Source of Truth 边界：
 
@@ -1354,18 +1356,18 @@ Source of Truth 边界：
 - `story_events` 保存正式 Milestone/Beat Completion，不回写 Outline 表。
 - 运行态 `volumes.source_outline_volume_id`、`story_arcs.source_outline_arc_id` 非空且唯一。
 - 删除 `volumes.outline_key`、`story_arcs.outline_key` 和 `story_arcs.beats`。
-- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链；`checksum`、`input_hash`、`admission_snapshot` 和 `admitted_at` 固化 Scene 1 前通过门禁的语义输入、Bible/State/Outline/Handoff 来源，以及 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 的下游 Route、模型容量与请求预算。
+- Chapter Plan 冻结 `novel_outline_id + checksum + arc_id + beat_id + milestone_id` 完整链；`checksum`、`input_hash`、`admission_snapshot` 和 `admitted_at` 固化 Scene 1 前通过门禁的语义输入、Bible/State/Outline/Handoff/字数来源，以及 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 的下游 Route、模型容量与请求预算。
 - 不保留 `baseline_completions`、旧 JSONB Outline 双读或 Key 回退。
 
-新 Admission Snapshot 使用 `schema_version=2`。`routes.<stage>.model_capacity` 保存匹配模型价格记录 ID、Provider、Model、上下文窗口、最大输出和能力声明；`routes.<stage>.request_budgets.<tier>` 保存 `output_tokens`、`reasoning_reserve_tokens`、`max_completion_tokens`。每个实际 Run 的 `context_snapshot.generation_preferences` 再保存 `frozen_route`、`request_budget_tier`、`request_budget_trigger`、`selected_request_budget` 和逐次容量门禁快照。模型价格或全局预算后续变化不得更新已 Admission 的 JSONB；旧 `schema_version=1` 只允许读取和明确拒绝，不能静默升级。
+新 Admission Snapshot 使用 `schema_version=3`。它保留 v2 的 `routes.<stage>.model_capacity` 与 `routes.<stage>.request_budgets.<tier>`，并新增 `outline_length_contract` 及其语义 Checksum，要求 Outline 单章目标、Plan `target_words` 与下游章节容量一致。每个实际 Run 的 `context_snapshot.generation_preferences` 再保存 `frozen_route`、`request_budget_tier`、`request_budget_trigger`、`selected_request_budget` 和逐次容量门禁快照。模型价格、全局预算或小说设置后续变化不得更新已 Admission 的 JSONB；历史 v2 继续按原容量合同读取，v1 只允许读取和明确拒绝，均不能静默升级。
 
 全局生成参数复用 `system_settings` 的 `generation` 记录，不新增业务表。其 JSON 保存计价币种、三类费用硬上限、Outline、章节阶段与修复子阶段的请求预算、审校上下文预算和 Embedding 维度；保存边界执行完整结构、分档单调性与 PostgreSQL 向量列维度校验。它只为新建 Run、Plan Admission 或 Outline Batch 提供输入，已经冻结的快照保持不变。
 
-`planner` 在 Plan Admission 之前运行，其首个 Chapter Planning Run 的 `context_snapshot.generation_preferences` 直接保存同结构的 `model_capacity`、`request_budgets` 与 `frozen_route`；同来源技术 Retry 只能复制该 Run 合同。`writer`、`extractor`、`reviewer`、`rewrite`、`summary` 则以 Plan Admission v2 为冻结事实源。
+`planner` 在 Plan Admission 之前运行，其首个 Chapter Planning Run 的 `context_snapshot` 同时保存 Outline 字数合同，并在 `generation_preferences` 保存 `model_capacity`、`request_budgets` 与 `frozen_route`；同来源技术 Retry 只能复制该 Run 合同。`writer`、`extractor`、`reviewer`、`rewrite`、`summary` 则以对应 Plan Admission v2/v3 为冻结事实源。
 
 版本创建在一个事务中按 Volume、Arc、Beat、Milestone 顺序写入，随后按稳定 `beat_key` 回填 Handoff 自外键，并从持久化关系重新计算 Checksum。任一引用、顺序、邻接或 Checksum 校验失败都回滚整个版本。`source=ai` 时 `source_artifact_id` 必须引用同小说同规划批次的最终 `outline_blueprint` Artifact，且一个 Finalize Artifact 最多创建一个 Outline Version。
 
-Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Finalize 或采用 Outline 都不会创建正式对象；只有对应 Plan、Review 证据、Introduced Event 和 State Version 校验通过后，Canonical Commit 才能幂等转正。
+Character/World Candidate 使用 Outline 内稳定 `candidate_key`。Outline 只授权在哪个 Beat 可以引入候选，不保存 `target_scene_sequence`；Chapter Planner 在生成本章 `scene_plans` 后，才为本章选中的候选指定目标 Scene。保存、Finalize 或采用 Outline 都不会创建正式对象；只有对应 Plan、Review 证据、Introduced Event 和 State Version 校验通过后，Canonical Commit 才能幂等转正。
 
 本基线明确放弃现有数据库数据，不迁移、不 Backfill 旧 `novel_outlines.content`、`story_arcs.beats`、旧 `beat_key` 或历史 Canonical 映射。Migration 实施和验收从停止 Worker 后的开发环境 `migrate:fresh` 开始。
 
@@ -1373,14 +1375,14 @@ Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Fi
 
 新建 Outline 的目标合同是 `Foundation → Structure → Arc Beats × Arc → Skeleton Assembly → Beat Detail × Main Beat → Finalize`：
 
-1. Foundation 生成 Bible、初始人物、世界实体和伏笔候选。
-2. Structure 只生成 Volume / Arc 稳定 Key、顺序、目标和预算，不生成 Beat。
-3. 每个 Arc Beats Provider 请求只生成目标 Arc 的 Beat 内容与 Candidate 内容，不生成 Beat / Candidate Key；同一 Novel 严格串行。
-4. Skeleton Assembly 由 Laravel 按 Structure 和全部 Arc Beats 的局部数组顺序与 checksum 确定性合并，统一分配全书唯一 Beat / Candidate Key，并校验主线顺序和预算，不调用 Provider。
-5. 每个 Beat Detail 只生成一个 Main Beat 的 Milestone / Handoff 内容，不生成 Beat / Milestone / Handoff 目标 Key；Laravel 从冻结 Skeleton 确定性补齐。
-6. Finalize 不调用 Provider；它沿固定 lineage 合并成功 Artifact、解析稳定 Key、执行完整校验并事务写入关系表与最终 `outline_blueprint`。
+1. Foundation 生成 Bible、初始人物、世界实体和伏笔候选；由于此时尚无 Arc Key，不生成伏笔归属。
+2. Structure 生成 Volume / Arc 稳定 Key、顺序、目标和预算，不生成 Beat；同时按 Foundation 伏笔原顺序返回等长的 `foreshadowing_owner_arc_keys`，非空值只能引用本次 Structure 的 Arc Key。
+3. 每个 Arc Beats Provider 请求只接收全书约束摘要、所属 Volume、目标 Arc、相邻 Arc 摘要与适用的字数合同，只生成目标 Arc 的 Beat 内容与 Candidate 内容；不得重复发送完整 Structure，不生成 Beat / Candidate Key，也不指定 Candidate 的目标 Scene；同一 Novel 严格串行。
+4. Skeleton Assembly 由 Laravel 按 Structure 和全部 Arc Beats 的局部数组顺序与 checksum 确定性合并，统一分配全书唯一 Beat / Candidate Key，并校验主线顺序和预算，不调用 Provider；`foreshadowing_owner_arc_keys` 是 Finalize 合并元数据，不进入标准 Outline 层级。
+5. 每个 Beat Detail 从冻结 Skeleton 接收目标 Beat 所属 Volume / Arc 的精简上下文，只生成一个 Main Beat 的 Milestone / Handoff 内容，不生成 Beat / Milestone / Handoff 目标 Key；Laravel 从冻结 Skeleton 确定性补齐。
+6. Finalize 不调用 Provider；它沿固定 lineage 合并成功 Artifact，按位置把 Structure 的伏笔 Arc 归属写回 Foundation 伏笔，解析稳定 Key、执行完整校验并事务写入关系表与最终 `outline_blueprint`。
 
-主批次与子阶段继续复用现有 `generation_runs`、`generation_artifacts`，不新增工作流业务表。主批次使用 `scope_type=novel_outline_batch`；所有子 Run 的 `scope_id` 指向主批次 Run ID。子阶段 `scope_type` 与区分字段固定为：
+主批次与子阶段继续复用现有 `generation_runs`、`generation_artifacts`，不新增工作流业务表。当前四个新版 Provider Stage 的模型 Prompt 只序列化规划所需的语义上下文；小说数据库主键、Artifact ID、checksum 与配置来源只进入内部 Run 快照、Artifact lineage 和 Stage 输入指纹，不发送给 Provider。历史 Legacy Skeleton 保持其冻结请求不变。主批次使用 `scope_type=novel_outline_batch`；所有子 Run 的 `scope_id` 指向主批次 Run ID。子阶段 `scope_type` 与区分字段固定为：
 
 | 阶段 | `scope_type` | Artifact | 区分字段 |
 |---|---|---|---|
@@ -1393,7 +1395,7 @@ Character/World Candidate 使用 Outline 内稳定 `candidate_key`。保存、Fi
 
 主批次持久化状态为 `queued / running / failed / succeeded / cancelled`。`retrying` 由页面根据主批次与最新子 Run 派生，不新增数据库枚举。页面启动生成时先创建或复用 `queued` 主批次；Worker 激活后改为 `running`；子阶段终止失败时收口为 `failed`；Finalize 事务成功才改为 `succeeded`。同输入重复执行必须复用校验通过的 Artifact，不得重复产生正式关系行或 Usage。
 
-`novel-outline-pipeline-v4` 主批次本身是协调器，因此 `provider` 与 `model_policy` 为空。它在 `context_snapshot.generation_preferences.outline_routes` 下按 `outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 分别保存 Provider、Model、Reasoning Effort、来源、Prompt Version、请求输出额度、推理预留和已核实容量；这些值共同进入 Batch `input_hash`。每个 Provider 子 Run 只复制自己任务的冻结路由，在 `context_snapshot.request_budget` 与 `input.capacity_snapshot` 保存实际预算和门禁结果，并把请求预算与 Schema Hash 纳入 Stage `input_hash`。Retry、Resume 和后台配置变化不得改写这些快照；临时故障 Resume 继续使用原快照，配置或完成预算类失败的 Restart 按当前设置创建新行，旧 v4 批次及其关联记录不得更新或回填。`novel-outline-pipeline-v3` 历史批次继续读取原单路由快照和升级前请求上限，不回填 v4 结构。
+`novel-outline-pipeline-v5` 主批次本身是协调器，因此 `provider` 与 `model_policy` 为空。它在 `context_snapshot.generation_preferences.outline_routes` 下按 `outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 分别保存 Provider、Model、Reasoning Effort、来源、Prompt Version、请求输出额度、推理预留和已核实容量，并在 `context_snapshot.length_contract` 冻结小说目标字数、单章目标字数、折算章节数与分卷数；这些值共同进入 Batch `input_hash`。每个 Provider 子 Run 只复制自己任务的冻结路由，在 `context_snapshot.request_budget` 与 `input.capacity_snapshot` 保存实际预算和门禁结果，并把请求预算、Schema Hash 与适用的字数合同纳入 Stage `input_hash`。Skeleton Assembly v3 保存完成后的逐卷主线预算，Finalize v2 将它写入不可变 Blueprint。Retry、Resume 和后台配置变化不得改写这些快照；临时故障 Resume 继续使用原快照，配置或完成预算类失败的 Restart 按当前设置创建新行。旧 v4 及更早批次与关联 Artifact 保持不可变，冻结 Prompt 与当前合同不同的未完成批次必须 Restart，不能静默补写 v5 字段。
 
 全书大纲进度只从 PostgreSQL 的 Run、Artifact 和 Draft Outline 投影。Redis、Horizon 与 `failed_jobs` 不保存权威业务进度。Structure 完成后才能确定 Arc Beats 分母；Skeleton Assembly 完成后才能确定 Main Beat Detail 分母。领域 Resume 从最早缺失且来源有效的 Artifact 继续，不直接重放 Queue payload。
 

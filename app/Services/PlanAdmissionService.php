@@ -22,7 +22,7 @@ use Throwable;
 class PlanAdmissionService
 {
     /** Chapter Plan Admission Snapshot 的当前结构版本。 */
-    public const SCHEMA_VERSION = 2;
+    public const SCHEMA_VERSION = 3;
 
     /** @var array<int, AiStage> */
     private const PIPELINE_STAGES = [
@@ -40,6 +40,8 @@ class PlanAdmissionService
         private readonly PromptVersionResolver $promptVersionResolver,
         private readonly ContextBuilder $contextBuilder,
         private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly NovelOutlineLengthContract $outlineLengthContract,
+        private readonly NovelOutlineChecksum $outlineChecksum,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly GenerationSettingsService $generationSettings,
@@ -84,8 +86,9 @@ class PlanAdmissionService
         $planChecksum = $plan->semanticChecksum();
         $handoff = $target->beat['handoff'];
         $previousEnding = $this->previousChapterEnding->for($chapter);
+        $lengthContract = $this->outlineLengthContract->forNovel($novel);
         $snapshot = [
-            // v2 首次区分模型静态容量、分档请求预算与 Provider 实际发送参数，旧快照不得静默补写。
+            // v3 继续保留 v2 容量合同，并冻结 Outline 到正文的字数来源；历史快照不得静默补写。
             'schema_version' => self::SCHEMA_VERSION,
             'plan_checksum' => $planChecksum,
             'bible_version' => $bibleVersion ?? $this->contextBuilder->bibleVersionForChapter($chapter),
@@ -93,6 +96,8 @@ class PlanAdmissionService
             'novel_outline_id' => $outline->getKey(),
             'outline_version' => $outline->version,
             'outline_checksum' => $outline->checksum,
+            'outline_length_contract' => $lengthContract,
+            'outline_length_contract_checksum' => $this->outlineChecksum->for($lengthContract),
             'primary_outline_arc_id' => $target->outlineArcId,
             'primary_outline_beat_id' => $target->outlineBeatId,
             'primary_outline_milestone_id' => $target->outlineMilestoneId,

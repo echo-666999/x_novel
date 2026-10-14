@@ -51,11 +51,14 @@ beforeEach(function () {
 
 function reviewFixture(?Closure $draftDataFactory = null): array
 {
-    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    $content = '林舟守住城门，也兑现了向同伴作出的承诺。';
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Generating,
+        'settings' => ['generation' => ['chapter_target_words' => mb_strlen($content)]],
+    ]);
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
-    $content = '林舟守住城门，也兑现了向同伴作出的承诺。';
     $plan = ChapterPlan::factory()->for($chapter)->create(['target_words' => mb_strlen($content)]);
     freezeChapterRouteContractsForTest($plan);
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['scope_type' => 'chapter', 'scope_id' => $chapter->getKey(), 'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded]);

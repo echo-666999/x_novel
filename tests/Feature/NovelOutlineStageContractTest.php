@@ -4,6 +4,7 @@ use App\AI\OpenAiStructuredOutputSchema;
 use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
+use App\Services\NovelOutlineLengthContract;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineStageContract;
 use Illuminate\Validation\ValidationException;
@@ -15,6 +16,7 @@ function ogrStructurePayload(): array
         'summary' => '主角从边城出发并揭开失落文明真相。',
         'must_include' => ['文明遗迹'],
         'must_not_include' => ['无代价复活'],
+        'foreshadowing_owner_arc_keys' => ['arc-02'],
         'volumes' => [
             [
                 'key' => 'vol-01',
@@ -66,7 +68,6 @@ function ogrArcBeatsPayload(): array
                     'name' => '卫队长',
                     'deduplication_basis' => 'Foundation 中无同名角色',
                     'introduction_reason' => '代表封锁力量',
-                    'target_scene_sequence' => 1,
                     'role' => '配角',
                     'motivation' => '守住城门',
                     'profile' => ['谨慎'],
@@ -78,7 +79,6 @@ function ogrArcBeatsPayload(): array
                     'name' => '北城门',
                     'deduplication_basis' => 'Foundation 中无同名地点',
                     'introduction_reason' => '逃离路线',
-                    'target_scene_sequence' => 1,
                     'type' => 'location',
                     'description' => '边城唯一仍可通行的城门。',
                 ]],
@@ -130,7 +130,6 @@ function ogrFoundationPayload(): array
             'description' => '地图指向遗迹',
             'promised_payoff' => '找到遗迹',
             'importance' => 'high',
-            'owner_arc_key' => 'arc-02',
         ]],
     ];
 }
@@ -138,7 +137,7 @@ function ogrFoundationPayload(): array
 test('outline structure and arc beats schemas are strict and exclude provider-owned ids and ordering', function () {
     $contract = app(NovelOutlineStageContract::class);
     $checker = app(OpenAiStructuredOutputSchema::class);
-    $structure = $contract->structureSchema(2);
+    $structure = $contract->structureSchema(2, 1);
     $arcBeats = $contract->arcBeatsSchema();
 
     expect($checker->errors($structure))->toBe([])
@@ -148,8 +147,11 @@ test('outline structure and arc beats schemas are strict and exclude provider-ow
         ->not->toContain('milestone')
         ->not->toContain('handoff')
         ->not->toContain('_id')
+        ->not->toContain('target_scene_sequence')
         ->not->toContain('mainline_sequence')
-        ->not->toContain('"sequence"');
+        ->not->toContain('"sequence"')
+        ->and(data_get($structure, 'properties.foreshadowing_owner_arc_keys.minItems'))->toBe(1)
+        ->and(data_get($structure, 'properties.foreshadowing_owner_arc_keys.maxItems'))->toBe(1);
 });
 
 test('structure validation rejects beats ids extra ordering duplicate keys and wrong volume count', function (callable $mutate, int $volumeCount) {
@@ -190,6 +192,77 @@ test('laravel assigns deterministic sibling sequences to structure and arc beats
         ->and(json_encode([$structure, $arcBeats], JSON_THROW_ON_ERROR))->not->toContain('mainline_sequence');
 });
 
+test('structure owns positional foreshadowing arc assignments and validates their references', function () {
+    $contract = app(NovelOutlineStageContract::class);
+    $structure = $contract->validateStructure(ogrStructurePayload(), 2, 1);
+
+    expect($structure['foreshadowing_owner_arc_keys'])->toBe(['arc-02']);
+
+    $wrongCount = ogrStructurePayload();
+    $wrongCount['foreshadowing_owner_arc_keys'] = [];
+    expect(fn () => $contract->validateStructure($wrongCount, 2, 1))
+        ->toThrow(ValidationException::class);
+
+    $unknownArc = ogrStructurePayload();
+    $unknownArc['foreshadowing_owner_arc_keys'] = ['arc-99'];
+    expect(fn () => $contract->validateStructure($unknownArc, 2, 1))
+        ->toThrow(ValidationException::class);
+
+    $globalForeshadowing = ogrStructurePayload();
+    $globalForeshadowing['foreshadowing_owner_arc_keys'] = [null];
+    expect($contract->validateStructure($globalForeshadowing, 2, 1)['foreshadowing_owner_arc_keys'])
+        ->toBe([null]);
+
+    $withoutForeshadowing = ogrStructurePayload();
+    $withoutForeshadowing['foreshadowing_owner_arc_keys'] = [];
+    expect($contract->validateStructure($withoutForeshadowing, 2, 0)['foreshadowing_owner_arc_keys'])
+        ->toBe([]);
+});
+
+test('outline length contract reconciles novel words volume words and mainline chapter budgets', function () {
+    $service = app(NovelOutlineLengthContract::class);
+    $structure = ogrStructurePayload();
+    $frozen = $service->freeze(220_000, 10_000, 2);
+    $structureContract = $service->validateStructure($structure, $frozen);
+
+    $structure['volumes'][0]['arcs'][0]['beats'] = ogrArcBeatsPayload()['beats'];
+    $structure['volumes'][1]['arcs'][0]['type'] = 'main';
+    $structure['volumes'][1]['arcs'][0]['beats'] = [[
+        ...ogrArcBeatsPayload()['beats'][0],
+        'chapter_budget' => ['min' => 2, 'max' => 12],
+    ]];
+    $complete = $service->complete($structure, $frozen);
+
+    expect($structureContract['target_chapter_count'])->toBe(22)
+        ->and(data_get($structureContract, 'volumes.0.target_chapter_count'))->toBe(10)
+        ->and(data_get($structureContract, 'volumes.1.target_chapter_count'))->toBe(12)
+        ->and(data_get($complete, 'volumes.0.mainline_chapter_budget'))->toBe(['min' => 4, 'max' => null])
+        ->and(data_get($complete, 'volumes.1.mainline_chapter_budget'))->toBe(['min' => 2, 'max' => 12]);
+});
+
+test('outline length contract rejects unallocated words and an unreachable mainline budget', function () {
+    $service = app(NovelOutlineLengthContract::class);
+    $structure = ogrStructurePayload();
+    $frozen = $service->freeze(220_000, 10_000, 2);
+
+    $wrongWords = $structure;
+    $wrongWords['volumes'][1]['target_words'] = 110_000;
+    expect(fn () => $service->validateStructure($wrongWords, $frozen))
+        ->toThrow(ValidationException::class, '必须等于冻结的小说目标字数');
+
+    $structure['volumes'][0]['arcs'][0]['beats'] = [[
+        ...ogrArcBeatsPayload()['beats'][0],
+        'chapter_budget' => ['min' => 1, 'max' => 4],
+    ]];
+    $structure['volumes'][1]['arcs'][0]['type'] = 'main';
+    $structure['volumes'][1]['arcs'][0]['beats'] = [[
+        ...ogrArcBeatsPayload()['beats'][0],
+        'chapter_budget' => ['min' => 1, 'max' => 4],
+    ]];
+    expect(fn () => $service->complete($structure, $frozen))
+        ->toThrow(ValidationException::class, 'Main Beat 预算合计');
+});
+
 test('arc beats rejects wrong target cross arc data provider owned keys invalid budgets and extra fields', function (callable $mutate, string $targetArcKey) {
     $contract = app(NovelOutlineStageContract::class);
     $structure = $contract->validateStructure(ogrStructurePayload(), 2);
@@ -212,6 +285,9 @@ test('arc beats rejects wrong target cross arc data provider owned keys invalid 
     'provider candidate key' => [function (array &$payload): void {
         $payload['beats'][0]['world_entity_candidates'][0]['candidate_key'] = 'north-gate';
     }, 'arc-01'],
+    'chapter scene ownership' => [function (array &$payload): void {
+        $payload['beats'][0]['world_entity_candidates'][0]['target_scene_sequence'] = 1;
+    }, 'arc-01'],
     'invalid budget' => [function (array &$payload): void {
         $payload['beats'][0]['chapter_budget'] = ['min' => 4, 'max' => 2];
     }, 'arc-01'],
@@ -229,18 +305,51 @@ test('arc beats rejects wrong target cross arc data provider owned keys invalid 
     }, 'arc-01'],
 ]);
 
-test('arc beats context includes only foundation summary complete structure target and adjacent summaries', function () {
+test('arc beats context includes the target volume length contract without prior beat outputs', function () {
     $contract = app(NovelOutlineStageContract::class);
-    $structure = $contract->validateStructure(ogrStructurePayload(), 2);
-    $context = $contract->arcBeatsContext(ogrFoundationPayload(), $structure, 'arc-01');
+    $structurePayload = ogrStructurePayload();
+    $structurePayload['volumes'][1]['arcs'][] = [
+        ...$structurePayload['volumes'][1]['arcs'][0],
+        'key' => 'arc-03',
+        'title' => '遗迹守门人',
+    ];
+    $structure = $contract->validateStructure($structurePayload, 2);
+    $length = app(NovelOutlineLengthContract::class)->validateStructure(
+        $structure,
+        app(NovelOutlineLengthContract::class)->freeze(220_000, 10_000, 2),
+    );
+    $context = $contract->arcBeatsContext(ogrFoundationPayload(), $structure, 'arc-01', $length);
 
-    expect($context)->toHaveKeys(['foundation_summary', 'structure', 'target_arc', 'adjacent_arcs'])
-        ->and($context['structure'])->toBe($structure)
+    expect($context)->toHaveKeys(['foundation_summary', 'outline', 'target_volume', 'length_contract', 'target_arc', 'adjacent_arcs'])
+        ->and($context)->not->toHaveKey('structure')
+        ->and($context['outline'])->toBe([
+            'title' => '星火长夜',
+            'summary' => '主角从边城出发并揭开失落文明真相。',
+            'must_include' => ['文明遗迹'],
+            'must_not_include' => ['无代价复活'],
+        ])
+        ->and($context['target_volume'])->toMatchArray([
+            'key' => 'vol-01',
+            'sequence' => 1,
+            'title' => '离城',
+            'goal' => '建立主角目标',
+            'climax' => '突破封锁',
+            'target_words' => 100_000,
+        ])
+        ->and($context['target_volume'])->not->toHaveKey('arcs')
+        ->and(data_get($context, 'length_contract.target_volume'))->toBe([
+            'volume_key' => 'vol-01',
+            'target_words' => 100_000,
+            'target_chapter_count' => 10,
+        ])
+        ->and(data_get($context, 'length_contract.budget_accounting'))->toBe('mainline_budget_must_cover_target_volume_chapters')
         ->and($context['target_arc']['key'])->toBe('arc-01')
         ->and($context['adjacent_arcs']['previous'])->toBeNull()
         ->and($context['adjacent_arcs']['next']['key'])->toBe('arc-02')
         ->and($context['foundation_summary']['characters'][0])->not->toHaveKey('profile')
-        ->and(json_encode($context, JSON_THROW_ON_ERROR))->not->toContain('beat-01');
+        ->and(json_encode($context, JSON_THROW_ON_ERROR))->not->toContain('arc-03')
+        ->not->toContain('beat-01')
+        ->not->toContain('"volumes"');
 });
 
 test('outline stage capacity is checked against frozen context and model output limits', function () {
@@ -274,11 +383,11 @@ test('outline stage capacity is checked against frozen context and model output 
 test('outline provider prompts use the central resolver and preserve deterministic and legacy versions', function () {
     $versions = app(PromptVersionResolver::class);
 
-    expect($versions->resolve(AiStage::OutlineFoundation))->toBe('novel-outline-foundation-v3+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v2+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v3+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineBeatDetail))->toBe('novel-outline-beat-detail-v3+natural-planning-v3')
-        ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION)->toBe('novel-outline-skeleton-assembly-v2')
+    expect($versions->resolve(AiStage::OutlineFoundation))->toBe('novel-outline-foundation-v6+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v5+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v7+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineBeatDetail))->toBe('novel-outline-beat-detail-v6+natural-planning-v3')
+        ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION)->toBe('novel-outline-skeleton-assembly-v4')
         ->and(NovelOutlinePipeline::LEGACY_SKELETON_PROMPT_VERSION)->toBe('novel-outline-skeleton-v1')
         ->and(ArtifactType::OutlineStructure->value)->toBe('outline_structure')
         ->and(ArtifactType::OutlineArcBeats->value)->toBe('outline_arc_beats');

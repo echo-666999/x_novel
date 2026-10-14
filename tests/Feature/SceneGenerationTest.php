@@ -52,7 +52,11 @@ beforeEach(function () {
 
 function sceneGenerationFixture(int $sceneCount = 2): array
 {
-    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    $chapterTargetWords = $sceneCount * 8;
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Generating,
+        'settings' => ['generation' => ['chapter_target_words' => $chapterTargetWords]],
+    ]);
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create([
@@ -64,7 +68,7 @@ function sceneGenerationFixture(int $sceneCount = 2): array
         'pov_character_id' => $pov->getKey(),
         'must_not_reveal' => ['终局真相'],
         'scene_plans' => [],
-        'target_words' => $sceneCount * 8,
+        'target_words' => $chapterTargetWords,
         'status' => PlanStatus::Ready,
     ]);
     $scenes = collect(range(1, $sceneCount))->map(fn (int $sequence): Scene => Scene::factory()
@@ -105,6 +109,14 @@ function sceneGenerationFixture(int $sceneCount = 2): array
     ]);
 
     return compact('novel', 'chapter', 'plan', 'scenes');
+}
+
+function setSceneGenerationTarget(array $fixture, int $targetWords): void
+{
+    $settings = $fixture['novel']->settings ?? [];
+    data_set($settings, 'generation.chapter_target_words', $targetWords);
+    $fixture['novel']->update(['settings' => $settings]);
+    $fixture['plan']->update(['target_words' => $targetWords]);
 }
 
 function sceneSelfCheck(string $content, array $overrides = []): array
@@ -361,7 +373,7 @@ test('missing scene foreshadowing action creates an automatic rewrite finding', 
     $fixture = sceneGenerationFixture(1);
     $foreshadowing = sceneForeshadowingAction($fixture);
     $content = '地图边缘泛起暗红微光，但没有显出目的地。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(sceneResponse(
         $content,
         foreshadowingCoverage: sceneForeshadowingCoverage($foreshadowing, 'missing', null),
@@ -382,7 +394,7 @@ test('scene generator repairs only invalid foreshadowing evidence', function () 
     $fixture = sceneGenerationFixture(1);
     $foreshadowing = sceneForeshadowingAction($fixture);
     $content = '林舟确认染血地图指向潮汐门。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '地图指出了潮汐门');
     $valid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '染血地图指向潮汐门');
     $fake = (new FakeAiProvider)
@@ -406,7 +418,7 @@ test('foreshadowing evidence repair cannot change the declared action result', f
     $canonicalStateVersionId = $fixture['novel']->fresh()->canonical_state_version_id;
     $foreshadowing = sceneForeshadowingAction($fixture);
     $content = '林舟确认染血地图指向潮汐门。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalid = sceneForeshadowingCoverage($foreshadowing, 'fulfilled', '地图指出了潮汐门');
     $changed = sceneForeshadowingCoverage($foreshadowing, 'missing', null);
     app()->instance(AiProvider::class, (new FakeAiProvider)
@@ -424,7 +436,7 @@ test('foreshadowing evidence repair cannot change the declared action result', f
 test('missing or contradicted scene coverage creates stable localized findings', function (string $status, string $code, ?string $evidence) {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟在门前停下，没有进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $selfCheck = sceneSelfCheck($content, [
         'outcome' => ['status' => $status, 'evidence' => $evidence],
     ]);
@@ -506,7 +518,7 @@ test('scene coverage resolves a high confidence transcription difference to an e
 test('scene generator repairs invalid coverage evidence without rewriting the prose', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidCoverage = sceneSelfCheck($content, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
     ]);
@@ -528,7 +540,7 @@ test('scene generator repairs invalid coverage evidence without rewriting the pr
 test('scene generator repairs malformed support fields without rewriting the prose', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidPayload = [
         'content' => $content,
         'temporary_state_delta' => '{"林舟仍在灯塔。"}',
@@ -567,7 +579,7 @@ test('scene generator repairs malformed support fields without rewriting the pro
 test('scene support field repair and coverage evidence repair can run in sequence', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidPayload = [
         'content' => $content,
         'temporary_state_delta' => '{"林舟仍在灯塔。"}',
@@ -605,7 +617,7 @@ test('scene support field repair and coverage evidence repair can run in sequenc
 test('coverage evidence repair cannot change the original status', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidCoverage = sceneSelfCheck($content, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
     ]);
@@ -625,7 +637,7 @@ test('coverage evidence repair cannot change the original status', function () {
 test('coverage evidence repair retries with a larger budget after a truncated response', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidCoverage = sceneSelfCheck($content, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
     ]);
@@ -650,7 +662,7 @@ test('scene prose evidence repair and length repair use independent routes and b
     createAiModelRouteForTest(AiStage::Extractor, 'extractor-route-model');
     createAiModelRouteForTest(AiStage::Rewrite, 'rewrite-route-model');
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 10]);
+    setSceneGenerationTarget($fixture, 10);
     $longContent = str_repeat('长', 20);
     $invalidCoverage = sceneSelfCheck($longContent, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '不存在的证据'],
@@ -692,7 +704,7 @@ test('scene job hands off before the hard timeout and resumes from the prose che
     createAiProviderConnectionForTest()->update(['timeout' => 150]);
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidCoverage = sceneSelfCheck($content, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '他进入了灯塔'],
     ]);
@@ -730,7 +742,7 @@ test('scene job hands off before the hard timeout and resumes from the prose che
 test('unverifiable coverage evidence waits for semantic judgment after repair is exhausted', function () {
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
-    $fixture['plan']->update(['target_words' => mb_strlen($content)]);
+    setSceneGenerationTarget($fixture, mb_strlen($content));
     $invalidCoverage = sceneSelfCheck($content, [
         'outcome' => ['status' => 'fulfilled', 'evidence' => '这里没有任何可核对的原文'],
     ]);
@@ -768,8 +780,8 @@ test('scene self check rejects an incomplete fixed schema', function () {
 
 test('scene generator persists an immutable draft artifact and temporary state delta', function () {
     $fixture = sceneGenerationFixture(1);
+    setSceneGenerationTarget($fixture, 11);
     $fixture['plan']->update([
-        'target_words' => 11,
         'scene_plans' => [[
             'goal' => $fixture['scenes'][0]->goal,
             'conflict' => $fixture['scenes'][0]->conflict,
@@ -781,7 +793,10 @@ test('scene generator persists an immutable draft artifact and temporary state d
             'continuity_requirements' => [],
         ]],
     ]);
-    $fixture['novel']->update(['settings' => ['editorial' => ['primary_style' => 'light_humorous', 'secondary_styles' => [], 'style_parameters' => []]]]);
+    $fixture['novel']->update(['settings' => [
+        'generation' => ['chapter_target_words' => 11],
+        'editorial' => ['primary_style' => 'light_humorous', 'secondary_styles' => [], 'style_parameters' => []],
+    ]]);
     $fake = (new FakeAiProvider)->enqueue(sceneResponse('雨幕中，林舟推开了门。', [
         'characters' => ['lin_zhou' => ['location' => '灯塔']],
     ]));
@@ -871,7 +886,7 @@ test('scene snapshots keep the bible version frozen for the current chapter plan
 test('a final scene budget shortfall is expanded once before the chapter is blocked', function () {
     Queue::fake();
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 100]);
+    setSceneGenerationTarget($fixture, 100);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse('过短场景'))
         ->enqueue(sceneResponse('仍然过短'));
@@ -895,7 +910,7 @@ test('a final scene budget shortfall is expanded once before the chapter is bloc
 
 test('a successful length expansion becomes the scene draft', function () {
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 100]);
+    setSceneGenerationTarget($fixture, 100);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('短', 20)))
         ->enqueue(sceneResponse(str_repeat('扩', 90)));
@@ -912,7 +927,7 @@ test('a successful length expansion becomes the scene draft', function () {
 
 test('an overlength scene is compressed once before it becomes the current draft', function () {
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 100]);
+    setSceneGenerationTarget($fixture, 100);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('超', 120)))
         ->enqueue(sceneResponse(str_repeat('改', 100)));
@@ -930,7 +945,7 @@ test('an overlength scene is compressed once before it becomes the current draft
 test('length repair discards a foreshadowing action assigned to another scene', function () {
     $fixture = sceneGenerationFixture(2);
     $foreshadowing = sceneForeshadowingAction($fixture, 2);
-    $fixture['plan']->update(['target_words' => 140]);
+    setSceneGenerationTarget($fixture, 140);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('超', 120)))
         ->enqueue(sceneResponse(
@@ -952,7 +967,7 @@ test('length repair discards a foreshadowing action assigned to another scene', 
 
 test('an overlength scene is rejected when compression still exceeds the hard maximum', function () {
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 100]);
+    setSceneGenerationTarget($fixture, 100);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('超', 120)))
         ->enqueue(sceneResponse(str_repeat('仍', 116)));
@@ -970,7 +985,7 @@ test('an overlength scene is rejected when compression still exceeds the hard ma
 test('cascade generation shifts an early scene shortfall to the next scene', function () {
     Queue::fake();
     $fixture = sceneGenerationFixture(2);
-    $fixture['plan']->update(['target_words' => 3000]);
+    setSceneGenerationTarget($fixture, 3000);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('短', 300)))
         ->enqueue(sceneResponse(str_repeat('长', 2700)));
@@ -1127,7 +1142,7 @@ test('scene two cannot execute before scene one succeeds', function () {
 
 test('the next scene receives previous temporary state and scene tail', function () {
     $fixture = sceneGenerationFixture();
-    $fixture['plan']->update(['target_words' => 20]);
+    setSceneGenerationTarget($fixture, 20);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse('第一幕：门后传来钟声', ['items' => ['key' => ['owner' => '林舟']]]))
         ->enqueue(sceneResponse('第二幕承接钟声继续。'));
@@ -1144,7 +1159,7 @@ test('the next scene receives previous temporary state and scene tail', function
 
 test('duplicate delivery reuses the successful scene artifact without another provider call', function () {
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 14]);
+    setSceneGenerationTarget($fixture, 14);
     $fake = (new FakeAiProvider)->enqueue(sceneResponse('唯一的 Scene Draft。'));
     app()->instance(AiProvider::class, $fake);
     $generator = app(SceneGenerator::class);
@@ -1160,7 +1175,7 @@ test('duplicate delivery reuses the successful scene artifact without another pr
 
 test('regenerating a scene preserves the previous artifact and returns the chapter to generation', function () {
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 11]);
+    setSceneGenerationTarget($fixture, 11);
     $scene = $fixture['scenes']->first();
     $previousRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->for($scene)->create([
         'stage' => GenerationStage::SceneGeneration,
@@ -1232,7 +1247,7 @@ test('retryable provider failures are recorded and rethrown for queue retry', fu
         'chapter_request_budgets.writer.retry.output_tokens' => 16_000,
     ]);
     $fixture = sceneGenerationFixture(1);
-    $fixture['plan']->update(['target_words' => 12]);
+    setSceneGenerationTarget($fixture, 12);
     $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', 'timeout', true));
     app()->instance(AiProvider::class, $fake);
     $job = new GenerateSceneJob($fixture['scenes']->first()->getKey());

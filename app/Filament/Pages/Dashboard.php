@@ -60,18 +60,18 @@ class Dashboard extends BaseDashboard
                 Stat::make('活跃小说', fn (): int => $this->stats()['active_novels'])
                     ->description('生成中、已暂停或收束中的小说')->descriptionIcon('heroicon-o-book-open')->color(fn (): string => $this->stats()['active_novels'] > 0 ? 'info' : 'gray'),
                 Stat::make('运行中章节', fn (): int => $this->stats()['running_chapters'])
-                    ->description('Queued / Running 的不同章节')->descriptionIcon('heroicon-o-document-text')->color(fn (): string => $this->stats()['running_chapters'] > 0 ? 'info' : 'gray'),
+                    ->description('排队中 / 运行中的不同章节')->descriptionIcon('heroicon-o-document-text')->color(fn (): string => $this->stats()['running_chapters'] > 0 ? 'info' : 'gray'),
                 Stat::make('今日成本', fn (): string => $this->stats()['today_cost'])
                     ->description(fn (): string => $this->stats()['has_usage'] ? '成功 Provider 请求' : '暂无用量记录')->descriptionIcon('heroicon-o-banknotes')->color(fn (): string => $this->stats()['has_usage'] ? 'info' : 'gray'),
                 Stat::make('今日 Tokens', fn (): string => number_format($this->stats()['today_tokens']))
                     ->description(fn (): string => $this->stats()['has_usage'] ? 'Input + Output' : '暂无用量记录')->descriptionIcon('heroicon-o-calculator')->color(fn (): string => $this->stats()['has_usage'] ? 'info' : 'gray'),
-                Stat::make('Failed', fn (): int => $this->stats()['failed'])->description('各工作流最新 Run')->color(fn (): string => $this->stats()['failed'] > 0 ? 'danger' : 'gray'),
-                Stat::make('Blocked', fn (): int => $this->stats()['blocked'])->description('各章节最新 Review')->color(fn (): string => $this->stats()['blocked'] > 0 ? 'danger' : 'gray'),
-                Stat::make('Needs Attention', fn (): int => $this->stats()['needs_attention'])->description('各章节最新 Review')->color(fn (): string => $this->stats()['needs_attention'] > 0 ? 'warning' : 'gray'),
+                Stat::make('已失败', fn (): int => $this->stats()['failed'])->description('各工作流最新运行记录')->color(fn (): string => $this->stats()['failed'] > 0 ? 'danger' : 'gray'),
+                Stat::make('已阻塞', fn (): int => $this->stats()['blocked'])->description('各章节最新审校结果')->color(fn (): string => $this->stats()['blocked'] > 0 ? 'danger' : 'gray'),
+                Stat::make('需要关注', fn (): int => $this->stats()['needs_attention'])->description('各章节最新审校结果')->color(fn (): string => $this->stats()['needs_attention'] > 0 ? 'warning' : 'gray'),
             ]),
             Grid::make(['default' => 1, 'xl' => 2])->schema([
                 Section::make('最近生成')
-                    ->description('最近 10 个 Generation Run，可直接进入章节工作台或 Run Inspector。')
+                    ->description('最近 10 条生成运行记录，可直接进入章节工作台或运行检查器。')
                     ->schema([
                         RepeatableEntry::make('recent_runs')->hiddenLabel()->state(fn (): array => $this->recentRuns())->columns(['default' => 2, 'lg' => 4])->schema([
                             TextEntry::make('novel')->label('小说')->weight('medium'),

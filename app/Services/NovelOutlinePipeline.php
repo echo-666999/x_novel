@@ -61,17 +61,23 @@ class NovelOutlinePipeline
     /** v3 单路由主批次合同；只允许按其原冻结路由恢复。 */
     public const SINGLE_ROUTE_BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v3';
 
-    /** 当前 v4 多路由主批次合同；变化会创建新的批次输入身份。 */
-    public const BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v4';
+    /** v4 多路由主批次合同；仅保留历史展示，旧冻结 Prompt 不得按新合同恢复。 */
+    public const MULTI_ROUTE_BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v4';
+
+    /** 当前 v5 合同冻结跨阶段字数与章节预算；变化会创建新的批次输入身份。 */
+    public const BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v5';
 
     /** 旧 v2 批次使用的 Skeleton Provider Prompt；历史文本与版本必须保持不变。 */
     public const LEGACY_SKELETON_PROMPT_VERSION = 'novel-outline-skeleton-v1';
 
-    /** Finalize 不调用 Provider，该版本标识确定性蓝图合并合同。 */
-    public const FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v1';
+    /** 旧 v2 批次的确定性 Finalize 合同；只用于解释历史运行。 */
+    public const LEGACY_FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v1';
 
-    /** Structure 与各 Arc Beats 的确定性组装算法版本。 */
-    public const SKELETON_ASSEMBLY_ALGORITHM_VERSION = 'novel-outline-skeleton-assembly-v2';
+    /** Finalize 不调用 Provider，该版本标识字数合同与伏笔 Arc 归属的蓝图合并边界。 */
+    public const FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v3';
+
+    /** Structure 与各 Arc Beats 的确定性组装算法版本；Structure 辅助映射不会进入 Skeleton。 */
+    public const SKELETON_ASSEMBLY_ALGORITHM_VERSION = 'novel-outline-skeleton-assembly-v4';
 
     public const SKELETON_MAX_TOKENS = 12_000;
 
@@ -84,6 +90,7 @@ class NovelOutlinePipeline
         private readonly GenerationRunLease $runLease,
         private readonly TargetPlatformResolver $targetPlatformResolver,
         private readonly NovelOutlineStageContract $stageContract,
+        private readonly NovelOutlineLengthContract $lengthContract,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly PromptVersionResolver $promptVersionResolver,
     ) {}
@@ -107,9 +114,10 @@ class NovelOutlinePipeline
                 ->whereIn('status', [RunStatus::Queued, RunStatus::Running, RunStatus::Succeeded])
                 ->latest('id')
                 ->get();
-            $sameBatch = $batches->first(fn (GenerationRun $run): bool => (int) data_get($run->context_snapshot, 'requested_volume_count') === $volumeCount);
+            $sameBatch = $batches->first(fn (GenerationRun $run): bool => $run->prompt_version === self::BATCH_CONTRACT_VERSION
+                && (int) data_get($run->context_snapshot, 'requested_volume_count') === $volumeCount);
             if ($sameBatch !== null) {
-                // 重复投递与后台路由变化都必须回到已冻结的原批次，不能创建另一套半完成来源链。
+                // 同一版合同的重复投递必须回到已冻结的原批次，不能创建另一套半完成来源链。
                 return $sameBatch;
             }
             if ($batches->contains(fn (GenerationRun $run): bool => in_array($run->status, [RunStatus::Queued, RunStatus::Running], true))) {
@@ -119,12 +127,14 @@ class NovelOutlinePipeline
 
             $targetPlatform = $this->targetPlatformResolver->forNovel($locked);
             $outlineRoutes = $this->resolveOutlineRoutes($locked);
+            $chapterTargetWords = (int) data_get($locked->settings, 'generation.chapter_target_words', 3_000);
             $context = [
                 'novel' => $locked->only(['id', 'title', 'genre', 'premise', 'target_words']),
                 'requested_volume_count' => $volumeCount,
                 'target_platform' => $targetPlatform,
+                'length_contract' => $this->lengthContract->freeze((int) $locked->target_words, $chapterTargetWords, $volumeCount),
                 'generation_preferences' => [
-                    'chapter_target_words' => (int) data_get($locked->settings, 'generation.chapter_target_words', 3_000),
+                    'chapter_target_words' => $chapterTargetWords,
                     'outline_routes' => $outlineRoutes,
                     'prompt_versions' => $this->promptVersions(),
                 ],
@@ -140,6 +150,7 @@ class NovelOutlinePipeline
                 ->where('scope_type', self::BATCH_SCOPE)
                 ->where('scope_id', $locked->getKey())
                 ->where('input_hash', $inputHash)
+                ->where('prompt_version', self::BATCH_CONTRACT_VERSION)
                 ->whereIn('status', [RunStatus::Queued, RunStatus::Running, RunStatus::Succeeded])
                 ->latest('id')
                 ->first();
@@ -521,10 +532,11 @@ class NovelOutlinePipeline
     {
         $this->assertRunnableBatch($batch);
         $targetPlatform = $this->frozenTargetPlatform($batch);
-        $context = [
-            'novel' => data_get($batch->context_snapshot, 'novel'),
+        $modelContext = [
+            'novel' => $this->novelPromptContext($batch),
             'chapter_target_words' => data_get($batch->context_snapshot, 'generation_preferences.chapter_target_words'),
-            'target_platform' => $targetPlatform,
+            'target_platform' => collect($targetPlatform)->only(['code', 'label'])->all(),
+            'style_guide' => $this->foundationStyleGuide(),
         ];
 
         return $this->providerStage(
@@ -533,9 +545,9 @@ class NovelOutlinePipeline
             scopeType: self::FOUNDATION_SCOPE,
             artifactType: ArtifactType::OutlineFoundation,
             promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineFoundation),
-            context: $context,
+            modelContext: $modelContext,
             systemPrompt: $this->foundationSystemPrompt(),
-            prompt: '请根据小说信息生成 Foundation 候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            prompt: '请根据小说信息生成 Foundation 候选：'.json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->foundationSchema($targetPlatform['code']),
             outputName: 'novel_outline_foundation',
             validate: fn (array $data): array => $this->validateFoundation($data, $targetPlatform['code']),
@@ -550,6 +562,7 @@ class NovelOutlinePipeline
         }
         $foundation = $this->requiredArtifact($batch, ArtifactType::OutlineFoundation);
         $volumeCount = (int) data_get($batch->context_snapshot, 'requested_volume_count');
+        // 历史 Prompt Version 已冻结且曾包含来源引用；只保留给旧批次，不能按新版分离合同重写。
         $context = [
             'novel' => data_get($batch->context_snapshot, 'novel'),
             'requested_volume_count' => $volumeCount,
@@ -563,7 +576,7 @@ class NovelOutlinePipeline
             scopeType: self::SKELETON_SCOPE,
             artifactType: ArtifactType::OutlineSkeleton,
             promptVersion: self::LEGACY_SKELETON_PROMPT_VERSION,
-            context: $context,
+            modelContext: $context,
             systemPrompt: $this->legacySkeletonSystemPrompt(),
             prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->skeletonSchema($volumeCount),
@@ -581,15 +594,17 @@ class NovelOutlinePipeline
         $this->assertCurrentBatch($batch);
         $foundation = $this->requiredArtifact($batch, ArtifactType::OutlineFoundation);
         $volumeCount = (int) data_get($batch->context_snapshot, 'requested_volume_count');
-        $context = [
-            'novel' => data_get($batch->context_snapshot, 'novel'),
+        $foundationData = $this->payload($foundation);
+        $foreshadowingCount = count($foundationData['foreshadowings'] ?? []);
+        $modelContext = [
+            'novel' => $this->novelPromptContext($batch),
             'requested_volume_count' => $volumeCount,
-            'foundation' => $this->payload($foundation),
-            'foundation_artifact' => $this->artifactReference($foundation),
+            'length_contract' => $this->batchLengthContract($batch),
+            'foundation' => $foundationData,
         ];
-        $schema = $this->stageContract->structureSchema($volumeCount);
+        $schema = $this->stageContract->structureSchema($volumeCount, $foreshadowingCount);
         $systemPrompt = $this->structureSystemPrompt();
-        $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $prompt = json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
 
         return $this->providerStage(
             batch: $batch,
@@ -597,12 +612,17 @@ class NovelOutlinePipeline
             scopeType: self::STRUCTURE_SCOPE,
             artifactType: ArtifactType::OutlineStructure,
             promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineStructure),
-            context: $context,
+            modelContext: $modelContext,
             systemPrompt: $systemPrompt,
             prompt: $prompt,
             schema: $schema,
             outputName: 'novel_outline_structure',
-            validate: fn (array $data): array => $this->stageContract->validateStructure($data, $volumeCount),
+            validate: function (array $data) use ($volumeCount, $foreshadowingCount, $batch): array {
+                $valid = $this->stageContract->validateStructure($data, $volumeCount, $foreshadowingCount);
+                $this->lengthContract->validateStructure($valid, $this->batchLengthContract($batch));
+
+                return $valid;
+            },
             sourceArtifacts: [$foundation],
         );
     }
@@ -615,12 +635,15 @@ class NovelOutlinePipeline
         $foundation = $this->requiredArtifact($batch, ArtifactType::OutlineFoundation);
         $structure = $this->requiredCurrentStructure($batch);
         $structureData = $this->payload($structure);
-        $context = $this->stageContract->arcBeatsContext($this->payload($foundation), $structureData, $arcKey) + [
-            'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($structure)],
-        ];
+        $modelContext = $this->stageContract->arcBeatsContext(
+            $this->payload($foundation),
+            $structureData,
+            $arcKey,
+            $this->lengthContract->validateStructure($structureData, $this->batchLengthContract($batch)),
+        );
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = $this->arcBeatsSystemPrompt();
-        $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $prompt = json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
 
         return $this->providerStage(
             batch: $batch,
@@ -628,7 +651,7 @@ class NovelOutlinePipeline
             scopeType: self::ARC_BEATS_SCOPE,
             artifactType: ArtifactType::OutlineArcBeats,
             promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineArcBeats),
-            context: $context,
+            modelContext: $modelContext,
             systemPrompt: $systemPrompt,
             prompt: $prompt,
             schema: $schema,
@@ -662,7 +685,12 @@ class NovelOutlinePipeline
             'structure' => $this->artifactReference($structure),
             'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
         ];
-        $inputHash = $this->hash(['algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION, 'sources' => $sourceReferences]);
+        $structureLengthContract = $this->lengthContract->validateStructure($structureData, $this->batchLengthContract($batch));
+        $inputHash = $this->hash([
+            'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
+            'sources' => $sourceReferences,
+            'length_contract' => $structureLengthContract,
+        ]);
         $runs = $this->stageRuns($batch, self::SKELETON_ASSEMBLY_SCOPE);
         $reusable = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first();
         $artifact = $reusable?->artifacts()->where('type', ArtifactType::OutlineSkeleton)->first();
@@ -690,7 +718,8 @@ class NovelOutlinePipeline
             $this->assertStageArtifact($batch, $arcArtifact, ArtifactType::OutlineArcBeats, self::ARC_BEATS_SCOPE, $arcKey, $this->arcBeatsInputHash($batch, $foundation, $structure, $arcKey));
         }
 
-        $skeleton = $structureData;
+        // 伏笔归属是 Structure 到最终 Blueprint 的合并元数据，不属于标准 Outline 层级。
+        $skeleton = collect($structureData)->except('foreshadowing_owner_arc_keys')->all();
         foreach ($skeleton['volumes'] as &$volume) {
             foreach ($volume['arcs'] as &$arc) {
                 $arc['beats'] = $this->payload($arcArtifacts[(string) $arc['key']])['beats'];
@@ -699,6 +728,7 @@ class NovelOutlinePipeline
         }
         unset($volume);
         $skeleton = $this->validateSkeleton($skeleton, (int) data_get($batch->context_snapshot, 'requested_volume_count'));
+        $lengthContract = $this->lengthContract->complete($skeleton, $this->batchLengthContract($batch));
         $attempt = ((int) $runs->clone()->max('attempt')) + 1;
         $run = GenerationRun::query()->create([
             'novel_id' => $batch->novel_id,
@@ -712,18 +742,24 @@ class NovelOutlinePipeline
             'prompt_version' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
             'provider' => null,
             'model_policy' => null,
-            'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION, 'source_artifacts' => $sourceReferences],
+            'context_snapshot' => [
+                'batch_run_id' => $batch->getKey(),
+                'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
+                'source_artifacts' => $sourceReferences,
+                'length_contract' => $lengthContract,
+            ],
             'started_at' => now(),
         ]);
 
         try {
-            return DB::transaction(function () use ($run, $batch, $sourceReferences, $skeleton): GenerationArtifact {
+            return DB::transaction(function () use ($run, $batch, $sourceReferences, $skeleton, $lengthContract): GenerationArtifact {
                 $data = [
                     'batch_run_id' => $batch->getKey(),
                     'stage' => self::SKELETON_ASSEMBLY_SCOPE,
                     'discriminator' => null,
                     'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
                     'source_artifacts' => $sourceReferences,
+                    'length_contract' => $lengthContract,
                     'payload' => $skeleton,
                 ];
                 $artifact = $run->artifacts()->create([
@@ -749,7 +785,7 @@ class NovelOutlinePipeline
         $this->assertRunnableBatch($batch);
         $foundation = $this->requiredArtifact($batch, ArtifactType::OutlineFoundation);
         $skeleton = $this->requiredArtifact($batch, ArtifactType::OutlineSkeleton);
-        [$context, $nextBeatKey] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
+        [$modelContext, $nextBeatKey] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
 
         return $this->providerStage(
             batch: $batch,
@@ -757,9 +793,9 @@ class NovelOutlinePipeline
             scopeType: self::BEAT_DETAIL_SCOPE,
             artifactType: ArtifactType::OutlineBeatDetail,
             promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineBeatDetail),
-            context: $context,
+            modelContext: $modelContext,
             systemPrompt: $this->beatDetailSystemPrompt(),
-            prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            prompt: json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->beatDetailSchema(),
             outputName: 'novel_outline_beat_detail',
             validate: fn (array $data): array => $this->validateBeatDetail($data, $beatKey, $nextBeatKey),
@@ -810,6 +846,10 @@ class NovelOutlinePipeline
                     'structure' => $this->artifactReference($structure),
                     'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
                 ],
+                'length_contract' => $this->lengthContract->validateStructure(
+                    $this->payload($structure),
+                    $this->batchLengthContract($batch),
+                ),
             ]);
             $this->assertStageArtifact($batch, $skeleton, ArtifactType::OutlineSkeleton, self::SKELETON_ASSEMBLY_SCOPE, null, $assemblyInputHash);
         }
@@ -855,6 +895,9 @@ class NovelOutlinePipeline
         $outline = $this->mergeOutline($skeletonData, $details);
         $this->outlineValidator->assertValid($outline);
         $foundationData = $this->payload($foundation);
+        if ($structure !== null) {
+            $foundationData = $this->attachForeshadowingOwners($foundationData, $this->payload($structure));
+        }
         $this->assertFoundationReferences($foundationData, $outline);
         $lineage = [
             'batch_run_id' => $batch->getKey(),
@@ -866,12 +909,25 @@ class NovelOutlinePipeline
             $lineage['structure'] = $this->artifactReference($structure);
             $lineage['arc_beats'] = collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all();
         }
-        $blueprint = [
+        $lengthContract = $this->isLegacyBatch($batch)
+            ? null
+            : $this->lengthContract->complete($outline, $this->batchLengthContract($batch));
+        $blueprint = array_filter([
             ...$foundationData,
             'outline' => $outline,
+            'length_contract' => $lengthContract,
             'lineage' => $lineage,
-        ];
-        $inputHash = $this->hash($blueprint['lineage']);
+        ], static fn (mixed $value): bool => $value !== null);
+        $finalizeContractVersion = $this->isLegacyBatch($batch)
+            ? self::LEGACY_FINALIZE_CONTRACT_VERSION
+            : self::FINALIZE_CONTRACT_VERSION;
+        $inputHash = $this->isLegacyBatch($batch)
+            ? $this->hash($blueprint['lineage'])
+            : $this->hash([
+                'contract' => $finalizeContractVersion,
+                'lineage' => $blueprint['lineage'],
+                'length_contract' => $lengthContract,
+            ]);
 
         $reusableRun = $this->stageRuns($batch, self::FINALIZE_SCOPE)
             ->where('input_hash', $inputHash)
@@ -893,7 +949,7 @@ class NovelOutlinePipeline
             'attempt' => $attempt,
             'idempotency_key' => "outline-finalize:{$batch->getKey()}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
-            'prompt_version' => self::FINALIZE_CONTRACT_VERSION,
+            'prompt_version' => $finalizeContractVersion,
             'provider' => null,
             'model_policy' => null,
             'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'lineage' => $blueprint['lineage']],
@@ -969,12 +1025,12 @@ class NovelOutlinePipeline
             'foreshadowings' => ['type' => 'array', 'maxItems' => NovelOutlineStageContract::MAX_FOUNDATION_FORESHADOWINGS, 'items' => $this->object([
                 'title' => $this->boundedShortText(), 'description' => $this->boundedText(), 'promised_payoff' => $this->boundedText(),
                 'due_from_chapter' => ['type' => 'integer', 'minimum' => 1], 'due_to_chapter' => ['type' => 'integer', 'minimum' => 1],
-                'importance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical'], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH], 'owner_arc_key' => ['type' => ['string', 'null'], 'maxLength' => 64],
+                'importance' => ['type' => 'string', 'enum' => ['low', 'medium', 'high', 'critical'], 'maxLength' => NovelOutlineStageContract::MAX_SHORT_TEXT_LENGTH],
             ])],
         ]);
     }
 
-    /** Skeleton 只允许 Volume、Arc、Beat 骨架，不包含 Milestone 与 Handoff。 */
+    /** 历史 v3 批次的 Skeleton Provider Schema；旧字段必须保留以便解释冻结请求。 */
     public function skeletonSchema(int $volumeCount): array
     {
         $strings = ['type' => 'array', 'items' => ['type' => 'string']];
@@ -1016,7 +1072,7 @@ class NovelOutlinePipeline
         ]);
     }
 
-    /** Beat Detail 只允许单个 Main Beat 的 Milestones 与一个 Handoff。 */
+    /** Beat Detail 只允许单个 Main Beat 的 Milestones 与一个 Handoff；最终 Beat 的空值由语义校验强制。 */
     public function beatDetailSchema(): array
     {
         $strings = $this->boundedStringList();
@@ -1048,7 +1104,11 @@ class NovelOutlinePipeline
 
 根据输入明确小说核心卖点、主角初始处境、长期行动动力、核心冲突、能力与信息边界、世界运行规则、文风以及结局约束。人物和世界实体只收录开篇已经存在或开篇推进确实必需的对象，不要因其未来可能登场而提前扩充名单。
 
-伏笔必须包含可在正文中具体埋设的信息、物件、关系、异常或承诺，并对应可观察的兑现结果和合理回收窗口。当前尚未生成 Arc，因此所有 foreshadowings[].owner_arc_key 必须返回 null，不得预测或编造 Arc Key。
+输入 style_guide 只用于解释文风枚举和字段职责，不属于输出字段。bible.tone 规定全书情绪基线，bible.pov 规定叙事信息边界，bible.tense 规定语法时态；三者不得由 style_profile 代替。style_profile.subgenre 负责作品定位，primary_style 是唯一主导文风，secondary_styles 最多两项且只能补充主文风，language_era 只控制措辞与句式的时代感，pacing 控制事件和信息推进密度，parameters 以 1 至 5 的显式值微调六个独立维度。不得用语言时代感改变故事年代，不得用节奏省略必要因果，也不得让辅助文风覆盖主文风。
+
+primary_style、secondary_styles、language_era 和 pacing 必须返回 style_guide 对应选项的 code，不得返回中文名称或自造枚举。parameters 必须逐项返回整数；高数值只表示该维度更强，不代表整体质量更高。style_options[].default_parameters 是主文风的参考起点，可以根据小说题材、读者定位和预期阅读体验调整，不得机械照抄。
+
+伏笔必须包含可在正文中具体埋设的信息、物件、关系、异常或承诺，并对应可观察的兑现结果和合理回收窗口。当前尚未生成 Arc，因此不得返回 owner_arc_key，也不得预测或编造 Arc Key；伏笔到 Arc 的归属由后续 Structure 阶段决定。
 
 只返回符合 Schema 的严格 JSON，不得返回 Volume、Arc、Beat、Milestone、Handoff、sequence 或任何数据库 ID。bible.style_profile.target_platform 必须逐字复制输入 target_platform.code。除固定键名与枚举值外，所有自然语言使用简体中文。
 PROMPT;
@@ -1063,7 +1123,11 @@ PROMPT;
 
 每个 Volume 必须有独立的阶段目标、主要压力和高潮结果；高潮应改变人物处境、关系、资源、权力或风险，并为下一卷制造新的具体问题。相邻 Volume 不得只是规模更大的同类事件。
 
+每个 Volume 的 target_words 必须是可执行的正整数；全部 Volume target_words 之和必须精确等于输入 length_contract.novel_target_words。分卷时同时参考 length_contract.chapter_target_words 与 target_chapter_count，避免把大部分字数挤入少数卷或生成无法承载目标篇幅的结构。
+
 每个 Arc 必须围绕一条可持续发展的冲突线，明确参与者、目标、阻力、失败代价和可验证的完成条件。主线负责改变全书核心局势，支线必须对人物选择、主线资源或后续风险产生实际影响，不得成为脱离主线的装饰。
+
+foreshadowing_owner_arc_keys 必须与输入 foundation.foreshadowings 保持完全相同的顺序和数量。每一项只能填写本次响应中实际生成的 Arc Key，或在伏笔确实跨越多个 Arc、属于全书级约束、无法合理归属单一 Arc 时填写 null。不得按标题重新排序，不得返回 Arc 标题、对象或数据库 ID。
 
 开篇所在 Volume 和首条主线 Arc 应尽早交付输入中的核心设定与主要冲突，不得用多个 Arc 重复铺陈苏醒、身份确认、背景介绍或同一情绪。
 
@@ -1078,11 +1142,15 @@ PROMPT;
         $prompt = <<<'PROMPT'
 你是 XNovel 单 Arc Beats 规划器。请把目标 Arc 拆成完成该冲突所需的最少且充分的 Beats。
 
+输入中的 outline 是全书级约束摘要，target_volume 是目标 Arc 的所属卷，target_arc 是唯一需要细化的 Arc，adjacent_arcs 仅用于校验前后承接。不得替其他 Arc 生成或补写 Beats。
+
 arc_key 必须逐字复制 target_arc.key。每个 Beat 都必须包含新的行动目标、阻力或转折，并以可观察的状态变化结束；上一 Beat 的结果必须构成下一 Beat 的条件、压力或触发原因。不得连续生成仅用于回忆、解释背景、确认身份、等待、准备或重复同一情绪的 Beats。
 
-chapter_budget 表示完成该 Beat 的合理章节范围，不是必须填满的篇幅。预算必须符合输入中的 pacing；快节奏开篇应压缩纯铺垫，并尽早完成核心设定落地、首次有效行动或不可逆选择。
+chapter_budget 表示完成该 Beat 的合理章节范围，不是单章字数，也不是必须填满的篇幅。预算必须符合输入中的 pacing；快节奏开篇应压缩纯铺垫，并尽早完成核心设定落地、首次有效行动或不可逆选择。
 
-acceptance_criteria 必须描述正文能够证明的事件或结果，不得使用“人物意识到”“关系得到深化”“主题得到体现”等抽象结论。must_include 只保留完成该 Beat 不可缺少的事项。人物和世界实体候选只在该 Beat 确实需要首次引入时创建，否则返回空数组。
+输入 length_contract.target_volume 给出本卷目标字数折算后的目标章节数。主线 Arc 的 Beat 预算会在 Skeleton Assembly 按卷相加，其合计区间必须覆盖该目标章节数；支线可能与主线共用同一章，不计入这项总量核对，但仍需给出自身合理的停留范围。
+
+acceptance_criteria 必须描述正文能够证明的事件或结果，不得使用“人物意识到”“关系得到深化”“主题得到体现”等抽象结论。must_include 只保留完成该 Beat 不可缺少的事项。人物和世界实体候选只在该 Beat 确实需要首次引入时创建，否则返回空数组。候选只描述 Beat 级引入资格，不得返回 target_scene_sequence；具体目标 Scene 由章节规划阶段根据本章 Scene Plans 决定。
 
 只返回符合 Schema 的严格 JSON。不得返回其他 Arc、Volume、Milestone、Handoff、Beat Key、Candidate Key、sequence、mainline_sequence 或任何数据库 ID。Beat 与 Candidate 的稳定 Key 由 Laravel 分配。除固定键名与枚举值外，所有自然语言使用简体中文。
 PROMPT;
@@ -1095,11 +1163,15 @@ PROMPT;
         $prompt = <<<'PROMPT'
 你是 XNovel 单 Main Beat 细化器。请把目标 Beat 拆成按因果顺序推进的最少且充分的 Milestones，并生成通向相邻下一主线 Beat 的出站 Handoff。
 
+输入中的 target_volume 和 target_arc 是 target_beat 在冻结 Skeleton 中的所属父级。Milestone 必须服务于当前 Beat，并与所属 Volume 的 goal、climax 以及所属 Arc 的 goal、stakes、completion_conditions 保持一致；除非 target_beat 明确要求，不得在当前 Beat 提前完成整个 Arc 或 Volume。
+
 每个 Milestone 必须完成一个能够由 Canonical 正文验证的阶段结果。相邻 Milestone 必须产生不同的新信息、行动、决定、关系变化或局势变化；不得把一次回忆、一次身份确认、同一场危机或同一情绪反应拆成多个 Milestone。
 
 objective 必须说明人物要取得的具体结果以及主要阻力。acceptance_criteria 必须使用正文可观察的动作、对白、物证、决定或状态变化，不得使用抽象主题、作者评价或单纯心理结论。使用能够完成目标的最少 Milestone，不得为了扩大篇幅重复铺垫。
 
-handoff.exit_result 应写明当前 Beat 已经造成的具体结果；next_trigger 应写明推动下一 Beat 开始的直接事件或压力；carried_states 和 open_threads 只保留下一 Beat 确实需要继承的状态；required_transition 与 forbidden_jump 用于防止跳过必要的时间、地点、行动或因果过程。
+当 expected_next_beat_key 非 null 时，handoff.transition_mode、exit_result、next_trigger 必须填写；carried_states 和 open_threads 只保留下一 Beat 确实需要继承的状态；required_transition 与 forbidden_jump 用于防止跳过必要的时间、地点、行动或因果过程。Handoff 即使跨 Arc 或 Volume，也必须以 expected_next_beat_key 和 next_main_beat 为相邻目标，不得自行选择后续 Beat。
+
+当 expected_next_beat_key 为 null 时，target_beat 是全书最后一个 Main Beat，必须返回显式空 Handoff：transition_mode、exit_result、next_trigger 均为 null，carried_states、open_threads、required_transition、forbidden_jump 均为空数组。不得为结局之后编造下一 Beat、触发事件、遗留状态或过渡要求。
 
 只返回符合 Schema 的严格 JSON。不得返回 Beat Key、Milestone Key、next_beat_key、sequence、其他 Beat、完整 Outline 或任何数据库 ID。稳定 Key、顺序和相邻下一主线 Beat 由 Laravel 分配。除固定键名与枚举值外，所有自然语言使用简体中文。
 PROMPT;
@@ -1119,7 +1191,7 @@ PROMPT;
         string $scopeType,
         ArtifactType $artifactType,
         string $promptVersion,
-        array $context,
+        array $modelContext,
         string $systemPrompt,
         string $prompt,
         array $schema,
@@ -1137,14 +1209,15 @@ PROMPT;
             $batch,
             $routeStage,
             $route,
-            $context,
+            $modelContext,
             $promptVersion,
             $systemPrompt,
             $prompt,
             $schema,
             $legacyMaxTokens,
+            $sourceArtifacts,
         );
-        $context = $requestContract['context'];
+        $trackedInput = $requestContract['tracked_input'];
         $requestBudget = $requestContract['request_budget'];
         $maxTokens = $requestBudget['max_completion_tokens'];
         $inputHash = $requestContract['input_hash'];
@@ -1195,7 +1268,7 @@ PROMPT;
                 'batch_run_id' => $batch->getKey(),
                 'discriminator' => $discriminator,
                 'source_artifacts' => array_map(fn (GenerationArtifact $item): array => $this->artifactReference($item), $sourceArtifacts),
-                'input' => $context,
+                'input' => $trackedInput,
                 'reasoning_effort' => $route['reasoning_effort'],
                 'request_budget' => $requestBudget,
                 'max_completion_tokens' => $maxTokens,
@@ -1327,7 +1400,6 @@ PROMPT;
             'foreshadowings.*.description' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH], 'foreshadowings.*.promised_payoff' => ['required', 'string', 'max:'.NovelOutlineStageContract::MAX_TEXT_LENGTH],
             'foreshadowings.*.due_from_chapter' => ['required', 'integer', 'min:1'], 'foreshadowings.*.due_to_chapter' => ['required', 'integer', 'min:1'],
             'foreshadowings.*.importance' => ['required', Rule::in(['low', 'medium', 'high', 'critical'])],
-            'foreshadowings.*.owner_arc_key' => ['present', 'nullable', 'string', 'max:64', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
         ];
         foreach (config('narrative.parameter_keys', []) as $key) {
             $rules["bible.style_profile.parameters.{$key}"] = ['required', 'integer', 'between:1,5'];
@@ -1376,13 +1448,11 @@ PROMPT;
             'volumes.*.arcs.*.beats.*.character_candidates.*.name' => ['required', 'string'],
             'volumes.*.arcs.*.beats.*.character_candidates.*.role' => ['required', 'string'],
             'volumes.*.arcs.*.beats.*.character_candidates.*.motivation' => ['required', 'string'],
-            'volumes.*.arcs.*.beats.*.character_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
             'volumes.*.arcs.*.beats.*.world_entity_candidates' => ['present', 'array'],
             'volumes.*.arcs.*.beats.*.world_entity_candidates.*.candidate_key' => ['required', 'string', 'regex:/^[a-z0-9][a-z0-9-]*$/'],
             'volumes.*.arcs.*.beats.*.world_entity_candidates.*.type' => ['required', Rule::in(['location', 'item', 'faction', 'organization', 'rule', 'concept'])],
             'volumes.*.arcs.*.beats.*.world_entity_candidates.*.name' => ['required', 'string'],
             'volumes.*.arcs.*.beats.*.world_entity_candidates.*.description' => ['required', 'string'],
-            'volumes.*.arcs.*.beats.*.world_entity_candidates.*.target_scene_sequence' => ['required', 'integer', 'min:1'],
         ])->validate();
 
         $keys = [];
@@ -1458,6 +1528,19 @@ PROMPT;
                     throw ValidationException::withMessages(['handoff' => "非最终 Main Beat 缺少 {$field}。"]);
                 }
             }
+        } else {
+            $scalarFieldsAreNull = collect(['transition_mode', 'exit_result', 'next_trigger'])
+                ->every(fn (string $field): bool => $data['handoff'][$field] === null);
+            $listFieldsAreEmpty = collect(['carried_states', 'open_threads', 'required_transition', 'forbidden_jump'])
+                ->every(fn (string $field): bool => $data['handoff'][$field] === []);
+            if (! $scalarFieldsAreNull || ! $listFieldsAreEmpty) {
+                throw ValidationException::withMessages([
+                    'handoff' => '最终 Main Beat 的 Handoff 必须显式为空：文本字段为 null，列表字段为空数组。',
+                ]);
+            }
+
+            // 重新构造稳定键序，保证最终 Beat 与 Subplot 使用同一种空 Handoff 表示。
+            $data['handoff'] = $this->emptyHandoff();
         }
 
         return $data;
@@ -1495,15 +1578,35 @@ PROMPT;
         return $skeleton;
     }
 
-    /** Finalize 时确认 Foundation 的稳定 Arc Key 都能在完整 Outline 中解析。 */
+    /** Finalize 时确认合并后的伏笔 Arc Key 都能在完整 Outline 中解析。 */
     private function assertFoundationReferences(array $foundation, array $outline): void
     {
         $arcKeys = collect($outline['volumes'])->flatMap(fn (array $volume): array => $volume['arcs'])->pluck('key');
         if (collect($foundation['foreshadowings'])->contains(
             fn (array $item): bool => filled($item['owner_arc_key'] ?? null) && ! $arcKeys->contains($item['owner_arc_key'])
         )) {
-            throw ValidationException::withMessages(['outline' => 'Foundation 伏笔引用了 Skeleton 中不存在的 Arc Key。']);
+            throw ValidationException::withMessages(['outline' => '伏笔归属引用了 Skeleton 中不存在的 Arc Key。']);
         }
+    }
+
+    /** 按冻结顺序把 Structure 的伏笔归属合并回 Foundation，避免依赖可变标题匹配。 */
+    private function attachForeshadowingOwners(array $foundation, array $structure): array
+    {
+        $foreshadowings = $foundation['foreshadowings'] ?? null;
+        $ownerArcKeys = $structure['foreshadowing_owner_arc_keys'] ?? null;
+        if (! is_array($foreshadowings) || ! is_array($ownerArcKeys) || count($foreshadowings) !== count($ownerArcKeys)) {
+            throw ValidationException::withMessages([
+                'foreshadowing_owner_arc_keys' => 'Structure 伏笔归属数量与 Foundation 伏笔数量不一致。',
+            ]);
+        }
+
+        foreach ($foreshadowings as $index => &$foreshadowing) {
+            $foreshadowing['owner_arc_key'] = $ownerArcKeys[$index];
+        }
+        unset($foreshadowing);
+        $foundation['foreshadowings'] = $foreshadowings;
+
+        return $foundation;
     }
 
     /** 拒绝跨小说、跨批次、类型错误或内容被篡改的阶段 Artifact。 */
@@ -1691,6 +1794,10 @@ PROMPT;
                 'structure' => $this->artifactReference($structure),
                 'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
             ],
+            'length_contract' => $this->lengthContract->validateStructure(
+                $this->payload($structure),
+                $this->batchLengthContract($batch),
+            ),
         ]);
 
         return GenerationArtifact::query()
@@ -1960,7 +2067,8 @@ PROMPT;
         GenerationArtifact $skeleton,
         string $beatKey,
     ): array {
-        $beats = $this->mainBeats($this->payload($skeleton));
+        $skeletonPayload = $this->payload($skeleton);
+        $beats = $this->mainBeats($skeletonPayload);
         $index = array_search($beatKey, array_column($beats, 'key'), true);
         if ($index === false) {
             throw ValidationException::withMessages(['beat_key' => "Main Beat {$beatKey} 不属于当前 Skeleton。"]);
@@ -1968,20 +2076,55 @@ PROMPT;
         $target = $beats[$index];
         $previous = $index > 0 ? $beats[$index - 1] : null;
         $next = $beats[$index + 1] ?? null;
+        $parentContext = $this->beatParentContext($skeletonPayload, $beatKey);
 
         return [[
-            'outline' => collect($this->payload($skeleton))->except('volumes')->all(),
+            'outline' => collect($skeletonPayload)->except('volumes')->all(),
             'foundation_summary' => [
                 'logline' => data_get($this->payload($foundation), 'bible.logline'),
                 'themes' => data_get($this->payload($foundation), 'bible.themes'),
                 'ending_contract' => data_get($this->payload($foundation), 'bible.ending_contract'),
             ],
+            'target_volume' => $parentContext['volume'],
+            'target_arc' => $parentContext['arc'],
             'target_beat' => $target,
             'previous_main_beat' => $previous === null ? null : collect($previous)->only(['key', 'title', 'summary', 'acceptance_criteria'])->all(),
             'next_main_beat' => $next === null ? null : collect($next)->only(['key', 'title', 'summary', 'acceptance_criteria'])->all(),
             'expected_next_beat_key' => $next['key'] ?? null,
-            'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($skeleton)],
         ], $next['key'] ?? null];
+    }
+
+    /**
+     * 从同一份冻结 Skeleton 定位 Main Beat 的父级，避免 Beat Detail 依赖可变数据库关系。
+     *
+     * @return array{volume: array<string, mixed>, arc: array<string, mixed>}
+     */
+    private function beatParentContext(array $skeleton, string $beatKey): array
+    {
+        foreach ($skeleton['volumes'] ?? [] as $volume) {
+            foreach ($volume['arcs'] ?? [] as $arc) {
+                if (($arc['type'] ?? null) !== 'main') {
+                    continue;
+                }
+
+                foreach ($arc['beats'] ?? [] as $beat) {
+                    if (($beat['key'] ?? null) !== $beatKey) {
+                        continue;
+                    }
+
+                    return [
+                        'volume' => collect($volume)->only([
+                            'key', 'sequence', 'title', 'goal', 'climax', 'target_words',
+                        ])->all(),
+                        'arc' => collect($arc)->only([
+                            'key', 'sequence', 'mainline_sequence', 'type', 'title', 'goal', 'stakes', 'completion_conditions',
+                        ])->all(),
+                    ];
+                }
+            }
+        }
+
+        throw ValidationException::withMessages(['beat_key' => "Main Beat {$beatKey} 缺少所属 Volume/Arc 上下文。"]);
     }
 
     private function beatDetailInputHash(
@@ -1990,21 +2133,22 @@ PROMPT;
         GenerationArtifact $skeleton,
         string $beatKey,
     ): string {
-        [$context] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
+        [$modelContext] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
         $schema = $this->beatDetailSchema();
         $systemPrompt = $this->beatDetailSystemPrompt();
-        $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $prompt = json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineBeatDetail);
 
         return $this->providerRequestContract(
             $batch,
             AiStage::OutlineBeatDetail,
             $route,
-            $context,
+            $modelContext,
             $this->promptVersionResolver->resolve(AiStage::OutlineBeatDetail),
             $systemPrompt,
             $prompt,
             $schema,
+            sourceArtifacts: [$foundation, $skeleton],
         )['input_hash'];
     }
 
@@ -2434,19 +2578,24 @@ PROMPT;
     /**
      * 四个新版 Provider Stage 共用同一容量门禁；门禁在创建子 Run 和发出请求前完成。
      *
-     * @return array{context: array<string, mixed>, request_budget: array<string, int>, input_hash: string}
+     * @param  array<int, GenerationArtifact>  $sourceArtifacts
+     * @return array{tracked_input: array<string, mixed>, request_budget: array<string, int>, input_hash: string}
      */
     private function providerRequestContract(
         GenerationRun $batch,
         AiStage $stage,
         array $route,
-        array $context,
+        array $modelContext,
         string $promptVersion,
         string $systemPrompt,
         string $prompt,
         array $schema,
         ?int $legacyMaxTokens = null,
+        array $sourceArtifacts = [],
     ): array {
+        $trackedSourceArtifacts = in_array($stage, $this->outlineRouteStages(), true)
+            ? array_map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact), $sourceArtifacts)
+            : [];
         if (in_array($stage, $this->outlineRouteStages(), true)) {
             $requestBudget = $route['request_budget'];
             $capacity = $this->capacitySnapshot(
@@ -2455,7 +2604,7 @@ PROMPT;
                 compact('systemPrompt', 'prompt', 'schema'),
                 $requestBudget,
             );
-            $context = [...$context, 'capacity_snapshot' => $capacity];
+            $trackedInput = [...$modelContext, 'capacity_snapshot' => $capacity];
         } else {
             if ($legacyMaxTokens === null || $legacyMaxTokens < 1) {
                 throw new AiProviderException('provider_run_route_missing', "历史 Outline 任务 {$stage->value} 缺少请求预算。", false);
@@ -2465,52 +2614,77 @@ PROMPT;
                 'reasoning_reserve_tokens' => 0,
                 'max_completion_tokens' => $legacyMaxTokens,
             ];
+            $trackedInput = $modelContext;
         }
 
         return [
-            'context' => $context,
+            'tracked_input' => $trackedInput,
             'request_budget' => $requestBudget,
-            'input_hash' => $this->providerInputHash($route, $context, $promptVersion, $requestBudget, $schema),
+            'input_hash' => $this->providerInputHash(
+                $route,
+                $trackedInput,
+                $promptVersion,
+                $requestBudget,
+                $schema,
+                $trackedSourceArtifacts,
+            ),
         ];
     }
 
     /** @param array{provider: string, model: string, reasoning_effort: string|null} $route */
-    private function providerInputHash(array $route, array $context, string $promptVersion, array $requestBudget, array $schema): string
-    {
-        return $this->hash([
-            'context' => $context,
+    private function providerInputHash(
+        array $route,
+        array $trackedInput,
+        string $promptVersion,
+        array $requestBudget,
+        array $schema,
+        array $sourceArtifacts = [],
+    ): string {
+        $identity = [
+            'context' => $trackedInput,
             'provider' => $route['provider'],
             'model' => $route['model'],
             'reasoning_effort' => $route['reasoning_effort'],
             'prompt_version' => $promptVersion,
             'request_budget' => $requestBudget,
             'response_schema_hash' => $this->hash($schema),
-        ]);
+        ];
+        if ($sourceArtifacts !== []) {
+            // 来源引用参与复用身份，但绝不序列化进发送给模型的 Prompt。
+            $identity['source_artifacts'] = $sourceArtifacts;
+        }
+
+        return $this->hash($identity);
     }
 
     private function structureInputHash(GenerationRun $batch, GenerationArtifact $foundation): string
     {
         $volumeCount = (int) data_get($batch->context_snapshot, 'requested_volume_count');
-        $context = [
-            'novel' => data_get($batch->context_snapshot, 'novel'),
+        $foundationData = $this->payload($foundation);
+        $modelContext = [
+            'novel' => $this->novelPromptContext($batch),
             'requested_volume_count' => $volumeCount,
-            'foundation' => $this->payload($foundation),
-            'foundation_artifact' => $this->artifactReference($foundation),
+            'length_contract' => $this->batchLengthContract($batch),
+            'foundation' => $foundationData,
         ];
-        $schema = $this->stageContract->structureSchema($volumeCount);
+        $schema = $this->stageContract->structureSchema(
+            $volumeCount,
+            count($foundationData['foreshadowings'] ?? []),
+        );
         $systemPrompt = $this->structureSystemPrompt();
-        $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $prompt = json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineStructure);
 
         return $this->providerRequestContract(
             $batch,
             AiStage::OutlineStructure,
             $route,
-            $context,
+            $modelContext,
             $this->promptVersionResolver->resolve(AiStage::OutlineStructure),
             $systemPrompt,
             $prompt,
             $schema,
+            sourceArtifacts: [$foundation],
         )['input_hash'];
     }
 
@@ -2520,24 +2694,96 @@ PROMPT;
         GenerationArtifact $structure,
         string $arcKey,
     ): string {
-        $context = $this->stageContract->arcBeatsContext($this->payload($foundation), $this->payload($structure), $arcKey) + [
-            'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($structure)],
-        ];
+        $structureData = $this->payload($structure);
+        $modelContext = $this->stageContract->arcBeatsContext(
+            $this->payload($foundation),
+            $structureData,
+            $arcKey,
+            $this->lengthContract->validateStructure($structureData, $this->batchLengthContract($batch)),
+        );
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = $this->arcBeatsSystemPrompt();
-        $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $prompt = json_encode($modelContext, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineArcBeats);
 
         return $this->providerRequestContract(
             $batch,
             AiStage::OutlineArcBeats,
             $route,
-            $context,
+            $modelContext,
             $this->promptVersionResolver->resolve(AiStage::OutlineArcBeats),
             $systemPrompt,
             $prompt,
             $schema,
+            sourceArtifacts: [$foundation, $structure],
         )['input_hash'];
+    }
+
+    /** 模型只需要小说语义字段；数据库主键由 Run 与 Artifact lineage 单独追踪。 */
+    private function novelPromptContext(GenerationRun $batch): array
+    {
+        $novel = data_get($batch->context_snapshot, 'novel');
+        if (! is_array($novel)) {
+            throw ValidationException::withMessages(['run' => 'Outline 主批次缺少冻结的小说语义上下文。']);
+        }
+
+        return collect($novel)->only(['title', 'genre', 'premise', 'target_words'])->all();
+    }
+
+    /**
+     * Foundation 尚无 Current Bible 可供展开，因此只把现有 narrative 配置转换成模型可读的选择指南。
+     * 该指南解释稳定 code，不持久化另一套小说级文风值。
+     *
+     * @return array<string, mixed>
+     */
+    private function foundationStyleGuide(): array
+    {
+        $parameterKeys = config('narrative.parameter_keys', []);
+        $enumOptions = static fn (string $group): array => collect(config("narrative.{$group}", []))
+            ->map(fn (string $label, string $code): array => ['code' => $code, 'label' => $label])
+            ->values()
+            ->all();
+
+        return [
+            'field_responsibilities' => [
+                'bible' => [
+                    'tone' => '全书稳定的情绪与氛围基线，不负责 POV、时态或具体句式。',
+                    'pov' => '叙事视角及角色可感知、可知晓的信息边界。',
+                    'tense' => '正文主要使用的语法时态。',
+                ],
+                'style_profile' => [
+                    'subgenre' => '作品的细分题材定位；可以为空，不替代小说 premise。',
+                    'target_platform' => '发布平台定位；必须逐字复制输入 target_platform.code。',
+                    'primary_style' => '唯一主导文风，决定最稳定的语言与叙事表达策略。',
+                    'secondary_styles' => '零至两项补充特征，不得与主文风重复或覆盖主文风。',
+                    'language_era' => '只控制词汇、句式和语感的时代倾向，不改变故事年代与史实。',
+                    'pacing' => '控制事件、信息、冲突和停留篇幅的推进密度，不允许省略必要因果。',
+                    'parameters' => '六项 1 至 5 的独立微调值；数值越高仅表示该维度越强。',
+                ],
+            ],
+            'style_options' => collect(config('narrative.styles', []))
+                ->map(fn (array $style, string $code): array => [
+                    'code' => $code,
+                    'name' => (string) ($style['name'] ?? $code),
+                    'instruction' => (string) ($style['instruction'] ?? ''),
+                    'default_parameters' => collect($parameterKeys)
+                        ->mapWithKeys(fn (string $key, int $index): array => [$key => data_get($style, "parameters.{$index}")])
+                        ->all(),
+                ])
+                ->values()
+                ->all(),
+            'language_era_options' => $enumOptions('language_eras'),
+            'pacing_options' => $enumOptions('paces'),
+            'parameter_scale' => ['minimum' => 1, 'maximum' => 5, 'meaning' => '1 表示很低，3 表示适中，5 表示很高。'],
+            'parameter_definitions' => [
+                'ornateness' => '语言华丽度：控制装饰性修辞和意象密度，不等同于文学质量。',
+                'dialogue_ratio' => '对白占比：控制对白相对叙述与行动的占比，不要求每段都出现对白。',
+                'description_density' => '描写密度：控制环境、动作与感官细节密度，不用于堆砌背景说明。',
+                'psychology_density' => '心理描写密度：控制直接呈现内心活动的频率与深度，不等同于人物复杂度。',
+                'humor_level' => '幽默程度：控制主动制造笑点的频率与强度，不禁止自然的轻松互动。',
+                'literary_level' => '文学性：控制语言质感、意象和结构呼应，不允许牺牲清晰度。',
+            ],
+        ];
     }
 
     /** @return array{code: string, label: string, source: string} */
@@ -2557,6 +2803,24 @@ PROMPT;
             'label' => is_string($selection['label'] ?? null) ? $selection['label'] : config("narrative.platforms.{$code}"),
             'source' => is_string($selection['source'] ?? null) ? $selection['source'] : 'default_config',
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function batchLengthContract(GenerationRun $batch): array
+    {
+        $contract = data_get($batch->context_snapshot, 'length_contract');
+        if (! is_array($contract)) {
+            throw ValidationException::withMessages([
+                'length_contract' => 'Outline 主批次缺少冻结的字数与章节预算合同。',
+            ]);
+        }
+
+        // PostgreSQL jsonb 不保证对象键顺序；重新构造稳定表示，避免同一合同在阶段哈希中漂移。
+        return $this->lengthContract->freeze(
+            (int) ($contract['novel_target_words'] ?? 0),
+            (int) ($contract['chapter_target_words'] ?? 0),
+            (int) ($contract['requested_volume_count'] ?? 0),
+        );
     }
 
     /** Subplot 与最终 Main Beat 使用显式空 Handoff，而不是 null 占位对象。 */

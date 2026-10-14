@@ -685,7 +685,6 @@ class ManageNovelOutline extends ViewRecord
                                         Textarea::make('deduplication_basis')->label('去重依据')->required(),
                                         Hidden::make('possible_duplicate_character_ids')->default([]),
                                         Textarea::make('introduction_reason')->label('引入理由')->required(),
-                                        TextInput::make('target_scene_sequence')->label('目标 Scene')->integer()->minValue(1)->required(),
                                     ]),
                                     Repeater::make('world_entity_candidates')->label('未来世界实体 Candidate')->default([])->collapsible()->schema([
                                         TextInput::make('candidate_key')->label('Candidate Key')->required(),
@@ -695,7 +694,6 @@ class ManageNovelOutline extends ViewRecord
                                         Textarea::make('deduplication_basis')->label('去重依据')->required(),
                                         Hidden::make('possible_duplicate_entity_ids')->default([]),
                                         Textarea::make('introduction_reason')->label('引入理由')->required(),
-                                        TextInput::make('target_scene_sequence')->label('目标 Scene')->integer()->minValue(1)->required(),
                                     ]),
                                     Repeater::make('milestones')->label('Main Beat Milestones')->default([])->collapsible()->reorderable()
                                         ->itemLabel(fn (array $state): ?string => $state['title'] ?? null)

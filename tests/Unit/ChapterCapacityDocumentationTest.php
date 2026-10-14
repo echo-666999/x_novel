@@ -52,12 +52,12 @@ test('chapter capacity database settings and documentation match the frozen budg
         ->not->toContain('chapter_request_budgets')
         ->not->toContain('chapter_repair_request_budgets');
     expect($prd)
-        ->toContain('Plan Admission v2')
+        ->toContain('Plan Admission v3')
         ->toContain('completion_budget_exhausted');
     expect($architecture)
-        ->toContain('Plan Admission v2')
+        ->toContain('Plan Admission v3')
         ->toContain('Provider 实际发送参数');
     expect($dataModel)
-        ->toContain('schema_version=2')
+        ->toContain('schema_version=3')
         ->toContain('selected_request_budget');
 });

@@ -300,17 +300,17 @@ scene_plans
 
 Chapter Plan 冻结 `novel_outline_id + outline_checksum + arc_id + beat_id + milestone_id` 完整父链、目标 Scene 和 Handoff；每个新 Plan 必须恰有一个 Primary，且只能是 Current Outline Target。Secondary 允许推进获准支线，但不能替代 Primary 或提前完成后续 Main Beat/Milestone。自然语言 `arc_contribution` 仅作说明。
 
-`character_candidates` 与 `world_entity_candidates` 以稳定临时键记录正文确实需要且 Canonical Domain 中尚不存在的对象，并包含去重依据、潜在重复对象、引入理由和目标 Scene。它们在 Review PASS 和 Canonical Commit 前都只是 Draft 契约。Planner 只能选择 Current Beat 授权的 Candidate；不得仅因模型认为剧情需要就新增核心人物或世界规则。
+Outline 的 `character_candidates` 与 `world_entity_candidates` 以稳定临时键记录 Beat 级引入资格，不包含 `target_scene_sequence`。Chapter Planner 只能从 Current Beat 授权的 Candidate 中选择，并根据本章实际 `scene_plans` 添加目标 Scene；不得仅因模型认为剧情需要就新增核心人物或世界规则。进入 Chapter Plan 后，它们仍在 Review PASS 和 Canonical Commit 前保持 Draft 契约。
 
 Plan Admission Gate 在 Scene 1 前确定性拒绝缺失 Primary、Outline 父链不一致、已完成或顺序跳跃的 Beat/Milestone、Handoff 错配、预算耗尽、Scene Sequence/衔接缺失、字数不可容纳、必须内容缺失、规划禁止内容和非法 Candidate。结构字段可由 Laravel 从关系表恢复；真正缺少剧情意图时返回 Chapter Planning 或人工修正。若一章不能完成当前 Milestone，Plan 必须给出可验证的推进结果，不能重复背景说明。
 
-Plan Admission v2 在同一 `admission_snapshot` 中冻结 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五条完整合同。每条合同包含 Provider、Model、Reasoning Effort、Prompt Version、匹配的模型价格记录容量，以及按顺序保存的 `initial / retry / final` 请求预算；Reviewer 当前只有 `initial`。每档预算保存 `output_tokens + reasoning_reserve_tokens = max_completion_tokens`，档位不得降低任一组成部分。Admission 先校验全部合同，再允许 Scene 1；任何一个 Stage 缺少容量或能力时，整个 Plan 不得进入运行态。Chapter Planner 在 Admission 之前执行，因此把同结构合同冻结到自己的首个 Run，技术 Retry 从失败 Run 还原。
+Plan Admission v3 在同一 `admission_snapshot` 中冻结 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五条完整容量合同，并保存 Current Outline 的 `outline_length_contract` 与 Checksum。每条路由合同包含 Provider、Model、Reasoning Effort、Prompt Version、匹配的模型价格记录容量，以及按顺序保存的 `initial / retry / final` 请求预算；Reviewer 当前只有 `initial`。每档预算保存 `output_tokens + reasoning_reserve_tokens = max_completion_tokens`，档位不得降低任一组成部分。Plan 的 `target_words`、Admission 的章节容量和 Outline 冻结的单章目标必须一致。Admission 先校验全部合同，再允许 Scene 1；任何一个 Stage 缺少容量、能力或字数来源时，整个 Plan 不得进入运行态。Chapter Planner 在 Admission 之前执行，因此把同结构合同冻结到自己的首个 Run，技术 Retry 从失败 Run 还原。历史 v2 Snapshot 继续按原容量合同执行，不得静默补写 v3 字段。
 
 Admission v1 不得静默改写为 v2。若旧章已经持久化完整 Plan、Scene 和 Chapter Draft，章节工作台提供独立的完整章节恢复动作：事务内锁定 Chapter，核实没有活动 Run，以当前配置解析 Extractor、Reviewer、Rewrite、Summary 四条独立合同，创建已经完成且零 Provider 请求的 `chapter_recovery` Run，并把来源与全部阶段合同写入不可变 Context Artifact。恢复合同成功后调用唯一 `AdvanceChapterPipelineAction`，由持久化状态选择 Coverage Judgment、Event Extraction、Review、Rewrite 或确定性 Assembly；Planner 和 Writer 永远不进入这条恢复链。每个后续 Provider Run 复制恢复合同 ID、阶段路由、容量、主预算和修复预算，Resume 只读取这些冻结值。局部 Rewrite 产生的 Scene Artifact 必须携带同一合同 ID，确定性 Assembly 只接受原冻结 Scene 或该合同的 Rewrite 来源；Canonical Commit 后 Summary 允许 Canonical State 前进并继续使用同一合同。Plan、旧 Admission、Bible、State 或 Artifact 来源漂移时零 Provider 请求失败，旧 Plan 快照和历史 Run/Artifact 均不修改。
 
 审校页面的自动修复统一调用 `StartChapterRewriteAction`，不再直接构造 `RewriteChapterJob`。该动作只接受当前 Draft 的 `REWRITE` Review，目标 Scene 必须由不可变 `rewrite_scope` 解析；`NEEDS_ATTENTION`、次数耗尽、来源缺失和非 Coverage Block 在派发前停止。Admission v1 先调用完整恢复动作；旧 Coverage Review 可以且只能在确认 Judgment 尚未覆盖时解除旧 `blocked` 状态，再由统一推进器选择 Coverage Judgment 或新 Review。整章自动 Rewrite 与页面任意选择 Scene 均不属于合法路径。
 
-常规“提取事件 / 重新提取事件”按钮在调用 `GenerationJobDispatcher` 前执行同步合同预检：只接受 Admission v2，Extractor Route 必须完整，模型容量必须匹配 Provider/Model 并支持结构化输出，`initial / retry / final` 三档预算必须有序、算式正确且不超过冻结容量。任何确定性失败都由 Filament 直接显示，不能写入 pending 标记、派发 Job 或先显示“已加入队列”。Worker 端容量门禁继续保留，作为并发变化和非 UI 调用的第二道校验。
+常规“提取事件 / 重新提取事件”按钮在调用 `GenerationJobDispatcher` 前执行同步合同预检：接受已冻结的 Admission v2/v3，Extractor Route 必须完整，模型容量必须匹配 Provider/Model 并支持结构化输出，`initial / retry / final` 三档预算必须有序、算式正确且不超过冻结容量。任何确定性失败都由 Filament 直接显示，不能写入 pending 标记、派发 Job 或先显示“已加入队列”。Worker 端容量门禁继续保留，作为并发变化和非 UI 调用的第二道校验。
 
 Provider 层无法仅凭部分 `content` 判断总完成预算耗在推理还是可见输出。Event Extraction 捕获 `length` 后使用当前 Run 的冻结预算复核：若实际 `reasoning_tokens > reasoning_reserve_tokens`，即使已有少量 JSON，也按推理挤占分类并只升级推理预留；否则已有不完整内容才按可见输出截断分类。Usage 的 `provider_completion_limit_reason` 保存适配器原始判断，`completion_limit_reason` 保存阶段合同复核结果，历史 Run 不回写。
 
@@ -331,7 +331,7 @@ chapter_budget
 
 新 Plan 的每个 Scene 使用 `continuity_requirements` 和稳定 `key` 区分 `establish / persist / change / callback`。相同持续状态只能首次建立一次；`persist` 只要求当前 Scene 的增量影响，`change` 要求真实状态变化，`callback` 只允许在章末回扣。Plan Validator 在 Writer 前拒绝跨 Scene 重复的 goal/conflict/turn/outcome 或错误的连续性阶段；历史 Plan 可缺少该字段并保持只读兼容。
 
-`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v10` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
+`due_foreshadowings` 的历史整数数组只用于兼容解释，不能满足新 Plan 的伏笔动作校验。`chapter-planner-v12` 写入 `foreshadowing_actions`；每项包含 `foreshadowing_id`、`action`、`target_scene_sequence`、`acceptance_criteria` 和可空 `reason`。模型 Schema 只允许 `plant / reinforce / pay_off`。`defer / abandon` 只能由用户从人工计划编辑或伏笔管理入口执行；Plan 中的授权同时保存原因、操作者、授权时间、当时 Canonical 章节与 State Version，`defer` 还保存晚于旧窗口的新窗口。人工编辑创建新的 Plan Version并保留旧版本。伏笔管理页直接延期时更新窗口并追加 `management_history`；直接放弃时通过 `ManualCorrection` 创建新 State Version。
 
 `due_from_chapter`～`due_to_chapter` 是兑现窗口。Planning 以目标章序号选择本章机会，但正式 `upcoming / due / overdue` 只按最新 Canonical 章节计算。Planner 同时接收完整伏笔定义、Canonical 生命周期来源、领域投影状态、允许动作和已发生的重要 Active Events。Critical 在窗口内必须有动作；目标章为 `due_to` 时不能只做 `reinforce`；窗口结束后，`ForeshadowingPlanningGate` 在创建 Planning Run 和调用模型前阻止自动 Planner。此时只有人工建立包含 `pay_off`，或具有有效人工授权的 `defer / abandon` 动作契约，才构成可继续执行的修复计划。非 Critical 逾期只产生 Warning。
 
@@ -765,7 +765,7 @@ Plan 已完成 → Scene 1
 无 Plan → Plan
 ```
 
-Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v4 主批次，旧 v4 批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
+Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v5 主批次，旧批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
 
 章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。技术 Retry 与 Resume 复用原 Run 或 Plan Admission 冻结的 Route、Prompt、容量和分档预算；尤其 Chapter Planner 位于 Admission 之前，必须从最近一个同来源、可重试的失败 Run 还原合同，不能在 Queue Retry 时重新解析后台配置。Provider 配置失败或冻结最高档的完成预算失败返回不可恢复点，修复后通过显式 Restart 创建新的来源链。Generation 运行详情分别显示冻结路由、静态容量、预算档位及升档原因、容量门禁、实际发送参数、Usage 和完成预算分类；恢复链额外显示路由合同来源、恢复合同 Run ID、冻结来源 Artifact、实际 Provider 请求数，以及 `chapter_recovery` Artifact 中的四条完整阶段路由。章节工作台把章节恢复合同显示为独立时间轴节点，同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
 
@@ -794,7 +794,11 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 统一配置 outline_foundation、outline_structure、outline_arc_beats、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Skeleton Assembly、Chapter Assembly 与 Outline Finalize 都是确定性阶段，没有 Provider Timeout。
 
-OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema。当前四个 Provider 阶段的基础版本为 `novel-outline-foundation-v3`、`novel-outline-structure-v2`、`novel-outline-arc-beats-v3`、`novel-outline-beat-detail-v3`；它们均追加 `natural-planning-v3` 形成有效 Prompt Version。确定性组装算法版本为 `novel-outline-skeleton-assembly-v2`。Arc Beats / Beat Detail 的 v2 Schema 已移除隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key，改由 Laravel 确定性分配。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
+OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema。当前四个 Provider 阶段的基础版本为 `novel-outline-foundation-v6`、`novel-outline-structure-v5`、`novel-outline-arc-beats-v7`、`novel-outline-beat-detail-v6`；它们均追加 `natural-planning-v3` 形成有效 Prompt Version。确定性组装算法版本为 `novel-outline-skeleton-assembly-v4`，Finalize 合同为 `novel-outline-finalize-v3`。Foundation v6 从现有 narrative 配置向模型提供文风 code、中文名称、写作指令、参数说明和字段职责，但输出仍只保存稳定 code 与显式参数，并在 Arc 尚未生成时省略伏笔归属。Structure v5 按 Foundation 伏笔原顺序返回等长的 `foreshadowing_owner_arc_keys`，非空值只能引用同次响应生成的 Arc；Skeleton Assembly v4 不把这组辅助映射写入标准 Outline，Finalize v3 再按位置合并回最终 Blueprint。Arc Beats / Beat Detail 的 v2 Schema 已移除隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key，改由 Laravel 确定性分配；Arc Beats v4 移除了只有 Chapter Planner 在形成具体 `scene_plans` 后才能确定的 Candidate `target_scene_sequence`。Structure v3 要求各卷目标字数总和精确等于主批次冻结的全书目标字数；Arc Beats v5 接收目标卷折算章节数，v7 不再把完整 Structure 与目标/相邻 Arc 重复发送给 Provider，只保留全书约束摘要、所属 Volume、目标 Arc 和相邻 Arc 摘要。Skeleton Assembly v3 起只汇总顺序执行的 Main Arc Beat 预算，并要求其区间覆盖目标卷章节数。Subplot 可与主线共用章节，因此不重复计入卷级核对。完成合同写入最终 Blueprint；`chapter-planner-v12` 与 Plan Admission v3 继续读取该冻结单章目标，小说设置后续变化不能改写已采用 AI Outline 的字数来源。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
+
+Beat Detail v4 从同一份冻结 Skeleton 确定性定位目标 Beat 的父级，只发送所属 Volume 的 Key、顺序、标题、目标、高潮、目标字数，以及所属 Arc 的 Key、顺序、类型、标题、目标、风险和完成条件。v5 进一步要求：当 `expected_next_beat_key=null` 时，Provider 必须把三个 Handoff 文本字段返回为 null、四个列表字段返回为空数组；Laravel 语义校验拒绝任何非空值，并补入 `next_beat_key=null` 的稳定表示。这些语义上下文与对应 Prompt Version 一并进入 Stage `input_hash`，输出 Schema 保持不变。
+
+当前 Foundation v6、Structure v5、Arc Beats v7 与 Beat Detail v6 将 Provider 可见的模型语义上下文和 Laravel 内部来源追踪分离。Prompt 不包含小说数据库主键、平台配置来源、Artifact ID、checksum、`foundation_artifact` 或 `source_artifacts`；来源引用仍保存在子 Run 顶层 `context_snapshot.source_artifacts`、Artifact `data.source_artifacts`，并作为独立字段参与 Stage `input_hash`。模型上下文和来源 lineage 任一变化都会形成新的复用身份。
 
 默认超时链：
 
@@ -841,7 +845,7 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v10+natural-planning-v3
+chapter-planner-v12+natural-planning-v3
 scene-writer-v16+natural-writing-v3
 deterministic-assembly-v1
 event-extractor-v9
@@ -864,7 +868,7 @@ Scene Writer 的 Run Snapshot 保留完整路由、容量、预算和 Memory 查
 
 文本模型按 Stage 从 Novel Settings / `ai_model_routes` 解析，不在 Job 中写死。一般 Stage 的解析优先级固定为：小说级非空 Stage Override → 数据库模型路由。数据库没有对应路由时，启动前直接报告配置缺失，不读取 `system_settings.ai`、环境变量或其他 Stage。小说创建与编辑表单的 Override 使用已启用 `ai_model_prices` 记录作为 Select 数据源；Embedding 不属于小说级 Override。Select 提交价格记录 ID，保存边界把它转换为完整 Provider + Model，并在页面实时展示当前表单状态对应的路由。现有结构化 Override 的 Provider + Model 未变化时保留其可选 `reasoning_effort`；用户改选价格记录时删除旧推理值并明确采用 Provider 默认。非 Outline 的旧 `settings.ai.models.{stage}` 仅作为小说记录迁移输入保留；编辑表单能把匹配项映射回价格记录，无法匹配时要求用户明确重选。Outline 的旧 Model-only 值不允许推断 Provider。全局 Outline 路由解析失败只影响继承状态提示，不能阻止创建或编辑表单打开。
 
-Outline 使用更严格的精确路由合同：`outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 各自解析完整的 Provider、Model 与 Reasoning Effort，优先级为小说级同名 Stage Override → `ai_model_routes` 同名记录。任何一层都不得读取或复制 `planner` 或其他 Stage；推理程度留空表示 Provider 默认行为。小说级旧 `ai.models.<outline_stage>` 只有 Model、不能与下层 Provider 拼接，解析时按不完整路由拒绝。Provider 或 Model 缺失时抛出 `outline_route_not_configured`，AI Outline 启动预览标记不可启动，`prepareBatch()` 在创建 Batch、子 Run 和 Provider 请求前使用同一解析路径拒绝执行。新建 v4 Outline 主批次一次性解析四个任务路由，并在 `generation_preferences.outline_routes` 中分别冻结 Provider、Model、Reasoning Effort、来源、Prompt Version、请求输出额度、推理预留，以及所匹配模型价格记录的 ID、容量和能力；主批次是协调器，`provider/model_policy` 为空。四个请求预算从 `system_settings.generation.outline_request_budgets` 读取。请求预算进入 Batch `input_hash`；Stage `input_hash` 还包含本阶段冻结预算、容量快照与响应 Schema Hash。每个 Provider 子 Run 只复制自己任务的冻结路由，`route_key`、请求 Stage、Input Hash 与 Usage 追踪保持一致；后台配置变化、自动重试和人工 Resume 都不得重新解析。v3 批次仍按其单路由快照和升级前无推理预留的请求上限执行，避免升级时改变未完成批次。新批次的每个 Outline 路由必须匹配已启用的 `ai_model_prices` 记录，该记录必须包含正整数 `context_window_tokens`、`max_output_tokens` 并声明 `supports_structured_output`；路由配置推理程度时还必须声明 `supports_reasoning_effort`。全局路由保存、小说级新选择和启动预检共用这套适用性规则。`ai_model_routes` 的 `reasoning_effort` 允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。Embedding 同样读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。Provider、Model、推理程度、请求预算或 Schema 任一变化都会形成新的复用边界。
+Outline 使用更严格的精确路由合同：`outline_foundation`、`outline_structure`、`outline_arc_beats`、`outline_beat_detail` 各自解析完整的 Provider、Model 与 Reasoning Effort，优先级为小说级同名 Stage Override → `ai_model_routes` 同名记录。任何一层都不得读取或复制 `planner` 或其他 Stage；推理程度留空表示 Provider 默认行为。小说级旧 `ai.models.<outline_stage>` 只有 Model、不能与下层 Provider 拼接，解析时按不完整路由拒绝。Provider 或 Model 缺失时抛出 `outline_route_not_configured`，AI Outline 启动预览标记不可启动，`prepareBatch()` 在创建 Batch、子 Run 和 Provider 请求前使用同一解析路径拒绝执行。新建 v5 Outline 主批次一次性解析四个任务路由，并在 `generation_preferences.outline_routes` 中分别冻结 Provider、Model、Reasoning Effort、来源、Prompt Version、请求输出额度、推理预留，以及所匹配模型价格记录的 ID、容量和能力；顶层 `length_contract` 同时冻结全书目标字数、单章目标字数、预计章节数和分卷数。主批次是协调器，`provider/model_policy` 为空。四个请求预算从 `system_settings.generation.outline_request_budgets` 读取。请求预算和字数合同进入 Batch `input_hash`；Stage `input_hash` 还包含本阶段冻结预算、容量快照与响应 Schema Hash。每个 Provider 子 Run 只复制自己任务的冻结路由，`route_key`、请求 Stage、Input Hash 与 Usage 追踪保持一致；后台配置变化、自动重试和人工 Resume 都不得重新解析。v3 批次仍按其单路由快照和升级前无推理预留的请求上限执行，v4 批次保留原多路由合同供历史追踪。新批次的每个 Outline 路由必须匹配已启用的 `ai_model_prices` 记录，该记录必须包含正整数 `context_window_tokens`、`max_output_tokens` 并声明 `supports_structured_output`；路由配置推理程度时还必须声明 `supports_reasoning_effort`。全局路由保存、小说级新选择和启动预检共用这套适用性规则。`ai_model_routes` 的 `reasoning_effort` 允许值为 `low`、`medium`、`high`；留空表示采用 Provider 默认行为。Embedding 同样读取数据库模型路由，但当前只允许 OpenAI Provider，且不使用推理程度。Provider、Model、推理程度、请求预算、字数合同或 Schema 任一变化都会形成新的复用边界。
 
 文本生成固定注册 `openai` 与 `deepseek` 两个 Provider，由 Laravel Router 按已冻结 Provider 精确分发，不做动态选型、跨 Provider Fallback 或价格路由。Base URL、API Key 和 Timeout只读取 `ai_provider_connections` 中对应的启用连接，API Key 使用 Eloquent `encrypted` cast，后台不回显；缺少连接、连接禁用或凭据为空时在请求前失败。成本按实际 Provider、响应 Model 和 UI 配置的币种从 `ai_model_prices` 读取启用价格，按 `billing_unit` 计算并保存到 Usage；没有匹配价格时成本记为零并由配置健康检查提示，不读取全局环境单价。DeepSeek 结构化任务使用 JSON Output，Laravel 在创建 Artifact 前检查空内容、JSON 合法性和响应 Schema；冻结路由显式配置推理程度时，适配器发送 `reasoning_effort`，留空时不发送并保留 Provider 默认行为。Embedding 固定使用 OpenAI 路由，不随文本 Stage 切换。
 
@@ -984,7 +988,7 @@ Milestone completion and Beat Handoff resume from persisted events
 
 ```text
 Planner 在创建 Run 和 Provider 请求前拒绝未核实容量或超限预算
-Writer / Extractor / Reviewer / Rewrite / Summary 全部使用 Plan Admission v2 冻结合同
+Writer / Extractor / Reviewer / Rewrite / Summary 使用 Plan Admission v2/v3 各自已冻结的合同
 可见输出截断只升级 output_tokens 严格增加的档位
 推理耗尽只升级 reasoning_reserve_tokens 严格增加的档位
 证据不足的完成耗尽只升级 max_completion_tokens 严格增加的档位

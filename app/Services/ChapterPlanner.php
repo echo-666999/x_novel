@@ -48,6 +48,7 @@ class ChapterPlanner
         private readonly ForeshadowingLifecycleResolver $foreshadowingLifecycleResolver,
         private readonly StoryArcBeatContract $storyArcBeatContract,
         private readonly OutlineContextBuilder $outlineContextBuilder,
+        private readonly NovelOutlineLengthContract $outlineLengthContract,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly InvalidateChapterPlanDownstreamAction $invalidatePlanDownstream,
         private readonly GenerationRequestBudget $requestBudget,
@@ -138,8 +139,9 @@ class ChapterPlanner
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
                     .'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。'
-                    .'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择并逐字段复制，没有 Candidate 时必须返回 []。只把当前 Milestone 的 must_include 合并到 must_reveal；不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
-                    .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据和目标 Scene，不需要新实体时返回 []。'
+                    .'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择；除 target_scene_sequence 外必须逐字段复制，没有 Candidate 时必须返回 []。每个已选 Candidate 的 target_scene_sequence 必须由本章实际 scene_plans 决定，并指向正文首次引入该对象的 Scene。只把当前 Milestone 的 must_include 合并到 must_reveal；不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
+                    .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据，并在本章计划中指定目标 Scene，不需要新实体时返回 []。'
+                    .'target_words 必须逐字复制 length_contract.chapter_target_words；chapter_budget 是当前 Beat 可停留的章节数范围，不是单章字数。'
                     .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
                     .'跨 Scene 持续信息必须使用 continuity_requirements 和稳定 key 明确分为 establish（本章首次出现）、persist（本章内持续但只写增量）、change（本章内后续场景必须变化）或 callback（章末允许回扣）。每个 key 按本章 Scene 顺序首次出现时必须使用 establish，即使该状态继承自 previous_chapter_ending 或 Canonical Story State，也要在首个 Scene 用 establish 说明本章起始基线；只有较早 Scene 已 establish 后才能使用 persist、change 或 callback，callback 只能位于章末 Scene。不得把同一持续状态重复写进多个 Scene 的 goal/conflict/turn/outcome。'
@@ -170,7 +172,7 @@ class ChapterPlanner
                 StructuredOutput::require($response, 'plan', 'Chapter Plan'),
             );
             $payload = $this->applyOutlineContract($payload, $context['current_outline_target']);
-            $payload['target_words'] = (int) data_get($novel->settings, 'generation.chapter_target_words', $payload['target_words']);
+            $payload['target_words'] = (int) data_get($context, 'length_contract.chapter_target_words');
             $failedCandidate = $payload;
             $candidate = new ChapterPlan($payload);
             $candidate->setRelation('chapter', $chapter);
@@ -266,11 +268,20 @@ class ChapterPlanner
 
         foreach (['character_candidates', 'world_entity_candidates'] as $field) {
             $contracts = collect($outlineTarget[$field] ?? [])->keyBy('candidate_key');
-            $payload[$field] = collect($payload[$field] ?? [])->map(
-                fn (mixed $candidate): mixed => is_array($candidate) && $contracts->has($candidate['candidate_key'] ?? null)
-                    ? $contracts->get($candidate['candidate_key'])
-                    : $candidate,
-            )->values()->all();
+            $payload[$field] = collect($payload[$field] ?? [])->map(function (mixed $candidate) use ($contracts): mixed {
+                if (! is_array($candidate) || ! $contracts->has($candidate['candidate_key'] ?? null)) {
+                    return $candidate;
+                }
+
+                $contract = collect($contracts->get($candidate['candidate_key']))
+                    ->except('target_scene_sequence')
+                    ->all();
+
+                return [
+                    ...$contract,
+                    'target_scene_sequence' => $candidate['target_scene_sequence'] ?? null,
+                ];
+            })->values()->all();
         }
 
         $inbound = $outlineTarget['inbound_handoff'] ?? null;
@@ -594,6 +605,7 @@ class ChapterPlanner
             throw new GenerationPreflightException('current_outline_missing', 'Chapter Planner 缺少 Current Outline，已在调用模型前停止。');
         }
         $outlineContext = $this->outlineContextBuilder->build($novel);
+        $lengthContract = $this->outlineLengthContract->forNovel($novel);
         $maximum = data_get($outlineContext, 'chapter_budget.max');
         if (is_int($maximum) && $outlineContext['chapters_used_for_current_beat'] >= $maximum) {
             throw new GenerationPreflightException(
@@ -605,8 +617,9 @@ class ChapterPlanner
         $context = [
             'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
             'generation_preferences' => [
-                'chapter_target_words' => (int) data_get($novel->settings, 'generation.chapter_target_words', 3_000),
+                'chapter_target_words' => (int) $lengthContract['chapter_target_words'],
             ],
+            'length_contract' => $lengthContract,
             'chapter' => ['id' => $chapter->getKey(), 'sequence' => $chapter->sequence],
             'bible_version' => $bible->version,
             'style_contract_checksum' => $styleContract['checksum'],

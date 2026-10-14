@@ -35,6 +35,7 @@ class NovelPlanner
         private readonly AiSettingsResolver $settingsResolver,
         private readonly NormalizedNovelOutlineValidator $outlineValidator,
         private readonly NovelOutlineChecksum $outlineChecksum,
+        private readonly NovelOutlineLengthContract $outlineLengthContract,
         private readonly CreateNovelOutlineVersionAction $createOutlineVersion,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly NovelOutlinePipeline $outlinePipeline,
@@ -77,6 +78,13 @@ class NovelPlanner
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
         // 局部修订不是独立 AiStage，但仍必须冻结 Prompt 本体与 planning 策略的有效版本。
         $promptVersion = $this->promptVersionResolver->resolveTask('outline_node_regeneration');
+        $sourceLengthContract = data_get($sourceArtifact->data, 'length_contract');
+        $lengthContext = is_array($sourceLengthContract) ? [
+            ...collect($sourceLengthContract)->except('volumes')->all(),
+            'volume_allocations' => collect($sourceLengthContract['volumes'] ?? [])->map(
+                fn (array $volume): array => collect($volume)->only(['volume_key', 'target_words', 'target_chapter_count', 'mainline_chapter_budget'])->all(),
+            )->values()->all(),
+        ] : null;
         $context = [
             'novel_id' => $novel->getKey(),
             'source_artifact_id' => $sourceArtifact->getKey(),
@@ -85,6 +93,7 @@ class NovelPlanner
             'target_node_key' => $nodeKey,
             'target_node_type' => $target['type'],
             'instruction' => $instruction,
+            'length_contract' => $lengthContext,
             'outline_contract' => collect($outlineData)->only(['title', 'summary', 'must_include', 'must_not_include'])->all(),
             'target_node' => $target['node'],
             'parent_context' => $target['parent'],
@@ -122,7 +131,7 @@ class NovelPlanner
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的目标 node 片段，不得返回完整 Outline。目标根节点的稳定 key 和顺序字段必须保持不变；可以按用户要求修改该节点内容及其后代。不得返回任何数据库 ID。'.NarrativeProsePolicy::planning(),
+                systemPrompt: '你是 XNovel 大纲局部修订器。只返回符合 Schema 的目标 node 片段，不得返回完整 Outline。目标根节点的稳定 key 和顺序字段必须保持不变；可以按用户要求修改该节点内容及其后代。若输入包含 length_contract，修订后的分卷字数总和及主线 Beat 章节预算必须继续满足该合同。不得返回任何数据库 ID。'.NarrativeProsePolicy::planning(),
                 prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: 0.4,
                 maxTokens: self::REGENERATION_MAX_TOKENS,
@@ -151,6 +160,10 @@ class NovelPlanner
             $this->replaceNode($revised, $nodeKey, $fragment);
             $revised = $this->normalizeOutlineSequences($revised);
             $this->outlineValidator->assertValid($revised);
+            $lengthContract = data_get($sourceArtifact->data, 'length_contract');
+            if (is_array($lengthContract)) {
+                $this->outlineLengthContract->complete($revised, collect($lengthContract)->except('volumes')->all());
+            }
             // Prompt 约束不能作为安全边界，服务端再次确认模型没有修改目标节点之外的内容。
             $this->assertOnlyTargetChanged($outlineData, $revised, $nodeKey);
 
@@ -679,11 +692,11 @@ class NovelPlanner
         $volumeKey = ['type' => 'string', 'pattern' => '^vol-[0-9]{2}$'];
         $arcKey = ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$'];
         $beatKey = ['type' => 'string', 'pattern' => '^beat-[0-9]{2,}$'];
-        $characterCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'name', 'role', 'motivation', 'profile', 'personality', 'abilities', 'knowledge', 'deduplication_basis', 'possible_duplicate_character_ids', 'introduction_reason', 'target_scene_sequence'], 'properties' => [
-            'candidate_key' => $stableKey, 'name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'motivation' => ['type' => 'string'], 'profile' => $stringArray, 'personality' => $stringArray, 'abilities' => $stringArray, 'knowledge' => $stringArray, 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_character_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
+        $characterCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'name', 'role', 'motivation', 'profile', 'personality', 'abilities', 'knowledge', 'deduplication_basis', 'possible_duplicate_character_ids', 'introduction_reason'], 'properties' => [
+            'candidate_key' => $stableKey, 'name' => ['type' => 'string'], 'role' => ['type' => 'string'], 'motivation' => ['type' => 'string'], 'profile' => $stringArray, 'personality' => $stringArray, 'abilities' => $stringArray, 'knowledge' => $stringArray, 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_character_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'],
         ]];
-        $worldCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'type', 'name', 'description', 'deduplication_basis', 'possible_duplicate_entity_ids', 'introduction_reason', 'target_scene_sequence'], 'properties' => [
-            'candidate_key' => $stableKey, 'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_entity_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'], 'target_scene_sequence' => ['type' => 'integer', 'minimum' => 1],
+        $worldCandidate = ['type' => 'object', 'additionalProperties' => false, 'required' => ['candidate_key', 'type', 'name', 'description', 'deduplication_basis', 'possible_duplicate_entity_ids', 'introduction_reason'], 'properties' => [
+            'candidate_key' => $stableKey, 'type' => ['type' => 'string', 'enum' => ['location', 'item', 'faction', 'organization', 'rule', 'concept']], 'name' => ['type' => 'string'], 'description' => ['type' => 'string'], 'deduplication_basis' => ['type' => 'string'], 'possible_duplicate_entity_ids' => $integerArray, 'introduction_reason' => ['type' => 'string'],
         ]];
         $milestone = ['type' => 'object', 'additionalProperties' => false, 'required' => ['key', 'sequence', 'title', 'objective', 'acceptance_criteria', 'must_include', 'must_not_include'], 'properties' => [
             'key' => $stableKey, 'sequence' => ['type' => 'integer', 'minimum' => 1], 'title' => ['type' => 'string'], 'objective' => ['type' => 'string'],

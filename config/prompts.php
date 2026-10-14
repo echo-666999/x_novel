@@ -12,11 +12,11 @@ return [
     |
     */
     'versions' => [
-        'outline_foundation' => 'novel-outline-foundation-v3',
-        'outline_structure' => 'novel-outline-structure-v2',
-        'outline_arc_beats' => 'novel-outline-arc-beats-v3',
-        'outline_beat_detail' => 'novel-outline-beat-detail-v3',
-        'planner' => 'chapter-planner-v10',
+        'outline_foundation' => 'novel-outline-foundation-v6',
+        'outline_structure' => 'novel-outline-structure-v5',
+        'outline_arc_beats' => 'novel-outline-arc-beats-v7',
+        'outline_beat_detail' => 'novel-outline-beat-detail-v6',
+        'planner' => 'chapter-planner-v12',
         'writer' => 'scene-writer-v16',
         'extractor' => 'event-extractor-v9',
         'reviewer' => 'reviewer-v16',
@@ -56,7 +56,7 @@ return [
     /* 不属于固定 AiStage、但会直接调用 Provider 的局部任务版本。 */
     'tasks' => [
         'outline_node_regeneration' => [
-            'version' => 'novel-outline-node-v4',
+            'version' => 'novel-outline-node-v6',
             'policy' => 'planning',
         ],
     ],

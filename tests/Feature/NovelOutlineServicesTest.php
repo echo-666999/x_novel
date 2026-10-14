@@ -117,6 +117,28 @@ test('normalized validator accepts the complete relationship contract', function
         ->isValid())->toBeTrue();
 });
 
+test('outline candidates do not require a scene while valid legacy scene values remain readable', function () {
+    $candidate = [
+        'candidate_key' => 'future-guide',
+        'name' => '向导',
+        'role' => '配角',
+        'motivation' => '带领主角穿过旧城',
+        'deduplication_basis' => '现有人物中没有向导',
+        'introduction_reason' => '后续 Beat 需要本地引路人',
+    ];
+    $withoutScene = NormalizedOutlineDefinition::make();
+    $withoutScene['volumes'][0]['arcs'][0]['beats'][0]['character_candidates'] = [$candidate];
+    $legacy = $withoutScene;
+    $legacy['volumes'][0]['arcs'][0]['beats'][0]['character_candidates'][0]['target_scene_sequence'] = 1;
+    $invalidLegacy = $withoutScene;
+    $invalidLegacy['volumes'][0]['arcs'][0]['beats'][0]['character_candidates'][0]['target_scene_sequence'] = 0;
+    $validator = app(NormalizedNovelOutlineValidator::class);
+
+    expect($validator->validate($withoutScene)->isValid())->toBeTrue()
+        ->and($validator->validate($legacy)->isValid())->toBeTrue()
+        ->and($validator->validate($invalidLegacy)->isValid())->toBeFalse();
+});
+
 test('large normalized outline keeps bounded progress queries and a PostgreSQL indexed foreign key join plan', function () {
     if (DB::getDriverName() !== 'pgsql') {
         $this->markTestSkipped('NGC-012 查询计划只在 PostgreSQL 验证。');

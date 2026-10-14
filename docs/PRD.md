@@ -16,7 +16,7 @@
 | 技术栈 | Laravel + Filament + PostgreSQL/pgvector + Redis + Laravel Queue |
 | 核心目标 | 小而精、低运维成本、长期可维护 |
 | 非目标 | SaaS、多租户、多人协作、复杂审批、微服务化 |
-| 状态 | 已完成 NGC-001～NGC-012 产品基线与 OGR-001～OGR-007 Outline 可靠性收尾；Outline 已具备 queued 主批次、Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize、PostgreSQL 进度投影、Filament 失败反馈与领域 Resume。遗留 v2 未完成批次已显式退役，新批次使用 v4 逐任务冻结路由合同，历史 v3 批次保留原执行语义 |
+| 状态 | 已完成 NGC-001～NGC-012 产品基线与 OGR-001～OGR-007 Outline 可靠性收尾；Outline 已具备 queued 主批次、Foundation → Structure → 逐 Arc Beats → 确定性 Skeleton Assembly → 逐 Main Beat Detail → Finalize、PostgreSQL 进度投影、Filament 失败反馈与领域 Resume。遗留 v2 未完成批次已显式退役，新批次使用 v5 逐任务冻结路由及字数合同，历史 v3/v4 批次保留原执行语义与 Artifact |
 
 ---
 
@@ -237,7 +237,7 @@ Chapter
 
 全书 Outline 生成必须具备持久化的可见进度和领域恢复入口。用户点击“AI 生成候选”时，Web 请求必须先在 PostgreSQL 创建或复用 `queued` 主批次，再在事务提交后投递协调 Job；Worker 激活批次时改为 `running`。任一子阶段最终失败必须把主批次收口为 `failed` 并保存可展示的错误码、用户文案、技术信息和可恢复性；Finalize 成功后才可变为 `succeeded`。页面不能依赖一次性 Toast、Redis、Horizon 或 `failed_jobs` 判断业务进度。
 
-全书大纲页面在批次为 `queued` 或 `running` 时轮询 PostgreSQL 中的 Run 与 Artifact 投影，并展示当前阶段、尝试次数和已知分母下的 `x/y` 进度；终态停止轮询。Structure 完成前不得伪造整体百分比，完成后可显示 Arc Beats 进度，Skeleton Assembly 完成后可显示 Main Beat Detail 进度。失败原因必须持久显示；仅临时 Provider 或基础设施故障提供“继续 AI 生成”，由领域 Resume Action 校验暂停、版本、活动 Run、输入指纹和 Artifact 来源链后，从最早缺失的有效 Artifact 继续，并保持原批次冻结路由和预算。Provider 配置、冻结路由、推理预算耗尽、可见输出截断或完成预算证据不足等必须修改配置或预算的失败不得 Resume；页面提供“重新生成候选”作为 Restart 入口，使用当前配置创建新的 v4 主批次，同时保留旧批次、子 Run、Artifact、Usage 和冻结快照，不得静默改写。禁止把 `queue:retry` 作为产品恢复入口。
+全书大纲页面在批次为 `queued` 或 `running` 时轮询 PostgreSQL 中的 Run 与 Artifact 投影，并展示当前阶段、尝试次数和已知分母下的 `x/y` 进度；终态停止轮询。Structure 完成前不得伪造整体百分比，完成后可显示 Arc Beats 进度，Skeleton Assembly 完成后可显示 Main Beat Detail 进度。失败原因必须持久显示；仅临时 Provider 或基础设施故障提供“继续 AI 生成”，由领域 Resume Action 校验暂停、版本、活动 Run、输入指纹和 Artifact 来源链后，从最早缺失的有效 Artifact 继续，并保持原批次冻结路由和预算。Provider 配置、冻结路由、推理预算耗尽、可见输出截断或完成预算证据不足等必须修改配置或预算的失败不得 Resume；页面提供“重新生成候选”作为 Restart 入口，使用当前配置创建新的 v5 主批次，同时保留旧批次、子 Run、Artifact、Usage 和冻结快照，不得静默改写。禁止把 `queue:retry` 作为产品恢复入口。
 
 若已启动章节必须立即采用新的 Bible 内容，恢复操作必须先 dry-run 并冻结 Expected Bible Version、Expected State Version、章节/Plan/Scene 来源链和 Artifact checksum；用户审核同一 plan hash 后才能显式执行。执行时创建新的不可变 Bible Version，保留旧 Run、Artifact、原始响应和 Usage 审计，并从最早受 Bible 变化影响的阶段重新生成。旧 Bible 的 Draft、Review 或 Rewrite Artifact 不得进入新来源链的 Canonical Commit。
 
@@ -605,7 +605,7 @@ must_not_include JSONB
 Volume → Arc → Beat → Milestone → Chapter → Scene
 ```
 
-四层定义必须通过非空外键和组合外键归属于同一 Outline Version。Volume、Arc、Beat、Milestone 的稳定 Key 在各自类型内对整个 Outline Version 唯一，同级 Sequence 在父节点作用域内唯一；每个 Main Beat 至少一个 Milestone；除最后一个 Main Beat 外必须有且只有一个指向相邻下一 Main Beat 的 Handoff。Structure Provider 只返回 Volume / Arc 稳定 Key；相互隔离的 Arc Beats 与 Beat Detail Provider 不得生成全书级 Beat、Candidate、Milestone Key 或 Handoff 目标 Key。Laravel 必须在确定性 Skeleton Assembly 和 Beat Detail 校验中按冻结结构与响应数组顺序分配这些 Key，并在 `FinalizeNovelOutlineJob` 中解析数据库 ID；无法唯一解析时整批失败。
+四层定义必须通过非空外键和组合外键归属于同一 Outline Version。Volume、Arc、Beat、Milestone 的稳定 Key 在各自类型内对整个 Outline Version 唯一，同级 Sequence 在父节点作用域内唯一；每个 Main Beat 至少一个 Milestone；除最后一个 Main Beat 外必须有且只有一个指向相邻下一 Main Beat 的 Handoff。全书最后一个 Main Beat 必须使用显式空 Handoff：目标、过渡模式、退出结果和下一触发均为 null，四个状态/约束列表均为空数组。Foundation 不得在 Arc 尚未生成时预测伏笔 `owner_arc_key`；Structure 必须按 Foundation 伏笔原顺序返回等长的 Arc Key / null 映射，并且非空 Key 必须引用同次 Structure 生成的 Arc。相互隔离的 Arc Beats 与 Beat Detail Provider 不得生成全书级 Beat、Candidate、Milestone Key 或 Handoff 目标 Key。Laravel 必须在确定性 Skeleton Assembly 和 Beat Detail 校验中按冻结结构与响应数组顺序分配这些 Key，并在 Finalize 时按位置把伏笔归属合并回 Blueprint、解析数据库 ID；无法唯一解析时整批失败。
 
 首版 Milestone/Handoff 只控制按 `mainline_sequence` 排列的 Main Beat。Subplot 继续通过 Arc Completion Conditions 和 Chapter Plan Secondary Contribution 推进，不建立第二套独立进度游标。
 
@@ -624,7 +624,7 @@ Foundation（Bible / 初始人物 / 世界 / 伏笔）
 → Finalize（Laravel 确定性合并、校验并事务写入）
 ```
 
-禁止一次 Provider 请求同时生成 Bible、全书 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Foundation、Structure、每个 Arc Beats 和每个 Beat Detail 都保存独立 Run、不可变 Artifact、输入指纹和恢复点；每个 Provider Job 最多一次模型请求。Skeleton Assembly 与 Finalize 均由 Laravel 确定性执行，不调用 Provider。任何 Arc 失败只恢复该 Arc，已经成功且来源链匹配的 Artifact 不重复计费。
+禁止一次 Provider 请求同时生成 Bible、全书 Volume/Arc/Beat、全部 Milestone 和全部 Handoff。Foundation、Structure、每个 Arc Beats 和每个 Beat Detail 都保存独立 Run、不可变 Artifact、输入指纹和恢复点；Foundation 必须从 `config/narrative.php` 接收文风 code、中文名称、写作指令及字段职责，模型输出仍只保存稳定 code 和显式参数，不得把说明目录写入 Bible；Arc Beats 从冻结 Structure 接收全书约束摘要、所属 Volume、目标 Arc 与相邻 Arc 摘要，不重复接收完整 Structure；Beat Detail 从同一份冻结 Skeleton 接收目标 Beat 所属 Volume / Arc 的精简上下文。两类精简上下文都必须纳入输入指纹。当前四个 Outline Provider Stage 的模型 Prompt 只包含完成规划所需的语义上下文，不得包含小说数据库主键、Artifact ID、checksum 或配置来源；这些内部来源引用必须继续保存在 Run 快照、Artifact lineage 和 Stage 输入指纹中。冻结历史 Legacy Skeleton 请求只用于旧批次解释与恢复，不得改写其原 Prompt。每个 Provider Job 最多一次模型请求。Skeleton Assembly 与 Finalize 均由 Laravel 确定性执行，不调用 Provider。任何 Arc 失败只恢复该 Arc，已经成功且来源链匹配的 Artifact 不重复计费。
 
 ### volumes
 
@@ -750,11 +750,11 @@ updated_at
 
 `due_foreshadowings` 只保留历史整数 ID；新版本 Plan 使用 `foreshadowing_actions`。人工编辑保存为新的 Plan Version，旧版本不得原地覆盖。
 
-Primary Contribution 使用 `novel_outline_arc_id + novel_outline_beat_id + novel_outline_milestone_id` 引用冻结 Outline 的完整父链，并记录目标 Scene 与验收条件；每个新 Plan 必须恰有一个 Primary，Secondary 只能推进获准支线，不能替代或提前完成后续 Main Beat/Milestone。`character_candidates` 与 `world_entity_candidates` 保存稳定临时键、名称或类型、描述、去重依据、潜在重复对象、引入理由与目标 Scene。三者在 Review PASS 前都只是 Draft 契约。
+Primary Contribution 使用 `novel_outline_arc_id + novel_outline_beat_id + novel_outline_milestone_id` 引用冻结 Outline 的完整父链，并记录目标 Scene 与验收条件；每个新 Plan 必须恰有一个 Primary，Secondary 只能推进获准支线，不能替代或提前完成后续 Main Beat/Milestone。Outline 中的 `character_candidates` 与 `world_entity_candidates` 只保存 Beat 级引入资格，不冻结 Scene；Chapter Planner 选择候选进入具体章节时，Chapter Plan 才保存稳定临时键、名称或类型、描述、去重依据、潜在重复对象、引入理由与目标 Scene。三者在 Review PASS 前都只是 Draft 契约。
 
 Chapter Plan 必须冻结 Outline ID、Checksum、Primary Arc/Beat/Milestone ID 和 Handoff 契约。`admission_snapshot` 在 Scene 1 前同时冻结 Bible/State/Outline/Plan 来源，以及 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五个下游 AI Stage 的 Route、Prompt Version、模型容量和分档请求预算；相同 `input_hash` 复用 Ready Plan，语义输入变化创建新 Plan Version。Generation Run 的 Context Snapshot 同时记录已完成 Milestone/Beat IDs、当前 Beat 已使用的 Canonical Chapter 数和章节预算；后续大纲修订不得把旧 Plan 静默改挂到新版本。
 
-Plan Admission v2 必须把模型静态容量与工作流请求预算分开保存。模型容量来自与冻结 Provider + Model 精确匹配且已启用的 `ai_model_prices` 记录；每档请求预算分别包含 `output_tokens`、`reasoning_reserve_tokens` 和两者之和 `max_completion_tokens`。任一 Stage 缺少已核实容量、缺少结构化输出能力、配置了不受支持的推理程度、预算超过模型最大输出或输入后的剩余上下文时，必须在 Provider 请求前失败。Chapter Planner 位于 Admission 之前，因此在其首个 Run 中独立冻结同样的路由、容量和预算合同。
+Plan Admission v3 必须保留 v2 的模型静态容量与工作流请求预算合同，并新增 Current Outline 字数合同及其 Checksum。模型容量来自与冻结 Provider + Model 精确匹配且已启用的 `ai_model_prices` 记录；每档请求预算分别包含 `output_tokens`、`reasoning_reserve_tokens` 和两者之和 `max_completion_tokens`。任一 Stage 缺少已核实容量、缺少结构化输出能力、配置了不受支持的推理程度、预算超过模型最大输出或输入后的剩余上下文时，必须在 Provider 请求前失败。Chapter Planner 位于 Admission 之前，因此在其首个 Run 中独立冻结同样的路由、容量、字数和预算合同。历史 v2 Snapshot 继续按其原合同执行，不得静默补写 v3 字段。
 
 ---
 
@@ -2039,14 +2039,14 @@ Dashboard 是跨小说的日常操作摘要，不承载章节生成领域逻辑�
 活跃小说
 正在运行章节
 今日 Token / Cost
-Failed
-Blocked
-Needs Attention
-最近 Generation Run
+已失败
+已阻塞
+需要关注
+最近生成运行记录
 待处理伏笔
 ```
 
-最近生成必须显示 Novel、Chapter、Stage、Status、耗时、成本与时间，并进入 Chapter Workbench 或 Run Inspector。
+最近生成必须显示小说、章节、阶段、状态、耗时、成本与时间，并进入章节工作台或运行检查器。
 
 Novel Overview 显示当前小说的 Canonical 字数、Active Volume、当前流水线、首轮 Review 通过率、Rewrite 比例、待处理伏笔以及失败和审校待办。下一步操作由持久化状态决定，同一时刻只突出一个主操作。
 
@@ -2192,7 +2192,7 @@ Filament “AI 与成本”只提供“服务商连接”和“模型价格”�
 
 服务商连接、API Key 与 Timeout 通过“AI 与成本 → 服务商连接”保存；模型价格、容量、能力和 Stage 路由通过“AI 与成本 → 模型价格”保存。计价币种、费用硬上限、Outline、章节阶段、修复子阶段的可见输出与推理预留预算、审校上下文预算和 Embedding 维度通过“设置 → 生成参数”保存到 `system_settings.generation`。Provider、Model、价格或全局生成参数在数据库缺失或无效时明确阻止新请求，不读取旧 `system_settings.ai`、`config/ai.php`、`config/generation.php` 业务回退；新安装由数据库迁移写入一次性初始生成参数，之后只由 UI 维护。Embedding 维度保存时必须与 PostgreSQL `memories.embedding` 的实际向量维度一致。
 
-启动 AI Outline 前，页面必须预览四个 Provider 任务的有效 Provider、Model、推理程度、配置来源、Prompt Version、请求预算、推理预留、已核实容量及配置错误；错误必须同时显示稳定错误码和用户文案。缺少任一独立路由、已启用模型价格记录、正整数容量、有效请求预算或结构化输出能力时，预览必须标记不可启动；配置推理程度时还必须确认该模型支持 `reasoning_effort`。全局路由和小说级新选择在保存边界执行同一适用性校验，服务端不得创建 Batch、子 Run 或发出 Provider 请求。新建 v4 Outline 主批次在开始时按四条有效路由分别读取对应 `ai_model_prices` 记录，并冻结 Foundation、Structure、Arc Beats、Beat Detail 各自的 Provider、Model、推理程度、Prompt Version、模型价格记录 ID、容量、能力、结构化输出额度与推理 Token 预留；Batch 和 Stage 的 `input_hash` 都必须包含冻结请求预算，后台修改配置不得改变已存在批次或复用边界。内部统一的 `max_completion_tokens` 请求预算为结构化输出额度与推理预留之和，Provider 适配器再映射为对应 API 参数；四个阶段在创建子 Run 前统一校验该总额不超过模型最大输出和扣除估算输入后的剩余上下文。Schema 的集合和文本字段必须声明数量与长度上限，避免合法但无界的结构化响应耗尽输出预算。子 Run 和重试只能读取该任务的冻结值。后台修改价格记录、路由或小说设置不得改变已存在批次，v3 批次继续按原单路由快照及升级前请求上限执行。运行详情必须分别显示冻结路由、静态模型容量、实际请求预算、容量门禁快照、Provider 适配器实际发送的非敏感参数、`reasoning_tokens` 和完成预算分类，不能用计划值冒充已发送参数。确定性的 Skeleton Assembly、Chapter Assembly 与 Outline Finalize 不配置模型。页面不得回显 API Key，日志不得记录密钥明文或密文。成本硬限制按 UI 中的全局设置和小说设置执行。
+启动 AI Outline 前，页面必须预览四个 Provider 任务的有效 Provider、Model、推理程度、配置来源、Prompt Version、请求预算、推理预留、已核实容量及配置错误；错误必须同时显示稳定错误码和用户文案。缺少任一独立路由、已启用模型价格记录、正整数容量、有效请求预算或结构化输出能力时，预览必须标记不可启动；配置推理程度时还必须确认该模型支持 `reasoning_effort`。全局路由和小说级新选择在保存边界执行同一适用性校验，服务端不得创建 Batch、子 Run 或发出 Provider 请求。新建 v5 Outline 主批次在开始时按四条有效路由分别读取对应 `ai_model_prices` 记录，并冻结 Foundation、Structure、Arc Beats、Beat Detail 各自的 Provider、Model、推理程度、Prompt Version、模型价格记录 ID、容量、能力、结构化输出额度、推理 Token 预留及字数合同；Batch 和 Stage 的 `input_hash` 都必须包含相应冻结合同，后台修改配置不得改变已存在批次或复用边界。内部统一的 `max_completion_tokens` 请求预算为结构化输出额度与推理预留之和，Provider 适配器再映射为对应 API 参数；四个阶段在创建子 Run 前统一校验该总额不超过模型最大输出和扣除估算输入后的剩余上下文。Schema 的集合和文本字段必须声明数量与长度上限，避免合法但无界的结构化响应耗尽输出预算。子 Run 和重试只能读取该任务的冻结值。后台修改价格记录、路由或小说设置不得改变已存在批次，v3 批次继续按原单路由快照及升级前请求上限执行，v4 批次保留原多路由合同供历史追踪。运行详情必须分别显示冻结路由、静态模型容量、实际请求预算、容量门禁快照、Provider 适配器实际发送的非敏感参数、`reasoning_tokens` 和完成预算分类，不能用计划值冒充已发送参数。确定性的 Skeleton Assembly、Chapter Assembly 与 Outline Finalize 不配置模型。页面不得回显 API Key，日志不得记录密钥明文或密文。成本硬限制按 UI 中的全局设置和小说设置执行。
 
 达到 hard limit：
 

@@ -38,7 +38,10 @@ beforeEach(function () {
 
 function rewriteFixture(): array
 {
-    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Generating,
+        'settings' => ['generation' => ['chapter_target_words' => 8]],
+    ]);
     app(InitializeNovelStateAction::class)->handle($novel);
     NovelBible::factory()->for($novel)->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Rewrite]);
