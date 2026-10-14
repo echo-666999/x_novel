@@ -27,6 +27,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Queue::fake();
+    configureEmbeddingForTest();
 });
 
 /** @return array<string, mixed> */

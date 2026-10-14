@@ -1,14 +1,16 @@
 <?php
 
-test('chapter capacity configuration documentation and environment example match the frozen budget contract', function () {
+test('chapter capacity database settings and documentation match the frozen budget contract', function () {
     $root = dirname(__DIR__, 2);
     $env = file_get_contents($root.'/.env.example');
     $generationConfig = file_get_contents($root.'/config/generation.php');
+    $generationSettings = file_get_contents($root.'/app/Services/GenerationSettingsService.php');
+    $settingsPage = file_get_contents($root.'/app/Filament/Pages/Settings.php');
     $prd = file_get_contents($root.'/docs/PRD.md');
     $architecture = file_get_contents($root.'/docs/architecture/generation-pipeline.md');
     $dataModel = file_get_contents($root.'/docs/architecture/data-model.md');
 
-    foreach ([$env, $generationConfig, $prd, $architecture, $dataModel] as $content) {
+    foreach ([$env, $generationConfig, $generationSettings, $settingsPage, $prd, $architecture, $dataModel] as $content) {
         expect($content)->toBeString()->not->toBeEmpty();
     }
 
@@ -21,24 +23,24 @@ test('chapter capacity configuration documentation and environment example match
         'summary' => ['SUMMARY', true],
     ];
     foreach ($stages as $stage => [$environmentPrefix, $hasRetryTiers]) {
-        // 环境示例、运行配置和架构文档必须共同描述同一套 Stage 预算合同。
+        // 环境文件不再承载预算；应用默认值、数据库服务、UI 与架构文档共同描述同一合同。
         expect($env)
-            ->toContain("{$environmentPrefix}_MAX_OUTPUT_TOKENS=")
-            ->toContain("{$environmentPrefix}_REASONING_RESERVE_TOKENS=");
+            ->not->toContain("{$environmentPrefix}_MAX_OUTPUT_TOKENS=")
+            ->not->toContain("{$environmentPrefix}_REASONING_RESERVE_TOKENS=");
         expect($generationConfig)
-            ->toContain("'{$stage}' => [")
-            ->toContain("{$environmentPrefix}_MAX_OUTPUT_TOKENS")
-            ->toContain("{$environmentPrefix}_REASONING_RESERVE_TOKENS");
+            ->toContain("'{$stage}' => [");
+        expect($generationSettings)->toContain('chapter_request_budgets');
+        expect($settingsPage)->toContain('chapter_request_budgets');
         expect($prd)->toContain("`{$stage}`");
         expect($architecture)->toContain("`{$stage}`");
         expect($dataModel)->toContain("`{$stage}`");
 
         if ($hasRetryTiers) {
             expect($env)
-                ->toContain("{$environmentPrefix}_RETRY_MAX_OUTPUT_TOKENS=")
-                ->toContain("{$environmentPrefix}_FINAL_RETRY_MAX_OUTPUT_TOKENS=")
-                ->toContain("{$environmentPrefix}_RETRY_REASONING_RESERVE_TOKENS=")
-                ->toContain("{$environmentPrefix}_FINAL_RETRY_REASONING_RESERVE_TOKENS=");
+                ->not->toContain("{$environmentPrefix}_RETRY_MAX_OUTPUT_TOKENS=")
+                ->not->toContain("{$environmentPrefix}_FINAL_RETRY_MAX_OUTPUT_TOKENS=")
+                ->not->toContain("{$environmentPrefix}_RETRY_REASONING_RESERVE_TOKENS=")
+                ->not->toContain("{$environmentPrefix}_FINAL_RETRY_REASONING_RESERVE_TOKENS=");
         }
     }
 

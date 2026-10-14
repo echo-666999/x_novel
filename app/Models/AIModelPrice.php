@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\AiStage;
+use App\Services\GenerationSettingsService;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 
@@ -42,7 +43,7 @@ class AIModelPrice extends Model
 
     public static function findEnabledForRoute(string $provider, string $model): ?self
     {
-        $currency = strtoupper((string) config('ai.cost.currency', 'USD'));
+        $currency = app(GenerationSettingsService::class)->currency();
 
         // 路由身份是 Provider + Model；多币种价格存在时优先采用系统计价币种的模型资料。
         return self::query()

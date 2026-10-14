@@ -21,8 +21,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
+    configureEmbeddingForTest();
 });
 
 test('memory embedder stores the fixed model and vector', function () {

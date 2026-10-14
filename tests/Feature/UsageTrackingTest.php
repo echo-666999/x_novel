@@ -1,6 +1,5 @@
 <?php
 
-use App\AI\AiSettingsService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
@@ -9,6 +8,7 @@ use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
 use App\Models\Chapter;
+use App\Models\AIModelPrice;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\UsageRecord;
@@ -18,10 +18,7 @@ use RuntimeException as TestRuntimeException;
 uses(RefreshDatabase::class);
 
 test('tracking provider records tokens latency cost request id and run context', function () {
-    config()->set('ai.provider', 'openai');
-    config()->set('ai.cost.input_per_million', 2);
-    config()->set('ai.cost.cached_input_per_million', 0.5);
-    config()->set('ai.cost.output_per_million', 8);
+    createUsageModelPrice();
 
     $response = usageResponse();
     $novel = Novel::factory()->create();
@@ -67,16 +64,7 @@ test('tracking provider records tokens latency cost request id and run context',
 });
 
 test('tracking provider calculates cost from database pricing', function () {
-    config()->set('ai.providers.openai.api_key', 'usage-test-key');
-    config()->set('ai.cost.input_per_million', 100);
-    config()->set('ai.cost.cached_input_per_million', 100);
-    config()->set('ai.cost.output_per_million', 100);
-    $settingsService = app(AiSettingsService::class);
-    $settings = $settingsService->editableSettings();
-    $settings['cost']['input_per_million'] = 2;
-    $settings['cost']['cached_input_per_million'] = 0.5;
-    $settings['cost']['output_per_million'] = 8;
-    $settingsService->save($settings, 7);
+    createUsageModelPrice();
     $fake = (new FakeAiProvider)->enqueue(usageResponse());
     $provider = new TrackingAiProvider($fake, app(UsageRecorder::class));
 
@@ -140,4 +128,18 @@ function usageResponse(): AiResponse
         ],
         reasoningTokens: 125,
     );
+}
+
+function createUsageModelPrice(): AIModelPrice
+{
+    return AIModelPrice::query()->create([
+        'provider' => 'openai',
+        'model' => 'resolved-model',
+        'currency' => 'USD',
+        'billing_unit' => 1_000_000,
+        'input_price' => 2,
+        'cached_input_price' => 0.5,
+        'output_price' => 8,
+        'is_enabled' => true,
+    ]);
 }

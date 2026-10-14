@@ -4,8 +4,11 @@ use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\OpenAiProvider;
 use App\Jobs\GenerateNovelBeatDetailJob;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Symfony\Component\Process\Exception\ProcessSignaledException;
 use Symfony\Component\Process\Process;
+
+uses(RefreshDatabase::class);
 
 test('openai http client stops a genuinely slow response at its configured timeout', function () {
     $port = availableTimeoutTestPort();
@@ -20,10 +23,10 @@ test('openai http client stops a genuinely slow response at its configured timeo
     try {
         awaitTimeoutTestServer($server, $port);
 
-        config()->set('ai.providers.openai.api_key', 'test-key');
-        config()->set('ai.providers.openai.base_url', "http://127.0.0.1:{$port}");
-        config()->set('ai.providers.openai.connect_timeout', 1);
-        config()->set('ai.providers.openai.timeout', 1);
+        createAiProviderConnectionForTest('openai', "http://127.0.0.1:{$port}")->update([
+            'connect_timeout' => 1,
+            'timeout' => 1,
+        ]);
 
         $startedAt = hrtime(true);
 

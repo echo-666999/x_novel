@@ -7,6 +7,7 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
+use App\Enums\StoryArcType;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Jobs\GenerateNovelFoundationJob;
 use App\Jobs\GenerateNovelOutlineJob;
@@ -387,6 +388,76 @@ test('outline page edits exactly one selected node instead of opening the whole 
     ], 'title', '页面修订 Milestone'],
 ]);
 
+test('outline page loads only the expanded volume hierarchy', function () {
+    $novel = Novel::factory()->create();
+    $definition = NormalizedOutlineDefinition::make();
+    $definition['volumes'][] = [
+        'key' => 'second-volume',
+        'sequence' => 2,
+        'title' => 'Second Volume',
+        'goal' => '第二卷目标。',
+        'climax' => '第二卷高潮。',
+        'target_words' => 20_000,
+        'arcs' => [[
+            'key' => 'second-arc',
+            'sequence' => 1,
+            'mainline_sequence' => null,
+            'type' => StoryArcType::Subplot->value,
+            'title' => 'Second Arc',
+            'goal' => '第二卷支线目标。',
+            'stakes' => '第二卷支线风险。',
+            'completion_conditions' => ['第二卷支线完成。'],
+            'beats' => [[
+                'key' => 'second-beat',
+                'sequence' => 1,
+                'mainline_sequence' => null,
+                'title' => 'Second Beat',
+                'summary' => '第二卷节点摘要。',
+                'chapter_budget' => ['min' => 1, 'max' => 2],
+                'acceptance_criteria' => ['第二卷节点完成。'],
+                'must_include' => [],
+                'must_not_include' => [],
+                'character_candidates' => [],
+                'world_entity_candidates' => [],
+                'milestones' => [],
+                'handoff' => [
+                    'next_beat_key' => null,
+                    'transition_mode' => null,
+                    'exit_result' => null,
+                    'next_trigger' => null,
+                    'carried_states' => [],
+                    'open_threads' => [],
+                    'required_transition' => [],
+                    'forbidden_jump' => [],
+                ],
+            ]],
+        ]],
+    ];
+    $outline = app(CreateNormalizedNovelOutlineVersionAction::class)->handle($novel, $definition);
+    $volumes = $outline->volumes()->get();
+
+    $component = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
+        ->assertSee(['Factory Volume', 'Second Volume', '按分卷加载'])
+        ->assertDontSee(['Factory Arc', 'Factory Beat', 'Factory Milestone', 'Second Arc', 'Second Beat']);
+    expect($component->get('loadedOutlineVolumes'))->toBe([]);
+
+    $component
+        ->call('loadOutlineVolume', $volumes[0]->getKey())
+        ->assertSee(['Factory Arc', 'Factory Beat', 'Factory Milestone'])
+        ->assertDontSee(['Second Arc', 'Second Beat']);
+    $firstLoad = $component->get('loadedOutlineVolumes');
+    expect($firstLoad[$outline->getKey()])->toHaveCount(1)
+        ->and($firstLoad[$outline->getKey()][$volumes[0]->getKey()]['arcs'][0]['title'])->toBe('Factory Arc');
+
+    $component->call('loadOutlineVolume', $volumes[0]->getKey());
+    expect($component->get('loadedOutlineVolumes'))->toBe($firstLoad);
+
+    $component
+        ->call('loadOutlineVolume', $volumes[1]->getKey())
+        ->assertSee(['Second Arc', 'Second Beat']);
+    expect($component->get('loadedOutlineVolumes')[$outline->getKey()])->toHaveCount(2);
+});
+
 test('outline generation action previews every resolved task route before start', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
 
@@ -399,34 +470,26 @@ test('outline generation action previews every resolved task route before start'
             AiStage::OutlineStructure->getLabel(),
             AiStage::OutlineArcBeats->getLabel(),
             AiStage::OutlineBeatDetail->getLabel(),
-            '可启动 · OPENAI / '.config('ai.models.outline_foundation'),
+            '可启动 · OPENAI / test-outline_foundation-model',
             '容量 1,050,000 / 128,000',
         ]);
 });
 
 test('outline start reports missing dedicated routes instead of using planner', function () {
     Queue::fake();
-    foreach ([
+    AIModelRoute::query()->whereIn('role', collect([
         AiStage::OutlineFoundation,
         AiStage::OutlineStructure,
         AiStage::OutlineArcBeats,
         AiStage::OutlineBeatDetail,
-    ] as $stage) {
-        config()->set("ai.models.{$stage->value}", null);
-        config()->set("ai.stage_providers.{$stage->value}", null);
-    }
-    AIModelRoute::query()->create([
-        'role' => AiStage::Planner,
-        'provider' => 'openai',
-        'model' => 'planner-must-not-be-used',
-        'reasoning_effort' => 'high',
-    ]);
+    ])->map->value->all())->delete();
+    createAiModelRouteForTest(AiStage::Planner, 'planner-must-not-be-used', 'openai', 'high');
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft]);
 
     $component = Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
         ->mountAction('generateOutlineCandidate')
         ->assertActionMounted('generateOutlineCandidate')
-        ->assertMountedActionModalSee(['不可启动', '[outline_route_not_configured]', '未配置独立的 Provider 和 Model 路由']);
+        ->assertMountedActionModalSee(['不可启动', '[outline_route_not_configured]', '尚未在管理后台配置模型路由']);
 
     $component
         ->setActionData(['volume_count' => 1])
@@ -439,7 +502,6 @@ test('outline start reports missing dedicated routes instead of using planner', 
 
 test('outline route preview exposes a capacity mismatch and start still rejects it', function () {
     Queue::fake();
-    config()->set('ai.providers.openai.api_key', 'test-key');
     $novel = Novel::factory()->create([
         'status' => NovelStatus::Draft,
         'settings' => ['ai' => ['stages' => [

@@ -7,6 +7,7 @@ use App\Enums\AiStage;
 use App\Models\AIModelPrice;
 use App\Models\AIModelRoute;
 use App\Models\Novel;
+use App\Services\GenerationSettingsService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -18,7 +19,10 @@ class AiModelRouteService
 
     private const INCOMPLETE_OUTLINE_OVERRIDE_PREFIX = 'incomplete-outline:';
 
-    public function __construct(private readonly AiSettingsService $settings) {}
+    public function __construct(
+        private readonly AiSettingsService $settings,
+        private readonly GenerationSettingsService $generationSettings,
+    ) {}
 
     public function find(AiStage $stage): ?AIModelRoute
     {
@@ -47,7 +51,7 @@ class AiModelRouteService
                 ->where('provider', $route->provider)
                 ->where('model', $route->model)
                 ->where('is_enabled', true)
-                ->orderByRaw('currency = ? desc', [strtoupper((string) config('ai.cost.currency', 'USD'))])
+                ->orderByRaw('currency = ? desc', [$this->generationSettings->currency()])
                 ->value('id');
 
             return [$stage->value => [
@@ -291,7 +295,7 @@ class AiModelRouteService
             ->where('provider', $route['provider'])
             ->where('model', $route['model'])
             ->where('is_enabled', true)
-            ->orderByRaw('currency = ? desc', [strtoupper((string) config('ai.cost.currency', 'USD'))])
+            ->orderByRaw('currency = ? desc', [$this->generationSettings->currency()])
             ->value('id');
 
         return is_numeric($priceId)
@@ -378,12 +382,7 @@ class AiModelRouteService
             return strtolower(trim($route->provider));
         }
 
-        $settings = $this->settings->current()['settings'];
-        $provider = data_get($settings, "stages.{$stage->value}.provider");
-
-        return strtolower(trim(is_string($provider) && $provider !== ''
-            ? $provider
-            : (string) data_get($settings, 'default_provider', config('ai.provider'))));
+        return '';
     }
 
     /** @param array<string, mixed> $routes */

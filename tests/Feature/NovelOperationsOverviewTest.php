@@ -17,6 +17,7 @@ use App\Models\Review;
 use App\Models\UsageRecord;
 use App\Models\Volume;
 use App\Services\DashboardOperationsOverview;
+use App\Services\GenerationSettingsService;
 use App\Services\NovelOperationsOverview;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -24,7 +25,10 @@ use Illuminate\Support\Facades\DB;
 uses(RefreshDatabase::class);
 
 test('novel operations overview derives progress and quality from persisted novel data', function () {
-    config()->set('ai.cost.currency', 'CNY');
+    $generationSettings = app(GenerationSettingsService::class);
+    $settings = $generationSettings->settings();
+    $settings['currency'] = 'CNY';
+    $generationSettings->save($settings, null);
     $novel = Novel::factory()->create([
         'status' => NovelStatus::Generating,
         'current_chapter_sequence' => 2,

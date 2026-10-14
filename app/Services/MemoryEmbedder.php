@@ -21,6 +21,7 @@ class MemoryEmbedder
         private readonly EmbeddingProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly GenerationSettingsService $generationSettings,
     ) {}
 
     public function embed(int $memoryId): Memory
@@ -29,7 +30,7 @@ class MemoryEmbedder
         $settings = $this->settingsResolver->resolve(AiStage::Embedding);
         $provider = $settings->provider;
         $model = $settings->model;
-        $dimensions = (int) config('ai.embedding.dimensions');
+        $dimensions = $this->generationSettings->embeddingDimensions();
         $key = "embedding:{$memory->getKey()}:{$provider}:{$model}";
         $inputHash = hash('sha256', $memory->summary."\0{$provider}\0{$model}\0{$dimensions}");
         $chapterId = Chapter::query()

@@ -6,6 +6,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
+use App\Enums\AiStage;
 use App\Filament\Pages\AiDebugTest;
 use App\Models\UsageRecord;
 use App\Models\User;
@@ -16,13 +17,9 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
-    config()->set('ai.provider', 'openai');
-    config()->set('ai.models.planner', 'planner-test-model');
-    config()->set('ai.models.writer', 'writer-test-model');
-    config()->set('ai.cost.currency', 'USD');
-    config()->set('ai.cost.input_per_million', 1.0);
-    config()->set('ai.cost.cached_input_per_million', 0.5);
-    config()->set('ai.cost.output_per_million', 2.0);
+    createAiProviderConnectionForTest();
+    createAiModelRouteForTest(AiStage::Planner, 'planner-test-model');
+    createAiModelRouteForTest(AiStage::Writer, 'writer-test-model');
 });
 
 test('ai debug remains directly accessible without adding top level navigation', function () {

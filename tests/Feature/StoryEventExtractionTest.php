@@ -967,9 +967,6 @@ test('invalid provider json is retried only once for the same event extraction i
 });
 
 test('event extraction increases frozen output budgets and stops before a fourth provider call', function () {
-    config()->set('generation.event_extraction_max_output_tokens', 100);
-    config()->set('generation.event_extraction_retry_max_output_tokens', 200);
-    config()->set('generation.event_extraction_final_retry_max_output_tokens', 300);
     config()->set('generation.chapter_request_budgets.extractor.initial.output_tokens', 100);
     config()->set('generation.chapter_request_budgets.extractor.retry.output_tokens', 200);
     config()->set('generation.chapter_request_budgets.extractor.final.output_tokens', 300);

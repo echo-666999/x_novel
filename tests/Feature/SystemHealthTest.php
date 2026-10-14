@@ -6,6 +6,7 @@ use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Services\SystemHealthService;
+use App\Services\GenerationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Queue;
@@ -15,7 +16,11 @@ uses(RefreshDatabase::class);
 test('system health exposes every mvp release checklist category without secrets', function () {
     config()->set('queue.default', 'redis');
     config()->set('app.locale', 'zh_CN');
-    config()->set('ai.budget.daily_hard_limit', 10);
+    seedAllAiModelRoutesForTest();
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->settings();
+    $settings['budget']['daily_hard_limit'] = 10;
+    $service->save($settings, null);
 
     $checks = app(SystemHealthService::class)->checks()->keyBy('key');
 

@@ -4,10 +4,10 @@ namespace App\Filament\Pages;
 
 use App\AI\AiDebugService;
 use App\AI\AiSettingsResolver;
-use App\AI\AiSettingsService;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\PromptVersionResolver;
 use App\Enums\AiStage;
+use App\Services\GenerationSettingsService;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -143,7 +143,7 @@ class AiDebugTest extends Page
                                     TextEntry::make('debug_cost')
                                         ->label('Cost')
                                         ->state(fn (): ?string => isset($this->result['cost'])
-                                            ? data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $this->result['cost'], 4)
+                                            ? app(GenerationSettingsService::class)->currency().' '.number_format((float) $this->result['cost'], 4)
                                             : null)
                                         ->placeholder('—'),
                                     TextEntry::make('debug_latency')

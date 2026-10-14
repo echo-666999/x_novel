@@ -23,8 +23,6 @@ use JsonException;
 
 class OpenAiProvider implements AiProvider, EmbeddingProvider
 {
-    private static bool $legacyEnvironmentWarningLogged = false;
-
     private const PROVIDER = 'openai';
 
     private const DIAGNOSTIC_METADATA_KEYS = [
@@ -63,7 +61,6 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $requestLogContext = $this->diagnosticLogContext($request, $requestLogId);
 
         if ((bool) config('ai.logging.prompts', false)) {
-            $requestLogContext['ai_models'] = $this->sanitizeForLogging((array) config('ai.models', []));
             $requestLogContext['metadata'] = $this->sanitizeForLogging($request->metadata);
             $requestLogContext['payload'] = $this->sanitizeForLogging($payload);
         }
@@ -166,42 +163,16 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
 
     private function client(): PendingRequest
     {
-        $this->logLegacyEnvironmentWarning();
+        $this->settingsService->assertProviderAvailable(self::PROVIDER);
         $providerSettings = $this->settingsService->providerSettings(self::PROVIDER);
         $apiKey = $this->settingsService->apiKey(self::PROVIDER);
 
-        if ($apiKey === '') {
-            throw new AiProviderException(
-                errorCode: 'provider_not_configured',
-                message: 'AI Provider API Key 尚未配置。',
-                retryable: false,
-            );
-        }
-
-        return Http::baseUrl(rtrim((string) ($providerSettings['base_url'] ?? config('ai.providers.openai.base_url')), '/'))
+        return Http::baseUrl(rtrim((string) $providerSettings['base_url'], '/'))
             ->withToken($apiKey)
             ->acceptJson()
             ->asJson()
-            ->connectTimeout((int) ($providerSettings['connect_timeout'] ?? config('ai.providers.openai.connect_timeout', 10)))
-            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.openai.timeout', 150)));
-    }
-
-    private function logLegacyEnvironmentWarning(): void
-    {
-        if (self::$legacyEnvironmentWarningLogged) {
-            return;
-        }
-
-        $legacy = array_values(array_filter([
-            config('ai.providers.openai.using_legacy_api_key') ? 'AI_API_KEY' : null,
-            config('ai.providers.openai.using_legacy_base_url') ? 'AI_BASE_URL' : null,
-        ]));
-
-        if ($legacy !== []) {
-            Log::warning('Deprecated OpenAI environment variables are in use.', ['variables' => $legacy]);
-        }
-
-        self::$legacyEnvironmentWarningLogged = true;
+            ->connectTimeout((int) $providerSettings['connect_timeout'])
+            ->timeout((int) $providerSettings['timeout']);
     }
 
     /** @return array<string, mixed> */

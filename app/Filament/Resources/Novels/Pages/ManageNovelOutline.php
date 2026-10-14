@@ -28,7 +28,6 @@ use App\Models\NovelOutlineArc;
 use App\Models\NovelOutlineBeat;
 use App\Models\NovelOutlineMilestone;
 use App\Models\NovelOutlineVolume;
-use App\Services\NormalizedNovelOutlineValidator;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineProgressResolver;
 use App\Services\NovelOutlineStageContract;
@@ -52,6 +51,9 @@ use Throwable;
 
 class ManageNovelOutline extends ViewRecord
 {
+    /** @var array<int|string, array<int|string, array<string, mixed>>> */
+    public array $loadedOutlineVolumes = [];
+
     protected ?NovelOutlineProgress $cachedOutlineGenerationProgress = null;
 
     /** @var array<string, array<string, mixed>>|null */
@@ -84,9 +86,6 @@ class ManageNovelOutline extends ViewRecord
                     return [
                         'outline' => $outline,
                         'versions' => $this->getRecord()->outlines()->get(),
-                        'validation' => $outline === null
-                        ? null
-                        : app(NormalizedNovelOutlineValidator::class)->validate(NormalizedNovelOutline::fromModel($outline)),
                         'outlineGeneration' => $this->outlineGenerationProgress(),
                         'outlineGenerationElapsed' => $this->outlineGenerationElapsed(),
                     ];
@@ -122,7 +121,7 @@ class ManageNovelOutline extends ViewRecord
                 ->schema([
                     TextInput::make('volume_count')->label('预计分卷数')->integer()->minValue(1)->maxValue(12)->default(5)->required(),
                     Section::make('启动前路由预览')
-                        ->description('以下结果按当前小说 Override、全局模型路由和环境回退实时解析；创建批次后会逐任务冻结。')
+                        ->description('以下结果按当前小说 Override 和数据库模型路由实时解析；创建批次后会逐任务冻结。')
                         ->schema(collect($this->outlineAiStages())->map(fn (AiStage $stage): TextEntry => TextEntry::make("outline_route_preview.{$stage->value}")
                             ->label($stage->getLabel())
                             ->state(fn (): string => $this->outlineRoutePreviewText($stage))
@@ -384,6 +383,7 @@ class ManageNovelOutline extends ViewRecord
                 }
 
                 $this->getRecord()->refresh();
+                $this->loadedOutlineVolumes = [];
                 $unchanged = $revision->getKey() === (int) ($arguments['outline_id'] ?? 0);
                 Notification::make()
                     ->title(match (true) {
@@ -394,6 +394,57 @@ class ManageNovelOutline extends ViewRecord
                     ->success()
                     ->send();
             });
+    }
+
+    /**
+     * 首次展开时只读取指定 Volume 的下级节点；后续展开复用当前 Livewire 页面中的结果。
+     */
+    public function loadOutlineVolume(int $volumeId): void
+    {
+        $outline = $this->displayedOutline();
+        if ($outline === null) {
+            return;
+        }
+
+        $outlineKey = (string) $outline->getKey();
+        $volumeKey = (string) $volumeId;
+        if (isset($this->loadedOutlineVolumes[$outlineKey][$volumeKey])) {
+            return;
+        }
+
+        $volume = $outline->volumes()
+            ->whereKey($volumeId)
+            ->with('arcs.beats.milestones')
+            ->first();
+        if (! $volume instanceof NovelOutlineVolume) {
+            return;
+        }
+
+        $this->loadedOutlineVolumes[$outlineKey][$volumeKey] = [
+            'goal' => $volume->goal,
+            'climax' => $volume->climax,
+            'arcs' => $volume->arcs->map(fn (NovelOutlineArc $arc): array => [
+                'sequence' => $arc->sequence,
+                'title' => $arc->title,
+                'type_label' => $arc->type->getLabel(),
+                'arc_key' => $arc->arc_key,
+                'goal' => $arc->goal,
+                'beats' => $arc->beats->map(fn (NovelOutlineBeat $beat): array => [
+                    'sequence' => $beat->sequence,
+                    'title' => $beat->title,
+                    'summary' => $beat->summary,
+                    'beat_key' => $beat->beat_key,
+                    'chapter_budget_min' => $beat->chapter_budget_min,
+                    'chapter_budget_max' => $beat->chapter_budget_max,
+                    'milestones' => $beat->milestones->map(fn (NovelOutlineMilestone $milestone): array => [
+                        'sequence' => $milestone->sequence,
+                        'title' => $milestone->title,
+                        'objective' => $milestone->objective,
+                        'milestone_key' => $milestone->milestone_key,
+                    ])->all(),
+                ])->all(),
+            ])->all(),
+        ];
     }
 
     /** @return array<int, mixed> */
@@ -552,7 +603,7 @@ class ManageNovelOutline extends ViewRecord
         $source = match ($route['source'] ?? null) {
             'novel' => '小说 Override',
             'database' => '数据库路由',
-            default => '环境回退',
+            default => '未知来源',
         };
         $reasoning = filled($route['reasoning_effort'] ?? null)
             ? (string) $route['reasoning_effort']
@@ -724,8 +775,8 @@ class ManageNovelOutline extends ViewRecord
     {
         $outline = $this->getRecord()->currentOutline ?? $this->latestDraft() ?? $this->getRecord()->outlines()->first();
 
-        // 页面会同时展示四层节点，预加载完整关系，避免 Beat 数量增加后产生逐节点查询。
-        return $outline?->loadMissing('volumes.arcs.beats.milestones');
+        // 首屏只需要 Volume 标题；Arc、Beat 与 Milestone 在用户展开对应 Volume 时读取。
+        return $outline?->loadMissing('volumes');
     }
 
     private function latestDraft(): ?NovelOutline

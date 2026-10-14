@@ -145,9 +145,6 @@ test('provider failure preserves the existing summary and canonical story state'
 });
 
 test('canonical summary increases frozen output budgets and stops before a fourth provider call', function () {
-    config()->set('generation.summary_max_output_tokens', 100);
-    config()->set('generation.summary_retry_max_output_tokens', 200);
-    config()->set('generation.summary_final_retry_max_output_tokens', 300);
     config()->set('generation.chapter_request_budgets.summary.initial.output_tokens', 100);
     config()->set('generation.chapter_request_budgets.summary.retry.output_tokens', 200);
     config()->set('generation.chapter_request_budgets.summary.final.output_tokens', 300);

@@ -39,6 +39,7 @@ class PlanAdmissionService
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly PreviousChapterEnding $previousChapterEnding,
         private readonly GenerationRequestBudget $requestBudget,
+        private readonly GenerationSettingsService $generationSettings,
     ) {}
 
     /**
@@ -111,7 +112,7 @@ class PlanAdmissionService
                 'scene_allocations' => $sceneAllocations,
                 'review' => [
                     'estimated_input_words' => $this->lengthPolicy->chapterMaximum($plan->target_words),
-                    'context_token_budget' => (int) config('generation.review_context_token_budget', 32_000),
+                    'context_token_budget' => $this->generationSettings->reviewContextTokenBudget(),
                     'max_completion_tokens' => $this->requestBudget->maximum((array) data_get($routes, 'reviewer.request_budgets', [])),
                 ],
                 'event_extraction' => [

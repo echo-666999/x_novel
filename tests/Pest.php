@@ -8,6 +8,8 @@ use App\Enums\GenerationStage;
 use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Models\AIModelPrice;
+use App\Models\AIModelRoute;
+use App\Models\AIProviderConnection;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -15,6 +17,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Services\GenerationRequestBudget;
+use App\Services\GenerationSettingsService;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanAdmissionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -82,34 +85,18 @@ function attachCanonicalArtifact(Novel $novel, Chapter $chapter): GenerationArti
 
 function seedVerifiedOutlineModelProfiles(): void
 {
+    createAiProviderConnectionForTest();
     collect([
         AiStage::OutlineFoundation,
         AiStage::OutlineStructure,
         AiStage::OutlineArcBeats,
         AiStage::OutlineBeatDetail,
-    ])->map(fn (AiStage $stage): array => [
-        'provider' => strtolower((string) config("ai.stage_providers.{$stage->value}")),
-        'model' => (string) config("ai.models.{$stage->value}"),
-    ])->unique(fn (array $route): string => $route['provider'].'|'.$route['model'])
-        ->each(function (array $route): void {
-            AIModelPrice::query()->updateOrCreate([
-                ...$route,
-                'currency' => strtoupper((string) config('ai.cost.currency', 'USD')),
-            ], [
-                'billing_unit' => 1_000_000,
-                'context_window_tokens' => 1_050_000,
-                'max_output_tokens' => 128_000,
-                'supports_structured_output' => true,
-                'supports_reasoning_effort' => true,
-                'input_price' => 0,
-                'output_price' => 0,
-                'is_enabled' => true,
-            ]);
-        });
+    ])->each(fn (AiStage $stage) => createAiModelRouteForTest($stage));
 }
 
 function seedVerifiedChapterModelProfiles(): void
 {
+    createAiProviderConnectionForTest();
     collect([
         AiStage::Planner,
         AiStage::Writer,
@@ -117,26 +104,71 @@ function seedVerifiedChapterModelProfiles(): void
         AiStage::Reviewer,
         AiStage::Rewrite,
         AiStage::Summary,
-    ])->map(fn (AiStage $stage): array => [
-        'provider' => strtolower((string) config("ai.stage_providers.{$stage->value}", config('ai.provider'))),
-        'model' => (string) config("ai.models.{$stage->value}", config('ai.model')),
-    ])->unique(fn (array $route): string => $route['provider'].'|'.$route['model'])
-        ->each(function (array $route): void {
-            // Chapter Admission 只接受已核实容量的模型，测试夹具也必须显式建立同一合同。
-            AIModelPrice::query()->updateOrCreate([
-                ...$route,
-                'currency' => strtoupper((string) config('ai.cost.currency', 'USD')),
-            ], [
-                'billing_unit' => 1_000_000,
-                'context_window_tokens' => 1_050_000,
-                'max_output_tokens' => 128_000,
-                'supports_structured_output' => true,
-                'supports_reasoning_effort' => true,
-                'input_price' => 0,
-                'output_price' => 0,
-                'is_enabled' => true,
-            ]);
-        });
+    ])->each(fn (AiStage $stage) => createAiModelRouteForTest($stage));
+}
+
+function createAiProviderConnectionForTest(
+    string $provider = 'openai',
+    ?string $baseUrl = null,
+    ?string $apiKey = null,
+    bool $enabled = true,
+): AIProviderConnection {
+    $baseUrl ??= $provider === 'deepseek' ? 'https://deepseek.example' : 'https://openai.example/v1';
+
+    return AIProviderConnection::query()->updateOrCreate(['provider' => $provider], [
+        'name' => ucfirst($provider),
+        'base_url' => $baseUrl,
+        'api_key' => $apiKey ?? "{$provider}-test-key",
+        'connect_timeout' => 10,
+        'timeout' => 150,
+        'is_enabled' => $enabled,
+    ]);
+}
+
+function createAiModelRouteForTest(
+    AiStage $stage,
+    ?string $model = null,
+    string $provider = 'openai',
+    ?string $reasoningEffort = null,
+): AIModelRoute {
+    $model ??= "test-{$stage->value}-model";
+    AIModelPrice::query()->updateOrCreate([
+        'provider' => $provider,
+        'model' => $model,
+        'currency' => app(GenerationSettingsService::class)->currency(),
+    ], [
+        'billing_unit' => 1_000_000,
+        'context_window_tokens' => 1_050_000,
+        'max_output_tokens' => 128_000,
+        'supports_structured_output' => true,
+        'supports_reasoning_effort' => true,
+        'input_price' => 0,
+        'cached_input_price' => 0,
+        'output_price' => 0,
+        'is_enabled' => true,
+    ]);
+
+    return AIModelRoute::query()->updateOrCreate(['role' => $stage->value], [
+        'provider' => $provider,
+        'model' => $model,
+        'reasoning_effort' => $reasoningEffort,
+    ]);
+}
+
+function seedAllAiModelRoutesForTest(): void
+{
+    createAiProviderConnectionForTest();
+    collect(AiStage::cases())->each(fn (AiStage $stage) => createAiModelRouteForTest($stage));
+}
+
+function configureEmbeddingForTest(string $model = 'embedding-fixed-v1', int $dimensions = 3): void
+{
+    createAiProviderConnectionForTest();
+    createAiModelRouteForTest(AiStage::Embedding, $model);
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->settings();
+    $settings['embedding_dimensions'] = $dimensions;
+    $service->save($settings, null);
 }
 
 function makeChapterPlanAdmissionReady(ChapterPlan $plan): ChapterPlan
@@ -214,7 +246,7 @@ function freezeChapterRouteContractsForTest(ChapterPlan $plan): ChapterPlan
         'admission_snapshot' => [
             'schema_version' => 2,
             'routes' => $routes,
-            'capacity' => ['review' => ['context_token_budget' => (int) config('generation.review_context_token_budget', 32_000)]],
+            'capacity' => ['review' => ['context_token_budget' => app(GenerationSettingsService::class)->reviewContextTokenBudget()]],
         ],
         'admitted_at' => now(),
     ]);

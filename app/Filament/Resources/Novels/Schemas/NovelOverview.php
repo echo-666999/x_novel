@@ -2,7 +2,6 @@
 
 namespace App\Filament\Resources\Novels\Schemas;
 
-use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Data\BudgetUsage;
 use App\Enums\NovelStatus;
@@ -10,6 +9,7 @@ use App\Filament\Pages\Generation;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use App\Services\ClosureDebtService;
+use App\Services\GenerationSettingsService;
 use App\Services\NovelGenerationReadiness;
 use App\Services\NovelOperationsOverview;
 use Filament\Infolists\Components\RepeatableEntry;
@@ -209,7 +209,7 @@ class NovelOverview
     {
         $limit = $usage->limit === null ? '无限制' : number_format($usage->limit, 4);
 
-        return data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format($usage->used, 4).' / '.$limit;
+        return app(GenerationSettingsService::class)->currency().' '.number_format($usage->used, 4).' / '.$limit;
     }
 
     /** @return array<string, mixed> */

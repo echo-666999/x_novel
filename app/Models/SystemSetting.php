@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 #[Fillable(['key', 'value'])]
 class SystemSetting extends Model
 {
-    public const AI = 'ai';
+    public const GENERATION = 'generation';
 
     protected $primaryKey = 'key';
 

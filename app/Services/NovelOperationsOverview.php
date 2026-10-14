@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsService;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\NovelStatus;
@@ -20,7 +19,7 @@ use Illuminate\Support\Facades\DB;
 final readonly class NovelOperationsOverview
 {
     public function __construct(
-        private AiSettingsService $settings,
+        private GenerationSettingsService $settings,
         private DueForeshadowingQuery $dueForeshadowings,
         private GenerationFailurePolicy $failurePolicy,
         private NovelGenerationReadiness $readiness,
@@ -213,7 +212,7 @@ final readonly class NovelOperationsOverview
 
     private function currency(): string
     {
-        return (string) data_get($this->settings->costSettings(), 'currency', 'USD');
+        return $this->settings->currency();
     }
 
     private function latestReviewIdExpression(): string

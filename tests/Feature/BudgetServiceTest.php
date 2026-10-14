@@ -1,6 +1,5 @@
 <?php
 
-use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
@@ -10,20 +9,18 @@ use App\AI\Providers\FakeAiProvider;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\UsageRecord;
+use App\Services\GenerationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use InvalidArgumentException as TestInvalidArgumentException;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    config()->set('ai.providers.openai.api_key', 'budget-test-key');
-    config()->set('ai.budget.daily_hard_limit', null);
-    config()->set('ai.budget.novel_total_limit', null);
-    config()->set('ai.budget.chapter_max_cost', null);
+    setGlobalBudgetsForTest();
 });
 
 test('daily hard limit blocks a new provider request before it is sent', function () {
-    config()->set('ai.budget.daily_hard_limit', 1.5);
+    setGlobalBudgetsForTest(daily: 1.5);
     UsageRecord::factory()->create(['estimated_cost' => 1.5, 'created_at' => now()]);
     $fake = (new FakeAiProvider)->enqueue(budgetResponse());
     $provider = new BudgetGuardAiProvider($fake, app(BudgetService::class));
@@ -41,12 +38,8 @@ test('daily hard limit blocks a new provider request before it is sent', functio
     expect($fake->requests())->toBe([]);
 });
 
-test('daily hard limit from database settings overrides the environment limit', function () {
-    config()->set('ai.budget.daily_hard_limit', 100);
-    $settingsService = app(AiSettingsService::class);
-    $settings = $settingsService->editableSettings();
-    $settings['budget']['daily_hard_limit'] = 1.5;
-    $settingsService->save($settings, 7);
+test('daily hard limit is read from database generation settings', function () {
+    setGlobalBudgetsForTest(daily: 1.5);
     UsageRecord::factory()->create(['estimated_cost' => 1.5, 'created_at' => now()]);
 
     expect(fn () => app(BudgetService::class)->assertCanRequest(new AiRequest(model: 'model')))
@@ -54,7 +47,7 @@ test('daily hard limit from database settings overrides the environment limit', 
 });
 
 test('novel override limit takes precedence over the global novel limit', function () {
-    config()->set('ai.budget.novel_total_limit', 10);
+    setGlobalBudgetsForTest(novel: 10);
     $novel = Novel::factory()->create([
         'settings' => ['budget' => ['novel_total_limit' => 2]],
     ]);
@@ -71,7 +64,7 @@ test('novel override limit takes precedence over the global novel limit', functi
 });
 
 test('chapter hard limit only counts usage for the requested chapter', function () {
-    config()->set('ai.budget.chapter_max_cost', 3);
+    setGlobalBudgetsForTest(chapter: 3);
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
     $otherChapter = Chapter::factory()->for($novel)->create();
@@ -96,7 +89,7 @@ test('chapter hard limit only counts usage for the requested chapter', function 
 });
 
 test('chapter limit preflight can guard a queued follow up stage', function () {
-    config()->set('ai.budget.chapter_max_cost', 3);
+    setGlobalBudgetsForTest(chapter: 3);
     $chapter = Chapter::factory()->create();
     UsageRecord::factory()->create([
         'novel_id' => $chapter->novel_id,
@@ -109,9 +102,7 @@ test('chapter limit preflight can guard a queued follow up stage', function () {
 });
 
 test('a request below all limits reaches the provider', function () {
-    config()->set('ai.budget.daily_hard_limit', 10);
-    config()->set('ai.budget.novel_total_limit', 5);
-    config()->set('ai.budget.chapter_max_cost', 2);
+    setGlobalBudgetsForTest(daily: 10, novel: 5, chapter: 2);
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
     $response = budgetResponse();
@@ -148,4 +139,16 @@ function budgetResponse(): AiResponse
         providerRequestId: 'budget-test',
         model: 'model',
     );
+}
+
+function setGlobalBudgetsForTest(?float $daily = null, ?float $novel = null, ?float $chapter = null): void
+{
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->settings();
+    $settings['budget'] = [
+        'daily_hard_limit' => $daily,
+        'novel_total_limit' => $novel,
+        'chapter_max_cost' => $chapter,
+    ];
+    $service->save($settings, null);
 }

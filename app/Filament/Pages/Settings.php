@@ -2,21 +2,26 @@
 
 namespace App\Filament\Pages;
 
-use App\AI\AiSettingsService;
 use App\AI\BudgetService;
 use App\AI\Data\BudgetUsage;
 use App\Filament\Actions\EmergencyStopAction;
+use App\Services\GenerationSettingsService;
 use App\Services\SystemHealthService;
 use BackedEnum;
 use Filament\Actions\Action;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Tabs;
+use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Text;
 use Filament\Schemas\Schema;
+use Illuminate\Validation\ValidationException;
 
 class Settings extends Page
 {
@@ -35,7 +40,10 @@ class Settings extends Page
 
     protected function getHeaderActions(): array
     {
-        return [EmergencyStopAction::make()];
+        return [
+            $this->generationSettingsAction(),
+            EmergencyStopAction::make(),
+        ];
     }
 
     public function content(Schema $schema): Schema
@@ -45,28 +53,236 @@ class Settings extends Page
                 'default' => 1,
                 'xl' => 2,
             ])->schema([
-                $this->placeholderSection(
-                    heading: '生成',
-                    description: '生成默认值、重试行为与章节工作流策略。',
-                    source: '来源：config 与小说设置',
-                    icon: 'heroicon-o-bolt',
-                ),
-                $this->placeholderSection(
-                    heading: '审校',
-                    description: '审校阈值、决策与重写次数限制。',
-                    source: '来源：config 与小说设置',
-                    icon: 'heroicon-o-clipboard-document-check',
-                ),
-                $this->placeholderSection(
-                    heading: '记忆',
-                    description: '检索数量、上下文预算与嵌入策略。',
-                    source: '来源：config 与小说设置',
-                    icon: 'heroicon-o-circle-stack',
-                ),
+                $this->generationSettingsSection(),
+                $this->reviewSettingsSection(),
+                $this->memorySettingsSection(),
                 $this->budgetSection(),
                 $this->systemHealthSection()->columnSpanFull(),
             ]),
         ]);
+    }
+
+    private function generationSettingsAction(): Action
+    {
+        return Action::make('configureGenerationSettings')
+            ->label('生成参数')
+            ->icon('heroicon-o-adjustments-horizontal')
+            ->modalHeading('配置生成参数')
+            ->modalDescription('保存后只影响新建或 Restart 的任务；Resume 与已冻结的 Run 继续使用原值。')
+            ->modalWidth('7xl')
+            ->fillForm(fn (): array => app(GenerationSettingsService::class)->settings())
+            ->schema([
+                Hidden::make('schema_version')->default(GenerationSettingsService::SCHEMA_VERSION),
+                Tabs::make('生成参数')
+                    ->tabs([
+                        Tab::make('通用')
+                            ->schema([
+                                Section::make('费用控制')
+                                    ->description('币种用于模型价格匹配和费用展示；费用上限留空表示无限制。')
+                                    ->columns(2)
+                                    ->schema([
+                                        TextInput::make('currency')
+                                            ->label('计价币种')
+                                            ->required()
+                                            ->minLength(3)
+                                            ->maxLength(3)
+                                            ->helperText('使用三个字母的 ISO 货币代码，例如 USD 或 CNY。'),
+                                        $this->costLimitInput('budget.daily_hard_limit', '每日费用上限'),
+                                        $this->costLimitInput('budget.novel_total_limit', '单本小说总费用上限'),
+                                        $this->costLimitInput('budget.chapter_max_cost', '单章费用上限'),
+                                    ]),
+                                Section::make('审校与向量')
+                                    ->description('向量维度必须与数据库字段一致；更换维度需要先执行数据库迁移和全量重建向量。')
+                                    ->columns(2)
+                                    ->schema([
+                                        $this->tokenInput('review_context_token_budget', '审校上下文 Token 预算'),
+                                        $this->tokenInput('embedding_dimensions', 'Embedding 向量维度')
+                                            ->helperText(fn (): string => '当前 PostgreSQL memories.embedding 维度：'.app(GenerationSettingsService::class)->databaseEmbeddingDimensions()),
+                                    ]),
+                            ]),
+                        Tab::make('Outline')
+                            ->schema($this->outlineBudgetSections()),
+                        Tab::make('章节阶段')
+                            ->schema($this->chapterBudgetSections()),
+                        Tab::make('修复子阶段')
+                            ->schema($this->repairBudgetSections()),
+                    ]),
+            ])
+            ->action(function (array $data, GenerationSettingsService $settings, Action $action): void {
+                try {
+                    $settings->save($data, auth()->id());
+                } catch (ValidationException $exception) {
+                    $statePath = $this->getMountedActionSchema()?->getStatePath() ?? 'mountedActions.0.data';
+                    foreach ($exception->errors() as $field => $messages) {
+                        foreach ($messages as $message) {
+                            $this->addError("{$statePath}.{$field}", $message);
+                        }
+                    }
+
+                    Notification::make()
+                        ->title('生成参数未保存')
+                        ->body(collect($exception->errors())->flatten()->unique()->take(3)->implode('；'))
+                        ->danger()
+                        ->persistent()
+                        ->send();
+                    $action->halt();
+
+                    return;
+                }
+
+                Notification::make()->title('生成参数已保存')->success()->send();
+            });
+    }
+
+    private function generationSettingsSection(): Section
+    {
+        return Section::make('生成')
+            ->description('Outline、章节阶段和修复子阶段的请求预算。')
+            ->icon('heroicon-o-bolt')
+            ->afterHeader([Text::make('数据库配置')->badge()->color('success')])
+            ->schema([
+                TextEntry::make('generation_settings_source')
+                    ->label('配置来源')
+                    ->state(fn (): string => $this->generationSettingsSource()),
+                Text::make('供应商连接在“AI 与成本 → 供应商连接”维护；模型、容量、价格和各阶段路由在“模型价格”维护。')
+                    ->color('gray'),
+            ]);
+    }
+
+    private function reviewSettingsSection(): Section
+    {
+        return Section::make('审校')
+            ->description('新 Plan Admission 冻结的审校上下文预算。')
+            ->icon('heroicon-o-clipboard-document-check')
+            ->afterHeader([Text::make('数据库配置')->badge()->color('success')])
+            ->schema([
+                TextEntry::make('review_context_budget')
+                    ->label('上下文 Token 预算')
+                    ->state(fn (): string => number_format(app(GenerationSettingsService::class)->reviewContextTokenBudget())),
+            ]);
+    }
+
+    private function memorySettingsSection(): Section
+    {
+        return Section::make('记忆')
+            ->description('Embedding 模型由模型路由维护，向量维度由生成参数维护。')
+            ->icon('heroicon-o-circle-stack')
+            ->afterHeader([Text::make('数据库配置')->badge()->color('success')])
+            ->schema([
+                TextEntry::make('embedding_dimensions')
+                    ->label('向量维度')
+                    ->state(fn (): string => number_format(app(GenerationSettingsService::class)->embeddingDimensions())),
+                Text::make('修改模型前必须确认其输出维度与 PostgreSQL memories.embedding 一致。')
+                    ->color('gray'),
+            ]);
+    }
+
+    /** @return array<int, Section> */
+    private function outlineBudgetSections(): array
+    {
+        $labels = [
+            'outline_foundation' => 'Foundation',
+            'outline_structure' => 'Structure',
+            'outline_arc_beats' => 'Arc Beats',
+            'outline_beat_detail' => 'Beat Detail',
+        ];
+
+        return collect($labels)->map(fn (string $label, string $stage): Section => Section::make($label)
+            ->columns(2)
+            ->schema($this->budgetInputs("outline_request_budgets.{$stage}")))
+            ->values()
+            ->all();
+    }
+
+    /** @return array<int, Section> */
+    private function chapterBudgetSections(): array
+    {
+        $stages = [
+            'planner' => ['章节规划', ['initial', 'retry', 'final']],
+            'writer' => ['场景写作', ['initial', 'retry', 'final']],
+            'extractor' => ['事件提取', ['initial', 'retry', 'final']],
+            'reviewer' => ['叙事审校', ['initial']],
+            'rewrite' => ['章节重写', ['initial', 'retry', 'final']],
+            'summary' => ['摘要生成', ['initial', 'retry', 'final']],
+        ];
+
+        return collect($stages)->map(fn (array $definition, string $stage): Section => Section::make($definition[0])
+            ->columns(['default' => 1, 'md' => 2, 'xl' => 3])
+            ->schema($this->tierSections("chapter_request_budgets.{$stage}", $definition[1])))
+            ->values()
+            ->all();
+    }
+
+    /** @return array<int, Section> */
+    private function repairBudgetSections(): array
+    {
+        $repairs = [
+            'extractor.scene_structure' => ['事件提取 · 场景结构修复', ['initial', 'retry']],
+            'extractor.coverage_evidence' => ['事件提取 · Coverage 证据修复', ['initial', 'retry']],
+            'extractor.foreshadowing_coverage' => ['事件提取 · 伏笔 Coverage 修复', ['initial', 'retry']],
+            'extractor.event_evidence' => ['事件提取 · 事件证据修复', ['initial', 'retry']],
+            'reviewer.coverage_judgment' => ['审校 · Coverage Judgment', ['initial', 'retry']],
+            'reviewer.review_schema' => ['审校 · Schema 修复', ['initial']],
+            'reviewer.arc_completion' => ['审校 · Arc Completion 修复', ['initial']],
+            'rewrite.coverage_evidence' => ['重写 · Coverage 证据修复', ['initial', 'retry']],
+            'rewrite.length_repair' => ['重写 · 长度修复', ['initial', 'retry']],
+        ];
+
+        return collect($repairs)->map(function (array $definition, string $path): Section {
+            $base = 'chapter_repair_request_budgets.'.str_replace('.', '.', $path);
+
+            return Section::make($definition[0])
+                ->columns(['default' => 1, 'md' => 2])
+                ->schema($this->tierSections($base, $definition[1]));
+        })->values()->all();
+    }
+
+    /** @param array<int, string> $tiers @return array<int, Section> */
+    private function tierSections(string $base, array $tiers): array
+    {
+        $labels = ['initial' => '首次', 'retry' => '重试', 'final' => '最终重试'];
+
+        return collect($tiers)->map(fn (string $tier): Section => Section::make($labels[$tier])
+            ->columns(2)
+            ->compact()
+            ->schema($this->budgetInputs("{$base}.{$tier}")))
+            ->all();
+    }
+
+    /** @return array<int, TextInput> */
+    private function budgetInputs(string $base): array
+    {
+        return [
+            $this->tokenInput("{$base}.output_tokens", '可见输出 Token'),
+            $this->tokenInput("{$base}.reasoning_reserve_tokens", '推理预留 Token', 0),
+        ];
+    }
+
+    private function tokenInput(string $name, string $label, int $minimum = 1): TextInput
+    {
+        return TextInput::make($name)
+            ->label($label)
+            ->integer()
+            ->minValue($minimum)
+            ->required();
+    }
+
+    private function costLimitInput(string $name, string $label): TextInput
+    {
+        return TextInput::make($name)
+            ->label($label)
+            ->numeric()
+            ->minValue(0)
+            ->placeholder('无限制');
+    }
+
+    private function generationSettingsSource(): string
+    {
+        return match (app(GenerationSettingsService::class)->current()['source']) {
+            'database' => 'PostgreSQL · system_settings',
+            'application_default_invalid_database' => '数据库配置无效，当前使用应用默认值',
+            default => '应用默认值（保存后写入 PostgreSQL）',
+        };
     }
 
     private function budgetSection(): Section
@@ -86,11 +302,11 @@ class Settings extends Page
                     ->color(fn (): string => app(BudgetService::class)->dailyUsage()->reached() ? 'danger' : 'gray'),
                 TextEntry::make('novel_budget_default')
                     ->label('Novel Total Default')
-                    ->state(fn (): string => $this->formatLimit(data_get(app(AiSettingsService::class)->budgetSettings(), 'novel_total_limit'))),
+                    ->state(fn (): string => $this->formatLimit(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'novel_total_limit'))),
                 TextEntry::make('chapter_budget_default')
                     ->label('Chapter Max Default')
-                    ->state(fn (): string => $this->formatLimit(data_get(app(AiSettingsService::class)->budgetSettings(), 'chapter_max_cost'))),
-                Text::make('来源：config 与 Novel settings。空值表示无限制。')
+                    ->state(fn (): string => $this->formatLimit(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'chapter_max_cost'))),
+                Text::make('来源：设置 → 生成参数与 Novel settings。空值表示无限制。')
                     ->icon('heroicon-o-information-circle')
                     ->color('gray')
                     ->columnSpanFull(),
@@ -157,7 +373,7 @@ class Settings extends Page
 
     private function currency(): string
     {
-        return strtoupper((string) config('ai.cost.currency', 'USD'));
+        return app(GenerationSettingsService::class)->currency();
     }
 
     private function placeholderSection(

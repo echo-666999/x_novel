@@ -21,6 +21,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
+    configureEmbeddingForTest();
 });
 
 test('memory page shows active memories and their retrieval metadata by default', function () {
@@ -86,8 +87,6 @@ test('memory page can explicitly inspect invalid memories', function () {
 });
 
 test('memory inspector shows query filters and top vector results in chinese', function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
     $novel = Novel::factory()->create(['title' => '雾海长明']);
     MemoryModel::factory()->for($novel)->create([
         'summary' => '潮汐门曾在月落时开启。',

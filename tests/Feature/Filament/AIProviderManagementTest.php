@@ -26,7 +26,6 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
-    config()->set('ai.cost.currency', 'USD');
 });
 
 test('ai and costs navigation exposes only provider connections and model prices', function () {
@@ -81,9 +80,7 @@ test('provider connection form defaults to the long generation request timeout',
         ]);
 });
 
-test('provider connection is used before environment fallback and can be verified', function () {
-    config()->set('ai.providers.openai.api_key', 'environment-key');
-    config()->set('ai.providers.openai.base_url', 'https://environment.example/v1');
+test('provider connection is the runtime source and can be verified', function () {
     $connection = AIProviderConnection::query()->create([
         'provider' => 'openai',
         'name' => 'Database connection',
@@ -109,7 +106,6 @@ test('provider connection is used before environment fallback and can be verifie
 });
 
 test('a disabled database connection cannot be selected for runtime use', function () {
-    config()->set('ai.providers.openai.api_key', 'environment-key');
     AIProviderConnection::query()->create([
         'provider' => 'openai',
         'name' => 'Disabled connection',
@@ -169,7 +165,7 @@ test('model price can be maintained and drives cost calculation', function () {
         ->and($cost)->toBe(0.0057);
 });
 
-test('model routes are maintained from the model price page and override environment models', function () {
+test('model routes are maintained from the model price page and drive runtime resolution', function () {
     AIProviderConnection::query()->create([
         'provider' => 'openai',
         'name' => 'OpenAI',

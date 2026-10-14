@@ -26,8 +26,7 @@ test('emergency stop is persisted in postgres and can be released', function () 
 });
 
 test('emergency stop blocks text and embedding provider requests before network access', function () {
-    config()->set('ai.provider', 'openai');
-    config()->set('ai.providers.openai.api_key', 'test-key');
+    createAiProviderConnectionForTest();
     Http::fake();
     app(EmergencyStopService::class)->setActive(true);
 

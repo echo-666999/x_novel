@@ -9,8 +9,8 @@
 - 执行 `php artisan migrate:status`，逐项确认没有未执行 Migration，并把命令输出时间和结论写入发布记录。
 - 执行 `php artisan schedule:list`，确认包含 `generation:mark-stalled` 和 `horizon:snapshot`。
 - 检查 Settings 页面的“系统健康”，处理所有“需要处理”项。
-- 确认至少配置 `AI_DAILY_HARD_LIMIT`、`AI_NOVEL_TOTAL_LIMIT` 或 `AI_CHAPTER_MAX_COST` 中的一项。
-- 核实 `AI_PROVIDER`、`AI_BASE_URL` 和实际模型在当前端点/账户可用。Stage 模型留空表示继承全局 `AI_MODEL`；不要把 `.env.example` 当成历史 Run 或生产配置证据，也不要把 API Key 复制进发布记录。
+- 在“设置 → 生成参数”确认计价币种，并至少配置每日硬上限、单本小说总上限或单章上限中的一项。
+- 在“AI 与成本”核实启用的供应商连接、模型价格、容量与全部 Stage 路由，在“设置 → 生成参数”核实费用上限、请求预算和向量维度；不要把 API Key 复制进发布记录。
 
 章节流水线相关发布至少执行：
 

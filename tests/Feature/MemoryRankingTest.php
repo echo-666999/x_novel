@@ -16,8 +16,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
+    configureEmbeddingForTest();
     config()->set('context.memory_candidate_k', 10);
     config()->set('context.memory_final_k', 3);
     config()->set('context.memory_semantic_dedup_threshold', 0.98);

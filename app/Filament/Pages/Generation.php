@@ -2,7 +2,6 @@
 
 namespace App\Filament\Pages;
 
-use App\AI\AiSettingsService;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\ReviewDecision;
@@ -25,6 +24,7 @@ use App\Models\Review as ReviewModel;
 use App\Models\Scene;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationOutputCapacityGuard;
+use App\Services\GenerationSettingsService;
 use App\Services\StalledRunRecoveryService;
 use BackedEnum;
 use Filament\Actions\Action;
@@ -191,7 +191,7 @@ class Generation extends Page implements HasTable
                     ->alignEnd(),
                 TextColumn::make('usage_records_sum_estimated_cost')
                     ->label('成本')
-                    ->formatStateUsing(fn (mixed $state): string => data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $state, 4))
+                    ->formatStateUsing(fn (mixed $state): string => app(GenerationSettingsService::class)->currency().' '.number_format((float) $state, 4))
                     ->alignEnd(),
                 TextColumn::make('created_at')->label('创建时间')->dateTime('Y-m-d H:i:s')->sortable(),
             ])
@@ -529,7 +529,7 @@ class Generation extends Page implements HasTable
                         TextEntry::make('latency_ms')->label('Latency')->suffix(' ms')->numeric(),
                         TextEntry::make('estimated_cost')
                             ->label('Cost')
-                            ->formatStateUsing(fn (mixed $state): string => data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $state, 4)),
+                            ->formatStateUsing(fn (mixed $state): string => app(GenerationSettingsService::class)->currency().' '.number_format((float) $state, 4)),
                     ]),
             ]),
         ];

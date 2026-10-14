@@ -4,11 +4,12 @@ namespace App\AI;
 
 use App\AI\Data\AiResponse;
 use App\Models\AIModelPrice;
+use App\Services\GenerationSettingsService;
 use Illuminate\Support\Facades\Schema;
 
 class AiCostCalculator
 {
-    public function __construct(private readonly AiSettingsService $settings) {}
+    public function __construct(private readonly GenerationSettingsService $settings) {}
 
     public function estimate(AiResponse $response, ?string $provider = null): float
     {
@@ -24,13 +25,7 @@ class AiCostCalculator
             ) / $billingUnit, 6);
         }
 
-        $cost = $this->settings->costSettings();
-        $uncachedInputTokens = max(0, $response->inputTokens - $response->cachedTokens);
-        $inputCost = $uncachedInputTokens * (float) ($cost['input_per_million'] ?? 0);
-        $cachedCost = $response->cachedTokens * (float) ($cost['cached_input_per_million'] ?? 0);
-        $outputCost = $response->outputTokens * (float) ($cost['output_per_million'] ?? 0);
-
-        return round(($inputCost + $cachedCost + $outputCost) / 1_000_000, 6);
+        return 0.0;
     }
 
     public function estimateInputOnly(int $inputTokens, ?string $provider = null, ?string $model = null): float
@@ -40,9 +35,7 @@ class AiCostCalculator
             return round($inputTokens * (float) ($price->input_price ?? 0) / max(1, $price->billing_unit), 6);
         }
 
-        $cost = $this->settings->costSettings();
-
-        return round($inputTokens * (float) ($cost['input_per_million'] ?? 0) / 1_000_000, 6);
+        return 0.0;
     }
 
     private function modelPrice(?string $provider, ?string $model): ?AIModelPrice
@@ -54,7 +47,7 @@ class AiCostCalculator
         return AIModelPrice::query()
             ->where('provider', $provider)
             ->where('model', $model)
-            ->where('currency', strtoupper((string) config('ai.cost.currency', 'USD')))
+            ->where('currency', $this->settings->currency())
             ->where('is_enabled', true)
             ->first();
     }

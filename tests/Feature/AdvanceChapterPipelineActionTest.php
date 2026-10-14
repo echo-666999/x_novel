@@ -43,9 +43,6 @@ beforeEach(function () {
     seedVerifiedChapterModelProfiles();
     Cache::flush();
     Queue::fake();
-    config()->set('ai.budget.daily_hard_limit', null);
-    config()->set('ai.budget.novel_total_limit', null);
-    config()->set('ai.budget.chapter_max_cost', null);
 });
 
 function pipelineChapter(): array

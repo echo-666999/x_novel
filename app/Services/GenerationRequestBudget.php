@@ -17,6 +17,8 @@ final class GenerationRequestBudget
     /** @var array<int, string> */
     private const TIER_ORDER = ['initial', 'retry', 'final'];
 
+    public function __construct(private readonly ?GenerationSettingsService $settings = null) {}
+
     /**
      * 解析指定 AI 路由下各修复子阶段的独立预算，避免子请求借用父阶段的大预算上限。
      *
@@ -24,7 +26,7 @@ final class GenerationRequestBudget
      */
     public function configuredRepairs(AiStage $stage): array
     {
-        $configured = config("generation.chapter_repair_request_budgets.{$stage->value}", []);
+        $configured = $this->settingsService()->chapterRepairRequestBudgets($stage);
         if (! is_array($configured)) {
             throw ValidationException::withMessages([
                 "routes.{$stage->value}" => "[REPAIR_REQUEST_BUDGET_INVALID] {$stage->getLabel()} 的修复子阶段预算必须是数组。",
@@ -50,7 +52,7 @@ final class GenerationRequestBudget
      */
     public function configured(AiStage $stage): array
     {
-        $configured = config("generation.chapter_request_budgets.{$stage->value}");
+        $configured = $this->settingsService()->chapterRequestBudgets($stage);
         if (! is_array($configured) || $configured === []) {
             throw ValidationException::withMessages([
                 "routes.{$stage->value}" => "[REQUEST_BUDGET_NOT_CONFIGURED] {$stage->getLabel()} 缺少请求预算配置。",
@@ -58,6 +60,30 @@ final class GenerationRequestBudget
         }
 
         return $this->normalizeConfiguredTiers($configured, $stage, $stage->getLabel());
+    }
+
+    /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
+    public function configuredOutline(AiStage $stage): array
+    {
+        $configured = $this->settingsService()->outlineRequestBudget($stage);
+        $outputTokens = is_array($configured) ? (int) ($configured['output_tokens'] ?? 0) : 0;
+        $reasoningReserve = is_array($configured) ? (int) ($configured['reasoning_reserve_tokens'] ?? -1) : -1;
+        if ($outputTokens < 1 || $reasoningReserve < 0) {
+            throw ValidationException::withMessages([
+                'request_budget' => "Outline 任务 {$stage->value} 缺少有效的输出 Token 或推理预留配置。",
+            ]);
+        }
+
+        return [
+            'output_tokens' => $outputTokens,
+            'reasoning_reserve_tokens' => $reasoningReserve,
+            'max_completion_tokens' => $outputTokens + $reasoningReserve,
+        ];
+    }
+
+    private function settingsService(): GenerationSettingsService
+    {
+        return $this->settings ?? app(GenerationSettingsService::class);
     }
 
     /**

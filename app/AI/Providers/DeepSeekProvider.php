@@ -38,7 +38,6 @@ class DeepSeekProvider implements AiProvider
         $requestLogContext = $this->diagnosticLogContext($request, $requestLogId);
 
         if ((bool) config('ai.logging.prompts', false)) {
-            $requestLogContext['ai_models'] = $this->sanitizeForLogging((array) config('ai.models', []));
             $requestLogContext['metadata'] = $this->sanitizeForLogging($request->metadata);
             $requestLogContext['payload'] = $this->sanitizeForLogging($payload);
         }
@@ -115,16 +114,14 @@ class DeepSeekProvider implements AiProvider
 
     private function client(): PendingRequest
     {
+        $this->settingsService->assertProviderAvailable(self::PROVIDER);
         $apiKey = $this->settingsService->apiKey(self::PROVIDER);
         $providerSettings = $this->settingsService->providerSettings(self::PROVIDER);
-        if ($apiKey === '') {
-            throw new AiProviderException('provider_not_configured', 'DeepSeek API Key 尚未配置。', false);
-        }
 
-        return Http::baseUrl(rtrim((string) ($providerSettings['base_url'] ?? config('ai.providers.deepseek.base_url')), '/'))
+        return Http::baseUrl(rtrim((string) $providerSettings['base_url'], '/'))
             ->withToken($apiKey)->acceptJson()->asJson()
-            ->connectTimeout((int) ($providerSettings['connect_timeout'] ?? config('ai.providers.deepseek.connect_timeout', 10)))
-            ->timeout((int) ($providerSettings['timeout'] ?? config('ai.providers.deepseek.timeout', 150)));
+            ->connectTimeout((int) $providerSettings['connect_timeout'])
+            ->timeout((int) $providerSettings['timeout']);
     }
 
     /**

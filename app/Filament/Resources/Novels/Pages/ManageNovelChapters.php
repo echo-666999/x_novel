@@ -5,12 +5,12 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\Actions\Chapters\DeleteChapterRangeAction;
 use App\Actions\Chapters\SaveManualChapterPlanAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
-use App\AI\AiSettingsService;
 use App\Enums\ChapterStatus;
 use App\Enums\NovelStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Support\ChapterPlanEditorSchema;
 use App\Models\Chapter;
+use App\Services\GenerationSettingsService;
 use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
 use Filament\Forms\Components\Repeater;
@@ -137,7 +137,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                     ->placeholder('未审校'),
                 TextColumn::make('usage_records_sum_estimated_cost')
                     ->label('成本')
-                    ->formatStateUsing(fn (mixed $state): string => data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD').' '.number_format((float) $state, 4))
+                    ->formatStateUsing(fn (mixed $state): string => app(GenerationSettingsService::class)->currency().' '.number_format((float) $state, 4))
                     ->placeholder('—')
                     ->alignEnd(),
                 TextColumn::make('latestStateVersion.version')

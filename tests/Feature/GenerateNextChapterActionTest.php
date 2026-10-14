@@ -21,6 +21,7 @@ use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\Volume;
 use App\Services\StalledRunRecoveryService;
+use App\Services\GenerationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
@@ -273,8 +274,11 @@ test('stalled cleanup persists when another fresh workflow still blocks generati
 });
 
 test('preflight rejects a reached hard budget before creating a chapter', function () {
-    config()->set('ai.budget.daily_hard_limit', 1);
-    config()->set('ai.budget.novel_total_limit', null);
+    $generationSettings = app(GenerationSettingsService::class);
+    $settings = $generationSettings->settings();
+    $settings['budget']['daily_hard_limit'] = 1;
+    $settings['budget']['novel_total_limit'] = null;
+    $generationSettings->save($settings, null);
     $novel = generationReadyNovel();
     UsageRecord::factory()->create(['estimated_cost' => 1]);
 

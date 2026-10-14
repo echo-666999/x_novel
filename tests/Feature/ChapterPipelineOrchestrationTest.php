@@ -68,6 +68,7 @@ beforeEach(function () {
     Cache::flush();
     seedVerifiedOutlineModelProfiles();
     seedVerifiedChapterModelProfiles();
+    configureEmbeddingForTest();
     $this->actingAs(User::factory()->create());
 });
 

@@ -394,7 +394,10 @@ test('writer and reviewer capacity are checked before admission', function () {
     config()->set('generation.chapter_request_budgets.writer.initial.reasoning_reserve_tokens', 0);
     config()->set('generation.chapter_request_budgets.writer.retry.reasoning_reserve_tokens', 0);
     config()->set('generation.chapter_request_budgets.writer.final.reasoning_reserve_tokens', 0);
-    config()->set('generation.review_context_token_budget', 10);
+    $generationSettings = app(\App\Services\GenerationSettingsService::class);
+    $settings = $generationSettings->settings();
+    $settings['review_context_token_budget'] = 10;
+    $generationSettings->save($settings, null);
 
     try {
         app(PlanAdmissionService::class)->prepare($plan);

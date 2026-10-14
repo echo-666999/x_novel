@@ -50,6 +50,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function (): void {
     seedVerifiedOutlineModelProfiles();
+    createAiModelRouteForTest(AiStage::Planner);
 });
 
 function novelBlueprint(): array
@@ -401,21 +402,13 @@ test('invalid default target platform stops before creating a run or calling the
 });
 
 test('missing dedicated outline routes stop before creating a run or calling the provider', function () {
-    foreach ([
+    AIModelRoute::query()->whereIn('role', collect([
         AiStage::OutlineFoundation,
         AiStage::OutlineStructure,
         AiStage::OutlineArcBeats,
         AiStage::OutlineBeatDetail,
-    ] as $stage) {
-        config()->set("ai.models.{$stage->value}", null);
-        config()->set("ai.stage_providers.{$stage->value}", null);
-    }
-    AIModelRoute::query()->create([
-        'role' => AiStage::Planner,
-        'provider' => 'openai',
-        'model' => 'planner-must-not-be-used',
-        'reasoning_effort' => 'high',
-    ]);
+    ])->map->value->all())->delete();
+    createAiModelRouteForTest(AiStage::Planner, 'planner-must-not-be-used', 'openai', 'high');
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $fake = new FakeAiProvider;
     app()->instance(AiProvider::class, $fake);
@@ -808,14 +801,9 @@ test('outline resume reuses successful artifacts and keeps the batch frozen rout
         $batch->context_snapshot,
         'generation_preferences.outline_routes.outline_structure',
     );
-    AIModelRoute::query()->create([
-        'role' => AiStage::OutlineStructure,
-        'provider' => (string) config('ai.provider'),
-        'model' => 'changed-after-batch',
-        'reasoning_effort' => 'high',
-    ]);
+    createAiModelRouteForTest(AiStage::OutlineStructure, 'changed-after-batch', 'openai', 'high');
     $novel->update(['settings' => ['ai' => ['stages' => ['outline_structure' => [
-        'provider' => (string) config('ai.provider'),
+        'provider' => 'openai',
         'model' => 'changed-novel-override-after-batch',
     ]]]]]);
     $batch->update([
@@ -879,7 +867,6 @@ test('outline configuration failures cannot resume a frozen batch', function () 
 
 test('outline restart creates a new batch from current routes without rewriting the failed v4 batch', function () {
     Queue::fake();
-    config()->set('ai.providers.openai.api_key', 'test-key');
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $pipeline = app(NovelOutlinePipeline::class);
     $oldBatch = $pipeline->startOrResume($novel, 1);
@@ -1158,9 +1145,8 @@ test('first outline apply rejects novels that already have a chapter or story ev
 
 test('outline stages freeze each task route and bind every child run to the batch', function () {
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
-    config()->set('ai.providers.openai.api_key', 'test-key');
-    config()->set('ai.providers.deepseek.enabled', true);
-    config()->set('ai.providers.deepseek.api_key', 'deepseek-test-key');
+    createAiProviderConnectionForTest('openai');
+    createAiProviderConnectionForTest('deepseek');
     $routeProfiles = [
         AiStage::OutlineFoundation->value => ['provider' => 'openai', 'model' => 'outline-foundation-model', 'reasoning' => 'low', 'context' => 500_000, 'output' => 40_000],
         AiStage::OutlineStructure->value => ['provider' => 'deepseek', 'model' => 'outline-structure-model', 'reasoning' => 'medium', 'context' => 600_000, 'output' => 50_000],
@@ -1168,10 +1154,11 @@ test('outline stages freeze each task route and bind every child run to the batc
         AiStage::OutlineBeatDetail->value => ['provider' => 'deepseek', 'model' => 'outline-beat-detail-model', 'reasoning' => null, 'context' => 800_000, 'output' => 70_000],
     ];
     foreach ($routeProfiles as $stage => $profile) {
-        AIModelPrice::query()->create([
+        AIModelPrice::query()->updateOrCreate([
             'provider' => $profile['provider'],
             'model' => $profile['model'],
             'currency' => 'USD',
+        ], [
             'billing_unit' => 1_000_000,
             'context_window_tokens' => $profile['context'],
             'max_output_tokens' => $profile['output'],
@@ -1181,8 +1168,9 @@ test('outline stages freeze each task route and bind every child run to the batc
             'output_price' => 2,
             'is_enabled' => true,
         ]);
-        AIModelRoute::query()->create([
+        AIModelRoute::query()->updateOrCreate([
             'role' => $stage,
+        ], [
             'provider' => $profile['provider'],
             'model' => $profile['model'],
             'reasoning_effort' => $profile['reasoning'],
@@ -1283,7 +1271,7 @@ test('v3 outline batches keep their original single frozen route after the v4 up
         'context_snapshot' => $context,
     ]);
 
-    config()->set('ai.models.planner', 'changed-after-v3-batch');
+    createAiModelRouteForTest(AiStage::OutlineFoundation, 'changed-after-v3-batch');
     $pipeline->assertResumeCompatible($batch->refresh());
     $pipeline->generateFoundation($batch);
 
@@ -1293,8 +1281,7 @@ test('v3 outline batches keep their original single frozen route after the v4 up
 });
 
 test('a dedicated outline route without verified matching capacity is rejected before batch creation', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
-    AIModelRoute::query()->create([
+    AIModelRoute::query()->updateOrCreate(['role' => AiStage::OutlineStructure->value], [
         'role' => AiStage::OutlineStructure,
         'provider' => 'openai',
         'model' => 'unverified-structure-model',

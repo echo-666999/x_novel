@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsService;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
@@ -15,7 +14,7 @@ use Illuminate\Support\Facades\DB;
 
 final readonly class DashboardOperationsOverview
 {
-    public function __construct(private AiSettingsService $settings) {}
+    public function __construct(private GenerationSettingsService $settings) {}
 
     /** @return array<string, int|string> */
     public function stats(): array
@@ -107,6 +106,6 @@ final readonly class DashboardOperationsOverview
 
     private function currency(): string
     {
-        return (string) data_get($this->settings->costSettings(), 'currency', 'USD');
+        return $this->settings->currency();
     }
 }

@@ -12,9 +12,11 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    configureEmbeddingForTest();
+});
+
 test('fixed retrieval evaluation measures hits and blocks invalid and cross novel leakage', function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
     $novel = Novel::factory()->create();
     evaluationMemory($novel, MemoryType::Event, '早期关键事实');
     evaluationMemory($novel, MemoryType::Foreshadowing, '早期伏笔');

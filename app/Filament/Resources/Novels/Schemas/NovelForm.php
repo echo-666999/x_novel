@@ -8,6 +8,7 @@ use App\AI\AiSettingsService;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\AiStage;
 use App\Models\Novel;
+use App\Services\GenerationSettingsService;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -241,11 +242,11 @@ class NovelForm
 
     private static function globalBudgetPlaceholder(string $key): string
     {
-        $settings = app(AiSettingsService::class);
+        $settings = app(GenerationSettingsService::class);
         $limit = data_get($settings->budgetSettings(), $key);
 
         return is_numeric($limit)
-            ? data_get($settings->costSettings(), 'currency', 'USD').' '.number_format((float) $limit, 4)
+            ? $settings->currency().' '.number_format((float) $limit, 4)
             : '无限制';
     }
 }

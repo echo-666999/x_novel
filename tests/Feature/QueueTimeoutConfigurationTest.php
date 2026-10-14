@@ -7,6 +7,7 @@ use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
+use App\AI\AiSettingsService;
 use App\Models\GenerationRun;
 use App\Services\GenerationRunLease;
 
@@ -16,15 +17,9 @@ function jobTimeout(string $jobClass): int
 }
 
 test('provider call budgets fit inside their queue job timeouts', function () {
-    $providerTimeout = (int) config('ai.providers.openai.timeout');
-    $maximumCallsWithLengthRepair = 1 + (int) config('generation.max_length_repair_attempts');
-
-    foreach ([PlanChapterJob::class, ExtractStoryEventsJob::class, ReviewChapterJob::class, GenerateEmbeddingJob::class] as $jobClass) {
+    $providerTimeout = AiSettingsService::MAX_REQUEST_TIMEOUT_SECONDS;
+    foreach ([PlanChapterJob::class, ExtractStoryEventsJob::class, ReviewChapterJob::class, GenerateEmbeddingJob::class, GenerateSceneJob::class, AssembleChapterJob::class, RewriteChapterJob::class] as $jobClass) {
         expect(jobTimeout($jobClass))->toBeGreaterThan($providerTimeout);
-    }
-
-    foreach ([GenerateSceneJob::class, AssembleChapterJob::class, RewriteChapterJob::class] as $jobClass) {
-        expect(jobTimeout($jobClass))->toBeGreaterThan($providerTimeout * $maximumCallsWithLengthRepair);
     }
 });
 

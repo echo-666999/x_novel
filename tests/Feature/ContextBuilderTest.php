@@ -35,6 +35,10 @@ use InvalidArgumentException as ContextInvalidArgumentException;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    configureEmbeddingForTest();
+});
+
 function contextFixture(array $bibleOverrides = []): array
 {
     $novel = Novel::factory()->create();
@@ -302,8 +306,6 @@ test('l2 drops recent story before mandatory context when the budget is tight', 
 });
 
 test('context builder assembles ranked long term memory into l3 and records selected ids', function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
     $fixture = contextFixture();
     $memory = Memory::factory()->for($fixture['novel'])->create([
         'summary' => '主角曾在潮汐门获得旧王密钥。',
@@ -325,8 +327,6 @@ test('context builder assembles ranked long term memory into l3 and records sele
 });
 
 test('l3 retrieval failure preserves mandatory context and records the fallback', function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
     $fixture = contextFixture();
     Memory::factory()->for($fixture['novel'])->create([
         'entities' => ['characters' => [(string) $fixture['character']->getKey()]],

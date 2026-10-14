@@ -8,9 +8,9 @@ use App\AI\Data\EmbeddingRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\Data\MemoryQuery;
 use App\Data\MemorySearchResult;
+use App\Enums\AiStage;
 use App\Enums\MemoryStatus;
 use App\Enums\MemoryType;
-use App\Enums\AiStage;
 use App\Models\Memory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
@@ -22,6 +22,7 @@ class MemoryQueryBuilder
     public function __construct(
         private readonly EmbeddingProvider $provider,
         private readonly AiSettingsResolver $settingsResolver,
+        private readonly GenerationSettingsService $generationSettings,
     ) {}
 
     /** @return Collection<int, MemorySearchResult> */
@@ -42,7 +43,7 @@ class MemoryQueryBuilder
     {
         $settings = $this->settingsResolver->resolve(AiStage::Embedding);
         $model = $settings->model;
-        $dimensions = (int) config('ai.embedding.dimensions');
+        $dimensions = $this->generationSettings->embeddingDimensions();
         $candidateK = $query->candidateK ?? (int) config('context.memory_candidate_k', 30);
         $finalK = $query->finalK ?? (int) config('context.memory_final_k', 10);
 

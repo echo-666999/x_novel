@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
-use App\AI\AiSettingsService;
 use App\Data\SystemHealthCheck;
+use App\Enums\AiStage;
+use App\Models\AIModelRoute;
+use App\Models\AIProviderConnection;
 use App\Models\SystemSetting;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
@@ -113,12 +115,20 @@ class SystemHealthService
 
     private function configuration(): SystemHealthCheck
     {
+        $routeCount = AIModelRoute::query()->whereIn('role', collect(AiStage::cases())->map->value)->count();
         $valid = config('app.locale') === 'zh_CN'
             && filled(config('app.key'))
-            && filled(config('ai.provider'))
-            && filled(config('ai.model'));
+            && AIProviderConnection::query()->where('is_enabled', true)->exists()
+            && $routeCount === count(AiStage::cases());
 
-        return new SystemHealthCheck('config', '关键配置', $valid ? 'healthy' : 'warning', $valid ? '应用密钥、中文语言与 AI 默认值已配置。' : '请检查 APP_KEY、APP_LOCALE、AI_PROVIDER 与 AI_MODEL。');
+        return new SystemHealthCheck(
+            'config',
+            '关键配置',
+            $valid ? 'healthy' : 'warning',
+            $valid
+                ? '应用密钥、中文语言、供应商连接与全部模型路由已配置。'
+                : '请检查 APP_KEY、APP_LOCALE，以及后台中的供应商连接和全部模型路由。',
+        );
     }
 
     private function rebuildCommands(): SystemHealthCheck
@@ -131,7 +141,7 @@ class SystemHealthService
 
     private function costLimit(): SystemHealthCheck
     {
-        $configured = collect(app(AiSettingsService::class)->budgetSettings())->contains(fn ($value): bool => is_numeric($value));
+        $configured = collect(app(GenerationSettingsService::class)->budgetSettings())->contains(fn ($value): bool => is_numeric($value));
 
         return new SystemHealthCheck('cost_limit', '成本硬限额', $configured ? 'healthy' : 'warning', $configured ? '至少配置了一项 Provider 请求硬限额。' : '未配置 Daily、Novel 或 Chapter 成本硬限额。');
     }

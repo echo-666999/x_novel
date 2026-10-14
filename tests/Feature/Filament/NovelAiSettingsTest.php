@@ -16,9 +16,9 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
-    config()->set('ai.models.planner', 'global-planner');
-    config()->set('ai.models.writer', 'global-writer');
-    config()->set('ai.providers.openai.api_key', 'test-key');
+    createAiProviderConnectionForTest();
+    createAiModelRouteForTest(AiStage::Planner, 'global-planner');
+    createAiModelRouteForTest(AiStage::Writer, 'global-writer');
 });
 
 function novelAiModelPrice(string $model, string $provider = 'openai'): AIModelPrice
@@ -54,7 +54,7 @@ test('a novel outline override rejects an unverified model profile', function ()
     ]))->toThrow(ValidationException::class, '缺少已核实');
 });
 
-test('novel settings shows environment and overridden resolved models', function () {
+test('novel settings shows database and overridden resolved models', function () {
     $writerPrice = novelAiModelPrice('novel-writer');
     $novel = Novel::factory()->create([
         'settings' => ['ai' => ['models' => ['writer' => 'novel-writer']]],
@@ -64,7 +64,7 @@ test('novel settings shows environment and overridden resolved models', function
         ->assertOk()
         ->assertSee('AI 模型覆盖')
         ->assertSee('章节规划 · 当前表单生效路由')
-        ->assertSee('OPENAI / global-planner · 推理 Provider 默认 · 环境路由')
+        ->assertSee('OPENAI / global-planner · 推理 Provider 默认 · 数据库路由')
         ->assertSee('场景写作 · 当前表单生效路由')
         ->assertSee('OPENAI / novel-writer · 推理 Provider 默认 · 小说 Override')
         ->assertFormSet([
@@ -79,8 +79,7 @@ test('novel form remains usable when inherited outline routes are missing and pr
         AiStage::OutlineArcBeats,
         AiStage::OutlineBeatDetail,
     ] as $stage) {
-        config()->set("ai.models.{$stage->value}", null);
-        config()->set("ai.stage_providers.{$stage->value}", null);
+        // 不建立该 Stage 的数据库路由，用于验证表单能够明确显示缺失配置。
     }
     $foundationPrice = novelAiModelPrice('foundation-form-model');
 
@@ -94,8 +93,8 @@ test('novel form remains usable when inherited outline routes are missing and pr
 });
 
 test('creating a novel persists provider and model overrides for every outline task', function () {
-    config()->set('ai.providers.deepseek.enabled', true);
-    config()->set('ai.providers.deepseek.api_key', 'deepseek-test-key');
+    seedAllAiModelRoutesForTest();
+    createAiProviderConnectionForTest('deepseek');
     $prices = collect([
         'outline_foundation' => ['provider' => 'openai', 'model' => 'foundation-model'],
         'outline_structure' => ['provider' => 'deepseek', 'model' => 'structure-model'],

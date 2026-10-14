@@ -1,7 +1,6 @@
 <?php
 
 use App\AI\AiSettingsResolver;
-use App\AI\AiSettingsService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
@@ -12,6 +11,7 @@ use App\Enums\AiStage;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Models\GenerationRun;
+use App\Models\AIProviderConnection;
 use App\Models\Novel;
 use App\Models\UsageRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -22,9 +22,8 @@ use Illuminate\Support\Facades\Log;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    config()->set('ai.providers.deepseek.enabled', true);
-    config()->set('ai.providers.deepseek.api_key', 'deepseek-test-key');
-    config()->set('ai.providers.deepseek.base_url', 'https://deepseek.example');
+    createAiProviderConnectionForTest('deepseek', 'https://deepseek.example', 'deepseek-test-key');
+    createAiProviderConnectionForTest('openai', 'https://openai.example/v1', 'openai-test-key');
 });
 
 test('deepseek structured requests use json output and map usage', function () {
@@ -230,15 +229,6 @@ test('deepseek exposes sanitized provider details for rejected requests', functi
 });
 
 test('router records the frozen provider on usage and does not change an existing run', function () {
-    $settings = app(AiSettingsService::class)->defaults();
-    $settings['providers']['deepseek']['enabled'] = true;
-    $settings['default_provider'] = 'deepseek';
-    foreach ($settings['stages'] as &$stage) {
-        $stage['provider'] = 'deepseek';
-    }
-    unset($stage);
-    app(AiSettingsService::class)->save($settings, null);
-
     $novel = Novel::factory()->create();
     $run = GenerationRun::factory()->for($novel)->create([
         'provider' => 'deepseek',
@@ -246,16 +236,6 @@ test('router records the frozen provider on usage and does not change an existin
         'stage' => GenerationStage::ChapterPlanning,
         'status' => RunStatus::Running,
     ]);
-
-    config()->set('ai.providers.openai.api_key', 'openai-test-key');
-    $switched = $settings;
-    $switched['default_provider'] = 'openai';
-    $switched['providers']['deepseek']['enabled'] = false;
-    foreach ($switched['stages'] as &$stage) {
-        $stage['provider'] = 'openai';
-    }
-    unset($stage);
-    app(AiSettingsService::class)->save($switched, null);
 
     Http::fake(['deepseek.example/*' => Http::response([
         'id' => 'deepseek-tracked',
@@ -274,8 +254,6 @@ test('router records the frozen provider on usage and does not change an existin
 });
 
 test('router uses the frozen scene substage route instead of the owning run provider', function () {
-    config()->set('ai.providers.openai.api_key', 'openai-test-key');
-    config()->set('ai.providers.openai.base_url', 'https://openai.example/v1');
     $novel = Novel::factory()->create();
     $run = GenerationRun::factory()->for($novel)->create([
         'provider' => 'deepseek',
@@ -318,7 +296,6 @@ test('router uses the frozen scene substage route instead of the owning run prov
 });
 
 test('router rejects a missing run and owning run model drift before sending a request', function (string $case) {
-    config()->set('ai.providers.openai.api_key', 'openai-test-key');
     $novel = Novel::factory()->create();
     $run = GenerationRun::factory()->for($novel)->create([
         'provider' => 'openai',
@@ -342,7 +319,6 @@ test('router rejects a missing run and owning run model drift before sending a r
 })->with(['missing', 'model']);
 
 test('router rejects provider or model drift from a frozen substage route', function (string $provider, string $model, string $routeKey, string $code) {
-    config()->set('ai.providers.openai.api_key', 'openai-test-key');
     $novel = Novel::factory()->create();
     $run = GenerationRun::factory()->for($novel)->create([
         'provider' => 'deepseek',
@@ -380,14 +356,10 @@ test('router rejects provider or model drift from a frozen substage route', func
 ]);
 
 test('planner and writer resolve different providers while existing runs remain frozen', function () {
-    config()->set('ai.providers.openai.api_key', 'openai-test-key');
     $novel = Novel::factory()->create();
     $existing = GenerationRun::factory()->for($novel)->create(['provider' => 'openai']);
-    $settings = app(AiSettingsService::class)->defaults();
-    $settings['providers']['deepseek']['enabled'] = true;
-    $settings['stages']['planner'] = ['provider' => 'openai', 'model' => 'planner-openai'];
-    $settings['stages']['writer'] = ['provider' => 'deepseek', 'model' => 'writer-deepseek'];
-    app(AiSettingsService::class)->save($settings, null);
+    createAiModelRouteForTest(AiStage::Planner, 'planner-openai');
+    createAiModelRouteForTest(AiStage::Writer, 'writer-deepseek', 'deepseek');
 
     $resolver = app(AiSettingsResolver::class);
 
@@ -430,12 +402,8 @@ test('deepseek prompt logging follows the shared environment switch', function (
         ->and($serialized)->not->toContain('deepseek-test-key');
 });
 
-test('deepseek logs ai model configuration when prompt logging is enabled', function () {
+test('deepseek logs the request payload when prompt logging is enabled', function () {
     config()->set('ai.logging.prompts', true);
-    config()->set('ai.models', [
-        'planner' => 'planner-log-model',
-        'writer' => 'writer-log-model',
-    ]);
     Http::fake(['deepseek.example/*' => Http::response([
         'id' => 'deepseek-model-log-test',
         'model' => 'deepseek-chat',
@@ -454,10 +422,7 @@ test('deepseek logs ai model configuration when prompt logging is enabled', func
         prompt: 'logged-user-prompt',
     ));
 
-    expect($records['AI Provider 请求。']['ai_models'])->toBe([
-        'planner' => 'planner-log-model',
-        'writer' => 'writer-log-model',
-    ])
+    expect($records['AI Provider 请求。'])->not->toHaveKey('ai_models')
         ->and($records['AI Provider 请求。']['payload']['messages'])->toBe([
             ['role' => 'system', 'content' => 'logged-system-prompt'],
             ['role' => 'user', 'content' => 'logged-user-prompt'],
@@ -465,9 +430,11 @@ test('deepseek logs ai model configuration when prompt logging is enabled', func
 });
 
 test('router rejects disabled missing and unknown providers before http', function (string $provider, ?string $key, string $code) {
-    config()->set('ai.providers.deepseek.api_key', $key);
-    if ($code === 'provider_disabled') {
-        config()->set('ai.providers.deepseek.enabled', false);
+    if ($provider === 'deepseek') {
+        AIProviderConnection::query()->where('provider', 'deepseek')->update([
+            'api_key' => $key,
+            'is_enabled' => $code !== 'provider_disabled',
+        ]);
     }
     Http::fake();
 

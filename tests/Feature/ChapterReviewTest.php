@@ -8,6 +8,7 @@ use App\AI\Providers\FakeAiProvider;
 use App\Data\StateFinding;
 use App\Data\StateValidationResult;
 use App\Enums\ArtifactType;
+use App\Enums\AiStage;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
 use App\Enums\ForeshadowingImportance;
@@ -32,6 +33,7 @@ use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Services\ArcCompletionAuditRepairer;
 use App\Services\ChapterReviewer;
+use App\Services\GenerationSettingsService;
 use App\Services\CompactReviewPayload;
 use App\Services\OutlineCompletionService;
 use App\Services\PlanningReviewAudit;
@@ -45,9 +47,6 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Cache::flush();
-    config()->set('ai.budget.daily_hard_limit', null);
-    config()->set('ai.budget.novel_total_limit', null);
-    config()->set('ai.budget.chapter_max_cost', null);
 });
 
 function reviewFixture(?Closure $draftDataFactory = null): array
@@ -140,12 +139,12 @@ function truncatedReviewResponse(int $outputTokens): AiResponse
 }
 
 test('reviewer uses one fixed legal output budget for compact review', function () {
-    expect(config('generation.review_max_output_tokens'))->toBe(12_000)
-        ->and(config('generation'))->not->toHaveKeys(['review_retry_max_output_tokens', 'review_final_retry_max_output_tokens']);
+    expect(app(GenerationSettingsService::class)->chapterRequestBudgets(AiStage::Reviewer))->toBe([
+        'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 0],
+    ]);
 });
 
 test('review truncation is terminal when the frozen route has no higher budget', function () {
-    config()->set('generation.review_max_output_tokens', 4_000);
     config()->set('generation.chapter_request_budgets.reviewer.initial.output_tokens', 4_000);
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));

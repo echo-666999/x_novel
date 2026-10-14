@@ -10,7 +10,6 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
-    config()->set('ai.cost.currency', 'USD');
 });
 
 test('dashboard shows todays provider cost and token totals', function () {

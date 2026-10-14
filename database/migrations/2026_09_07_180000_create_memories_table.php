@@ -37,7 +37,8 @@ return new class extends Migration
 
             $table = DB::connection()->getSchemaGrammar()->wrapTable('memories');
             $embedding = DB::connection()->getQueryGrammar()->wrap('embedding');
-            $dimensions = max(1, (int) config('ai.embedding.dimensions', 1536));
+            // 初始 Schema 固定为 1536；运行时设置只能选择与该字段实际维度一致的值。
+            $dimensions = 1536;
             $types = $this->quotedValues(MemoryType::cases());
             $statuses = $this->quotedValues(MemoryStatus::cases());
 

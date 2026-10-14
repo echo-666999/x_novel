@@ -16,8 +16,7 @@ use InvalidArgumentException as QueryInvalidArgumentException;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
+    configureEmbeddingForTest();
     config()->set('context.memory_candidate_k', 3);
     config()->set('context.memory_final_k', 2);
 });

@@ -41,7 +41,26 @@ class ChapterReviewer
     private const FINDING_SCOPES = ['paragraph', 'scene', 'chapter'];
 
     /** 注入 Narrative Review 依赖；Coverage 自报 Finding 必须先经过独立 Judgment 解析。 */
-    public function __construct(private readonly AiProvider $provider, private readonly StateValidator $stateValidator, private readonly AutoStopService $autoStop, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit, private readonly PlanningReviewAudit $planningReviewAudit, private readonly OutlineCompletionService $outlineCompletion, private readonly GenerationFailurePolicy $failurePolicy, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget, private readonly PlanCoverageJudgmentRepairer $coverageJudgment, private readonly ChapterStageRouteResolver $routeResolver) {}
+    public function __construct(
+        private readonly AiProvider $provider,
+        private readonly StateValidator $stateValidator,
+        private readonly AutoStopService $autoStop,
+        private readonly DraftLengthPolicy $lengthPolicy,
+        private readonly PreviousChapterEnding $previousChapterEnding,
+        private readonly ContextBuilder $contextBuilder,
+        private readonly GenerationRunCoordinator $runCoordinator,
+        private readonly AutomaticRewriteCounter $rewriteCounter,
+        private readonly RewriteScopeResolver $rewriteScopeResolver,
+        private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit,
+        private readonly PlanningReviewAudit $planningReviewAudit,
+        private readonly OutlineCompletionService $outlineCompletion,
+        private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly GenerationOutputCapacityGuard $outputCapacity,
+        private readonly GenerationRequestBudget $requestBudget,
+        private readonly PlanCoverageJudgmentRepairer $coverageJudgment,
+        private readonly ChapterStageRouteResolver $routeResolver,
+        private readonly GenerationSettingsService $generationSettings,
+    ) {}
 
     /** 执行章节审校；技术性 Coverage 失败不得直接进入确定性 REWRITE。 */
     public function review(int $chapterId, bool $regenerate = false, ?string $operationId = null): ?Review
@@ -113,7 +132,11 @@ class ChapterReviewer
             ->only(['review_schema', 'arc_completion'])
             ->all();
         $context['generation_preferences']['review_token_budget'] = [
-            'context_token_budget' => (int) data_get($chapter->latestPlan?->admission_snapshot, 'capacity.review.context_token_budget', config('generation.review_context_token_budget', 32_000)),
+            'context_token_budget' => (int) data_get(
+                $chapter->latestPlan?->admission_snapshot,
+                'capacity.review.context_token_budget',
+                $this->generationSettings->reviewContextTokenBudget(),
+            ),
         ];
 
         $deterministicFindings = [

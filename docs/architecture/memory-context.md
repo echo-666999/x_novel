@@ -234,12 +234,14 @@ semantic similarity
 
 ## 11. Embedding
 
-MVP 只使用一个 Embedding Model 和固定维度。配置：
+MVP 只使用一个 Embedding Model 和固定维度。配置入口：
 
 ```text
-AI_EMBEDDING_MODEL
-AI_EMBEDDING_DIMENSIONS
+AI 与成本 → 模型价格 → 向量生成路由
+设置 → 生成参数 → Embedding 向量维度
 ```
+
+模型路由保存在 `ai_model_routes`，维度保存在 `system_settings.generation`。维度保存时必须与 PostgreSQL `memories.embedding` 的实际 `vector(n)` 一致；变更维度需要数据库迁移并重建全部向量，不能只修改设置值。
 
 `memories.embedding_model` 必须记录实际模型。
 

@@ -55,8 +55,7 @@ test('memory invalidation is novel scoped and idempotent', function () {
 });
 
 test('invalidated rollback memory cannot enter vector retrieval', function () {
-    config()->set('ai.embedding.model', 'embedding-fixed-v1');
-    config()->set('ai.embedding.dimensions', 3);
+    configureEmbeddingForTest();
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
     $event = StoryEvent::factory()->for($novel)->for($chapter)->create();

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\AI\AiSettingsService;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
@@ -40,6 +41,7 @@ class SceneGenerator
         private readonly SceneExecutionClock $executionClock,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
+        private readonly AiSettingsService $aiSettings,
     ) {}
 
     public function generate(int $sceneId, bool $regenerate = false, ?string $regenerationBatchId = null, bool $singleProviderCall = false): ?GenerationArtifact
@@ -895,7 +897,7 @@ class SceneGenerator
         $run->touch();
         $softTimeout = (int) config('generation.scene_job_soft_timeout_seconds', 300);
         $safetyMargin = (int) config('generation.scene_job_safety_margin_seconds', 20);
-        $providerTimeout = (int) config("ai.providers.{$provider}.timeout", 150);
+        $providerTimeout = $this->aiSettings->providerTimeout($provider);
         $elapsed = $this->executionClock->elapsedSeconds($jobStartedAt);
         $remaining = max(0, $softTimeout - $elapsed);
         $required = $providerTimeout + $safetyMargin;

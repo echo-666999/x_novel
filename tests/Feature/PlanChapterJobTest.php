@@ -10,6 +10,7 @@ use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Enums\ArtifactType;
+use App\Enums\AiStage;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
@@ -24,6 +25,7 @@ use App\Exceptions\GenerationPreflightException;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\AIModelPrice;
+use App\Models\AIModelRoute;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -513,8 +515,6 @@ test('an exhausted outline beat budget stops planning before a run or provider c
 });
 
 test('outline retries and duplicate delivery keep the same frozen outline context', function () {
-    config()->set('generation.planner_max_output_tokens', 12_000);
-    config()->set('generation.planner_retry_max_output_tokens', 16_000);
     config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
     config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
     [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
@@ -542,10 +542,9 @@ test('outline retries and duplicate delivery keep the same frozen outline contex
 });
 
 test('planner technical retry keeps the failed run route capacity prompt and budget after configuration changes', function () {
-    $provider = (string) config('ai.stage_providers.planner', config('ai.provider'));
-    config()->set('ai.models.planner', 'planner-frozen-old');
-    config()->set('ai.reasoning_efforts.planner', 'high');
     [$chapter, $character] = plannerChapter();
+    $provider = 'openai';
+    createAiModelRouteForTest(AiStage::Planner, 'planner-frozen-old', $provider, 'high');
     $payload = plannerPayload($character->getKey());
     $fake = (new FakeAiProvider)
         ->enqueue(new AiProviderException('provider_timeout', 'timeout', true))
@@ -556,21 +555,7 @@ test('planner technical retry keeps the failed run route capacity prompt and bud
     expect(fn () => $planner->generate($chapter->getKey()))->toThrow(AiProviderException::class, 'timeout');
     $first = $chapter->generationRuns()->sole();
 
-    config()->set('ai.models.planner', 'planner-new-config');
-    config()->set('ai.reasoning_efforts.planner', 'low');
-    AIModelPrice::query()->create([
-        'provider' => $provider,
-        'model' => 'planner-new-config',
-        'currency' => 'USD',
-        'billing_unit' => 1_000_000,
-        'context_window_tokens' => 1_050_000,
-        'max_output_tokens' => 128_000,
-        'supports_structured_output' => true,
-        'supports_reasoning_effort' => true,
-        'input_price' => 0,
-        'output_price' => 0,
-        'is_enabled' => true,
-    ]);
+    createAiModelRouteForTest(AiStage::Planner, 'planner-new-config', $provider, 'low');
 
     $planner->generate($chapter->getKey());
     $runs = $chapter->generationRuns()->oldest('id')->get();
@@ -613,9 +598,6 @@ test('planner rejects an oversized request contract before creating a run or cal
 });
 
 test('planner truncation escalates to the final budget and then stops before another provider request', function () {
-    config()->set('generation.planner_max_output_tokens', 12_000);
-    config()->set('generation.planner_retry_max_output_tokens', 16_000);
-    config()->set('generation.planner_final_retry_max_output_tokens', 24_000);
     config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
     config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
     config()->set('generation.chapter_request_budgets.planner.final.output_tokens', 24_000);

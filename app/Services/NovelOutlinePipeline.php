@@ -81,6 +81,7 @@ class NovelOutlinePipeline
         private readonly GenerationRunLease $runLease,
         private readonly TargetPlatformResolver $targetPlatformResolver,
         private readonly NovelOutlineStageContract $stageContract,
+        private readonly GenerationRequestBudget $requestBudget,
     ) {}
 
     /**
@@ -2215,20 +2216,7 @@ class NovelOutlinePipeline
     /** @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int} */
     private function configuredOutlineRequestBudget(AiStage $stage): array
     {
-        $configured = config("generation.outline_request_budgets.{$stage->value}");
-        $outputTokens = is_array($configured) ? (int) ($configured['output_tokens'] ?? 0) : 0;
-        $reasoningReserveTokens = is_array($configured) ? (int) ($configured['reasoning_reserve_tokens'] ?? -1) : -1;
-        if ($outputTokens < 1 || $reasoningReserveTokens < 0) {
-            throw ValidationException::withMessages([
-                'request_budget' => "Outline 任务 {$stage->value} 缺少有效的输出 Token 或推理预留配置。",
-            ]);
-        }
-
-        return [
-            'output_tokens' => $outputTokens,
-            'reasoning_reserve_tokens' => $reasoningReserveTokens,
-            'max_completion_tokens' => $outputTokens + $reasoningReserveTokens,
-        ];
+        return $this->requestBudget->configuredOutline($stage);
     }
 
     /** @return array<string, int|string|bool> */

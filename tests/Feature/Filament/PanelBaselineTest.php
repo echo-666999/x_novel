@@ -132,6 +132,8 @@ test('the settings page keeps the remaining operational configuration sections',
             '记忆',
             '预算',
         ])
-        ->assertSee('来源：config 与小说设置')
+        ->assertSee('生成参数')
+        ->assertSee('数据库配置')
+        ->assertSee('应用默认值（保存后写入 PostgreSQL）')
         ->assertSee('只读');
 });

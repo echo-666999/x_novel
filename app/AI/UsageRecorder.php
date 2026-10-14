@@ -52,7 +52,7 @@ class UsageRecorder
         $generationRunId = $request->metadata['generation_run_id'] ?? null;
         $novelId = $request->metadata['novel_id'] ?? null;
         $chapterId = $request->metadata['chapter_id'] ?? null;
-        $provider = (string) ($request->metadata['provider'] ?? config('ai.embedding.provider', 'openai'));
+        $provider = (string) ($request->metadata['provider'] ?? 'openai');
         $estimatedCost = $this->costCalculator->estimateInputOnly($response->inputTokens, $provider, $response->model);
 
         return UsageRecord::query()->create([

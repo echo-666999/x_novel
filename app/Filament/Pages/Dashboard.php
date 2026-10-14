@@ -5,7 +5,6 @@ namespace App\Filament\Pages;
 use App\Actions\Generation\StartMvpSoakRunAction;
 use App\Actions\Generation\StartReliabilityRunAction;
 use App\Actions\Generation\StartSmokeRunAction;
-use App\AI\AiSettingsService;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Actions\EmergencyStopAction;
@@ -13,6 +12,7 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Widgets\DueForeshadowingsWidget;
 use App\Models\Novel;
 use App\Services\DashboardOperationsOverview;
+use App\Services\GenerationSettingsService;
 use App\Services\MvpSoakRunService;
 use App\Services\ReliabilityRunService;
 use App\Services\SmokeRunService;
@@ -228,6 +228,6 @@ class Dashboard extends BaseDashboard
 
     private function costCurrency(): string
     {
-        return (string) data_get(app(AiSettingsService::class)->costSettings(), 'currency', 'USD');
+        return app(GenerationSettingsService::class)->currency();
     }
 }

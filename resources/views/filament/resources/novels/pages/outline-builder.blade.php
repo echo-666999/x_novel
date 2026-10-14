@@ -29,102 +29,115 @@
                         <div class="mt-1 text-lg font-semibold tabular-nums text-gray-950 dark:text-white">{{ $outline->volumes->count() }}</div>
                     </div>
                     <div class="rounded-lg border border-gray-200 p-3 dark:border-white/10">
-                        <div class="text-xs text-gray-500 dark:text-gray-400">校验状态</div>
-                        <div class="mt-1 text-sm font-medium {{ $validation?->isValid() ? 'text-success-600' : 'text-danger-600' }}">
-                            {{ $validation?->isValid() ? 'VALID' : 'INVALID' }}
-                        </div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">内容加载</div>
+                        <div class="mt-1 text-sm font-medium text-gray-950 dark:text-white">按分卷加载</div>
                     </div>
                     <div class="rounded-lg border border-gray-200 p-3 dark:border-white/10">
                         <div class="text-xs text-gray-500 dark:text-gray-400">Checksum</div>
                         <div class="mt-1 truncate font-mono text-xs text-gray-700 dark:text-gray-300" title="{{ $outline->checksum }}">{{ $outline->checksum }}</div>
                     </div>
                 </div>
-                @if (! $validation?->isValid())
-                    <ul class="list-disc space-y-1 pl-5 text-sm text-danger-600">
-                        @foreach ($validation->errors as $error)
-                            <li>{{ $error }}</li>
-                        @endforeach
-                    </ul>
-                @endif
             </div>
         </x-filament::section>
 
         @foreach ($outline->volumes as $volume)
-            <x-filament::section collapsible>
-                <x-slot name="heading">{{ $volume->sequence }}. {{ $volume->title }}</x-slot>
-                <x-slot name="description">{{ $volume->volume_key }} · 目标 {{ number_format($volume->target_words) }} 字</x-slot>
-                <x-slot name="afterHeader">
-                    {{ ($this->editOutlineNodeAction)([
-                        'outline_id' => $outline->getKey(),
-                        'outline_checksum' => $outline->checksum,
-                        'node_type' => 'volume',
-                        'node_key' => $volume->volume_key,
-                    ]) }}
-                </x-slot>
+            @php
+                $volumeDetails = $this->loadedOutlineVolumes[(string) $outline->getKey()][(string) $volume->getKey()] ?? null;
+            @endphp
+            <div
+                wire:key="outline-volume-{{ $outline->getKey() }}-{{ $volume->getKey() }}"
+                @if ($volumeDetails === null)
+                    x-on:click.capture="if ($event.target.closest('.fi-section-header') && ! $event.target.closest('.fi-section-header-after-ctn')) { $wire.loadOutlineVolume(@js($volume->getKey())) }"
+                @endif
+            >
+                <x-filament::section collapsed collapsible>
+                    <x-slot name="heading">{{ $volume->sequence }}. {{ $volume->title }}</x-slot>
+                    <x-slot name="description">{{ $volume->volume_key }} · 目标 {{ number_format($volume->target_words) }} 字</x-slot>
+                    <x-slot name="afterHeader">
+                        {{ ($this->editOutlineNodeAction)([
+                            'outline_id' => $outline->getKey(),
+                            'outline_checksum' => $outline->checksum,
+                            'node_type' => 'volume',
+                            'node_key' => $volume->volume_key,
+                        ]) }}
+                    </x-slot>
 
-                <div class="space-y-5">
-                    <div class="grid gap-4 md:grid-cols-2">
-                        <div><span class="text-xs text-gray-500">目标</span><p class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ $volume->goal }}</p></div>
-                        <div><span class="text-xs text-gray-500">高潮</span><p class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ $volume->climax }}</p></div>
-                    </div>
-                    @foreach ($volume->arcs as $arc)
-                        <div class="rounded-lg border border-gray-200 p-4 dark:border-white/10">
-                            <div class="flex flex-wrap items-center justify-between gap-2">
-                                <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ $arc->sequence }}. {{ $arc->title }}</h3>
-                                <div class="flex items-center gap-2">
-                                    <span class="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-300">{{ $arc->type->getLabel() }} · {{ $arc->arc_key }}</span>
-                                    {{ ($this->editOutlineNodeAction)([
-                                        'outline_id' => $outline->getKey(),
-                                        'outline_checksum' => $outline->checksum,
-                                        'node_type' => 'arc',
-                                        'node_key' => $arc->arc_key,
-                                    ]) }}
-                                </div>
-                            </div>
-                            <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">{{ $arc->goal }}</p>
-                            <div class="mt-4 divide-y divide-gray-200 dark:divide-white/10">
-                                @foreach ($arc->beats as $beat)
-                                    <div class="space-y-3 py-3">
-                                      <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
-                                        <div>
-                                            <div class="text-sm font-medium text-gray-900 dark:text-white">{{ $beat->sequence }}. {{ $beat->title }}</div>
-                                            <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">{{ $beat->summary }}</p>
-                                        </div>
-                                        <div class="flex items-center gap-2">
-                                          <div class="font-mono text-xs text-gray-500">{{ $beat->beat_key }} · {{ $beat->chapter_budget_min }}–{{ $beat->chapter_budget_max ?? '∞' }} 章</div>
-                                          {{ ($this->editOutlineNodeAction)([
-                                              'outline_id' => $outline->getKey(),
-                                              'outline_checksum' => $outline->checksum,
-                                              'node_type' => 'beat',
-                                              'node_key' => $beat->beat_key,
-                                          ]) }}
-                                        </div>
-                                      </div>
-                                      @if ($beat->milestones->isNotEmpty())
-                                        <div class="grid gap-2 md:grid-cols-2">
-                                          @foreach ($beat->milestones as $milestone)
-                                            <div class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-white/5">
-                                              <div class="flex items-start justify-between gap-2">
-                                                <div class="font-medium text-gray-900 dark:text-white">M{{ $milestone->sequence }} · {{ $milestone->title }}</div>
-                                                {{ ($this->editOutlineNodeAction)([
-                                                    'outline_id' => $outline->getKey(),
-                                                    'outline_checksum' => $outline->checksum,
-                                                    'node_type' => 'milestone',
-                                                    'node_key' => $milestone->milestone_key,
-                                                ]) }}
-                                              </div>
-                                              <div class="mt-1 text-gray-600 dark:text-gray-400">{{ $milestone->objective }}</div>
-                                            </div>
-                                          @endforeach
-                                        </div>
-                                      @endif
-                                    </div>
-                                @endforeach
-                            </div>
+                    @if ($volumeDetails === null)
+                        <div class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                            <x-filament::loading-indicator
+                                class="h-4 w-4"
+                                wire:loading
+                                wire:target="loadOutlineVolume({{ $volume->getKey() }})"
+                            />
+                            <span wire:loading wire:target="loadOutlineVolume({{ $volume->getKey() }})">正在加载当前分卷大纲…</span>
+                            <span wire:loading.remove wire:target="loadOutlineVolume({{ $volume->getKey() }})">展开后加载当前分卷大纲。</span>
                         </div>
-                    @endforeach
-                </div>
-            </x-filament::section>
+                    @else
+                        <div class="space-y-5">
+                            <div class="grid gap-4 md:grid-cols-2">
+                                <div><span class="text-xs text-gray-500">目标</span><p class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ $volumeDetails['goal'] }}</p></div>
+                                <div><span class="text-xs text-gray-500">高潮</span><p class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ $volumeDetails['climax'] }}</p></div>
+                            </div>
+                            @foreach ($volumeDetails['arcs'] as $arc)
+                                <div class="rounded-lg border border-gray-200 p-4 dark:border-white/10">
+                                    <div class="flex flex-wrap items-center justify-between gap-2">
+                                        <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ $arc['sequence'] }}. {{ $arc['title'] }}</h3>
+                                        <div class="flex items-center gap-2">
+                                            <span class="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-white/5 dark:text-gray-300">{{ $arc['type_label'] }} · {{ $arc['arc_key'] }}</span>
+                                            {{ ($this->editOutlineNodeAction)([
+                                                'outline_id' => $outline->getKey(),
+                                                'outline_checksum' => $outline->checksum,
+                                                'node_type' => 'arc',
+                                                'node_key' => $arc['arc_key'],
+                                            ]) }}
+                                        </div>
+                                    </div>
+                                    <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">{{ $arc['goal'] }}</p>
+                                    <div class="mt-4 divide-y divide-gray-200 dark:divide-white/10">
+                                        @foreach ($arc['beats'] as $beat)
+                                            <div class="space-y-3 py-3">
+                                                <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                                                    <div>
+                                                        <div class="text-sm font-medium text-gray-900 dark:text-white">{{ $beat['sequence'] }}. {{ $beat['title'] }}</div>
+                                                        <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">{{ $beat['summary'] }}</p>
+                                                    </div>
+                                                    <div class="flex items-center gap-2">
+                                                        <div class="font-mono text-xs text-gray-500">{{ $beat['beat_key'] }} · {{ $beat['chapter_budget_min'] }}–{{ $beat['chapter_budget_max'] ?? '∞' }} 章</div>
+                                                        {{ ($this->editOutlineNodeAction)([
+                                                            'outline_id' => $outline->getKey(),
+                                                            'outline_checksum' => $outline->checksum,
+                                                            'node_type' => 'beat',
+                                                            'node_key' => $beat['beat_key'],
+                                                        ]) }}
+                                                    </div>
+                                                </div>
+                                                @if ($beat['milestones'] !== [])
+                                                    <div class="grid gap-2 md:grid-cols-2">
+                                                        @foreach ($beat['milestones'] as $milestone)
+                                                            <div class="rounded-md bg-gray-50 px-3 py-2 text-xs dark:bg-white/5">
+                                                                <div class="flex items-start justify-between gap-2">
+                                                                    <div class="font-medium text-gray-900 dark:text-white">M{{ $milestone['sequence'] }} · {{ $milestone['title'] }}</div>
+                                                                    {{ ($this->editOutlineNodeAction)([
+                                                                        'outline_id' => $outline->getKey(),
+                                                                        'outline_checksum' => $outline->checksum,
+                                                                        'node_type' => 'milestone',
+                                                                        'node_key' => $milestone['milestone_key'],
+                                                                    ]) }}
+                                                                </div>
+                                                                <div class="mt-1 text-gray-600 dark:text-gray-400">{{ $milestone['objective'] }}</div>
+                                                            </div>
+                                                        @endforeach
+                                                    </div>
+                                                @endif
+                                            </div>
+                                        @endforeach
+                                    </div>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </x-filament::section>
+            </div>
         @endforeach
     @endif
 

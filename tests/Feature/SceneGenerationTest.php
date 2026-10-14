@@ -10,6 +10,7 @@ use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
 use App\Enums\ArtifactType;
+use App\Enums\AiStage;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\ForeshadowingStatus;
@@ -645,10 +646,9 @@ test('coverage evidence repair retries with a larger budget after a truncated re
 });
 
 test('scene prose evidence repair and length repair use independent routes and budgets', function () {
-    config()->set('ai.models.writer', 'writer-route-model');
-    config()->set('ai.models.extractor', 'extractor-route-model');
-    config()->set('ai.models.rewrite', 'rewrite-route-model');
-    seedVerifiedChapterModelProfiles();
+    createAiModelRouteForTest(AiStage::Writer, 'writer-route-model');
+    createAiModelRouteForTest(AiStage::Extractor, 'extractor-route-model');
+    createAiModelRouteForTest(AiStage::Rewrite, 'rewrite-route-model');
     $fixture = sceneGenerationFixture(1);
     $fixture['plan']->update(['target_words' => 10]);
     $longContent = str_repeat('长', 20);
@@ -689,7 +689,7 @@ test('scene job hands off before the hard timeout and resumes from the prose che
     Queue::fake();
     config()->set('generation.scene_job_soft_timeout_seconds', 300);
     config()->set('generation.scene_job_safety_margin_seconds', 20);
-    config()->set('ai.providers.openai.timeout', 150);
+    createAiProviderConnectionForTest()->update(['timeout' => 150]);
     $fixture = sceneGenerationFixture(1);
     $content = '林舟进入灯塔。';
     $fixture['plan']->update(['target_words' => mb_strlen($content)]);
@@ -1226,8 +1226,6 @@ test('a stale running scene is marked interrupted and resumed with a new run', f
 
 test('retryable provider failures are recorded and rethrown for queue retry', function () {
     Queue::fake();
-    config()->set('generation.scene_max_output_tokens', 12_000);
-    config()->set('generation.scene_retry_max_output_tokens', 16_000);
     config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 12_000);
     config()->set('generation.chapter_request_budgets.writer.retry.output_tokens', 16_000);
     $fixture = sceneGenerationFixture(1);
@@ -1283,9 +1281,6 @@ test('truncated structured scene output is retried as a technical failure', func
 });
 
 test('scene truncation escalates to the final budget and then stops before another provider request', function () {
-    config()->set('generation.scene_max_output_tokens', 12_000);
-    config()->set('generation.scene_retry_max_output_tokens', 16_000);
-    config()->set('generation.scene_final_retry_max_output_tokens', 24_000);
     config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 12_000);
     config()->set('generation.chapter_request_budgets.writer.initial.reasoning_reserve_tokens', 0);
     config()->set('generation.chapter_request_budgets.writer.initial.max_completion_tokens', 12_000);

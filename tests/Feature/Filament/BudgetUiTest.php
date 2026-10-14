@@ -5,8 +5,10 @@ use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Models\Chapter;
 use App\Models\Novel;
+use App\Models\SystemSetting;
 use App\Models\UsageRecord;
 use App\Models\User;
+use App\Services\GenerationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Livewire\Livewire;
 
@@ -14,10 +16,15 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
-    config()->set('ai.cost.currency', 'USD');
-    config()->set('ai.budget.daily_hard_limit', 5);
-    config()->set('ai.budget.novel_total_limit', 20);
-    config()->set('ai.budget.chapter_max_cost', 4);
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->defaults();
+    $settings['currency'] = 'USD';
+    $settings['budget'] = [
+        'daily_hard_limit' => 5,
+        'novel_total_limit' => 20,
+        'chapter_max_cost' => 4,
+    ];
+    $service->save($settings, null);
 });
 
 test('settings shows the global budget usage and defaults', function () {
@@ -31,6 +38,35 @@ test('settings shows the global budget usage and defaults', function () {
         ->assertSee('USD 20.0000')
         ->assertSee('Chapter Max Default')
         ->assertSee('USD 4.0000');
+});
+
+test('generation request budgets and embedding dimensions can be saved from settings', function () {
+    $settings = app(GenerationSettingsService::class)->defaults();
+    $settings['review_context_token_budget'] = 52_000;
+    $settings['currency'] = 'CNY';
+    $settings['budget']['daily_hard_limit'] = 12.5;
+    $settings['chapter_request_budgets']['writer']['initial']['output_tokens'] = 13_000;
+
+    Livewire::test(Settings::class)
+        ->assertActionExists('configureGenerationSettings')
+        ->callAction('configureGenerationSettings', data: $settings)
+        ->assertHasNoActionErrors();
+
+    expect(data_get(SystemSetting::query()->findOrFail(SystemSetting::GENERATION)->value, 'review_context_token_budget'))->toBe(52_000)
+        ->and(app(GenerationSettingsService::class)->currency())->toBe('CNY')
+        ->and(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'daily_hard_limit'))->toBe(12.5)
+        ->and(data_get(app(GenerationSettingsService::class)->settings(), 'chapter_request_budgets.writer.initial.output_tokens'))->toBe(13_000);
+});
+
+test('sqlite settings can save an embedding dimension when no pgvector column is available to verify', function () {
+    $settings = app(GenerationSettingsService::class)->defaults();
+    $settings['embedding_dimensions'] = 3_072;
+
+    Livewire::test(Settings::class)
+        ->callAction('configureGenerationSettings', data: $settings)
+        ->assertHasNoActionErrors();
+
+    expect(data_get(SystemSetting::query()->findOrFail(SystemSetting::GENERATION)->value, 'embedding_dimensions'))->toBe(3_072);
 });
 
 test('novel overview shows novel and current chapter used versus limit', function () {

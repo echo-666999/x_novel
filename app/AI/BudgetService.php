@@ -8,11 +8,12 @@ use App\AI\Exceptions\BudgetExceededException;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\UsageRecord;
+use App\Services\GenerationSettingsService;
 use InvalidArgumentException;
 
 class BudgetService
 {
-    public function __construct(private readonly AiSettingsService $settings) {}
+    public function __construct(private readonly GenerationSettingsService $settings) {}
 
     public function assertWithinNovelLimits(Novel $novel): void
     {

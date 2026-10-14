@@ -8,9 +8,17 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\EmergencyStopAiProvider;
 use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\OpenAiProvider;
+use App\Models\AIProviderConnection;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+
+uses(RefreshDatabase::class);
+
+beforeEach(function () {
+    createAiProviderConnectionForTest(baseUrl: 'https://llm.example/v1', apiKey: 'test-key');
+});
 
 test('ai request resolves system messages and a prompt in order', function () {
     $request = new AiRequest(
@@ -37,9 +45,6 @@ test('fake provider returns queued responses and records requests', function () 
 });
 
 test('openai provider maps a successful response to the provider dto', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
-
     Http::fake([
         'llm.example/*' => Http::response([
             'id' => 'request-123',
@@ -97,13 +102,7 @@ test('openai provider maps a successful response to the provider dto', function 
 });
 
 test('openai provider logs the complete prompt and response with request metadata', function () {
-    config()->set('ai.providers.openai.api_key', 'secret-test-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
     config()->set('ai.logging.prompts', true);
-    config()->set('ai.models', [
-        'planner' => 'planner-log-model',
-        'writer' => 'writer-log-model',
-    ]);
 
     Http::fake([
         'llm.example/*' => Http::response([
@@ -154,10 +153,6 @@ test('openai provider logs the complete prompt and response with request metadat
         ->and($requestLog['provider'])->toBe('openai')
         ->and($responseLog['provider'])->toBe('openai')
         ->and($requestLog['model'])->toBe('current-model')
-        ->and($requestLog['ai_models'])->toBe([
-            'planner' => 'planner-log-model',
-            'writer' => 'writer-log-model',
-        ])
         ->and($responseLog['model'])->toBe('current-model-2026-09-01')
         ->and($requestLog['prompt_version'])->toBe('scene-writer-test')
         ->and($requestLog['metadata'])->toBe([
@@ -190,9 +185,6 @@ test('openai provider does not log prompts when the prompt logging environment s
     expect(file_get_contents(config_path('ai.php')))
         ->toContain("'prompts' => env('AI_LOG_PROMPTS', false)");
     config()->set('ai.logging.prompts', false);
-
-    config()->set('ai.providers.openai.api_key', 'default-disabled-secret-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
 
     Http::fake(['llm.example/*' => Http::response([
         'id' => 'request-default-disabled',
@@ -268,9 +260,6 @@ test('openai provider does not log prompts when the prompt logging environment s
 
 test('openai provider obeys the cached prompt logging config when explicitly disabled', function () {
     config()->set('ai.logging.prompts', false);
-    config()->set('ai.providers.openai.api_key', 'explicit-disabled-secret-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
-
     Http::fake(['llm.example/*' => Http::response([
         'id' => 'request-explicit-disabled',
         'model' => 'current-model',
@@ -303,9 +292,6 @@ test('openai provider obeys the cached prompt logging config when explicitly dis
 });
 
 test('openai provider uses the default temperature for gpt 5.6 models', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
-
     Http::fake([
         'llm.example/*' => Http::response([
             'id' => 'request-gpt-5-6',
@@ -327,8 +313,6 @@ test('openai provider uses the default temperature for gpt 5.6 models', function
 });
 
 test('openai provider maps a fixed dimension embedding response', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
     Http::fake(['llm.example/*' => Http::response([
         'id' => 'embedding-request-1',
         'model' => 'text-embedding-test',
@@ -354,7 +338,6 @@ test('openai provider maps a fixed dimension embedding response', function () {
 });
 
 test('openai provider rejects malformed embedding vectors', function (array $embedding) {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'id' => 'bad-embedding',
         'model' => 'text-embedding-test',
@@ -373,7 +356,6 @@ test('openai provider rejects malformed embedding vectors', function (array $emb
 ])->throws(AiProviderException::class, 'Embedding Provider 返回了无效响应。');
 
 test('openai provider maps retryable and non retryable errors', function (int $status, string $code, bool $retryable) {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response(['error' => ['message' => 'Provider error']], $status)]);
 
     try {
@@ -392,8 +374,6 @@ test('openai provider maps retryable and non retryable errors', function (int $s
 ]);
 
 test('openai provider logs the complete rejected response body', function () {
-    config()->set('ai.providers.openai.api_key', 'secret-test-key');
-    config()->set('ai.providers.openai.base_url', 'https://llm.example/v1');
 
     Http::fake([
         'llm.example/*' => Http::response([
@@ -441,7 +421,6 @@ test('openai provider logs the complete rejected response body', function () {
 });
 
 test('openai provider rejects an invalid strict response schema before sending a request', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake();
 
     try {
@@ -468,7 +447,6 @@ test('openai provider rejects an invalid strict response schema before sending a
 });
 
 test('openai provider classifies a remote invalid schema response with its exact detail', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'error' => ['message' => "Invalid schema for response_format 'xnovel_response': additionalProperties is required."],
     ], 400)]);
@@ -483,7 +461,6 @@ test('openai provider classifies a remote invalid schema response with its exact
 });
 
 test('openai provider validates structured response data before returning it', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'id' => 'invalid-structured-response',
         'model' => 'test-model',
@@ -504,7 +481,6 @@ test('openai provider validates structured response data before returning it', f
 })->throws(AiProviderException::class, 'AI Provider 结构化输出不符合响应 Schema。');
 
 test('openai provider reports a structured output refusal', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'id' => 'structured-failure',
         'model' => 'test-model',
@@ -531,7 +507,6 @@ test('openai provider reports a structured output refusal', function () {
 });
 
 test('openai provider returns usage metadata for truncated structured output', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'id' => 'structured-truncated',
         'model' => 'test-model',
@@ -566,7 +541,6 @@ test('openai provider returns usage metadata for truncated structured output', f
 });
 
 test('openai provider identifies completion spent on reasoning before visible output', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::response([
         'id' => 'reasoning-exhausted',
         'model' => 'test-model',
@@ -596,14 +570,13 @@ test('openai provider identifies completion spent on reasoning before visible ou
 });
 
 test('openai provider rejects missing credentials before sending a request', function () {
-    config()->set('ai.providers.openai.api_key', null);
+    AIProviderConnection::query()->where('provider', 'openai')->update(['api_key' => null]);
     Http::fake();
 
     app(OpenAiProvider::class)->generate(new AiRequest(model: 'test-model', prompt: 'Ping'));
-})->throws(AiProviderException::class, 'AI Provider API Key 尚未配置。');
+})->throws(AiProviderException::class, 'has no configured API key');
 
 test('openai provider maps connection timeouts to a retryable timeout error', function () {
-    config()->set('ai.providers.openai.api_key', 'test-key');
     Http::fake(['*' => Http::failedConnection('cURL error 28: Operation timed out')]);
 
     try {
@@ -617,8 +590,6 @@ test('openai provider maps connection timeouts to a retryable timeout error', fu
 });
 
 test('the configured provider is bound through the interface', function () {
-    config()->set('ai.provider', 'openai');
-
     expect(app(AiProvider::class))->toBeInstanceOf(EmergencyStopAiProvider::class);
 });
 
