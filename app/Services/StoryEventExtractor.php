@@ -25,8 +25,11 @@ use Throwable;
 
 class StoryEventExtractor
 {
-    /** v9 起模型只返回语义字段，数据库身份与可计算字段由 Laravel 恢复。 */
+    /** v9 历史分支起模型只返回语义字段；该值用于选择兼容解析合同，不跟随当前配置漂移。 */
     private const COMPACT_CONTRACT_VERSION = 'event-extractor-v9';
+
+    /** 已校验事件 Payload 的恢复检查点指纹结构版本。 */
+    private const PAYLOAD_CHECKPOINT_CONTRACT_VERSION = 'event-payload-checkpoint-v1';
 
     public function __construct(
         private readonly AiProvider $provider,
@@ -803,7 +806,7 @@ class StoryEventExtractor
             GenerationStage::EventExtraction,
             $payload,
             upstreamChecksums: [$inputHash, $draft->checksum],
-            contractVersion: 'event-payload-checkpoint-v1',
+            contractVersion: self::PAYLOAD_CHECKPOINT_CONTRACT_VERSION,
         );
         $data = [
             'checkpoint' => 'event_payload',
@@ -854,7 +857,7 @@ class StoryEventExtractor
             GenerationStage::EventExtraction,
             ['event_index' => $eventIndex, 'repair_attempt' => $attempt, 'response' => $response],
             upstreamChecksums: [$inputHash, $draft->checksum],
-            contractVersion: 'event-evidence-repair-v1',
+            contractVersion: StoryEventEvidenceRepairer::PROMPT_VERSION,
         );
         $run->artifacts()->create([
             'type' => ArtifactType::Context,

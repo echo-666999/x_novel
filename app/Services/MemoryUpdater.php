@@ -24,6 +24,7 @@ use Throwable;
 
 class MemoryUpdater
 {
+    /** 从 Canonical Story Event 确定性生成 Memory 的规则版本，参与幂等键和输入哈希。 */
     public const POLICY_VERSION = 'memory-policy-v1';
 
     public function __construct(

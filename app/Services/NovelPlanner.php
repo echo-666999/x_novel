@@ -8,6 +8,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
+use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Data\NormalizedNovelOutline;
 use App\Enums\AiStage;
@@ -25,11 +26,6 @@ use Throwable;
 
 class NovelPlanner
 {
-    // Prompt 版本参与 input_hash；修改提示词时必须升级版本，避免复用旧语义产物。
-    public const PROMPT_VERSION = 'novel-planner-v7';
-
-    public const REGENERATION_PROMPT_VERSION = 'novel-outline-node-v3';
-
     public const MAX_COMPLETION_TOKENS = 24_000;
 
     public const REGENERATION_MAX_TOKENS = 8_000;
@@ -42,6 +38,7 @@ class NovelPlanner
         private readonly CreateNovelOutlineVersionAction $createOutlineVersion,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly NovelOutlinePipeline $outlinePipeline,
+        private readonly PromptVersionResolver $promptVersionResolver,
     ) {}
 
     public function generate(Novel $novel, int $volumeCount = 5): GenerationArtifact
@@ -78,6 +75,8 @@ class NovelPlanner
 
         $target = $this->regenerationTarget($outlineData, $nodeKey);
         $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
+        // 局部修订不是独立 AiStage，但仍必须冻结 Prompt 本体与 planning 策略的有效版本。
+        $promptVersion = $this->promptVersionResolver->resolveTask('outline_node_regeneration');
         $context = [
             'novel_id' => $novel->getKey(),
             'source_artifact_id' => $sourceArtifact->getKey(),
@@ -97,7 +96,7 @@ class NovelPlanner
             'provider' => $settings->provider,
             'model' => $settings->model,
             'reasoning_effort' => $settings->reasoningEffort,
-            'prompt_version' => self::REGENERATION_PROMPT_VERSION,
+            'prompt_version' => $promptVersion,
         ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
         $attempt = ((int) $novel->generationRuns()
             ->where('stage', GenerationStage::ChapterPlanning)
@@ -110,7 +109,7 @@ class NovelPlanner
             'attempt' => $attempt,
             'idempotency_key' => "outline-regenerate:{$novel->getKey()}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
-            'prompt_version' => self::REGENERATION_PROMPT_VERSION,
+            'prompt_version' => $promptVersion,
             'provider' => $settings->provider,
             'model_policy' => $settings->model,
             'context_snapshot' => $context,
@@ -128,7 +127,7 @@ class NovelPlanner
                 temperature: 0.4,
                 maxTokens: self::REGENERATION_MAX_TOKENS,
                 responseSchema: $this->regenerationSchema($target['type']),
-                promptVersion: self::REGENERATION_PROMPT_VERSION,
+                promptVersion: $promptVersion,
                 metadata: [
                     'generation_run_id' => $run->getKey(),
                     'novel_id' => $novel->getKey(),

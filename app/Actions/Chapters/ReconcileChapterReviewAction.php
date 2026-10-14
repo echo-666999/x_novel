@@ -19,6 +19,9 @@ use Illuminate\Validation\ValidationException;
 
 final class ReconcileChapterReviewAction
 {
+    /** 确定性归一化重复规划审计时写入 Run 的操作合同版本。 */
+    private const OPERATION_CONTRACT_VERSION = 'planning-audit-reconciliation-v1';
+
     public function __construct(private readonly PlanningReviewAudit $planningReviewAudit) {}
 
     public function execute(Chapter $chapter, string $reason, ?int $actorId = null): Review
@@ -86,7 +89,7 @@ final class ReconcileChapterReviewAction
                 'idempotency_key' => $key,
                 'input_hash' => hash('sha256', $key),
                 'state_version' => $stateVersion,
-                'prompt_version' => 'planning-audit-reconciliation-v1',
+                'prompt_version' => self::OPERATION_CONTRACT_VERSION,
                 'model_policy' => 'deterministic',
                 'context_snapshot' => [
                     'source_review_id' => $source->getKey(),

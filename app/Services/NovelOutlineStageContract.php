@@ -14,10 +14,6 @@ use Illuminate\Validation\ValidationException;
  */
 final class NovelOutlineStageContract
 {
-    public const STRUCTURE_PROMPT_VERSION = 'novel-outline-structure-v1';
-
-    public const ARC_BEATS_PROMPT_VERSION = 'novel-outline-arc-beats-v2';
-
     public const MAX_VOLUME_COUNT = 12;
 
     public const MAX_SHORT_TEXT_LENGTH = 255;

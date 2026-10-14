@@ -16,6 +16,7 @@ use Illuminate\Validation\ValidationException;
  */
 final class GenerationSettingsService
 {
+    /** system_settings 中 generation 配置 JSON 的结构版本，用于拒绝读取未知格式。 */
     public const SCHEMA_VERSION = 1;
 
     /** @var array<string, array<int, string>> */

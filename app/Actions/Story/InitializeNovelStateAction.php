@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\DB;
 
 class InitializeNovelStateAction
 {
+    /** 小说初始 Story State 快照的结构版本。 */
     private const SCHEMA_VERSION = 1;
 
     public function __construct(private readonly StoryStateService $storyState) {}

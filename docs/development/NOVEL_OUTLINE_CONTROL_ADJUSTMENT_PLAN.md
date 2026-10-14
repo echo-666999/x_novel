@@ -1,13 +1,13 @@
 # 人工全书大纲与受控章节生成调整方案
 
 > 日期：2026-09-21
-> 状态：历史实施记录（OUT-001～OUT-009 已完成；Outline Source of Truth、Beat 完成与迁移语义自 NGC-001 起由新方案替代）
+> 状态：历史实施记录（OUT-001～OUT-008 已完成；Outline Source of Truth、Beat 完成与迁移语义自 NGC-001 起由新方案替代）
 > 范围：新建小说的全书大纲、连载中的未来大纲修订、Chapter Planner 按大纲生成、AI Prompt 日志开关、AI 配置后台维护、DeepSeek 生成支持、《六环余光》迁移准备
 > 不包含：本文件不修改业务代码，不调用 AI Provider，不修改《六环余光》的小说数据
 
 ## 0. NGC-001 后续替代说明
 
-自 2026-09-26 起，`NOVEL_GENERATION_CONTROL_AND_CONTENT_DELETION_OPTIMIZATION_PLAN.md` 和对应 PRD/Architecture 是后续实现的权威来源。本文件保留 OUT-001～OUT-009 的历史背景和实施记录，但以下旧设计不得继续作为新代码依据：
+自 2026-09-26 起，`NOVEL_GENERATION_CONTROL_AND_CONTENT_DELETION_OPTIMIZATION_PLAN.md` 和对应 PRD/Architecture 是后续实现的权威来源。本文件保留其余任务的历史背景和实施记录，但以下旧设计不得继续作为新代码依据：
 
 - `novel_outlines.content` 和 `story_arcs.beats` 不再是 Outline Source of Truth；目标结构改为版本头加 `novel_outline_volumes/arcs/beats/milestones` 四张关系表。
 - 不保留旧数据迁移、`baseline_completions`、旧 Beat Key 回退或 JSONB 双读；实施从 `migrate:fresh` 后的空数据库开始。
@@ -945,9 +945,8 @@ flowchart TD
     E --> G
     F --> G
     E --> H[OUT-008 Canonical Summary 补齐能力]
-    G --> I[OUT-009 六环余光 Dry Run]
-    H --> I
-    I --> J[OUT-010 六环余光执行与端到端验收]
+    G --> J[OUT-010 六环余光执行与端到端验收]
+    H --> J
     K[OUT-011 Prompt 日志环境开关] --> M[OUT-013 DeepSeek Provider 与运行时切换]
     L[OUT-012 AI 配置入库与后台维护] --> M
     M --> J
@@ -963,8 +962,7 @@ flowchart TD
 | OUT-006 | Review、Canonical Commit、人物 Candidate 与回滚 | P0 | DONE | OUT-005 |
 | OUT-007 | 连载中未来大纲修订与当前章安全重建 | P1 | DONE | OUT-004～006 |
 | OUT-008 | Canonical Chapter Summary 幂等补齐 | P1 | DONE | OUT-005 |
-| OUT-009 | 《六环余光》大纲迁移 Dry Run | P0 | DONE | OUT-007、008 |
-| OUT-010 | 《六环余光》执行与端到端验收 | P0 | BLOCKED_BY_DECISION | OUT-009、OUT-013、用户确认第 12 章处理方式与完整大纲 |
+| OUT-010 | 《六环余光》执行与端到端验收 | P0 | BLOCKED_BY_DECISION | OUT-007、OUT-008、OUT-013、用户确认第 12 章处理方式与完整大纲 |
 | OUT-011 | Prompt 日志环境开关 | P0 | DONE | 无 |
 | OUT-012 | AI 配置入库与后台维护 | P0 | DONE | 无 |
 | OUT-013 | DeepSeek Provider 与运行时切换 | P0 | DONE | OUT-011、012 |
@@ -1215,30 +1213,6 @@ flowchart TD
 
 - 清除错误的当前 Summary 指针或字段值，保留 Run、Artifact 和 Usage 用于审计。
 
-## OUT-009 — 《六环余光》大纲迁移 Dry Run
-
-**实现内容**
-
-- 读取 Chapter 1～11 Canonical Artifact。
-- 输出用户大纲节点与历史正文的证据映射。
-- 输出第 12 章两种处理方案的具体影响。
-- 输出缺失 Summary、当前 Beat、候选教授和未来世界实体。
-- 生成 plan hash，供后续 Execute 防止数据漂移。
-
-**验收产物**
-
-- 本地 JSON Dry Run 报告。
-- 本地 Markdown 人工审核报告。
-- 报告包含 Expected State Version、Current Outline ID、Chapter 12 Artifact checksum 和 plan hash。
-
-**数据库 / Canonical State**
-
-- 无。Dry Run 必须回滚或完全只读。
-
-**回滚**
-
-- 不需要；删除本地报告即可。
-
 ## OUT-010 — 《六环余光》执行与端到端验收
 
 **开始条件**
@@ -1246,7 +1220,6 @@ flowchart TD
 - 用户确认完整大纲或明确只先采用已提供的两个 Volume。
 - 用户确认教授姓名、核心能力、动机和限制，或者确认允许 AI 提供候选后再选。
 - 用户确认第 12 章保留还是废弃重建。
-- 用户审核 OUT-009 的同一 plan hash。
 
 **执行内容**
 

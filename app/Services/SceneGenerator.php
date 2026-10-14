@@ -28,6 +28,15 @@ use Throwable;
 
 class SceneGenerator
 {
+    /** Scene 辅助字段与 Coverage 修复路由的冻结合同版本。 */
+    private const SUPPORT_REPAIR_ROUTE_CONTRACT_VERSION = 'scene-support-repair-v2';
+
+    /** 仅修复 Scene 字数不足或超限的 Provider Prompt 版本。 */
+    private const LENGTH_REPAIR_PROMPT_VERSION = 'scene-length-repair-v2';
+
+    /** Scene 子阶段 Context Artifact 的指纹结构版本。 */
+    private const SUBSTAGE_CHECKPOINT_CONTRACT_VERSION = 'scene-substage-checkpoint-v1';
+
     public function __construct(
         private readonly AiProvider $provider,
         private readonly PlanAdmissionService $planAdmission,
@@ -131,8 +140,8 @@ class SceneGenerator
         );
         $context['generation_preferences']['substage_routes'] = [
             'prose' => $this->routeSnapshot($chapter, $settings, AiStage::Writer, $promptVersion, null),
-            'structure_and_coverage' => $this->routeSnapshot($chapter, $extractorSettings, AiStage::Extractor, 'scene-support-repair-v2', null),
-            'length_repair' => $this->routeSnapshot($chapter, $rewriteSettings, AiStage::Rewrite, 'scene-length-repair-v2', $lengthRepairBudget['max_completion_tokens']),
+            'structure_and_coverage' => $this->routeSnapshot($chapter, $extractorSettings, AiStage::Extractor, self::SUPPORT_REPAIR_ROUTE_CONTRACT_VERSION, null),
+            'length_repair' => $this->routeSnapshot($chapter, $rewriteSettings, AiStage::Rewrite, self::LENGTH_REPAIR_PROMPT_VERSION, $lengthRepairBudget['max_completion_tokens']),
         ];
         $foreshadowingExpectations = ForeshadowingCoverage::expectationsForScene(
             data_get($context, 'l0.foreshadowing_contract', []),
@@ -254,7 +263,7 @@ class SceneGenerator
                     context: $context,
                     provider: $rewriteSettings->provider,
                     model: $rewriteSettings->model,
-                    promptVersion: 'scene-length-repair-v2',
+                    promptVersion: self::LENGTH_REPAIR_PROMPT_VERSION,
                     reasoningEffort: $this->sentReasoningEffort($rewriteSettings->reasoningEffort),
                     metadata: $metadata,
                     beforeRequest: $beforeRequest,
@@ -828,7 +837,7 @@ class SceneGenerator
                 ['checkpoint' => $substage, 'payload' => $payload, 'metadata' => $checkpointMetadata],
                 upstreamChecksums: array_values(array_filter([$inputHash, $sourceCheckpoint])),
                 frozen: ['state_version' => $lockedRun->state_version, 'prompt_version' => $lockedRun->prompt_version],
-                contractVersion: 'scene-substage-checkpoint-v1',
+                contractVersion: self::SUBSTAGE_CHECKPOINT_CONTRACT_VERSION,
             );
 
             $data = array_filter([

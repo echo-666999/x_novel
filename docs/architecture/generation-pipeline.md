@@ -794,7 +794,7 @@ Human/Block: locked_fact / ambiguity / rewrite_exhausted / budget / ending_confl
 
 统一配置 outline_foundation、outline_structure、outline_arc_beats、outline_beat_detail、planning、scene_generation、event_extraction、review、local_rewrite、summary、embedding timeout。Skeleton Assembly、Chapter Assembly 与 Outline Finalize 都是确定性阶段，没有 Provider Timeout。
 
-OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema。当前版本冻结为 `novel-outline-structure-v1`、`novel-outline-arc-beats-v2`、`novel-outline-beat-detail-v2` 和 `novel-outline-skeleton-assembly-v2`；v2 Arc Beats / Beat Detail Schema 移除隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key，改由 Laravel 确定性分配。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
+OGR-003 将 Structure 与 Arc Beats 分离为两个 Strict Schema。当前四个 Provider 阶段的基础版本为 `novel-outline-foundation-v3`、`novel-outline-structure-v2`、`novel-outline-arc-beats-v3`、`novel-outline-beat-detail-v3`；它们均追加 `natural-planning-v3` 形成有效 Prompt Version。确定性组装算法版本为 `novel-outline-skeleton-assembly-v2`。Arc Beats / Beat Detail 的 v2 Schema 已移除隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key，改由 Laravel 确定性分配。Structure 输出上限为 12,000 Token：保留旧 Skeleton 对最多 12 卷结构的上限，但移除全部 Beat；单 Arc Beats 上限为 8,000 Token，与现有 Foundation 上限一致并保留候选字段容量。调用前必须把系统提示、任务提示、Schema 和上下文作为完整请求输入估算 Token，并同时满足冻结模型的上下文窗口与最大输出限制。2026-09-30 当前 Planner 路由为 `openai/gpt-5.6-terra`；官方模型页给出的容量为 1,050,000 Token 上下文和 128,000 Token 最大输出。模型路由变化后必须提供新模型的真实容量，不能沿用该证据推断其他模型。[OpenAI GPT-5.6 Terra 模型规格](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
 
 默认超时链：
 
@@ -841,22 +841,22 @@ Hard Budget 至少在 Chapter 开始、每个新 Provider Request、Rewrite、�
 每个 AI Stage 记录 Prompt Version，例如：
 
 ```text
-chapter-planner-v10+natural-prose-v1
-scene-writer-v16+natural-prose-v1
-assembly-algorithm-v1
+chapter-planner-v10+natural-planning-v3
+scene-writer-v16+natural-writing-v3
+deterministic-assembly-v1
 event-extractor-v9
-reviewer-v16+natural-prose-v1
-rewrite-v14+natural-prose-v1
+reviewer-v16+natural-reviewing-v3
+rewrite-v14+natural-writing-v3
 review-schema-repair-v3
 arc-completion-repair-v2
-coverage-judgment-repair-v1
-rewrite-length-patch-v2
-summary-v2+natural-prose-v1
+coverage-judgment-v2
+scene-length-repair-v2
+summary-v2+natural-summary-v3
 ```
 
-`NarrativeProsePolicy::VERSION = natural-prose-v1` 是规划、Scene 正文、局部 Rewrite 和审校共用的自然表达契约。Novel Planner 与 Chapter Planner 要把抽象主题落成可验证的人物行动、阻力和后果；Scene Writer 与局部 Rewrite 通过动作、对白、POV 感知和具体后果呈现信息；Reviewer 只在这些特征反复出现或实质损害叙事时生成 `STYLE_MISMATCH`；Canonical Summary 只记录事件、状态变化和未决后果。Deterministic Assembler 不读取该策略。
+`NarrativeProsePolicy` 的规划、写作、审校与摘要规则分别使用 `natural-planning-v3`、`natural-writing-v3`、`natural-reviewing-v3`、`natural-summary-v3`。四个版本在 `config/prompts.php` 独立维护，修改一种规则只使实际引用它的阶段形成新复用边界。Novel Planner 与 Chapter Planner 必须让相邻结构单元承担不同推进职责，禁止把同一次回忆、确认、情绪、揭示或准备拆分重复；Scene Writer 与局部 Rewrite 必须保持有限视角，让动作、对白、环境和心理服务当前目标与因果推进，避免无新增作用的记忆、意象、感受和结论重播；Reviewer 必须区分 `EXCESSIVE_REPETITION` 与 `STYLE_MISMATCH`，忽略有实际作用的回扣并合并相同根因；Canonical Summary 必须按字段职责记录最短因果链、状态变化和未决后果，保留原文不确定性并避免跨字段复述。Deterministic Assembler 不读取该策略。
 
-`PromptVersionResolver` 为 Provider 阶段的 Planner、Writer、Reviewer、Local Rewrite 和 Summary 返回 `{stage_prompt_version}+{narrative_policy_version}`。该有效版本同时进入 Run、Context Snapshot、Input Hash、Idempotency Key 和 Provider 请求诊断；修改任一组成部分都会形成新的复用边界。Assembly 使用独立算法版本，不注册 Prompt Version，也不产生 Provider Usage。Extractor 等不注入自然文风策略的结构化阶段保持独立版本。
+`PromptVersionResolver` 是当前 Provider Prompt 的统一入口，覆盖四个 Outline 阶段、Chapter Planner、Writer、Reviewer、Local Rewrite、Summary，以及没有独立 `AiStage` 的 Outline 局部修订任务。它按 `config/prompts.php` 的 `stage_policies` 或 `tasks` 映射返回 `{base_prompt_version}+{policy_version}`。该有效版本同时进入 Run、Context Snapshot、Input Hash、Idempotency Key 和 Provider 请求诊断；修改任一组成部分都会形成新的复用边界。历史 Pipeline 合同、确定性算法、Schema、恢复合同和人工操作合同仍保留在对应实现旁边，不伪装成当前 Provider Prompt。Extractor 等不注入叙事策略的结构化阶段保持独立版本。
 
 Scene Writer 的 Run Snapshot 保留完整路由、容量、预算和 Memory 查询诊断，但正文请求只发送 `l0/l1/l2/l4`、已选中的长期记忆、临时状态、前场尾部、当前 Scene 任务和写作约束。`generation_preferences`、Token 分配、Checksum、ID 列表及 `l3.query_text` 不进入 Provider Prompt。Writer 的完成预算必须分别冻结可见输出与推理预留；Provider 默认启用推理时，即使 `reasoning_effort` 为空也不能把推理预留设为零。
 

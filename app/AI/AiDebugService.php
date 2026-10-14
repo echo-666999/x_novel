@@ -19,8 +19,7 @@ final class AiDebugService
     public function run(AiStage $stage, string $input): AiDebugResult
     {
         $settings = $this->settingsResolver->resolve($stage);
-        // Debug requests do not inject NarrativeProsePolicy, so they must report
-        // the base stage version instead of the production effective version.
+        // Debug 请求不注入 NarrativeProsePolicy，因此记录基础版本，不能伪装成生产有效版本。
         $promptVersion = $this->promptVersionResolver->resolveBase($stage);
 
         $response = $this->provider->generate(new AiRequest(

@@ -7,8 +7,8 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\Data\StateFinding;
 use App\Data\StateValidationResult;
-use App\Enums\ArtifactType;
 use App\Enums\AiStage;
+use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
 use App\Enums\ForeshadowingImportance;
@@ -33,8 +33,8 @@ use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Services\ArcCompletionAuditRepairer;
 use App\Services\ChapterReviewer;
-use App\Services\GenerationSettingsService;
 use App\Services\CompactReviewPayload;
+use App\Services\GenerationSettingsService;
 use App\Services\OutlineCompletionService;
 use App\Services\PlanningReviewAudit;
 use App\Services\StateValidator;
@@ -623,7 +623,10 @@ test('compact narrative review schema excludes decisions database identities ord
         ->and($encoded)->not->toContain('scene_id')
         ->and($encoded)->not->toContain('target_scene_sequence')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得返回推荐 Decision')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('不得复述数据库 ID');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得复述数据库 ID')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('必须区分“内容重复”和“文风失真”')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('EXCESSIVE_REPETITION')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('STYLE_MISMATCH');
 });
 
 test('forced review creates a fresh run and includes the extractor completion audit', function () {

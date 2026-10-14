@@ -12,7 +12,8 @@ use Illuminate\Validation\ValidationException;
 /** 校正 Story Event 的逐字证据，并按 Extractor Run 冻结的独立预算执行。 */
 final class StoryEventEvidenceRepairer
 {
-    private const PROMPT_VERSION = 'event-evidence-repair-v1';
+    /** 仅校正 Story Event 逐字证据的 Provider Prompt 版本。 */
+    public const PROMPT_VERSION = 'event-evidence-repair-v1';
 
     public function __construct(
         private readonly AiProvider $provider,

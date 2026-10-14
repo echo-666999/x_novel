@@ -1,6 +1,8 @@
 <?php
 
 use App\AI\OpenAiStructuredOutputSchema;
+use App\AI\PromptVersionResolver;
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineStageContract;
@@ -269,12 +271,15 @@ test('outline stage capacity is checked against frozen context and model output 
         ->toThrow(ValidationException::class);
 });
 
-test('new prompt and artifact types preserve the legacy skeleton version', function () {
-    expect(NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION)->toBe('novel-outline-structure-v1')
-        ->and(NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION)->toBe('novel-outline-arc-beats-v2')
-        ->and(NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION)->toBe('novel-outline-beat-detail-v2')
-        ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_VERSION)->toBe('novel-outline-skeleton-assembly-v2')
-        ->and(NovelOutlinePipeline::SKELETON_PROMPT_VERSION)->toBe('novel-outline-skeleton-v1')
+test('outline provider prompts use the central resolver and preserve deterministic and legacy versions', function () {
+    $versions = app(PromptVersionResolver::class);
+
+    expect($versions->resolve(AiStage::OutlineFoundation))->toBe('novel-outline-foundation-v3+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v2+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v3+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineBeatDetail))->toBe('novel-outline-beat-detail-v3+natural-planning-v3')
+        ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION)->toBe('novel-outline-skeleton-assembly-v2')
+        ->and(NovelOutlinePipeline::LEGACY_SKELETON_PROMPT_VERSION)->toBe('novel-outline-skeleton-v1')
         ->and(ArtifactType::OutlineStructure->value)->toBe('outline_structure')
         ->and(ArtifactType::OutlineArcBeats->value)->toBe('outline_arc_beats');
 });

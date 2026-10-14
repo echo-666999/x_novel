@@ -8,6 +8,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\NarrativeProsePolicy;
+use App\AI\PromptVersionResolver;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -54,21 +55,23 @@ class NovelOutlinePipeline
 
     public const FINALIZE_SCOPE = 'novel_outline_finalize';
 
-    public const LEGACY_BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v2';
+    /** 旧 v2 主批次工作流合同；仅用于识别和安全淘汰历史批次。 */
+    public const LEGACY_BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v2';
 
-    public const SINGLE_ROUTE_BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v3';
+    /** v3 单路由主批次合同；只允许按其原冻结路由恢复。 */
+    public const SINGLE_ROUTE_BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v3';
 
-    public const BATCH_PROMPT_VERSION = 'novel-outline-pipeline-v4';
+    /** 当前 v4 多路由主批次合同；变化会创建新的批次输入身份。 */
+    public const BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v4';
 
-    public const FOUNDATION_PROMPT_VERSION = 'novel-outline-foundation-v2';
+    /** 旧 v2 批次使用的 Skeleton Provider Prompt；历史文本与版本必须保持不变。 */
+    public const LEGACY_SKELETON_PROMPT_VERSION = 'novel-outline-skeleton-v1';
 
-    public const SKELETON_PROMPT_VERSION = 'novel-outline-skeleton-v1';
+    /** Finalize 不调用 Provider，该版本标识确定性蓝图合并合同。 */
+    public const FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v1';
 
-    public const BEAT_DETAIL_PROMPT_VERSION = 'novel-outline-beat-detail-v2';
-
-    public const FINALIZE_PROMPT_VERSION = 'novel-outline-finalize-v1';
-
-    public const SKELETON_ASSEMBLY_VERSION = 'novel-outline-skeleton-assembly-v2';
+    /** Structure 与各 Arc Beats 的确定性组装算法版本。 */
+    public const SKELETON_ASSEMBLY_ALGORITHM_VERSION = 'novel-outline-skeleton-assembly-v2';
 
     public const SKELETON_MAX_TOKENS = 12_000;
 
@@ -82,6 +85,7 @@ class NovelOutlinePipeline
         private readonly TargetPlatformResolver $targetPlatformResolver,
         private readonly NovelOutlineStageContract $stageContract,
         private readonly GenerationRequestBudget $requestBudget,
+        private readonly PromptVersionResolver $promptVersionResolver,
     ) {}
 
     /**
@@ -127,7 +131,7 @@ class NovelOutlinePipeline
             ];
             $inputHash = $this->hash([
                 'context' => $context,
-                'batch_prompt_version' => self::BATCH_PROMPT_VERSION,
+                'batch_prompt_version' => self::BATCH_CONTRACT_VERSION,
             ]);
 
             $existing = GenerationRun::query()
@@ -158,7 +162,7 @@ class NovelOutlinePipeline
                 'attempt' => $attempt,
                 'idempotency_key' => "novel-outline-batch:{$locked->getKey()}:{$inputHash}:{$attempt}",
                 'input_hash' => $inputHash,
-                'prompt_version' => self::BATCH_PROMPT_VERSION,
+                'prompt_version' => self::BATCH_CONTRACT_VERSION,
                 'provider' => null,
                 'model_policy' => null,
                 'context_snapshot' => $context,
@@ -409,11 +413,11 @@ class NovelOutlinePipeline
     public function assertResumeCompatible(GenerationRun $batch): void
     {
         $this->assertBatch($batch);
-        if (! in_array($batch->prompt_version, [self::SINGLE_ROUTE_BATCH_PROMPT_VERSION, self::BATCH_PROMPT_VERSION], true)
+        if (! in_array($batch->prompt_version, [self::SINGLE_ROUTE_BATCH_CONTRACT_VERSION, self::BATCH_CONTRACT_VERSION], true)
             || data_get($batch->context_snapshot, 'generation_preferences.prompt_versions') !== $this->promptVersions()) {
             throw ValidationException::withMessages(['run' => 'Outline 主批次版本与当前 Pipeline 合同不兼容。']);
         }
-        if ($batch->prompt_version === self::BATCH_PROMPT_VERSION) {
+        if ($batch->prompt_version === self::BATCH_CONTRACT_VERSION) {
             foreach ($this->outlineRouteStages() as $stage) {
                 $this->frozenRoute($batch, $stage);
             }
@@ -528,9 +532,9 @@ class NovelOutlinePipeline
             routeStage: AiStage::OutlineFoundation,
             scopeType: self::FOUNDATION_SCOPE,
             artifactType: ArtifactType::OutlineFoundation,
-            promptVersion: self::FOUNDATION_PROMPT_VERSION,
+            promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineFoundation),
             context: $context,
-            systemPrompt: '你是 XNovel 小说 Foundation 规划器。只返回严格 JSON。只规划开篇即成立的小说圣经、初始人物、初始世界实体和伏笔候选；不得返回 Volume、Arc、Beat、Milestone、Handoff 或任何数据库 ID。bible.style_profile.target_platform 必须精确返回输入 target_platform.code，不得自行更换平台。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
+            systemPrompt: $this->foundationSystemPrompt(),
             prompt: '请根据小说信息生成 Foundation 候选：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->foundationSchema($targetPlatform['code']),
             outputName: 'novel_outline_foundation',
@@ -558,9 +562,9 @@ class NovelOutlinePipeline
             routeStage: AiStage::Planner,
             scopeType: self::SKELETON_SCOPE,
             artifactType: ArtifactType::OutlineSkeleton,
-            promptVersion: self::SKELETON_PROMPT_VERSION,
+            promptVersion: self::LEGACY_SKELETON_PROMPT_VERSION,
             context: $context,
-            systemPrompt: '你是 XNovel 全书 Outline Skeleton 规划器。只返回严格 JSON。生成 Volume、Arc、Beat 骨架和 Beat 级约束，不得生成 Milestone、Handoff 或数据库 ID。稳定 Key 必须全局唯一；Laravel 决定顺序和后续引用。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
+            systemPrompt: $this->legacySkeletonSystemPrompt(),
             prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->skeletonSchema($volumeCount),
             outputName: 'novel_outline_skeleton',
@@ -584,7 +588,7 @@ class NovelOutlinePipeline
             'foundation_artifact' => $this->artifactReference($foundation),
         ];
         $schema = $this->stageContract->structureSchema($volumeCount);
-        $systemPrompt = '你是 XNovel 全书 Structure 规划器。只返回严格 JSON。只生成全书、Volume 与 Arc 结构，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。稳定 Key 必须全局唯一。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = $this->structureSystemPrompt();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
 
         return $this->providerStage(
@@ -592,7 +596,7 @@ class NovelOutlinePipeline
             routeStage: AiStage::OutlineStructure,
             scopeType: self::STRUCTURE_SCOPE,
             artifactType: ArtifactType::OutlineStructure,
-            promptVersion: NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
+            promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineStructure),
             context: $context,
             systemPrompt: $systemPrompt,
             prompt: $prompt,
@@ -615,7 +619,7 @@ class NovelOutlinePipeline
             'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($structure)],
         ];
         $schema = $this->stageContract->arcBeatsSchema();
-        $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、Beat Key、Candidate Key、sequence、mainline_sequence 或数据库 ID。Beat 与 Candidate 的稳定 Key 由 Laravel 在合并时统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = $this->arcBeatsSystemPrompt();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
 
         return $this->providerStage(
@@ -623,7 +627,7 @@ class NovelOutlinePipeline
             routeStage: AiStage::OutlineArcBeats,
             scopeType: self::ARC_BEATS_SCOPE,
             artifactType: ArtifactType::OutlineArcBeats,
-            promptVersion: NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
+            promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineArcBeats),
             context: $context,
             systemPrompt: $systemPrompt,
             prompt: $prompt,
@@ -658,7 +662,7 @@ class NovelOutlinePipeline
             'structure' => $this->artifactReference($structure),
             'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
         ];
-        $inputHash = $this->hash(['algorithm' => self::SKELETON_ASSEMBLY_VERSION, 'sources' => $sourceReferences]);
+        $inputHash = $this->hash(['algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION, 'sources' => $sourceReferences]);
         $runs = $this->stageRuns($batch, self::SKELETON_ASSEMBLY_SCOPE);
         $reusable = $runs->clone()->where('input_hash', $inputHash)->where('status', RunStatus::Succeeded)->latest('id')->first();
         $artifact = $reusable?->artifacts()->where('type', ArtifactType::OutlineSkeleton)->first();
@@ -705,10 +709,10 @@ class NovelOutlinePipeline
             'attempt' => $attempt,
             'idempotency_key' => 'outline-skeleton-assembly:'.$batch->getKey().":{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
-            'prompt_version' => self::SKELETON_ASSEMBLY_VERSION,
+            'prompt_version' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
             'provider' => null,
             'model_policy' => null,
-            'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'algorithm' => self::SKELETON_ASSEMBLY_VERSION, 'source_artifacts' => $sourceReferences],
+            'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION, 'source_artifacts' => $sourceReferences],
             'started_at' => now(),
         ]);
 
@@ -718,7 +722,7 @@ class NovelOutlinePipeline
                     'batch_run_id' => $batch->getKey(),
                     'stage' => self::SKELETON_ASSEMBLY_SCOPE,
                     'discriminator' => null,
-                    'algorithm' => self::SKELETON_ASSEMBLY_VERSION,
+                    'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
                     'source_artifacts' => $sourceReferences,
                     'payload' => $skeleton,
                 ];
@@ -752,9 +756,9 @@ class NovelOutlinePipeline
             routeStage: AiStage::OutlineBeatDetail,
             scopeType: self::BEAT_DETAIL_SCOPE,
             artifactType: ArtifactType::OutlineBeatDetail,
-            promptVersion: self::BEAT_DETAIL_PROMPT_VERSION,
+            promptVersion: $this->promptVersionResolver->resolve(AiStage::OutlineBeatDetail),
             context: $context,
-            systemPrompt: '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的 Milestones 和出站 Handoff 内容；不得返回 Beat Key、Milestone Key、next_beat_key、sequence、其他 Beat、完整 Outline 或任何数据库 ID。稳定 Key、顺序和相邻下一 Main Beat 由 Laravel 统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning(),
+            systemPrompt: $this->beatDetailSystemPrompt(),
             prompt: json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
             schema: $this->beatDetailSchema(),
             outputName: 'novel_outline_beat_detail',
@@ -800,7 +804,7 @@ class NovelOutlinePipeline
             $skeleton = $this->currentSkeletonArtifactBySources($batch, $foundation, $structure, $arcArtifacts)
                 ?? throw ValidationException::withMessages(['outline' => '缺少与当前来源链匹配的 Skeleton Artifact。']);
             $assemblyInputHash = $this->hash([
-                'algorithm' => self::SKELETON_ASSEMBLY_VERSION,
+                'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
                 'sources' => [
                     'foundation' => $this->artifactReference($foundation),
                     'structure' => $this->artifactReference($structure),
@@ -889,7 +893,7 @@ class NovelOutlinePipeline
             'attempt' => $attempt,
             'idempotency_key' => "outline-finalize:{$batch->getKey()}:{$inputHash}:{$attempt}",
             'input_hash' => $inputHash,
-            'prompt_version' => self::FINALIZE_PROMPT_VERSION,
+            'prompt_version' => self::FINALIZE_CONTRACT_VERSION,
             'provider' => null,
             'model_policy' => null,
             'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'lineage' => $blueprint['lineage']],
@@ -929,12 +933,12 @@ class NovelOutlinePipeline
     public function promptVersions(): array
     {
         return [
-            'foundation' => self::FOUNDATION_PROMPT_VERSION,
-            'structure' => NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
-            'arc_beats' => NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
-            'skeleton_assembly' => self::SKELETON_ASSEMBLY_VERSION,
-            'beat_detail' => self::BEAT_DETAIL_PROMPT_VERSION,
-            'finalize' => self::FINALIZE_PROMPT_VERSION,
+            'foundation' => $this->promptVersionResolver->resolve(AiStage::OutlineFoundation),
+            'structure' => $this->promptVersionResolver->resolve(AiStage::OutlineStructure),
+            'arc_beats' => $this->promptVersionResolver->resolve(AiStage::OutlineArcBeats),
+            'skeleton_assembly' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
+            'beat_detail' => $this->promptVersionResolver->resolve(AiStage::OutlineBeatDetail),
+            'finalize' => self::FINALIZE_CONTRACT_VERSION,
         ];
     }
 
@@ -1029,6 +1033,78 @@ class NovelOutlinePipeline
                 'carried_states' => $strings, 'open_threads' => $strings, 'required_transition' => $strings, 'forbidden_jump' => $strings,
             ]),
         ]);
+    }
+
+    /** 历史 Skeleton v1 必须保持原始文本，避免同一 Prompt Version 对应不同请求。 */
+    private function legacySkeletonSystemPrompt(): string
+    {
+        return '你是 XNovel 全书 Outline Skeleton 规划器。只返回严格 JSON。生成 Volume、Arc、Beat 骨架和 Beat 级约束，不得生成 Milestone、Handoff 或数据库 ID。稳定 Key 必须全局唯一；Laravel 决定顺序和后续引用。所有自然语言使用简体中文。规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化。不得用“展现、体现、深化、凸显、升华、命运齿轮、时代洪流”等抽象标签代替实际剧情，也不得把主题结论预写成角色独白或旁白。场景目标和验收条件必须能由正文中的行为或结果验证，避免同义反复、整齐排比和宣传文案式句子。';
+    }
+
+    private function foundationSystemPrompt(): string
+    {
+        $prompt = <<<'PROMPT'
+你是 XNovel 小说 Foundation 规划器。请建立后续全书结构必须遵守的初始叙事合同，而不是提前编写分卷或剧情摘要。
+
+根据输入明确小说核心卖点、主角初始处境、长期行动动力、核心冲突、能力与信息边界、世界运行规则、文风以及结局约束。人物和世界实体只收录开篇已经存在或开篇推进确实必需的对象，不要因其未来可能登场而提前扩充名单。
+
+伏笔必须包含可在正文中具体埋设的信息、物件、关系、异常或承诺，并对应可观察的兑现结果和合理回收窗口。当前尚未生成 Arc，因此所有 foreshadowings[].owner_arc_key 必须返回 null，不得预测或编造 Arc Key。
+
+只返回符合 Schema 的严格 JSON，不得返回 Volume、Arc、Beat、Milestone、Handoff、sequence 或任何数据库 ID。bible.style_profile.target_platform 必须逐字复制输入 target_platform.code。除固定键名与枚举值外，所有自然语言使用简体中文。
+PROMPT;
+
+        return $prompt.NarrativeProsePolicy::planning();
+    }
+
+    private function structureSystemPrompt(): string
+    {
+        $prompt = <<<'PROMPT'
+你是 XNovel 全书 Structure 规划器。请把 Foundation 转换成具有明确因果推进的全书、Volume 与 Arc 结构。
+
+每个 Volume 必须有独立的阶段目标、主要压力和高潮结果；高潮应改变人物处境、关系、资源、权力或风险，并为下一卷制造新的具体问题。相邻 Volume 不得只是规模更大的同类事件。
+
+每个 Arc 必须围绕一条可持续发展的冲突线，明确参与者、目标、阻力、失败代价和可验证的完成条件。主线负责改变全书核心局势，支线必须对人物选择、主线资源或后续风险产生实际影响，不得成为脱离主线的装饰。
+
+开篇所在 Volume 和首条主线 Arc 应尽早交付输入中的核心设定与主要冲突，不得用多个 Arc 重复铺陈苏醒、身份确认、背景介绍或同一情绪。
+
+只返回符合 Schema 的严格 JSON。只生成全书、Volume 与 Arc，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。Volume Key 与 Arc Key 必须全局唯一并符合 Schema。除固定键名与枚举值外，所有自然语言使用简体中文。
+PROMPT;
+
+        return $prompt.NarrativeProsePolicy::planning();
+    }
+
+    private function arcBeatsSystemPrompt(): string
+    {
+        $prompt = <<<'PROMPT'
+你是 XNovel 单 Arc Beats 规划器。请把目标 Arc 拆成完成该冲突所需的最少且充分的 Beats。
+
+arc_key 必须逐字复制 target_arc.key。每个 Beat 都必须包含新的行动目标、阻力或转折，并以可观察的状态变化结束；上一 Beat 的结果必须构成下一 Beat 的条件、压力或触发原因。不得连续生成仅用于回忆、解释背景、确认身份、等待、准备或重复同一情绪的 Beats。
+
+chapter_budget 表示完成该 Beat 的合理章节范围，不是必须填满的篇幅。预算必须符合输入中的 pacing；快节奏开篇应压缩纯铺垫，并尽早完成核心设定落地、首次有效行动或不可逆选择。
+
+acceptance_criteria 必须描述正文能够证明的事件或结果，不得使用“人物意识到”“关系得到深化”“主题得到体现”等抽象结论。must_include 只保留完成该 Beat 不可缺少的事项。人物和世界实体候选只在该 Beat 确实需要首次引入时创建，否则返回空数组。
+
+只返回符合 Schema 的严格 JSON。不得返回其他 Arc、Volume、Milestone、Handoff、Beat Key、Candidate Key、sequence、mainline_sequence 或任何数据库 ID。Beat 与 Candidate 的稳定 Key 由 Laravel 分配。除固定键名与枚举值外，所有自然语言使用简体中文。
+PROMPT;
+
+        return $prompt.NarrativeProsePolicy::planning();
+    }
+
+    private function beatDetailSystemPrompt(): string
+    {
+        $prompt = <<<'PROMPT'
+你是 XNovel 单 Main Beat 细化器。请把目标 Beat 拆成按因果顺序推进的最少且充分的 Milestones，并生成通向相邻下一主线 Beat 的出站 Handoff。
+
+每个 Milestone 必须完成一个能够由 Canonical 正文验证的阶段结果。相邻 Milestone 必须产生不同的新信息、行动、决定、关系变化或局势变化；不得把一次回忆、一次身份确认、同一场危机或同一情绪反应拆成多个 Milestone。
+
+objective 必须说明人物要取得的具体结果以及主要阻力。acceptance_criteria 必须使用正文可观察的动作、对白、物证、决定或状态变化，不得使用抽象主题、作者评价或单纯心理结论。使用能够完成目标的最少 Milestone，不得为了扩大篇幅重复铺垫。
+
+handoff.exit_result 应写明当前 Beat 已经造成的具体结果；next_trigger 应写明推动下一 Beat 开始的直接事件或压力；carried_states 和 open_threads 只保留下一 Beat 确实需要继承的状态；required_transition 与 forbidden_jump 用于防止跳过必要的时间、地点、行动或因果过程。
+
+只返回符合 Schema 的严格 JSON。不得返回 Beat Key、Milestone Key、next_beat_key、sequence、其他 Beat、完整 Outline 或任何数据库 ID。稳定 Key、顺序和相邻下一主线 Beat 由 Laravel 分配。除固定键名与枚举值外，所有自然语言使用简体中文。
+PROMPT;
+
+        return $prompt.NarrativeProsePolicy::planning();
     }
 
     /**
@@ -1505,14 +1581,14 @@ class NovelOutlinePipeline
 
     private function assertCurrentBatch(GenerationRun $batch): void
     {
-        if (! in_array($batch->prompt_version, [self::SINGLE_ROUTE_BATCH_PROMPT_VERSION, self::BATCH_PROMPT_VERSION], true)) {
+        if (! in_array($batch->prompt_version, [self::SINGLE_ROUTE_BATCH_CONTRACT_VERSION, self::BATCH_CONTRACT_VERSION], true)) {
             throw ValidationException::withMessages(['run' => 'Outline 主批次版本与新版阶段图不兼容。']);
         }
     }
 
     private function isLegacyBatch(GenerationRun $batch): bool
     {
-        return $batch->prompt_version === self::LEGACY_BATCH_PROMPT_VERSION;
+        return $batch->prompt_version === self::LEGACY_BATCH_CONTRACT_VERSION;
     }
 
     /** 旧 v2 批次仅用于消化已存在的 Queue Payload，不会读取新版阶段 Artifact。 */
@@ -1609,7 +1685,7 @@ class NovelOutlinePipeline
         array $arcArtifacts,
     ): ?GenerationArtifact {
         $inputHash = $this->hash([
-            'algorithm' => self::SKELETON_ASSEMBLY_VERSION,
+            'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
             'sources' => [
                 'foundation' => $this->artifactReference($foundation),
                 'structure' => $this->artifactReference($structure),
@@ -1916,7 +1992,7 @@ class NovelOutlinePipeline
     ): string {
         [$context] = $this->beatDetailContext($foundation, $skeleton, $beatKey);
         $schema = $this->beatDetailSchema();
-        $systemPrompt = '你是 XNovel 单 Main Beat 细化器。只返回目标 Beat 的 Milestones 和出站 Handoff 内容；不得返回 Beat Key、Milestone Key、next_beat_key、sequence、其他 Beat、完整 Outline 或任何数据库 ID。稳定 Key、顺序和相邻下一 Main Beat 由 Laravel 统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = $this->beatDetailSystemPrompt();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineBeatDetail);
 
@@ -1925,7 +2001,7 @@ class NovelOutlinePipeline
             AiStage::OutlineBeatDetail,
             $route,
             $context,
-            self::BEAT_DETAIL_PROMPT_VERSION,
+            $this->promptVersionResolver->resolve(AiStage::OutlineBeatDetail),
             $systemPrompt,
             $prompt,
             $schema,
@@ -2204,11 +2280,11 @@ class NovelOutlinePipeline
     private function promptVersionForRoute(AiStage $stage): string
     {
         return match ($stage) {
-            AiStage::OutlineFoundation => self::FOUNDATION_PROMPT_VERSION,
-            AiStage::OutlineStructure => NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
-            AiStage::OutlineArcBeats => NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
-            AiStage::OutlineBeatDetail => self::BEAT_DETAIL_PROMPT_VERSION,
-            AiStage::Planner => self::SKELETON_PROMPT_VERSION,
+            AiStage::OutlineFoundation,
+            AiStage::OutlineStructure,
+            AiStage::OutlineArcBeats,
+            AiStage::OutlineBeatDetail => $this->promptVersionResolver->resolve($stage),
+            AiStage::Planner => self::LEGACY_SKELETON_PROMPT_VERSION,
             default => throw new AiProviderException('provider_run_route_missing', "AI 阶段 {$stage->value} 不是 Outline Provider 任务。", false),
         };
     }
@@ -2244,7 +2320,7 @@ class NovelOutlinePipeline
      */
     private function frozenRoute(GenerationRun $batch, AiStage $stage): array
     {
-        if ($batch->prompt_version === self::BATCH_PROMPT_VERSION) {
+        if ($batch->prompt_version === self::BATCH_CONTRACT_VERSION) {
             $route = data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$stage->value}");
             if (! is_array($route)
                 || blank($route['provider'] ?? null)
@@ -2422,7 +2498,7 @@ class NovelOutlinePipeline
             'foundation_artifact' => $this->artifactReference($foundation),
         ];
         $schema = $this->stageContract->structureSchema($volumeCount);
-        $systemPrompt = '你是 XNovel 全书 Structure 规划器。只返回严格 JSON。只生成全书、Volume 与 Arc 结构，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。稳定 Key 必须全局唯一。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = $this->structureSystemPrompt();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineStructure);
 
@@ -2431,7 +2507,7 @@ class NovelOutlinePipeline
             AiStage::OutlineStructure,
             $route,
             $context,
-            NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
+            $this->promptVersionResolver->resolve(AiStage::OutlineStructure),
             $systemPrompt,
             $prompt,
             $schema,
@@ -2448,7 +2524,7 @@ class NovelOutlinePipeline
             'source_artifacts' => [$this->artifactReference($foundation), $this->artifactReference($structure)],
         ];
         $schema = $this->stageContract->arcBeatsSchema();
-        $systemPrompt = '你是 XNovel 单 Arc Beats 规划器。只返回严格 JSON。只生成目标 Arc 的 Beats、预算、验收条件和候选；不得返回其他 Arc、Volume、Milestone、Handoff、Beat Key、Candidate Key、sequence、mainline_sequence 或数据库 ID。Beat 与 Candidate 的稳定 Key 由 Laravel 在合并时统一分配。所有自然语言使用简体中文。'.NarrativeProsePolicy::planning();
+        $systemPrompt = $this->arcBeatsSystemPrompt();
         $prompt = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         $route = $this->frozenRoute($batch, AiStage::OutlineArcBeats);
 
@@ -2457,7 +2533,7 @@ class NovelOutlinePipeline
             AiStage::OutlineArcBeats,
             $route,
             $context,
-            NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
+            $this->promptVersionResolver->resolve(AiStage::OutlineArcBeats),
             $systemPrompt,
             $prompt,
             $schema,

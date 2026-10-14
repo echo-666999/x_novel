@@ -20,6 +20,7 @@ use Illuminate\Validation\ValidationException;
 
 class ForeshadowingHistoryRepairService
 {
+    /** 伏笔历史修复计划 JSON 的输入结构版本。 */
     private const SCHEMA_VERSION = 1;
 
     public function __construct(

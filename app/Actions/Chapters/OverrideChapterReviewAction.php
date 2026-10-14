@@ -18,6 +18,9 @@ use Illuminate\Validation\ValidationException;
 
 class OverrideChapterReviewAction
 {
+    /** 人工通过 Review 时写入审计 Run 的操作合同版本。 */
+    private const OPERATION_CONTRACT_VERSION = 'manual-override-v1';
+
     public const NON_OVERRIDABLE_PLANNING_FINDING_CODES = [
         'ARC_BEAT_NOT_FULFILLED',
         'CHARACTER_CANDIDATE_NOT_INTRODUCED',
@@ -80,7 +83,7 @@ class OverrideChapterReviewAction
                 'idempotency_key' => $key,
                 'input_hash' => hash('sha256', $key),
                 'state_version' => $stateVersion,
-                'prompt_version' => 'manual-override-v1',
+                'prompt_version' => self::OPERATION_CONTRACT_VERSION,
                 'model_policy' => 'manual',
                 'context_snapshot' => [
                     'manual_override' => true,

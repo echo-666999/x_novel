@@ -126,9 +126,9 @@ needs_attention = 0
 
 系统 Dashboard 目前突出显示 20、50、100 章测试入口，同时把活跃小说、当前章节、需要处理和最近生成显示为固定占位值。该页面更接近验收工具，而不是日常创作首页。
 
-### 3.6 NarrativeProsePolicy 内容可保留，但版本未生效
+### 3.6 NarrativeProsePolicy 版本治理已完成
 
-`NarrativeProsePolicy::VERSION` 当前为 `natural-prose-v1`，但没有被 Prompt Version、Input Hash 或 Context Snapshot 引用。修改公共文风规则后，如果没有同时人工提升每一个阶段版本，历史成功 Run 仍可能被复用。
+当前由 `config/prompts.php` 分别维护 planning、writing、reviewing、summary 策略版本，`PromptVersionResolver` 只把实际使用的策略追加到对应 Provider 阶段。有效版本进入 Prompt Version、Input Hash、Context Snapshot 与幂等边界；修改一种策略不会再使无关阶段同时失效。
 
 ### 3.7 Run #393 暴露了 Scene 单 Job 无累计预算的问题
 
@@ -485,7 +485,7 @@ flowchart TD
 - 组合版本写入 Run、Context Snapshot、Input Hash 和 Idempotency Key。
 - 明确 Planner、Writer、Assembler、Reviewer、Rewrite、Summary 使用该版本。
 - Event Extractor 等不使用自然文风策略的阶段保持独立版本。
-- 增加测试，防止修改 `NarrativeProsePolicy::VERSION` 后仍复用旧 Artifact。
+- 增加测试，防止修改任一共享叙事策略版本后仍复用旧 Artifact。
 
 ### 边界
 
@@ -784,7 +784,7 @@ GFO-005
 
 **Summary**
 
-- GFO-004：Planner、Writer、Assembler、Reviewer、Rewrite、Summary 使用 `{stage_prompt_version}+{NarrativeProsePolicy::VERSION}` 有效版本；Extractor 保持独立版本，AI Debug 因不注入文风策略而继续使用基础阶段版本。
+- GFO-004：当前 Provider 阶段使用 `{base_prompt_version}+{policy_version}` 有效版本；planning、writing、reviewing、summary 独立演进，Extractor 保持独立版本，确定性 Assembler 使用算法版本。
 - GFO-005：新增只读 `NovelGenerationReadiness`，由小说概览和 `StartNovelGenerationAction` 共用；页面展示八项准备度并禁用未就绪的主操作，领域 Action 在 Novel 锁内再次校验。
 
 **Problems Addressed**

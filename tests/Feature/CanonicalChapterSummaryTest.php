@@ -55,14 +55,16 @@ test('a successful canonical summary persists its run artifact usage and input h
         ->and($run->stage)->toBe(GenerationStage::MemorySummary)
         ->and($run->status)->toBe(RunStatus::Succeeded)
         ->and($run->input_hash)->toHaveLength(64)
-        ->and($run->prompt_version)->toBe('summary-v2+natural-prose-v1')
-        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('summary-v2+natural-prose-v1')
+        ->and($run->prompt_version)->toBe('summary-v2+natural-summary-v3')
+        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('summary-v2+natural-summary-v3')
         ->and($fake->requests()[0]->maxTokens)->toBe(1_500)
         ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.output_tokens'))->toBe(1_200)
         ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.reasoning_reserve_tokens'))->toBe(300)
         ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.max_completion_tokens'))->toBe(1_500)
         ->and(data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.remaining_context_tokens'))->toBeGreaterThan(0)
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得评价文笔、解释主题')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('summary 只保留本章从起因、关键选择到结果及后续压力的最短因果链')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('不得把猜测、误解、传闻或人物判断改写成已经证实的事实')
         ->and($result['artifact']->type)->toBe(ArtifactType::Summary)
         ->and(data_get($result['artifact']->data, 'source_canonical_artifact_id'))->toBe($chapter->canonical_artifact_id)
         ->and(UsageRecord::query()->where('generation_run_id', $run->getKey())->count())->toBe(1);
@@ -196,7 +198,7 @@ test('explicit summary restart freezes the current budget without mutating the c
         'scope_id' => $chapter->getKey(),
         'stage' => GenerationStage::MemorySummary,
         'status' => RunStatus::Failed,
-        'prompt_version' => 'summary-v2+natural-prose-v1',
+        'prompt_version' => 'summary-v2+natural-summary-v3',
         'error_code' => 'summary_reasoning_budget_exhausted',
         'context_snapshot' => [
             'canonical_artifact_id' => $source->getKey(),

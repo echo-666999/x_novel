@@ -64,7 +64,7 @@ class RetireLegacyNovelOutlineBatch extends Command
     private function summary(GenerationRun $batch): array
     {
         if ($batch->scope_type !== NovelOutlinePipeline::BATCH_SCOPE
-            || $batch->prompt_version !== NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION) {
+            || $batch->prompt_version !== NovelOutlinePipeline::LEGACY_BATCH_CONTRACT_VERSION) {
             throw ValidationException::withMessages(['run' => '指定 Run 不是旧版 v2 Outline 主批次。']);
         }
 

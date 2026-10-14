@@ -24,6 +24,7 @@ use Throwable;
 
 class CanonicalChapterSummaryService
 {
+    /** Summary Restart 冻结合同版本，用于区分人工重启与普通阶段复用。 */
     public const RESTART_CONTRACT_VERSION = 'canonical-summary-restart-v1';
 
     public function __construct(

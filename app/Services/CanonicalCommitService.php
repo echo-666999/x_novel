@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Contracts\StoryEventApplier;
 use App\Data\CanonicalCommitData;
 use App\Data\StatePatch;
@@ -219,7 +220,7 @@ class CanonicalCommitService
 
         $reviewData = $review->artifact->data;
         $hasRecordedException = data_get($reviewData, 'manual_length_exception') === true
-            && $review->generationRun->prompt_version === 'manual-length-exception-v1'
+            && $review->generationRun->prompt_version === AcceptOverlengthChapterAction::OPERATION_CONTRACT_VERSION
             && $review->generationRun->model_policy === 'manual'
             && data_get($review->generationRun->context_snapshot, 'manual_length_exception') === true
             && (int) data_get($reviewData, 'source_artifact_id') === $artifact->getKey()

@@ -4,6 +4,9 @@ namespace App\Data;
 
 final readonly class ContextSnapshot
 {
+    /** Context Snapshot 序列化结构版本，用于解释历史生成输入。 */
+    public const SCHEMA_VERSION = 3;
+
     /**
      * @param  array<int, int>  $characterIds
      * @param  array<int, int>  $worldEntityIds
@@ -49,7 +52,7 @@ final readonly class ContextSnapshot
     public function toArray(): array
     {
         return [
-            'schema_version' => 3,
+            'schema_version' => self::SCHEMA_VERSION,
             'novel_id' => $this->novelId,
             'chapter_id' => $this->chapterId,
             'scene_id' => $this->sceneId,

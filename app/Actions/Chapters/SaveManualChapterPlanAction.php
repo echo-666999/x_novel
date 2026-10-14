@@ -19,6 +19,9 @@ use Illuminate\Validation\ValidationException;
 
 final class SaveManualChapterPlanAction
 {
+    /** 人工保存 Chapter Plan 时写入审计 Run 的操作合同版本。 */
+    private const OPERATION_CONTRACT_VERSION = 'manual-chapter-plan-v1';
+
     public function __construct(
         private readonly OutlineProgressResolver $outlineProgress,
         private readonly PlanValidator $planValidator,
@@ -133,7 +136,7 @@ final class SaveManualChapterPlanAction
                 'input_hash' => $admission['input_hash'],
                 'state_version' => data_get($admission, 'admission_snapshot.state_version'),
                 'bible_version' => data_get($admission, 'admission_snapshot.bible_version'),
-                'prompt_version' => 'manual-chapter-plan-v1',
+                'prompt_version' => self::OPERATION_CONTRACT_VERSION,
                 'model_policy' => 'manual',
                 'context_snapshot' => [
                     'manual_plan' => true,

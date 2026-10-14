@@ -23,6 +23,9 @@ use Illuminate\Validation\ValidationException;
  */
 class CreateNormalizedNovelOutlineVersionAction
 {
+    /** 关系化 Outline 当前持久化结构版本。 */
+    public const SCHEMA_VERSION = 2;
+
     public function __construct(
         private readonly NormalizedNovelOutlineValidator $validator,
         private readonly NovelOutlineChecksum $checksum,
@@ -69,7 +72,7 @@ class CreateNormalizedNovelOutlineVersionAction
                 'version' => $version,
                 'status' => NovelOutlineStatus::Draft,
                 'source' => $source,
-                'schema_version' => 2,
+                'schema_version' => self::SCHEMA_VERSION,
                 'title' => $data['title'],
                 'summary' => $data['summary'],
                 'must_include' => $data['must_include'],

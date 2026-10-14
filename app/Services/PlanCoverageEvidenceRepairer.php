@@ -10,6 +10,7 @@ use Illuminate\Validation\ValidationException;
 /** 仅校正计划 Coverage 逐字证据，并按父 Run 冻结的修复预算发送请求。 */
 final class PlanCoverageEvidenceRepairer
 {
+    /** 仅校正计划 Coverage 逐字证据的 Provider Prompt 版本。 */
     public const PROMPT_VERSION = 'coverage-evidence-repair-v1';
 
     public function __construct(

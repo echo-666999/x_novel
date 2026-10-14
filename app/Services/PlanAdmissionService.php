@@ -21,6 +21,9 @@ use Throwable;
  */
 class PlanAdmissionService
 {
+    /** Chapter Plan Admission Snapshot 的当前结构版本。 */
+    public const SCHEMA_VERSION = 2;
+
     /** @var array<int, AiStage> */
     private const PIPELINE_STAGES = [
         AiStage::Writer,
@@ -83,7 +86,7 @@ class PlanAdmissionService
         $previousEnding = $this->previousChapterEnding->for($chapter);
         $snapshot = [
             // v2 首次区分模型静态容量、分档请求预算与 Provider 实际发送参数，旧快照不得静默补写。
-            'schema_version' => 2,
+            'schema_version' => self::SCHEMA_VERSION,
             'plan_checksum' => $planChecksum,
             'bible_version' => $bibleVersion ?? $this->contextBuilder->bibleVersionForChapter($chapter),
             'state_version' => $stateVersion,

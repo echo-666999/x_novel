@@ -15,6 +15,7 @@ use Throwable;
 /** 修复 Arc Completion 审计，并把技术预算与主 Review 请求隔离。 */
 final class ArcCompletionAuditRepairer
 {
+    /** 修复 Arc Completion 审计数组的 Provider Prompt 版本。 */
     public const PROMPT_VERSION = 'arc-completion-repair-v2';
 
     public function __construct(

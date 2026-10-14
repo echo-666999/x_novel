@@ -27,6 +27,7 @@ use Throwable;
  */
 final class PlanCoverageJudgmentRepairer
 {
+    /** 对失败 Scene Coverage 进行独立语义复核的 Provider Prompt 版本。 */
     public const PROMPT_VERSION = 'coverage-judgment-v2';
 
     private const FINDING_CODES = [

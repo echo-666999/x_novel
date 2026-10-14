@@ -22,6 +22,9 @@ use Illuminate\Validation\ValidationException;
 
 class RecoverChapterForBibleChangeAction
 {
+    /** Bible 变更恢复预览与执行计划的冻结结构版本。 */
+    private const SCHEMA_VERSION = 1;
+
     private const BIBLE_CONTENT_FIELDS = [
         'logline',
         'themes',
@@ -80,7 +83,7 @@ class RecoverChapterForBibleChangeAction
         })->all();
         $entityCounts = $novel->worldEntities()->reorder()->selectRaw('type, count(*) as aggregate')->groupBy('type')->pluck('aggregate', 'type')->map(fn ($count): int => (int) $count)->all();
         $frozen = [
-            'schema_version' => 1,
+            'schema_version' => self::SCHEMA_VERSION,
             'novel_id' => $novel->getKey(),
             'chapter_id' => $chapter->getKey(),
             'chapter_sequence' => $chapter->sequence,

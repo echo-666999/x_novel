@@ -12,6 +12,9 @@ use Illuminate\Support\Collection;
 
 class ForeshadowingContextContract
 {
+    /** 冻结到生成上下文中的伏笔动作合同结构版本。 */
+    public const SCHEMA_VERSION = 'foreshadowing-contract-v1';
+
     /** @return array<string, mixed> */
     public function build(
         ChapterPlan $plan,
@@ -33,7 +36,7 @@ class ForeshadowingContextContract
         $events = $this->latestEvents($novel->getKey(), $ids, $state->version);
 
         $payload = [
-            'schema_version' => 'foreshadowing-contract-v1',
+            'schema_version' => self::SCHEMA_VERSION,
             'bible_version' => $bible->version,
             'state_version' => $state->version,
             'chapter_plan_id' => $plan->getKey(),

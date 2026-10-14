@@ -9,8 +9,8 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
-use App\Enums\ArtifactType;
 use App\Enums\AiStage;
+use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\EventType;
@@ -25,7 +25,6 @@ use App\Exceptions\GenerationPreflightException;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\AIModelPrice;
-use App\Models\AIModelRoute;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\Character;
@@ -706,8 +705,8 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v10+natural-prose-v1')
-        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v10+natural-prose-v1')
+        ->and($run->prompt_version)->toBe('chapter-planner-v10+natural-planning-v3')
+        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v10+natural-planning-v3')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -869,7 +868,7 @@ test('the planner receives the previous canonical ending and requires a scene tr
     expect(data_get($snapshot, 'previous_chapter_ending.text'))->toBe('林舟与苏离沿石阶向魔法学院走去。')
         ->and($fake->requests()[0]->prompt)->toContain('transition_from_previous')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得静默跳过')
-        ->and($fake->requests()[0]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化');
+        ->and($fake->requests()[0]->systemPrompt)->toContain('规划内容必须写清：谁要做什么、受到什么阻力、作出什么选择、造成什么可观察结果');
 });
 
 test('the planner reads recent canonical chapter summaries in sequence order', function () {

@@ -10,6 +10,7 @@ use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\PromptVersionResolver;
 use App\AI\Providers\FakeAiProvider;
 use App\Data\NormalizedNovelOutline;
 use App\Enums\AiStage;
@@ -332,12 +333,16 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($novel->volumes()->count())->toBe(0)
         ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->status)->toBe(RunStatus::Succeeded)
         ->and($fake->requests())->toHaveCount(5)
-        ->and($fake->requests()[0]->promptVersion)->toBe(NovelOutlinePipeline::FOUNDATION_PROMPT_VERSION)
-        ->and($fake->requests()[1]->promptVersion)->toBe(NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION)
-        ->and($fake->requests()[2]->promptVersion)->toBe(NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION)
-        ->and($fake->requests()[3]->promptVersion)->toBe(NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION)
+        ->and($fake->requests()[0]->promptVersion)->toBe(app(PromptVersionResolver::class)->resolve(AiStage::OutlineFoundation))
+        ->and($fake->requests()[1]->promptVersion)->toBe(app(PromptVersionResolver::class)->resolve(AiStage::OutlineStructure))
+        ->and($fake->requests()[2]->promptVersion)->toBe(app(PromptVersionResolver::class)->resolve(AiStage::OutlineArcBeats))
+        ->and($fake->requests()[3]->promptVersion)->toBe(app(PromptVersionResolver::class)->resolve(AiStage::OutlineBeatDetail))
         ->and($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BEAT_DETAIL_SCOPE)->orderBy('id')->pluck('attempt')->all())->toBe([1, 1])
-        ->and($fake->requests()[0]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('规划内容必须写清：谁要做什么、受到什么阻力、作出什么选择、造成什么可观察结果')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('所有 foreshadowings[].owner_arc_key 必须返回 null')
+        ->and($fake->requests()[1]->systemPrompt)->toContain('相邻 Volume 不得只是规模更大的同类事件')
+        ->and($fake->requests()[2]->systemPrompt)->toContain('拆成完成该冲突所需的最少且充分的 Beats')
+        ->and($fake->requests()[3]->systemPrompt)->toContain('拆成按因果顺序推进的最少且充分的 Milestones')
         ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.reasoning_effort'))->toBeNull()
@@ -908,7 +913,7 @@ test('outline restart creates a new batch from current routes without rewriting 
     expect($newBatch->getKey())->not->toBe($oldBatch->getKey())
         ->and($newBatch->status)->toBe(RunStatus::Queued)
         ->and($newBatch->attempt)->toBe(2)
-        ->and($newBatch->prompt_version)->toBe(NovelOutlinePipeline::BATCH_PROMPT_VERSION)
+        ->and($newBatch->prompt_version)->toBe(NovelOutlinePipeline::BATCH_CONTRACT_VERSION)
         ->and($newBatch->input_hash)->not->toBe($oldInputHash)
         ->and(data_get($newBatch->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.model'))
         ->toBe('outline-foundation-restart-model')
@@ -917,7 +922,7 @@ test('outline restart creates a new batch from current routes without rewriting 
 
     $unchangedOldBatch = $oldBatch->fresh();
     expect($unchangedOldBatch->status)->toBe(RunStatus::Failed)
-        ->and($unchangedOldBatch->prompt_version)->toBe(NovelOutlinePipeline::BATCH_PROMPT_VERSION)
+        ->and($unchangedOldBatch->prompt_version)->toBe(NovelOutlinePipeline::BATCH_CONTRACT_VERSION)
         ->and($unchangedOldBatch->input_hash)->toBe($oldInputHash)
         ->and($unchangedOldBatch->context_snapshot)->toBe($oldContext)
         ->and(data_get($unchangedOldBatch->context_snapshot, 'generation_preferences.outline_routes.outline_foundation'))
@@ -1265,7 +1270,7 @@ test('v3 outline batches keep their original single frozen route after the v4 up
     data_set($context, 'generation_preferences.reasoning_effort', $route['reasoning_effort']);
     data_set($context, 'generation_preferences.model_capacity', $route['model_capacity']);
     $batch->update([
-        'prompt_version' => NovelOutlinePipeline::SINGLE_ROUTE_BATCH_PROMPT_VERSION,
+        'prompt_version' => NovelOutlinePipeline::SINGLE_ROUTE_BATCH_CONTRACT_VERSION,
         'provider' => $route['provider'],
         'model_policy' => $route['model'],
         'context_snapshot' => $context,
@@ -1637,7 +1642,7 @@ test('a deserialized legacy skeleton job can finish only a legacy batch', functi
     data_set($legacyContext, 'generation_preferences.reasoning_effort', $foundationRoute['reasoning_effort']);
     data_set($legacyContext, 'generation_preferences.model_capacity', $foundationRoute['model_capacity']);
     $batch->update([
-        'prompt_version' => NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION,
+        'prompt_version' => NovelOutlinePipeline::LEGACY_BATCH_CONTRACT_VERSION,
         'provider' => $foundationRoute['provider'],
         'model_policy' => $foundationRoute['model'],
         'context_snapshot' => $legacyContext,
@@ -1649,7 +1654,10 @@ test('a deserialized legacy skeleton job can finish only a legacy batch', functi
     $legacyRun = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_SCOPE)->sole();
     expect($legacyRun->status)->toBe(RunStatus::Succeeded)
         ->and($legacyRun->artifacts()->where('type', ArtifactType::OutlineSkeleton)->count())->toBe(1)
-        ->and($fake->requests())->toHaveCount(2);
+        ->and($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe(NovelOutlinePipeline::LEGACY_SKELETON_PROMPT_VERSION)
+        ->and($fake->requests()[1]->systemPrompt)->toContain('规划语言必须落到具体人物、动作、选择、阻力、因果和可观察变化')
+        ->and($fake->requests()[1]->systemPrompt)->not->toContain('规划内容必须写清：谁要做什么');
     Queue::assertPushed(GenerateNovelBeatDetailJob::class, fn (GenerateNovelBeatDetailJob $job): bool => $job->beatKey === 'beat-01');
     Queue::assertNotPushed(GenerateNovelOutlineStructureJob::class);
 });

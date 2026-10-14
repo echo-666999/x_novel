@@ -347,7 +347,7 @@ test('targeted scene length repair creates a new current scene artifact within f
             'provider' => 'fake',
             'model' => 'rewrite-test',
             'reasoning_effort' => null,
-            'prompt_version' => 'rewrite-v14+natural-prose-v1',
+            'prompt_version' => 'rewrite-v14+natural-writing-v3',
             'model_capacity' => [
                 'context_window_tokens' => 128_000,
                 'max_output_tokens' => 32_000,
@@ -372,7 +372,7 @@ test('targeted scene length repair creates a new current scene artifact within f
         reasoningEffort: null,
         source: 'test',
     ));
-    $admission->shouldReceive('promptVersionFor')->once()->andReturn('rewrite-v14+natural-prose-v1');
+    $admission->shouldReceive('promptVersionFor')->once()->andReturn('rewrite-v14+natural-writing-v3');
     $repairer = new SceneLengthRepairer(
         $fake,
         $admission,

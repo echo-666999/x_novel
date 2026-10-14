@@ -299,6 +299,7 @@ test('scene rewrite replaces only the target pointer and preserves plan and styl
         ->and(data_get($artifact->generationRun->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
         ->and($fake->requests()[0]->responseSchema)->not->toBeNull()
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得改写其他 Scene')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('回扣必须改变人物当下的选择、理解、关系或风险')
         ->and($fake->requests()[0]->prompt)->toContain('旧稿失速')
         ->and($fake->requests()[0]->prompt)->not->toContain('第二场景有可选的文风建议');
 });

@@ -62,7 +62,7 @@ class RetireLegacyNovelOutlineBatchAction
             $context['contract_upgrade'] = [
                 'retired_at' => now()->toISOString(),
                 'from_prompt_version' => $locked->prompt_version,
-                'to_prompt_version' => NovelOutlinePipeline::BATCH_PROMPT_VERSION,
+                'to_prompt_version' => NovelOutlinePipeline::BATCH_CONTRACT_VERSION,
                 'reason' => trim($reason),
             ];
 
@@ -91,7 +91,7 @@ class RetireLegacyNovelOutlineBatchAction
     private function assertLegacyBatch(GenerationRun $batch): void
     {
         if ($batch->scope_type !== NovelOutlinePipeline::BATCH_SCOPE
-            || $batch->prompt_version !== NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION) {
+            || $batch->prompt_version !== NovelOutlinePipeline::LEGACY_BATCH_CONTRACT_VERSION) {
             throw ValidationException::withMessages([
                 'run' => '指定 Run 不是可退役的旧版 Outline 主批次。',
             ]);

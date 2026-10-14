@@ -15,10 +15,13 @@ use Illuminate\Validation\ValidationException;
  */
 final class GenerationOutputCapacityGuard
 {
+    /** 旧 Event Extraction Run 补建独立预算时接受的恢复 Artifact 合同。 */
     public const LEGACY_EVENT_RECOVERY_CONTRACT = 'legacy-event-extraction-recovery-v1';
 
+    /** Admission v1 章节恢复合同的兼容别名，统一由恢复服务定义真实值。 */
     public const LEGACY_CHAPTER_RECOVERY_CONTRACT = LegacyAdmissionRecoveryContract::CONTRACT_VERSION;
 
+    /** Canonical Summary 人工 Restart 合同的兼容别名。 */
     public const CANONICAL_SUMMARY_RESTART_CONTRACT = CanonicalChapterSummaryService::RESTART_CONTRACT_VERSION;
 
     public function __construct(

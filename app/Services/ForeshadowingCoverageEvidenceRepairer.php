@@ -10,6 +10,7 @@ use Illuminate\Validation\ValidationException;
 /** 只校正伏笔 Coverage 的逐字证据，并保持冻结身份与语义声明不变。 */
 final class ForeshadowingCoverageEvidenceRepairer
 {
+    /** 仅校正伏笔 Coverage 逐字证据的 Provider Prompt 版本。 */
     public const PROMPT_VERSION = 'foreshadowing-coverage-evidence-repair-v1';
 
     public function __construct(

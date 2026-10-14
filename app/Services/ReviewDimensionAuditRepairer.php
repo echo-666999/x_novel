@@ -16,6 +16,7 @@ use Throwable;
 /** 修复单个 Review 维度的 Schema 缺口，并记录独立的冻结请求预算。 */
 final class ReviewDimensionAuditRepairer
 {
+    /** 修复单个 Review 维度结构缺口的 Provider Prompt 版本。 */
     public const PROMPT_VERSION = 'review-schema-repair-v3';
 
     public function __construct(

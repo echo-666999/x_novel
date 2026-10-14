@@ -19,6 +19,9 @@ use Illuminate\Validation\ValidationException;
 
 class AcceptOverlengthChapterAction
 {
+    /** 人工接受章节超长时写入审计 Run 的操作合同版本。 */
+    public const OPERATION_CONTRACT_VERSION = 'manual-length-exception-v1';
+
     public function __construct(private readonly DraftLengthPolicy $lengthPolicy) {}
 
     public function execute(Chapter $chapter, string $reason, ?int $actorId = null): Review
@@ -85,7 +88,7 @@ class AcceptOverlengthChapterAction
                 'idempotency_key' => $key,
                 'input_hash' => hash('sha256', $key),
                 'state_version' => $stateVersion,
-                'prompt_version' => 'manual-length-exception-v1',
+                'prompt_version' => self::OPERATION_CONTRACT_VERSION,
                 'model_policy' => 'manual',
                 'context_snapshot' => [
                     'manual_length_exception' => true,

@@ -11,6 +11,9 @@ use Illuminate\Validation\ValidationException;
 
 class NarrativeStyleProfile
 {
+    /** 冻结到 Bible 与生成上下文中的叙事风格合同结构版本。 */
+    public const SCHEMA_VERSION = 1;
+
     public function __construct(private readonly CreateBibleVersionAction $createBibleVersion) {}
 
     /** @return array<string, mixed> */
@@ -72,7 +75,7 @@ class NarrativeStyleProfile
         $primaryCode = $profile['primary_style'];
         $secondaryCodes = $profile['secondary_styles'];
         $contract = [
-            'schema_version' => 1,
+            'schema_version' => self::SCHEMA_VERSION,
             'bible_id' => $bible->getKey(),
             'bible_version' => $bible->version,
             'tone' => $bible->tone,

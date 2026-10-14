@@ -20,6 +20,7 @@ use Illuminate\Validation\ValidationException;
  */
 final class LegacyAdmissionRecoveryContract
 {
+    /** Admission v1 章节进入新版 Provider 阶段前生成的显式恢复合同版本。 */
     public const CONTRACT_VERSION = 'legacy-admission-chapter-recovery-v1';
 
     public const SCOPE = 'legacy_admission_recovery';

@@ -21,6 +21,7 @@ use Throwable;
 
 class ChapterAssembler
 {
+    /** 按 Scene 顺序拼接正文并规范分隔符的确定性算法版本，不是 Provider Prompt。 */
     public const ALGORITHM_VERSION = 'deterministic-assembly-v1';
 
     public const SEPARATOR = "\n\n";

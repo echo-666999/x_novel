@@ -9,8 +9,8 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
-use App\Enums\ArtifactType;
 use App\Enums\AiStage;
+use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\ForeshadowingStatus;
@@ -833,6 +833,7 @@ test('scene generator persists an immutable draft artifact and temporary state d
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得从上一章结尾直接跳到次日')
         ->and($fake->requests()[0]->systemPrompt)->toContain('l0.foreshadowing_contract 是本章冻结的唯一伏笔动作契约')
         ->and($fake->requests()[0]->systemPrompt)->toContain('正文必须像人物正在经历事件')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('同一段记忆、意象、动作、身体感觉、判断或情绪不得在没有新信息和新后果时反复出现')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得在每段末尾总结意义')
         ->and($fake->requests()[0]->prompt)->toContain('"l0"', '"l1"', '"l4"', '"scene_task"', '"writing_constraints"')
         ->and($fake->requests()[0]->prompt)->not->toContain('"generation_preferences"', '"query_text"', '"token_allocation"');

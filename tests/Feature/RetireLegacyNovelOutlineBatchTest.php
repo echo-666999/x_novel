@@ -23,7 +23,7 @@ function legacyOutlineBatch(RunStatus $status = RunStatus::Running): GenerationR
         'scope_type' => NovelOutlinePipeline::BATCH_SCOPE,
         'scope_id' => $novel->getKey(),
         'status' => $status,
-        'prompt_version' => NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION,
+        'prompt_version' => NovelOutlinePipeline::LEGACY_BATCH_CONTRACT_VERSION,
         'provider' => 'openai',
         'model_policy' => 'test-model',
         'context_snapshot' => ['requested_volume_count' => 3],
@@ -62,7 +62,7 @@ test('retires an unfinished legacy outline batch while preserving all history', 
         ->and(data_get($retired->error_metadata, 'retired_from_status'))->toBe('running')
         ->and(data_get($retired->error_metadata, 'preserved_child_run_count'))->toBe(2)
         ->and(data_get($retired->error_metadata, 'preserved_artifact_count'))->toBe(1)
-        ->and(data_get($retired->context_snapshot, 'contract_upgrade.to_prompt_version'))->toBe(NovelOutlinePipeline::BATCH_PROMPT_VERSION)
+        ->and(data_get($retired->context_snapshot, 'contract_upgrade.to_prompt_version'))->toBe(NovelOutlinePipeline::BATCH_CONTRACT_VERSION)
         ->and(GenerationRun::query()->whereKey($child)->exists())->toBeTrue()
         ->and(GenerationRun::query()->whereKey($failed)->exists())->toBeTrue()
         ->and(GenerationArtifact::query()->whereKey($artifact)->exists())->toBeTrue();
@@ -93,8 +93,8 @@ test('refuses current or successful batches', function (string $promptVersion, R
     expect(fn () => app(RetireLegacyNovelOutlineBatchAction::class)->handle($batch, 'upgrade'))
         ->toThrow(ValidationException::class);
 })->with([
-    'current contract' => [NovelOutlinePipeline::BATCH_PROMPT_VERSION, RunStatus::Running],
-    'successful legacy contract' => [NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION, RunStatus::Succeeded],
+    'current contract' => [NovelOutlinePipeline::BATCH_CONTRACT_VERSION, RunStatus::Running],
+    'successful legacy contract' => [NovelOutlinePipeline::LEGACY_BATCH_CONTRACT_VERSION, RunStatus::Succeeded],
 ]);
 
 test('legacy retirement command is dry run by default and executes explicitly', function () {

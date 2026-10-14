@@ -12,6 +12,7 @@ use Illuminate\Validation\ValidationException;
 /** 修复 Scene 的机器可读辅助字段，并拒绝使用父阶段预算替代子阶段合同。 */
 final class SceneDraftStructureRepairer
 {
+    /** 仅修复 Scene 辅助结构字段的 Provider Prompt 版本，不代表正文 Writer 版本。 */
     public const PROMPT_VERSION = 'scene-support-fields-repair-v1';
 
     public function __construct(

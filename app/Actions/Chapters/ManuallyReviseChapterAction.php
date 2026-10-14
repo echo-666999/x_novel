@@ -25,6 +25,9 @@ use Illuminate\Validation\ValidationException;
 
 class ManuallyReviseChapterAction
 {
+    /** 人工修改 Scene 正文时写入审计 Run 的操作合同版本。 */
+    private const OPERATION_CONTRACT_VERSION = 'manual-scene-edit-v1';
+
     public function __construct(
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly GenerationStageGate $stageGate,
@@ -111,7 +114,7 @@ class ManuallyReviseChapterAction
                 'idempotency_key' => $key,
                 'input_hash' => $inputHash,
                 'state_version' => $chapter->novel->canonicalStateVersion?->version,
-                'prompt_version' => 'manual-scene-edit-v1',
+                'prompt_version' => self::OPERATION_CONTRACT_VERSION,
                 'model_policy' => 'manual',
                 'context_snapshot' => [
                     'manual_edit' => true,

@@ -607,23 +607,40 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 
 ## 12. Prompt 版本与模型调用追踪
 
-用户指定的 `PromptVersionResolver` 是 Provider Stage 的版本入口。它从 `config/prompts.php` 读取阶段版本；缺失、空值、未知 Stage 或错误配置会直接抛出异常，不允许静默使用一个无法追踪的 Prompt。Planner、Writer、Reviewer、Rewrite 和 Summary 的有效版本为 `{stage_prompt_version}+{NarrativeProsePolicy::VERSION}`；Extractor 保持独立阶段版本。确定性 Assembly 使用算法版本，不注册 Prompt Version。
+`PromptVersionResolver` 是当前 Provider Prompt 的版本入口。它从 `config/prompts.php` 读取基础版本、阶段到叙事策略的映射，以及少量没有独立 `AiStage` 的 Provider 任务；缺失、空值、未知 Stage 或错误配置会直接抛出异常，不允许静默使用无法追踪的 Prompt。规划、写作、审校和摘要策略独立版本化，实际阶段版本为 `{base_prompt_version}+{policy_version}`；Extractor 保持独立版本。确定性算法、Schema、恢复合同和人工操作合同在各自实现旁边定义，不进入当前 Prompt 配置。
+
+项目中的 `version` 按用途分为以下几类，不能合并成一个全局版本号：
+
+| 类型 | 管理位置 | 用途 |
+|---|---|---|
+| 当前 Provider Prompt | `config/prompts.php` + `PromptVersionResolver` | 决定新 Run 的 Prompt 身份、输入哈希与 Artifact 复用边界 |
+| Pipeline / Recovery Contract | 对应 Pipeline 或恢复服务常量 | 选择历史兼容路径并限制 Resume；旧值必须保留可识别 |
+| Deterministic Algorithm / Policy | 执行算法的服务常量 | 算法变化时改变幂等输入，不表示调用过 Provider |
+| Schema Version | 结构的生产者或验证器常量 | 解释持久化 JSON、Snapshot、Contract 或迁移报告的字段布局 |
+| Manual Operation Contract | 对应 Action 常量 | 证明人工修改、Override 或例外由哪套确定性规则产生 |
+| 业务数据版本 | `bible_versions.version`、`story_state_versions.version`、Plan / Outline / Artifact 的 `version` 等 | 表示同一业务对象的不可变修订序号，属于 PostgreSQL 数据，不是可集中配置的代码版本 |
+
+因此只有“当前 Provider Prompt”集中配置。其余版本必须靠近解释或执行它们的代码，并在定义处注明用途；历史合同值不得因整理命名而回填或改写。
 
 当前配置为：
 
 | AI Stage | Effective Prompt Version |
 |---|---|
-| planner | `chapter-planner-v10+natural-prose-v1` |
-| writer | `scene-writer-v16+natural-prose-v1` |
+| outline_foundation | `novel-outline-foundation-v3+natural-planning-v3` |
+| outline_structure | `novel-outline-structure-v2+natural-planning-v3` |
+| outline_arc_beats | `novel-outline-arc-beats-v3+natural-planning-v3` |
+| outline_beat_detail | `novel-outline-beat-detail-v3+natural-planning-v3` |
+| planner | `chapter-planner-v10+natural-planning-v3` |
+| writer | `scene-writer-v16+natural-writing-v3` |
 | extractor | `event-extractor-v9` |
-| reviewer | `reviewer-v16+natural-prose-v1` |
-| rewrite | `rewrite-v14+natural-prose-v1` |
-| summary | `summary-v2+natural-prose-v1` |
+| reviewer | `reviewer-v16+natural-reviewing-v3` |
+| rewrite | `rewrite-v14+natural-writing-v3` |
+| summary | `summary-v2+natural-summary-v3` |
 
 补充边界：
 
 - NGC-002B 历史 Outline 批次记录 `novel-outline-pipeline-v2`；Provider 阶段分别记录 `novel-outline-foundation-v2`、`novel-outline-skeleton-v1` 和 `novel-outline-beat-detail-v1`；确定性 Finalize 记录 `novel-outline-finalize-v1`。这些历史版本继续可解释，但未完成 v2 批次必须显式标记 `cancelled / pipeline_contract_upgraded`，不得在新版 Pipeline 中继续。
-- Structure、Arc Beats 与 Beat Detail 分别冻结 `novel-outline-structure-v1`、`novel-outline-arc-beats-v2`、`novel-outline-beat-detail-v2`；确定性 Skeleton Assembly 冻结为 `novel-outline-skeleton-assembly-v2`。v2 合同由 Laravel 分配隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key。当前 `novel-outline-pipeline-v4` 主批次逐任务冻结 Foundation、Structure、Arc Beats、Beat Detail 路由；冻结旧 Prompt Version 的失败 v4 批次不得 Resume，必须 Restart 创建新批次，旧 Artifact 保持不可变。v3 批次保留原单路由执行语义。历史 Skeleton Job 类只为 failed job 安全反序列化保留，终态批次重放为空操作。Outline 版本仍由 Outline 服务维护，不通过 `PromptVersionResolver`；局部 Outline 修订继续记录 `novel-outline-node-v3`。
+- Foundation、Structure、Arc Beats 与 Beat Detail 的基础版本分别为 `novel-outline-foundation-v3`、`novel-outline-structure-v2`、`novel-outline-arc-beats-v3`、`novel-outline-beat-detail-v3`，均由 `PromptVersionResolver` 追加 `natural-planning-v3`；确定性 Skeleton Assembly 使用算法版本 `novel-outline-skeleton-assembly-v2`。Arc Beats / Beat Detail 的 v2 Schema 继续由 Laravel 分配隔离请求无法保证全书唯一的 Beat、Candidate、Milestone 与 Handoff 目标 Key。当前 `novel-outline-pipeline-v4` 主批次逐任务冻结 Foundation、Structure、Arc Beats、Beat Detail 路由；冻结旧 Prompt Version 的失败 v4 批次不得 Resume，必须 Restart 创建新批次，旧 Artifact 保持不可变。v3 批次保留原单路由执行语义。历史 Skeleton Job 类只为 failed job 安全反序列化保留，终态批次重放为空操作。局部 Outline 修订通过任务配置记录 `novel-outline-node-v4+natural-planning-v3`。
 - Embedding 是 `AiStage::Embedding`，但 `config/prompts.php` 不含 embedding Prompt；Embedding 使用模型配置，不是文本 Prompt 流程。
 - 每次主模型调用应把有效 Prompt Version 写入 Generation Run、Context Snapshot、Input Hash 和 Idempotency Key，使阶段 Prompt 或自然文风策略更新后都不会复用旧 Artifact。Assembly Run 的 `prompt_version/provider/model_policy` 为空，并在 Context Snapshot 与 Artifact 中记录 `deterministic-assembly-v1`、Ordered Sources 和 Assembly Hash。
 - `AiDebugService` 不注入 Narrative Prose Policy，因此显示并记录基础阶段版本，不伪装成生产有效版本。
@@ -694,7 +711,7 @@ Ending Contract、Closure Debt 和 Ending Audit 确保系统不仅会继续生�
 以下结论来自当前代码核查：
 
 1. Post-Commit 已使用 `UpdateMemoryJob → GenerateCanonicalChapterSummaryJob → RefreshNovelProjectionJob → ContinueAutoGenerationJob` 的 Queue Chain；Embedding 由 Memory 独立派发，不阻塞下一章。
-2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；`GenerateCanonicalChapterSummaryJob` 调用 `CanonicalChapterSummaryService` 使用有效版本 `summary-v2+natural-prose-v1` 生成正式章节摘要，不属于 Memory 建立步骤。
+2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；`GenerateCanonicalChapterSummaryJob` 调用 `CanonicalChapterSummaryService` 使用有效版本 `summary-v2+natural-summary-v3` 生成正式章节摘要，不属于 Memory 建立步骤。
 3. 当前分卷完成由人工触发 `VolumeCompletionGate`；未发现自动激活下一卷的工作流。
 4. 进入收束期由用户显式执行 `EnterCompletingModeAction`；未发现按目标字数自动进入 `completing` 的流程。
 5. `auto_commit` 默认关闭；Review PASS 本身不会自动改变 Canonical Story State。

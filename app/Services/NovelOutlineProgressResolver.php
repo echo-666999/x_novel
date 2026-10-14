@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\AI\PromptVersionResolver;
 use App\Data\NovelOutlineProgress;
 use App\Data\NovelOutlineStageProgress;
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -50,7 +52,10 @@ final class NovelOutlineProgressResolver
         NovelOutlinePipeline::FINALIZE_SCOPE,
     ];
 
-    public function __construct(private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(
+        private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly PromptVersionResolver $promptVersionResolver,
+    ) {}
 
     public function resolve(Novel $novel): NovelOutlineProgress
     {
@@ -89,7 +94,7 @@ final class NovelOutlineProgressResolver
             ->get();
         $batch = $runs->firstWhere('id', $latestBatch->getKey()) ?? $latestBatch;
         $children = $runs->where('id', '!=', $batch->getKey())->values();
-        $chain = $batch->prompt_version === NovelOutlinePipeline::LEGACY_BATCH_PROMPT_VERSION
+        $chain = $batch->prompt_version === NovelOutlinePipeline::LEGACY_BATCH_CONTRACT_VERSION
             ? $this->legacyChain($batch, $children)
             : $this->currentChain($batch, $children);
 
@@ -634,7 +639,7 @@ final class NovelOutlineProgressResolver
     {
         if ($batch->status !== RunStatus::Failed
             || $batch->stage !== GenerationStage::ChapterPlanning
-            || ! in_array($batch->prompt_version, [NovelOutlinePipeline::SINGLE_ROUTE_BATCH_PROMPT_VERSION, NovelOutlinePipeline::BATCH_PROMPT_VERSION], true)
+            || ! in_array($batch->prompt_version, [NovelOutlinePipeline::SINGLE_ROUTE_BATCH_CONTRACT_VERSION, NovelOutlinePipeline::BATCH_CONTRACT_VERSION], true)
             || ! in_array($novel->status, [NovelStatus::Draft, NovelStatus::Planning], true)
             || $novel->current_outline_id !== null
             || $novel->chapters_count > 0
@@ -646,7 +651,7 @@ final class NovelOutlineProgressResolver
         if (! $this->failurePolicy->allowsFrozenResume($batch)) {
             return false;
         }
-        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_PROMPT_VERSION) {
+        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_CONTRACT_VERSION) {
             if (! $this->hasCompleteFrozenRoutes($batch)) {
                 return false;
             }
@@ -673,7 +678,7 @@ final class NovelOutlineProgressResolver
             ];
         }
 
-        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_PROMPT_VERSION) {
+        if ($batch->prompt_version === NovelOutlinePipeline::BATCH_CONTRACT_VERSION) {
             $routeKey = match ($currentStage) {
                 'foundation' => 'outline_foundation',
                 'structure' => 'outline_structure',
@@ -729,12 +734,12 @@ final class NovelOutlineProgressResolver
     private function currentPromptVersions(): array
     {
         return [
-            'foundation' => NovelOutlinePipeline::FOUNDATION_PROMPT_VERSION,
-            'structure' => NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
-            'arc_beats' => NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
-            'skeleton_assembly' => NovelOutlinePipeline::SKELETON_ASSEMBLY_VERSION,
-            'beat_detail' => NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION,
-            'finalize' => NovelOutlinePipeline::FINALIZE_PROMPT_VERSION,
+            'foundation' => $this->promptVersionResolver->resolve(AiStage::OutlineFoundation),
+            'structure' => $this->promptVersionResolver->resolve(AiStage::OutlineStructure),
+            'arc_beats' => $this->promptVersionResolver->resolve(AiStage::OutlineArcBeats),
+            'skeleton_assembly' => NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
+            'beat_detail' => $this->promptVersionResolver->resolve(AiStage::OutlineBeatDetail),
+            'finalize' => NovelOutlinePipeline::FINALIZE_CONTRACT_VERSION,
         ];
     }
 

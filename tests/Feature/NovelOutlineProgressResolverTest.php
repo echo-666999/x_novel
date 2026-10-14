@@ -1,5 +1,7 @@
 <?php
 
+use App\AI\PromptVersionResolver;
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -10,7 +12,6 @@ use App\Models\Novel;
 use App\Models\UsageRecord;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineProgressResolver;
-use App\Services\NovelOutlineStageContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -22,12 +23,12 @@ uses(RefreshDatabase::class);
 function ogrProgressPromptVersions(): array
 {
     return [
-        'foundation' => NovelOutlinePipeline::FOUNDATION_PROMPT_VERSION,
-        'structure' => NovelOutlineStageContract::STRUCTURE_PROMPT_VERSION,
-        'arc_beats' => NovelOutlineStageContract::ARC_BEATS_PROMPT_VERSION,
-        'skeleton_assembly' => NovelOutlinePipeline::SKELETON_ASSEMBLY_VERSION,
-        'beat_detail' => NovelOutlinePipeline::BEAT_DETAIL_PROMPT_VERSION,
-        'finalize' => NovelOutlinePipeline::FINALIZE_PROMPT_VERSION,
+        'foundation' => app(PromptVersionResolver::class)->resolve(AiStage::OutlineFoundation),
+        'structure' => app(PromptVersionResolver::class)->resolve(AiStage::OutlineStructure),
+        'arc_beats' => app(PromptVersionResolver::class)->resolve(AiStage::OutlineArcBeats),
+        'skeleton_assembly' => NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
+        'beat_detail' => app(PromptVersionResolver::class)->resolve(AiStage::OutlineBeatDetail),
+        'finalize' => NovelOutlinePipeline::FINALIZE_CONTRACT_VERSION,
     ];
 }
 
@@ -71,7 +72,7 @@ function ogrProgressBatch(Novel $novel, RunStatus $status = RunStatus::Running, 
         'stage' => GenerationStage::ChapterPlanning,
         'status' => $status,
         'attempt' => 1,
-        'prompt_version' => NovelOutlinePipeline::BATCH_PROMPT_VERSION,
+        'prompt_version' => NovelOutlinePipeline::BATCH_CONTRACT_VERSION,
         'provider' => null,
         'model_policy' => null,
         'context_snapshot' => [

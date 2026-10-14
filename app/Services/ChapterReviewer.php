@@ -24,6 +24,9 @@ use Throwable;
 
 class ChapterReviewer
 {
+    /** 未调用 Reviewer Provider 时，确定性预检 Review Run 使用的合同版本。 */
+    private const DETERMINISTIC_PREFLIGHT_CONTRACT_VERSION = 'deterministic-review-preflight-v1';
+
     private const DIMENSIONS = ['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'];
 
     private const WEIGHTS = ['continuity' => .25, 'plan' => .15, 'character' => .15, 'progress' => .15, 'repetition' => .10, 'pacing' => .10, 'style' => .10];
@@ -322,7 +325,7 @@ class ChapterReviewer
                 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'scope_type' => 'chapter', 'scope_id' => $chapter->getKey(),
                 'stage' => GenerationStage::Review, 'status' => RunStatus::Succeeded, 'attempt' => (int) $chapter->generationRuns()->where('stage', GenerationStage::Review)->max('attempt') + 1,
                 'idempotency_key' => $key, 'input_hash' => $hash, 'state_version' => $context['state_version'], 'bible_version' => $context['bible_version'],
-                'prompt_version' => 'deterministic-review-preflight-v1', 'provider' => 'deterministic', 'model_policy' => 'deterministic',
+                'prompt_version' => self::DETERMINISTIC_PREFLIGHT_CONTRACT_VERSION, 'provider' => 'deterministic', 'model_policy' => 'deterministic',
                 'context_snapshot' => [
                     'source_artifact_id' => $draft->getKey(),
                     'semantic_review_performed' => false,
