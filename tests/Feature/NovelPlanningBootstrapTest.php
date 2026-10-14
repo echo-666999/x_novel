@@ -343,7 +343,7 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($fake->requests()[1]->systemPrompt)->toContain('相邻 Volume 不得只是规模更大的同类事件')
         ->and($fake->requests()[2]->systemPrompt)->toContain('拆成完成该冲突所需的最少且充分的 Beats')
         ->and($fake->requests()[3]->systemPrompt)->toContain('拆成按因果顺序推进的最少且充分的 Milestones')
-        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[0]->maxTokens)->toBe(20_000)
         ->and($fake->requests()[0]->reasoningEffort)->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.reasoning_effort'))->toBeNull()
         ->and(data_get($novel->generationRuns()->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)->sole()->context_snapshot, 'target_platform'))->toBe([
@@ -1309,8 +1309,8 @@ test('outline request budgets are frozen into the batch hash', function () {
     $second = $pipeline->prepareBatch($novel, 1);
 
     expect($second->input_hash)->not->toBe($first->input_hash)
-        ->and(data_get($first->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(12_000)
-        ->and(data_get($second->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(13_000);
+        ->and(data_get($first->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(20_000)
+        ->and(data_get($second->context_snapshot, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens'))->toBe(17_000);
 });
 
 test('outline request budget exceeding model capacity is rejected before batch creation', function () {
@@ -1335,16 +1335,16 @@ test('outline stage input hash includes its frozen request budget', function () 
     $pipeline->generateFoundation($batch);
 
     $context = $batch->context_snapshot;
-    data_set($context, 'generation_preferences.outline_routes.outline_foundation.request_budget.output_tokens', 8_001);
-    data_set($context, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens', 12_001);
+    data_set($context, 'generation_preferences.outline_routes.outline_foundation.request_budget.output_tokens', 12_001);
+    data_set($context, 'generation_preferences.outline_routes.outline_foundation.request_budget.max_completion_tokens', 20_001);
     $batch->update(['context_snapshot' => $context]);
     $pipeline->generateFoundation($batch->refresh());
 
     $runs = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FOUNDATION_SCOPE)->orderBy('id')->get();
     expect($runs)->toHaveCount(2)
         ->and($runs[1]->input_hash)->not->toBe($runs[0]->input_hash)
-        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
-        ->and($fake->requests()[1]->maxTokens)->toBe(12_001);
+        ->and($fake->requests()[0]->maxTokens)->toBe(20_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(20_001);
 });
 
 test('all four outline stages reject insufficient frozen capacity before creating a child run', function (AiStage $stage, string $scopeType) {

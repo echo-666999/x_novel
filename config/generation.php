@@ -21,8 +21,9 @@ return [
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),
     'outline_request_budgets' => [
         'outline_foundation' => [
-            'output_tokens' => 8_000,
-            'reasoning_reserve_tokens' => 4_000,
+            // 历史 8k 总预算曾被推理全部耗尽；12k 总预算的成功样本又已接近上限，因此同时扩充可见输出与推理空间。
+            'output_tokens' => 12_000,
+            'reasoning_reserve_tokens' => 8_000,
         ],
         'outline_structure' => [
             'output_tokens' => 12_000,
@@ -53,9 +54,10 @@ return [
     // Chapter Pipeline 将可见输出与推理预留分开冻结；旧 max_output 配置继续表示可见输出额度。
     'chapter_request_budgets' => [
         'planner' => [
-            'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 0],
-            'retry' => ['output_tokens' => 16_000, 'reasoning_reserve_tokens' => 0],
-            'final' => ['output_tokens' => 24_000, 'reasoning_reserve_tokens' => 0],
+            // 当前 high 推理路由已有 1,809 Token 的实际推理消耗；递增预留使推理耗尽后能够进入更高档。
+            'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 4_000],
+            'retry' => ['output_tokens' => 16_000, 'reasoning_reserve_tokens' => 8_000],
+            'final' => ['output_tokens' => 24_000, 'reasoning_reserve_tokens' => 16_000],
         ],
         'writer' => [
             // DeepSeek 留空 reasoning_effort 时仍默认 high；Writer 必须为隐藏推理预留递增空间。
@@ -64,18 +66,20 @@ return [
             'final' => ['output_tokens' => 24_000, 'reasoning_reserve_tokens' => 24_000],
         ],
         'extractor' => [
-            // 成功样本隐藏推理最高 21,230 Token，旧 retry 档还出现过 23,999 Token 全被推理耗尽；首档按 24k 推理 + 4k 可见输出冻结。
-            'initial' => ['output_tokens' => 4_000, 'reasoning_reserve_tokens' => 24_000],
-            'retry' => ['output_tokens' => 8_000, 'reasoning_reserve_tokens' => 32_000],
+            // 28k 总预算样本曾消耗 26,559 推理 Token 后截断，40k 总预算随后成功；提高首档并保留逐档升级空间。
+            'initial' => ['output_tokens' => 4_000, 'reasoning_reserve_tokens' => 32_000],
+            'retry' => ['output_tokens' => 8_000, 'reasoning_reserve_tokens' => 40_000],
             'final' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 48_000],
         ],
         'reviewer' => [
-            'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 0],
+            // 当前 high 推理审校样本最高使用 4,421 推理 Token；Reviewer 只有单档，需在首次请求中直接预留。
+            'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 8_000],
         ],
         'rewrite' => [
-            'initial' => ['output_tokens' => 16_000, 'reasoning_reserve_tokens' => 0],
-            'retry' => ['output_tokens' => 20_000, 'reasoning_reserve_tokens' => 0],
-            'final' => ['output_tokens' => 24_000, 'reasoning_reserve_tokens' => 0],
+            // DeepSeek 重写样本最高使用 7,591 推理 Token；递增预留避免总预算被隐藏推理提前占满。
+            'initial' => ['output_tokens' => 16_000, 'reasoning_reserve_tokens' => 8_000],
+            'retry' => ['output_tokens' => 20_000, 'reasoning_reserve_tokens' => 16_000],
+            'final' => ['output_tokens' => 24_000, 'reasoning_reserve_tokens' => 24_000],
         ],
         'summary' => [
             // DeepSeek 留空 reasoning_effort 时仍可能默认推理；Summary 同样需要冻结隐藏推理空间。
@@ -92,8 +96,9 @@ return [
                 'retry' => ['output_tokens' => 2_000, 'reasoning_reserve_tokens' => 16_000],
             ],
             'coverage_evidence' => [
-                'initial' => ['output_tokens' => 1_000, 'reasoning_reserve_tokens' => 8_000],
-                'retry' => ['output_tokens' => 2_000, 'reasoning_reserve_tokens' => 16_000],
+                // 9k 总预算在近期样本中反复耗尽，18k 档成功；将成功档能力前移并保留一次增量重试。
+                'initial' => ['output_tokens' => 1_000, 'reasoning_reserve_tokens' => 16_000],
+                'retry' => ['output_tokens' => 2_000, 'reasoning_reserve_tokens' => 24_000],
             ],
             'foreshadowing_coverage' => [
                 'initial' => ['output_tokens' => 1_000, 'reasoning_reserve_tokens' => 8_000],

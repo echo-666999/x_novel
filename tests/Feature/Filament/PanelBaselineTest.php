@@ -12,6 +12,7 @@ use App\Models\User;
 use Filament\Facades\Filament;
 use Filament\Panel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
@@ -136,4 +137,47 @@ test('the settings page keeps the remaining operational configuration sections',
         ->assertSee('数据库配置')
         ->assertSee('应用默认值（保存后写入 PostgreSQL）')
         ->assertSee('只读');
+});
+
+test('the generation settings dialog localizes user facing english except token', function () {
+    $this->actingAs(User::factory()->create());
+
+    $component = Livewire::test(Settings::class)
+        ->assertActionExists(
+            'configureGenerationSettings',
+            fn ($action): bool => $action->getModalDescription() === '保存后只影响新建或重新开始的任务；继续执行的任务与已冻结的生成记录仍使用原值。',
+        )
+        ->mountAction('configureGenerationSettings');
+
+    $schemaName = $component->instance()->getMountedActionSchemaName();
+    $dialogText = html_entity_decode(strip_tags((string) $component->instance()->{$schemaName}->toHtmlString()));
+
+    expect($dialogText)
+        ->toContain(
+            '全书大纲',
+            '基础设定',
+            '整体结构',
+            '故事线节点',
+            '节点细化',
+            '计划覆盖证据修复',
+            '伏笔覆盖修复',
+            '计划覆盖判定',
+            '响应结构修复',
+            '故事线完成度修复',
+            '嵌入向量维度',
+            '可见输出 Token',
+            '推理预留 Token',
+        )
+        ->not->toContain(
+            'Restart',
+            'Resume',
+            'Foundation',
+            'Structure',
+            'Arc Beats',
+            'Beat Detail',
+            'Coverage Judgment',
+            'Schema 修复',
+            'Arc Completion',
+            'Embedding',
+        );
 });

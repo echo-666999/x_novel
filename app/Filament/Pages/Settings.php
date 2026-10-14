@@ -68,7 +68,7 @@ class Settings extends Page
             ->label('生成参数')
             ->icon('heroicon-o-adjustments-horizontal')
             ->modalHeading('配置生成参数')
-            ->modalDescription('保存后只影响新建或 Restart 的任务；Resume 与已冻结的 Run 继续使用原值。')
+            ->modalDescription('保存后只影响新建或重新开始的任务；继续执行的任务与已冻结的生成记录仍使用原值。')
             ->modalWidth('7xl')
             ->fillForm(fn (): array => app(GenerationSettingsService::class)->settings())
             ->schema([
@@ -86,7 +86,7 @@ class Settings extends Page
                                             ->required()
                                             ->minLength(3)
                                             ->maxLength(3)
-                                            ->helperText('使用三个字母的 ISO 货币代码，例如 USD 或 CNY。'),
+                                            ->helperText('使用三个字母的货币代码，例如美元代码或人民币代码。'),
                                         $this->costLimitInput('budget.daily_hard_limit', '每日费用上限'),
                                         $this->costLimitInput('budget.novel_total_limit', '单本小说总费用上限'),
                                         $this->costLimitInput('budget.chapter_max_cost', '单章费用上限'),
@@ -96,11 +96,11 @@ class Settings extends Page
                                     ->columns(2)
                                     ->schema([
                                         $this->tokenInput('review_context_token_budget', '审校上下文 Token 预算'),
-                                        $this->tokenInput('embedding_dimensions', 'Embedding 向量维度')
-                                            ->helperText(fn (): string => '当前 PostgreSQL memories.embedding 维度：'.app(GenerationSettingsService::class)->databaseEmbeddingDimensions()),
+                                        $this->tokenInput('embedding_dimensions', '嵌入向量维度')
+                                            ->helperText(fn (): string => '当前数据库记忆向量字段维度：'.app(GenerationSettingsService::class)->databaseEmbeddingDimensions()),
                                     ]),
                             ]),
-                        Tab::make('Outline')
+                        Tab::make('全书大纲')
                             ->schema($this->outlineBudgetSections()),
                         Tab::make('章节阶段')
                             ->schema($this->chapterBudgetSections()),
@@ -181,10 +181,10 @@ class Settings extends Page
     private function outlineBudgetSections(): array
     {
         $labels = [
-            'outline_foundation' => 'Foundation',
-            'outline_structure' => 'Structure',
-            'outline_arc_beats' => 'Arc Beats',
-            'outline_beat_detail' => 'Beat Detail',
+            'outline_foundation' => '基础设定',
+            'outline_structure' => '整体结构',
+            'outline_arc_beats' => '故事线节点',
+            'outline_beat_detail' => '节点细化',
         ];
 
         return collect($labels)->map(fn (string $label, string $stage): Section => Section::make($label)
@@ -218,13 +218,13 @@ class Settings extends Page
     {
         $repairs = [
             'extractor.scene_structure' => ['事件提取 · 场景结构修复', ['initial', 'retry']],
-            'extractor.coverage_evidence' => ['事件提取 · Coverage 证据修复', ['initial', 'retry']],
-            'extractor.foreshadowing_coverage' => ['事件提取 · 伏笔 Coverage 修复', ['initial', 'retry']],
+            'extractor.coverage_evidence' => ['事件提取 · 计划覆盖证据修复', ['initial', 'retry']],
+            'extractor.foreshadowing_coverage' => ['事件提取 · 伏笔覆盖修复', ['initial', 'retry']],
             'extractor.event_evidence' => ['事件提取 · 事件证据修复', ['initial', 'retry']],
-            'reviewer.coverage_judgment' => ['审校 · Coverage Judgment', ['initial', 'retry']],
-            'reviewer.review_schema' => ['审校 · Schema 修复', ['initial']],
-            'reviewer.arc_completion' => ['审校 · Arc Completion 修复', ['initial']],
-            'rewrite.coverage_evidence' => ['重写 · Coverage 证据修复', ['initial', 'retry']],
+            'reviewer.coverage_judgment' => ['审校 · 计划覆盖判定', ['initial', 'retry']],
+            'reviewer.review_schema' => ['审校 · 响应结构修复', ['initial']],
+            'reviewer.arc_completion' => ['审校 · 故事线完成度修复', ['initial']],
+            'rewrite.coverage_evidence' => ['重写 · 计划覆盖证据修复', ['initial', 'retry']],
             'rewrite.length_repair' => ['重写 · 长度修复', ['initial', 'retry']],
         ];
 

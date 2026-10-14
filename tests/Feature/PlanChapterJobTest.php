@@ -531,12 +531,12 @@ test('outline retries and duplicate delivery keep the same frozen outline contex
 
     expect($duplicate?->is($plan))->toBeTrue()
         ->and($fake->requests())->toHaveCount(2)
-        ->and($fake->requests()[0]->maxTokens)->toBe(12_000)
-        ->and($fake->requests()[1]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[0]->maxTokens)->toBe(16_000)
+        ->and($fake->requests()[1]->maxTokens)->toBe(16_000)
         ->and($runs)->toHaveCount(2)
         ->and($runs->pluck('context_snapshot')->pluck('outline_checksum')->unique()->all())->toBe([$outline->checksum])
-        ->and(data_get($runs[0]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
-        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(12_000)
+        ->and(data_get($runs[0]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
+        ->and(data_get($runs[1]->context_snapshot, 'generation_preferences.max_completion_tokens'))->toBe(16_000)
         ->and($chapter->plans()->count())->toBe(1);
 });
 
@@ -600,6 +600,9 @@ test('planner truncation escalates to the final budget and then stops before ano
     config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
     config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
     config()->set('generation.chapter_request_budgets.planner.final.output_tokens', 24_000);
+    config()->set('generation.chapter_request_budgets.planner.initial.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.planner.retry.reasoning_reserve_tokens', 0);
+    config()->set('generation.chapter_request_budgets.planner.final.reasoning_reserve_tokens', 0);
     [$chapter] = plannerChapter();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedPlannerResponse(12_000))

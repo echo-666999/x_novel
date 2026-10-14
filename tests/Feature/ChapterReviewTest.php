@@ -140,12 +140,13 @@ function truncatedReviewResponse(int $outputTokens): AiResponse
 
 test('reviewer uses one fixed legal output budget for compact review', function () {
     expect(app(GenerationSettingsService::class)->chapterRequestBudgets(AiStage::Reviewer))->toBe([
-        'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 0],
+        'initial' => ['output_tokens' => 12_000, 'reasoning_reserve_tokens' => 8_000],
     ]);
 });
 
 test('review truncation is terminal when the frozen route has no higher budget', function () {
     config()->set('generation.chapter_request_budgets.reviewer.initial.output_tokens', 4_000);
+    config()->set('generation.chapter_request_budgets.reviewer.initial.reasoning_reserve_tokens', 0);
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));
     $fake = (new FakeAiProvider)->enqueue(truncatedReviewResponse(4_000));

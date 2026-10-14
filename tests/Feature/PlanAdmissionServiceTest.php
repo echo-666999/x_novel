@@ -28,6 +28,7 @@ use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
 use App\Services\GenerationOutputCapacityGuard;
+use App\Services\GenerationSettingsService;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanAdmissionService;
 use App\Services\PlanValidator;
@@ -109,10 +110,10 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.context_window_tokens'))->toBe(1_050_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.max_output_tokens'))->toBe(128_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.output_tokens'))->toBe(4_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.reasoning_reserve_tokens'))->toBe(24_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.max_completion_tokens'))->toBe(28_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.reasoning_reserve_tokens'))->toBe(32_000)
-        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.max_completion_tokens'))->toBe(40_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.reasoning_reserve_tokens'))->toBe(32_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.initial.max_completion_tokens'))->toBe(36_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.reasoning_reserve_tokens'))->toBe(40_000)
+        ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.retry.max_completion_tokens'))->toBe(48_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.reasoning_reserve_tokens'))->toBe(48_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.request_budgets.final.max_completion_tokens'))->toBe(60_000)
         // 修复子阶段必须独立冻结输出、推理预留和 Provider 总完成预算。
@@ -394,7 +395,7 @@ test('writer and reviewer capacity are checked before admission', function () {
     config()->set('generation.chapter_request_budgets.writer.initial.reasoning_reserve_tokens', 0);
     config()->set('generation.chapter_request_budgets.writer.retry.reasoning_reserve_tokens', 0);
     config()->set('generation.chapter_request_budgets.writer.final.reasoning_reserve_tokens', 0);
-    $generationSettings = app(\App\Services\GenerationSettingsService::class);
+    $generationSettings = app(GenerationSettingsService::class);
     $settings = $generationSettings->settings();
     $settings['review_context_token_budget'] = 10;
     $generationSettings->save($settings, null);
