@@ -1,35 +1,87 @@
 <?php
 
 return [
+    /*
+    |--------------------------------------------------------------------------
+    | 生成阶段失败与重试策略
+    |--------------------------------------------------------------------------
+    |
+    | max_attempts：Queue 最多执行次数，包含首次执行。
+    | backoff：每次重试前的等待秒数，按数组顺序应用。
+    | repairs：该阶段允许调用的局部修复类型；空数组表示不调用修复器。
+    | non_terminal_codes：遇到这些 Provider 错误码时，不把当前阶段直接标记为终态失败。
+    |
+    */
     'stage_policies' => [
+        // 章节规划：生成并校验本章的 Chapter Plan。
         'chapter_planning' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => [], 'non_terminal_codes' => ['novel_paused']],
+        // 场景生成：按顺序生成 Scene Draft，并允许结构、证据和长度修复。
         'scene_generation' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['schema', 'evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'previous_scene_incomplete']],
+        // 章节组装：合并已完成的 Scene Draft，并允许长度修复。
         'chapter_assembly' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => ['length'], 'non_terminal_codes' => ['novel_paused', 'assembly_input_incomplete', 'assembly_scene_incomplete', 'assembly_context_incomplete']],
+        // 事件提取：从章节草稿中提取会影响后续状态的事件，并允许证据修复。
         'event_extraction' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['evidence'], 'non_terminal_codes' => ['novel_paused']],
         // Coverage 语义复核是独立 Provider 阶段，技术失败不能伪装成正文缺失后进入 Rewrite。
         'coverage_judgment' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => [], 'non_terminal_codes' => ['novel_paused']],
+        // 章节审校：在确定性前置校验和 Coverage 复核完成后生成 Review。
         'review' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => [], 'non_terminal_codes' => ['novel_paused', 'review_prerequisite_missing', 'coverage_judgment_pending']],
         // Rewrite 有 initial/retry/final 三档技术预算，Queue 必须允许三次投递才能真正到达最终档。
         'rewrite' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'rewrite_exhausted', 'coverage_judgment_required']],
+        // 正式提交：通过 Canonical Commit 将已通过审校的章节写入正式故事状态。
         'commit' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
+        // 正式摘要：为 Canonical Chapter 生成后续上下文与记忆所需的摘要。
         'memory_summary' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
+        // 向量化：为正式记忆生成 Embedding。
         'embedding' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => []],
+        // 结局审计：检查 Ending Contract 和收束债务是否满足完结条件。
         'ending_audit' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => []],
     ],
+
+    // 是否显示仅供验收使用的生成诊断工具；默认不显示。
     'acceptance_tools_enabled' => (bool) env('GENERATION_ACCEPTANCE_TOOLS_ENABLED', false),
+
+    // Generation Run 在多久未更新后可判定为 Worker 丢失或任务卡死，单位：秒。
     'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 480),
+
+    // 生成 Job 的唯一锁和重复派发抑制时长，单位：秒。
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),
+
+    // 单个场景构建 Prompt 上下文时可使用的 Token 预算。
     'scene_context_token_budget' => (int) env('SCENE_CONTEXT_TOKEN_BUDGET', 12_000),
+
+    // 单个场景生成 Job 的软执行时限，单位：秒；发起 Provider 请求前会检查剩余时间。
     'scene_job_soft_timeout_seconds' => (int) env('SCENE_JOB_SOFT_TIMEOUT_SECONDS', 300),
+
+    // 场景 Job 为 Provider 请求完成和本地收尾预留的安全时间，单位：秒。
     'scene_job_safety_margin_seconds' => (int) env('SCENE_JOB_SAFETY_MARGIN_SECONDS', 20),
+
+    // Scene Draft 未达到长度要求时，最多执行的长度修复次数。
     'max_length_repair_attempts' => 1,
+
+    // Rewrite Draft 未达到长度要求时，最多执行的长度修复次数。
     'max_rewrite_length_repair_attempts' => 2,
+
+    // Plan 与伏笔 Coverage 缺少可验证证据时，最多执行的证据修复次数。
     'max_coverage_repair_attempts' => 2,
+
+    // Scene Draft 结构不符合契约时，最多执行的结构修复次数。
     'max_scene_structure_repair_attempts' => 2,
+
+    // 传给下一场景作为衔接上下文的上一场景末尾字符数。
     'previous_scene_tail_characters' => (int) env('PREVIOUS_SCENE_TAIL_CHARACTERS', 1_000),
+
+    // 章节正文允许的最小字数比例，相对于 Chapter Plan 的目标字数。
     'chapter_min_length_ratio' => .85,
+
+    // 章节正文允许的最大字数比例，相对于 Chapter Plan 的目标字数。
     'chapter_max_length_ratio' => 1.15,
+
+    // Story Event 缺少正文逐字证据时，最多执行的证据修复次数。
     'max_event_evidence_repair_attempts' => 2,
+
+    // Review 加权分数达到该值后，才满足自动通过的分数条件。
     'review_pass_score' => (float) env('REVIEW_PASS_SCORE', 80),
+
+    // 同一章节最多允许执行的自动 Rewrite 次数。
     'max_rewrite_attempts' => (int) env('MAX_REWRITE_ATTEMPTS', 2),
 ];
