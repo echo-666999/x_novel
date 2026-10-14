@@ -38,6 +38,7 @@ use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\User;
 use App\Services\GenerationJobDispatcher;
+use App\Services\GenerationSettingsService;
 use App\Services\NovelOutlinePipeline;
 use App\Services\NovelOutlineStageContract;
 use App\Services\NovelPlanner;
@@ -1211,7 +1212,7 @@ test('outline stages freeze each task route and bind every child run to the batc
         ->and($fake->requests())->toHaveCount(5);
     foreach ($routeProfiles as $stage => $profile) {
         $frozen = data_get($batch->context_snapshot, "generation_preferences.outline_routes.{$stage}");
-        $configuredBudget = config("generation.outline_request_budgets.{$stage}");
+        $configuredBudget = app(GenerationSettingsService::class)->outlineRequestBudget(AiStage::from($stage));
         expect($frozen['model'])->toBe($profile['model'])
             ->and($frozen['request_budget'])->toBe([
                 'output_tokens' => $configuredBudget['output_tokens'],
@@ -1226,7 +1227,7 @@ test('outline stages freeze each task route and bind every child run to the batc
     }
     foreach ($fake->requests() as $index => $request) {
         $stage = $requestStages[$index];
-        $configuredBudget = config("generation.outline_request_budgets.{$stage}");
+        $configuredBudget = app(GenerationSettingsService::class)->outlineRequestBudget(AiStage::from($stage));
         $childRun = $novel->generationRuns()->findOrFail($request->metadata['generation_run_id']);
         expect($request->provider)->toBe($routeProfiles[$stage]['provider'])
             ->and($request->model)->toBe($routeProfiles[$stage]['model'])
@@ -1305,7 +1306,9 @@ test('outline request budgets are frozen into the batch hash', function () {
     $first = $pipeline->prepareBatch($novel, 1);
     $first->update(['status' => RunStatus::Cancelled]);
 
-    config()->set('generation.outline_request_budgets.outline_foundation.output_tokens', 9_000);
+    setGenerationSettingsForTest([
+        'outline_request_budgets.outline_foundation.output_tokens' => 9_000,
+    ]);
     $second = $pipeline->prepareBatch($novel, 1);
 
     expect($second->input_hash)->not->toBe($first->input_hash)
@@ -1314,7 +1317,9 @@ test('outline request budgets are frozen into the batch hash', function () {
 });
 
 test('outline request budget exceeding model capacity is rejected before batch creation', function () {
-    config()->set('generation.outline_request_budgets.outline_foundation.output_tokens', 128_000);
+    setGenerationSettingsForTest([
+        'outline_request_budgets.outline_foundation.output_tokens' => 128_000,
+    ]);
     $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
     $fake = new FakeAiProvider;
     app()->instance(AiProvider::class, $fake);

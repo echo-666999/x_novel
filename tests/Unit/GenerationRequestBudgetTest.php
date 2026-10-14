@@ -5,10 +5,12 @@ use App\AI\Exceptions\AiProviderException;
 use App\Enums\AiStage;
 use App\Models\GenerationRun;
 use App\Services\GenerationRequestBudget;
+use App\Services\GenerationSettingsService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
-uses(TestCase::class);
+uses(TestCase::class, RefreshDatabase::class);
 
 function frozenBudgetRun(string $errorCode, string $tier, array $budget): GenerationRun
 {
@@ -25,9 +27,11 @@ function frozenBudgetRun(string $errorCode, string $tier, array $budget): Genera
 }
 
 test('repair budget config is normalized into independent completion contracts', function () {
-    config()->set('generation.chapter_repair_request_budgets.reviewer.coverage_judgment', [
-        'initial' => ['output_tokens' => 1_500, 'reasoning_reserve_tokens' => 8_000],
-        'retry' => ['output_tokens' => 3_000, 'reasoning_reserve_tokens' => 16_000],
+    setGenerationSettingsForTest([
+        'chapter_repair_request_budgets.reviewer.coverage_judgment' => [
+            'initial' => ['output_tokens' => 1_500, 'reasoning_reserve_tokens' => 8_000],
+            'retry' => ['output_tokens' => 3_000, 'reasoning_reserve_tokens' => 16_000],
+        ],
     ]);
 
     $budgets = (new GenerationRequestBudget)->configuredRepairs(AiStage::Reviewer);
@@ -40,12 +44,14 @@ test('repair budget config is normalized into independent completion contracts',
 });
 
 test('repair budget config rejects a retry tier that lowers reasoning reserve', function () {
-    config()->set('generation.chapter_repair_request_budgets.reviewer.coverage_judgment', [
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->settings();
+    data_set($settings, 'chapter_repair_request_budgets.reviewer.coverage_judgment', [
         'initial' => ['output_tokens' => 1_500, 'reasoning_reserve_tokens' => 8_000],
         'retry' => ['output_tokens' => 3_000, 'reasoning_reserve_tokens' => 4_000],
     ]);
 
-    expect(fn () => (new GenerationRequestBudget)->configuredRepairs(AiStage::Reviewer))
+    expect(fn () => $service->save($settings, null))
         ->toThrow(ValidationException::class, '推理预留都不能低于前一档预算');
 });
 
@@ -223,12 +229,15 @@ test('temporary provider failures keep the initial frozen budget instead of upgr
 });
 
 test('configured chapter budgets reject a decreasing output or reasoning tier', function () {
-    config()->set('generation.chapter_request_budgets.writer', [
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->settings();
+    data_set($settings, 'chapter_request_budgets.writer', [
         'initial' => ['output_tokens' => 2_000, 'reasoning_reserve_tokens' => 200],
         'retry' => ['output_tokens' => 1_000, 'reasoning_reserve_tokens' => 100],
+        'final' => ['output_tokens' => 3_000, 'reasoning_reserve_tokens' => 300],
     ]);
 
-    expect(fn () => (new GenerationRequestBudget)->configured(AiStage::Writer))
+    expect(fn () => $service->save($settings, null))
         ->toThrow(ValidationException::class, '不能低于前一档预算');
 });
 

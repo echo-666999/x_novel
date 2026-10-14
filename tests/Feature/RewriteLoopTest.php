@@ -366,12 +366,14 @@ test('rewrite job checkpoints a paid response and resumes repair in a new job at
 });
 
 test('rewrite visible truncation upgrades all frozen tiers and stops before a fourth provider request', function () {
-    config()->set('generation.chapter_request_budgets.rewrite.initial.output_tokens', 100);
-    config()->set('generation.chapter_request_budgets.rewrite.retry.output_tokens', 200);
-    config()->set('generation.chapter_request_budgets.rewrite.final.output_tokens', 300);
-    config()->set('generation.chapter_request_budgets.rewrite.initial.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.rewrite.retry.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.rewrite.final.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.rewrite.initial.output_tokens' => 100,
+        'chapter_request_budgets.rewrite.retry.output_tokens' => 200,
+        'chapter_request_budgets.rewrite.final.output_tokens' => 300,
+        'chapter_request_budgets.rewrite.initial.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.rewrite.retry.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.rewrite.final.reasoning_reserve_tokens' => 0,
+    ]);
     $fixture = sceneRewriteFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedRewriteResponse())

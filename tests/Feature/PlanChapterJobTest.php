@@ -514,8 +514,10 @@ test('an exhausted outline beat budget stops planning before a run or provider c
 });
 
 test('outline retries and duplicate delivery keep the same frozen outline context', function () {
-    config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
-    config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.planner.initial.output_tokens' => 12_000,
+        'chapter_request_budgets.planner.retry.output_tokens' => 16_000,
+    ]);
     [$chapter, $character, $outline, , $arc] = outlinePlannerChapter();
     $payload = outlinePlannerPayload($character, $outline, $arc);
     $fake = (new FakeAiProvider)
@@ -597,12 +599,14 @@ test('planner rejects an oversized request contract before creating a run or cal
 });
 
 test('planner truncation escalates to the final budget and then stops before another provider request', function () {
-    config()->set('generation.chapter_request_budgets.planner.initial.output_tokens', 12_000);
-    config()->set('generation.chapter_request_budgets.planner.retry.output_tokens', 16_000);
-    config()->set('generation.chapter_request_budgets.planner.final.output_tokens', 24_000);
-    config()->set('generation.chapter_request_budgets.planner.initial.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.planner.retry.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.planner.final.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.planner.initial.output_tokens' => 12_000,
+        'chapter_request_budgets.planner.retry.output_tokens' => 16_000,
+        'chapter_request_budgets.planner.final.output_tokens' => 24_000,
+        'chapter_request_budgets.planner.initial.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.planner.retry.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.planner.final.reasoning_reserve_tokens' => 0,
+    ]);
     [$chapter] = plannerChapter();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedPlannerResponse(12_000))
@@ -636,9 +640,11 @@ test('planner truncation escalates to the final budget and then stops before ano
 });
 
 test('planner reasoning exhaustion upgrades only a larger frozen reasoning reserve', function () {
-    config()->set('generation.chapter_request_budgets.planner.initial.reasoning_reserve_tokens', 1_000);
-    config()->set('generation.chapter_request_budgets.planner.retry.reasoning_reserve_tokens', 2_000);
-    config()->set('generation.chapter_request_budgets.planner.final.reasoning_reserve_tokens', 3_000);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.planner.initial.reasoning_reserve_tokens' => 1_000,
+        'chapter_request_budgets.planner.retry.reasoning_reserve_tokens' => 2_000,
+        'chapter_request_budgets.planner.final.reasoning_reserve_tokens' => 3_000,
+    ]);
     [$chapter] = plannerChapter();
     $fake = (new FakeAiProvider)
         ->enqueue(reasoningExhaustedPlannerResponse(1_000))

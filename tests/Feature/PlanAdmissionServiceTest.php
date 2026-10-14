@@ -27,6 +27,7 @@ use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\Scene;
+use App\Models\SystemSetting;
 use App\Services\GenerationOutputCapacityGuard;
 use App\Services\GenerationSettingsService;
 use App\Services\OutlineProgressResolver;
@@ -228,9 +229,11 @@ test('plan admission rejects a missing model capacity profile without calling a 
 });
 
 test('plan admission freezes model capacity and request budgets independently from later settings changes', function () {
-    config()->set('generation.chapter_request_budgets.extractor.initial.reasoning_reserve_tokens', 6_000);
-    config()->set('generation.chapter_request_budgets.extractor.retry.reasoning_reserve_tokens', 6_000);
-    config()->set('generation.chapter_request_budgets.extractor.final.reasoning_reserve_tokens', 6_000);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.extractor.initial.reasoning_reserve_tokens' => 6_000,
+        'chapter_request_budgets.extractor.retry.reasoning_reserve_tokens' => 6_000,
+        'chapter_request_budgets.extractor.final.reasoning_reserve_tokens' => 6_000,
+    ]);
     $plan = app(PlanAdmissionService::class)->admit(admissionReadyPlan());
     $snapshot = $plan->admission_snapshot;
     $profileId = (int) data_get($snapshot, 'routes.extractor.model_capacity.model_price_id');
@@ -239,7 +242,9 @@ test('plan admission freezes model capacity and request budgets independently fr
         'context_window_tokens' => 2_000_000,
         'max_output_tokens' => 256_000,
     ]);
-    config()->set('generation.chapter_request_budgets.extractor.initial.output_tokens', 9_000);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.extractor.initial.output_tokens' => 3_000,
+    ]);
 
     expect(data_get($plan->fresh()->admission_snapshot, 'routes.extractor.model_capacity.context_window_tokens'))->toBe(1_050_000)
         ->and(data_get($plan->fresh()->admission_snapshot, 'routes.extractor.model_capacity.max_output_tokens'))->toBe(128_000)
@@ -263,6 +268,9 @@ test('plan admission rejects a configured request budget above the selected mode
 
 test('plan admission rejects a repair budget above its selected model capacity before provider use', function () {
     $plan = admissionReadyPlan();
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.reviewer.initial.output_tokens' => 4_000,
+    ]);
     $settings = app(AiSettingsResolver::class)->resolve(AiStage::Reviewer, $plan->chapter->novel);
     AIModelPrice::query()
         ->where('provider', $settings->provider)
@@ -274,14 +282,17 @@ test('plan admission rejects a repair budget above its selected model capacity b
         ->toThrow(ValidationException::class, '[REQUEST_BUDGET_EXCEEDS_MODEL_CAPACITY]');
 });
 
-test('plan admission rejects an invalid repair budget without calling a provider', function () {
+test('invalid database generation settings stop admission before provider use', function () {
     $plan = admissionReadyPlan();
     $provider = new FakeAiProvider;
     app()->instance(AiProvider::class, $provider);
-    config()->set('generation.chapter_repair_request_budgets.reviewer.coverage_judgment.initial.output_tokens', 0);
+    $stored = SystemSetting::query()->findOrFail(SystemSetting::GENERATION);
+    $corrupted = $stored->value;
+    data_set($corrupted, 'chapter_repair_request_budgets.reviewer.coverage_judgment.initial.output_tokens', 0);
+    $stored->update(['value' => $corrupted]);
 
     expect(fn () => app(PlanAdmissionService::class)->prepare($plan))
-        ->toThrow(ValidationException::class, '[REQUEST_BUDGET_INVALID]');
+        ->toThrow(RuntimeException::class, '数据库中的 generation 全局生成参数无效');
     expect($provider->requests())->toBe([]);
 });
 
@@ -389,12 +400,14 @@ test('missing frozen routes and source versions invalidate an admitted plan', fu
 
 test('writer and reviewer capacity are checked before admission', function () {
     $plan = admissionReadyPlan(1);
-    config()->set('generation.chapter_request_budgets.writer.initial.output_tokens', 10);
-    config()->set('generation.chapter_request_budgets.writer.retry.output_tokens', 10);
-    config()->set('generation.chapter_request_budgets.writer.final.output_tokens', 10);
-    config()->set('generation.chapter_request_budgets.writer.initial.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.writer.retry.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.writer.final.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.writer.initial.output_tokens' => 10,
+        'chapter_request_budgets.writer.retry.output_tokens' => 10,
+        'chapter_request_budgets.writer.final.output_tokens' => 10,
+        'chapter_request_budgets.writer.initial.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.writer.retry.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.writer.final.reasoning_reserve_tokens' => 0,
+    ]);
     $generationSettings = app(GenerationSettingsService::class);
     $settings = $generationSettings->settings();
     $settings['review_context_token_budget'] = 10;

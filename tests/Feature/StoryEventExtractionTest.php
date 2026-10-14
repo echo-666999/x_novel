@@ -967,13 +967,15 @@ test('invalid provider json is retried only once for the same event extraction i
 });
 
 test('event extraction increases frozen output budgets and stops before a fourth provider call', function () {
-    config()->set('generation.chapter_request_budgets.extractor.initial.output_tokens', 100);
-    config()->set('generation.chapter_request_budgets.extractor.retry.output_tokens', 200);
-    config()->set('generation.chapter_request_budgets.extractor.final.output_tokens', 300);
     // 本用例只验证可见输出截断的升级路径，显式清零推理预留，避免生产默认值改变测试目标。
-    config()->set('generation.chapter_request_budgets.extractor.initial.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.extractor.retry.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.extractor.final.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.extractor.initial.output_tokens' => 100,
+        'chapter_request_budgets.extractor.retry.output_tokens' => 200,
+        'chapter_request_budgets.extractor.final.output_tokens' => 300,
+        'chapter_request_budgets.extractor.initial.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.extractor.retry.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.extractor.final.reasoning_reserve_tokens' => 0,
+    ]);
     $fixture = eventExtractionFixture();
     $fake = (new FakeAiProvider)
         ->enqueue(truncatedEventExtractionResponse())
@@ -1001,10 +1003,12 @@ test('event extraction increases frozen output budgets and stops before a fourth
 });
 
 test('event extraction reclassifies partial output as reasoning exhaustion from actual usage', function () {
-    config()->set('generation.chapter_request_budgets.extractor', [
-        'initial' => ['output_tokens' => 100, 'reasoning_reserve_tokens' => 100],
-        'retry' => ['output_tokens' => 200, 'reasoning_reserve_tokens' => 300],
-        'final' => ['output_tokens' => 300, 'reasoning_reserve_tokens' => 500],
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.extractor' => [
+            'initial' => ['output_tokens' => 100, 'reasoning_reserve_tokens' => 100],
+            'retry' => ['output_tokens' => 200, 'reasoning_reserve_tokens' => 300],
+            'final' => ['output_tokens' => 300, 'reasoning_reserve_tokens' => 500],
+        ],
     ]);
     $fixture = eventExtractionFixture();
     $response = new AiResponse(

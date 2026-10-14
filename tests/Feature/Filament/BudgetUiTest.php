@@ -17,7 +17,7 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
     $service = app(GenerationSettingsService::class);
-    $settings = $service->defaults();
+    $settings = $service->settings();
     $settings['currency'] = 'USD';
     $settings['budget'] = [
         'daily_hard_limit' => 5,
@@ -41,7 +41,7 @@ test('settings shows the global budget usage and defaults', function () {
 });
 
 test('generation request budgets and embedding dimensions can be saved from settings', function () {
-    $settings = app(GenerationSettingsService::class)->defaults();
+    $settings = app(GenerationSettingsService::class)->settings();
     $settings['review_context_token_budget'] = 52_000;
     $settings['currency'] = 'CNY';
     $settings['budget']['daily_hard_limit'] = 12.5;
@@ -59,7 +59,7 @@ test('generation request budgets and embedding dimensions can be saved from sett
 });
 
 test('sqlite settings can save an embedding dimension when no pgvector column is available to verify', function () {
-    $settings = app(GenerationSettingsService::class)->defaults();
+    $settings = app(GenerationSettingsService::class)->settings();
     $settings['embedding_dimensions'] = 3_072;
 
     Livewire::test(Settings::class)

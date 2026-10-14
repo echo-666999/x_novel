@@ -39,9 +39,11 @@ test('a non-canonical chapter is rejected before the provider is called', functi
 });
 
 test('a successful canonical summary persists its run artifact usage and input hash', function () {
-    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 300);
-    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 300);
-    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 300);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.summary.initial.reasoning_reserve_tokens' => 300,
+        'chapter_request_budgets.summary.retry.reasoning_reserve_tokens' => 300,
+        'chapter_request_budgets.summary.final.reasoning_reserve_tokens' => 300,
+    ]);
     [$chapter] = canonicalSummaryChapter();
     $fake = (new FakeAiProvider)->enqueue(summaryResponse());
     app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
@@ -147,12 +149,14 @@ test('provider failure preserves the existing summary and canonical story state'
 });
 
 test('canonical summary increases frozen output budgets and stops before a fourth provider call', function () {
-    config()->set('generation.chapter_request_budgets.summary.initial.output_tokens', 100);
-    config()->set('generation.chapter_request_budgets.summary.retry.output_tokens', 200);
-    config()->set('generation.chapter_request_budgets.summary.final.output_tokens', 300);
-    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.summary.initial.output_tokens' => 100,
+        'chapter_request_budgets.summary.retry.output_tokens' => 200,
+        'chapter_request_budgets.summary.final.output_tokens' => 300,
+        'chapter_request_budgets.summary.initial.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.summary.retry.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.summary.final.reasoning_reserve_tokens' => 0,
+    ]);
     [$chapter] = canonicalSummaryChapter();
     $truncated = new AiResponse(
         content: '',
@@ -188,9 +192,11 @@ test('canonical summary increases frozen output budgets and stops before a fourt
 });
 
 test('explicit summary restart freezes the current budget without mutating the canonical plan', function () {
-    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 0);
-    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.summary.initial.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.summary.retry.reasoning_reserve_tokens' => 0,
+        'chapter_request_budgets.summary.final.reasoning_reserve_tokens' => 0,
+    ]);
     [$chapter, $source] = canonicalSummaryChapter();
     $plan = $chapter->latestPlan;
     $failed = GenerationRun::factory()->for($chapter->novel)->for($chapter)->create([
@@ -205,9 +211,11 @@ test('explicit summary restart freezes the current budget without mutating the c
             'canonical_artifact_checksum' => $source->checksum,
         ],
     ]);
-    config()->set('generation.chapter_request_budgets.summary.initial.reasoning_reserve_tokens', 8_000);
-    config()->set('generation.chapter_request_budgets.summary.retry.reasoning_reserve_tokens', 16_000);
-    config()->set('generation.chapter_request_budgets.summary.final.reasoning_reserve_tokens', 24_000);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.summary.initial.reasoning_reserve_tokens' => 8_000,
+        'chapter_request_budgets.summary.retry.reasoning_reserve_tokens' => 16_000,
+        'chapter_request_budgets.summary.final.reasoning_reserve_tokens' => 24_000,
+    ]);
     $fake = (new FakeAiProvider)->enqueue(summaryResponse());
     app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
 

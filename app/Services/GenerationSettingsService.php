@@ -48,35 +48,16 @@ final class GenerationSettingsService
         ],
     ];
 
-    /** @return array<string, mixed> */
-    public function defaults(): array
-    {
-        return [
-            'schema_version' => self::SCHEMA_VERSION,
-            'currency' => 'USD',
-            'budget' => [
-                'daily_hard_limit' => null,
-                'novel_total_limit' => null,
-                'chapter_max_cost' => null,
-            ],
-            'review_context_token_budget' => 48_000,
-            'embedding_dimensions' => $this->databaseEmbeddingDimensions(),
-            'outline_request_budgets' => (array) config('generation.outline_request_budgets', []),
-            'chapter_request_budgets' => (array) config('generation.chapter_request_budgets', []),
-            'chapter_repair_request_budgets' => (array) config('generation.chapter_repair_request_budgets', []),
-        ];
-    }
-
     /** @return array{settings: array<string, mixed>, source: string} */
     public function current(): array
     {
         if (! Schema::hasTable('system_settings')) {
-            return ['settings' => $this->defaults(), 'source' => 'application_default'];
+            throw new \RuntimeException('数据库尚未创建 system_settings 表，无法读取生成参数。');
         }
 
         $value = SystemSetting::query()->find(SystemSetting::GENERATION)?->value;
         if (! is_array($value)) {
-            return ['settings' => $this->defaults(), 'source' => 'application_default'];
+            throw new \RuntimeException('数据库缺少 generation 全局生成参数；请执行数据库迁移后再启动生成任务。');
         }
 
         try {
@@ -86,12 +67,12 @@ final class GenerationSettingsService
                 'source' => 'database',
             ];
         } catch (ValidationException $exception) {
-            Log::warning('Stored generation settings are invalid; application defaults are active.', [
+            Log::error('Stored generation settings are invalid.', [
                 'setting_key' => SystemSetting::GENERATION,
                 'validation_fields' => array_keys($exception->errors()),
             ]);
 
-            return ['settings' => $this->defaults(), 'source' => 'application_default_invalid_database'];
+            throw new \RuntimeException('数据库中的 generation 全局生成参数无效，请在修复配置后再启动生成任务。', 0, $exception);
         }
     }
 
@@ -107,15 +88,16 @@ final class GenerationSettingsService
         return DB::transaction(function () use ($settings, $actorId): array {
             $normalized = $this->normalize($settings, true);
             $record = SystemSetting::query()->lockForUpdate()->find(SystemSetting::GENERATION);
+            if ($record === null) {
+                throw new \RuntimeException('数据库缺少 generation 全局生成参数；请执行数据库迁移后再保存。');
+            }
             $before = is_array($record?->value) ? $record->value : null;
 
             if ($before === $normalized) {
                 return ['settings' => $normalized, 'changed' => false];
             }
 
-            $record === null
-                ? SystemSetting::query()->create(['key' => SystemSetting::GENERATION, 'value' => $normalized])
-                : $record->update(['value' => $normalized]);
+            $record->update(['value' => $normalized]);
 
             Log::info('Generation settings changed.', [
                 'actor_id' => $actorId,

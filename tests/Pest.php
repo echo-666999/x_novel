@@ -171,6 +171,19 @@ function configureEmbeddingForTest(string $model = 'embedding-fixed-v1', int $di
     $service->save($settings, null);
 }
 
+/** @param array<string, mixed> $values */
+function setGenerationSettingsForTest(array $values): array
+{
+    $service = app(GenerationSettingsService::class);
+    $settings = $service->settings();
+    foreach ($values as $path => $value) {
+        data_set($settings, $path, $value);
+    }
+    $service->save($settings, null);
+
+    return $service->settings();
+}
+
 function makeChapterPlanAdmissionReady(ChapterPlan $plan): ChapterPlan
 {
     seedVerifiedChapterModelProfiles();

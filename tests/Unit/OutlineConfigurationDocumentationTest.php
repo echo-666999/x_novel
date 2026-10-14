@@ -5,13 +5,14 @@ test('outline configuration documentation and database settings match the four-s
     $env = file_get_contents($root.'/.env.example');
     $aiConfig = file_get_contents($root.'/config/ai.php');
     $generationConfig = file_get_contents($root.'/config/generation.php');
+    $generationSettingMigration = file_get_contents($root.'/database/migrations/2026_10_14_110000_seed_generation_system_setting.php');
     $generationSettings = file_get_contents($root.'/app/Services/GenerationSettingsService.php');
     $settingsPage = file_get_contents($root.'/app/Filament/Pages/Settings.php');
     $prd = file_get_contents($root.'/docs/PRD.md');
     $architecture = file_get_contents($root.'/docs/architecture/generation-pipeline.md');
     $dataModel = file_get_contents($root.'/docs/architecture/data-model.md');
 
-    foreach ([$env, $aiConfig, $generationConfig, $generationSettings, $settingsPage, $prd, $architecture, $dataModel] as $content) {
+    foreach ([$env, $aiConfig, $generationConfig, $generationSettingMigration, $generationSettings, $settingsPage, $prd, $architecture, $dataModel] as $content) {
         expect($content)->toBeString()->not->toBeEmpty();
     }
 
@@ -36,8 +37,8 @@ test('outline configuration documentation and database settings match the four-s
             ->not->toContain("AI_REASONING_EFFORT_{$environmentSuffix}");
         expect($routes)->toContain('AIModelRoute');
         expect($connections)->toContain('AIProviderConnection');
-        expect($generationConfig)
-            ->toContain("'{$stage}'");
+        expect($generationConfig)->not->toContain("'{$stage}'");
+        expect($generationSettingMigration)->toContain("'{$stage}'");
         expect($generationSettings)->toContain('outline_request_budgets');
         expect($settingsPage)->toContain('outline_request_budgets');
         expect($prd)->toContain("`{$stage}`");
@@ -48,6 +49,7 @@ test('outline configuration documentation and database settings match the four-s
     expect($env)
         ->not->toContain('OUTLINE_PLANNER_CAPACITY')
         ->not->toContain('AI_MODEL_OUTLINE=');
+    expect($generationConfig)->not->toContain('outline_request_budgets');
     expect($prd)
         ->toContain('Restart')
         ->toContain('reasoning_tokens')

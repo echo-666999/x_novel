@@ -278,11 +278,9 @@ class Settings extends Page
 
     private function generationSettingsSource(): string
     {
-        return match (app(GenerationSettingsService::class)->current()['source']) {
-            'database' => 'PostgreSQL · system_settings',
-            'application_default_invalid_database' => '数据库配置无效，当前使用应用默认值',
-            default => '应用默认值（保存后写入 PostgreSQL）',
-        };
+        app(GenerationSettingsService::class)->settings();
+
+        return 'PostgreSQL · system_settings';
     }
 
     private function budgetSection(): Section

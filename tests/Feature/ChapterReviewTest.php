@@ -145,8 +145,10 @@ test('reviewer uses one fixed legal output budget for compact review', function 
 });
 
 test('review truncation is terminal when the frozen route has no higher budget', function () {
-    config()->set('generation.chapter_request_budgets.reviewer.initial.output_tokens', 4_000);
-    config()->set('generation.chapter_request_budgets.reviewer.initial.reasoning_reserve_tokens', 0);
+    setGenerationSettingsForTest([
+        'chapter_request_budgets.reviewer.initial.output_tokens' => 4_000,
+        'chapter_request_budgets.reviewer.initial.reasoning_reserve_tokens' => 0,
+    ]);
     $fixture = reviewFixture();
     bindStateValidation(new StateValidationResult([]));
     $fake = (new FakeAiProvider)->enqueue(truncatedReviewResponse(4_000));
