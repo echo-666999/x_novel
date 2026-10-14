@@ -19,10 +19,10 @@ enum AiStage: string
     public function getLabel(): string
     {
         return match ($this) {
-            self::OutlineFoundation => '全书大纲 · Foundation',
-            self::OutlineStructure => '全书大纲 · Structure',
-            self::OutlineArcBeats => '全书大纲 · Arc Beats',
-            self::OutlineBeatDetail => '全书大纲 · Beat Detail',
+            self::OutlineFoundation => '全书大纲 · 基础设定',
+            self::OutlineStructure => '全书大纲 · 整体结构',
+            self::OutlineArcBeats => '全书大纲 · 故事线节点',
+            self::OutlineBeatDetail => '全书大纲 · 节点细化',
             self::Planner => '章节规划',
             self::Writer => '场景写作',
             self::Extractor => '事件提取',

@@ -126,8 +126,8 @@ class SystemHealthService
             '关键配置',
             $valid ? 'healthy' : 'warning',
             $valid
-                ? '应用密钥、中文语言、供应商连接与全部模型路由已配置。'
-                : '请检查 APP_KEY、APP_LOCALE，以及后台中的供应商连接和全部模型路由。',
+                ? '应用密钥、中文语言、服务商连接与全部模型路由已配置。'
+                : '请检查 APP_KEY、APP_LOCALE，以及后台中的服务商连接和全部模型路由。',
         );
     }
 

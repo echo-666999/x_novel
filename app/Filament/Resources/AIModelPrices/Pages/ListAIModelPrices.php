@@ -25,7 +25,7 @@ class ListAIModelPrices extends ListRecords
                 ->label('模型路由')
                 ->icon('heroicon-o-arrows-right-left')
                 ->modalHeading('按生成节点配置模型')
-                ->modalDescription('只影响之后创建的 Generation Run；运行中的任务继续使用已经冻结的 Provider、Model 和推理程度。Outline 模型必须先在模型价格记录中填写已核实容量并开启必要能力。')
+                ->modalDescription('只影响之后创建的生成任务；运行中的任务继续使用已经冻结的服务商、模型和推理程度。全书大纲模型必须先在模型价格记录中填写已核实容量并开启必要能力。')
                 ->fillForm(fn (): array => ['routes' => app(AiModelRouteService::class)->formState()])
                 ->schema(collect(AiStage::cases())->map(fn (AiStage $stage): Grid => Grid::make(['default' => 1, 'md' => 2])
                     ->schema([
@@ -36,19 +36,19 @@ class ListAIModelPrices extends ListRecords
                             ->native(false)
                             ->required()
                             ->helperText(match (true) {
-                                $stage === AiStage::Embedding => '当前向量生成只支持 OpenAI Provider。',
+                                $stage === AiStage::Embedding => '当前向量生成只支持 OpenAI 服务商。',
                                 in_array($stage, [AiStage::OutlineFoundation, AiStage::OutlineStructure, AiStage::OutlineArcBeats, AiStage::OutlineBeatDetail], true) => '必须先在模型价格记录中填写容量并开启结构化输出；设置推理程度时还需开启对应能力。',
                                 default => null,
                             }),
                         Select::make("routes.{$stage->value}.reasoning_effort")
                             ->label($stage->getLabel().'推理程度')
                             ->options(AiReasoningEffort::options())
-                            ->placeholder('Provider 默认')
+                            ->placeholder('服务商默认值')
                             ->native(false)
                             ->disabled($stage === AiStage::Embedding)
                             ->helperText($stage === AiStage::Embedding
                                 ? '向量生成不使用推理程度。'
-                                : '仅对支持 reasoning_effort 的 Provider 生效。'),
+                                : '仅对支持推理程度参数的服务商生效。'),
                     ]))
                     ->all())
                 ->action(function (array $data, AiModelRouteService $routes, Action $action): void {

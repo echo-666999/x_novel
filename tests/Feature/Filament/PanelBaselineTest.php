@@ -89,7 +89,7 @@ test('the owner can access every workbench page', function (string $path, string
     ['/x/review', '审校收件箱为空'],
     ['/x/memory', '暂无已索引记忆'],
     ['/x/settings', '系统健康'],
-    ['/x/a-i-provider-connections', '暂无供应商连接'],
+    ['/x/a-i-provider-connections', '暂无服务商连接'],
     ['/x/a-i-model-prices', '暂无模型价格'],
 ]);
 

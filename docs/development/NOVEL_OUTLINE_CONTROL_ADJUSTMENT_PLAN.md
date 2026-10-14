@@ -115,7 +115,7 @@ Novel
 - 项目已经有 `system_settings` 表，`key` 为主键、`value` 为 JSONB；目前用于保存 `emergency_stop`。
 - `usage_records.provider` 当前从全局配置读取。增加运行时切换后，这种写法会记录错误 Provider，必须改为记录本次请求实际使用的 Provider。
 
-结论：参照 EasyPay 的“AI 与成本”，XNovel 只增加“供应商连接”和“模型价格”两个管理 Resource。连接、价格和模型路由分别保存到 `ai_provider_connections`、`ai_model_prices` 与 `ai_model_routes`，不再把连接或价格塞入 `system_settings.ai`；模型路由在“模型价格”页面内维护，不增加第三个导航入口。API Key 使用 Eloquent `encrypted` cast 加密保存且后台绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
+结论：参照 EasyPay 的“AI 与成本”，XNovel 只增加“服务商连接”和“模型价格”两个管理 Resource。连接、价格和模型路由分别保存到 `ai_provider_connections`、`ai_model_prices` 与 `ai_model_routes`，不再把连接或价格塞入 `system_settings.ai`；模型路由在“模型价格”页面内维护，不增加第三个导航入口。API Key 使用 Eloquent `encrypted` cast 加密保存且后台绝不回显。现有环境配置仅作为兼容回退。Prompt 是否落日志属于部署级安全开关，不放到后台修改。
 
 ## 3. 用户期望的大纲示例
 
@@ -879,10 +879,10 @@ is_enabled
 
 导航组只包含：
 
-1. 供应商连接：创建或编辑连接、加密保存 API Key、启用或停用、测试 `/models` 连接、显示最近验证时间。
+1. 服务商连接：创建或编辑连接、加密保存 API Key、启用或停用、测试 `/models` 连接、显示最近验证时间。
 2. 模型价格：创建或编辑 Provider + Model 的币种、计费单位、输入、缓存输入和输出价格。
 
-明确不增加 EasyPay 中的供应商目录、模型同步目录、Token 账户、预算策略、请求日志、余额流水或团队隔离。XNovel 是单用户项目，不复制 EasyPay 的多租户结构。
+明确不增加 EasyPay 中的服务商目录、模型同步目录、Token 账户、预算策略、请求日志、余额流水或团队隔离。XNovel 是单用户项目，不复制 EasyPay 的多租户结构。
 
 后台连接变化只影响之后发出的 Provider 请求；已经创建的 Generation Run 继续使用冻结的 Provider 与 Model，不运行到一半自动换 Provider。
 
@@ -1291,8 +1291,8 @@ flowchart TD
 **实现内容**
 
 - 新增 `ai_provider_connections`、`ai_model_prices` 与 `ai_model_routes` 三张表，不再使用 `system_settings.ai` 保存连接或价格；旧 Stage 配置仅保留兼容读取。
-- Filament 新增“AI 与成本”导航组，且只包含“供应商连接”和“模型价格”两个 Resource。
-- 供应商连接保存固定 Provider、名称、Base URL、加密 API Key、Timeout、启用状态和最近验证时间，并提供 `/models` 连接测试。
+- Filament 新增“AI 与成本”导航组，且只包含“服务商连接”和“模型价格”两个 Resource。
+- 服务商连接保存固定 Provider、名称、Base URL、加密 API Key、Timeout、启用状态和最近验证时间，并提供 `/models` 连接测试。
 - 模型价格按 Provider + Model + Currency 保存计费单位、输入、缓存输入和输出 Token 价格。
 - “模型价格”页面提供“模型路由”操作，按 Stage 保存 Provider + Model 映射；不增加第三个导航入口。
 - Provider 请求优先读取启用的数据库连接；费用计算优先读取匹配的启用模型价格；缺失时兼容回退 `config/ai.php`。

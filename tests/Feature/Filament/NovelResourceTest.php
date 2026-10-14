@@ -62,10 +62,48 @@ test('the novel list previews and executes permanent deletion only while paused'
     ]);
     NovelBible::factory()->for($novel)->create();
 
-    Livewire::test(ListNovels::class)
+    $component = Livewire::test(ListNovels::class)
+        ->assertTableActionExists(
+            'deleteNovel',
+            fn ($action): bool => $action->getModalDescription() === '将物理删除整部小说及全部正文、小说大纲、正式故事状态、记忆和生成追踪数据。成功后只能从数据库备份恢复。',
+            $novel,
+        )
         ->assertTableActionEnabled('deleteNovel', $novel)
         ->mountTableAction('deleteNovel', $novel)
-        ->assertTableActionDataSet(fn (array $data): bool => $data['impact']['bibles'] === 1)
+        ->assertTableActionDataSet(fn (array $data): bool => $data['impact']['bibles'] === 1);
+
+    foreach ([
+        'impact.outlines' => '小说大纲',
+        'impact.outline_volumes' => '大纲分卷',
+        'impact.outline_arcs' => '大纲故事线',
+        'impact.outline_beats' => '大纲节点',
+        'impact.outline_milestones' => '里程碑',
+        'impact.volumes' => '分卷',
+        'impact.story_arcs' => '故事线',
+        'impact.chapters' => '章节',
+        'impact.plans' => '章节计划',
+        'impact.scenes' => '场景',
+        'impact.state_versions' => '故事状态版本',
+        'impact.events' => '故事事件',
+        'impact.facts' => '事实',
+        'impact.memories' => '记忆',
+        'impact.characters' => '人物',
+        'impact.world_entities' => '世界实体',
+        'impact.foreshadowings' => '伏笔',
+        'impact.runs' => '生成记录',
+        'impact.artifacts' => '生成产物',
+        'impact.reviews' => '审校记录',
+        'impact.usage' => 'AI 用量',
+        'impact.bibles' => '小说圣经',
+    ] as $componentKey => $label) {
+        $component->assertSchemaComponentExists(
+            $componentKey,
+            null,
+            fn ($schemaComponent): bool => $schemaComponent->getLabel() === $label,
+        );
+    }
+
+    $component
         ->setTableActionData([
             'expected_title' => '将被删除的长篇',
             'reason' => '清理误建小说',

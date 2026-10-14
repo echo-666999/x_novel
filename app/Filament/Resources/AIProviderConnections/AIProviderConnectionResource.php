@@ -22,9 +22,9 @@ class AIProviderConnectionResource extends Resource
 
     protected static ?int $navigationSort = 1;
 
-    protected static ?string $modelLabel = '供应商连接';
+    protected static ?string $modelLabel = '服务商连接';
 
-    protected static ?string $pluralModelLabel = '供应商连接';
+    protected static ?string $pluralModelLabel = '服务商连接';
 
     public static function getNavigationGroup(): ?string
     {

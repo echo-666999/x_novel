@@ -131,11 +131,11 @@ test('provider failure preserves the existing summary and canonical story state'
     [$chapter] = canonicalSummaryChapter(['summary' => '原摘要'], true);
     $novel = $chapter->novel->fresh();
     $stateId = $novel->canonical_state_version_id;
-    $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', '供应商超时', true));
+    $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_timeout', '服务商超时', true));
     app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
 
     expect(fn () => app(CanonicalChapterSummaryService::class)->generate($chapter->getKey()))
-        ->toThrow(AiProviderException::class, '供应商超时');
+        ->toThrow(AiProviderException::class, '服务商超时');
 
     expect($chapter->fresh()->summary)->toBe('原摘要')
         ->and($chapter->novel->fresh()->canonical_state_version_id)->toBe($stateId)

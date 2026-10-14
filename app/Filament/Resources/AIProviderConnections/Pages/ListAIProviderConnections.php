@@ -12,6 +12,6 @@ class ListAIProviderConnections extends ListRecords
 
     protected function getHeaderActions(): array
     {
-        return [CreateAction::make()->label('新建供应商连接')];
+        return [CreateAction::make()->label('新建')];
     }
 }

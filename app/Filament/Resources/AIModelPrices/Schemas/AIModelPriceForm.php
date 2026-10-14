@@ -17,7 +17,7 @@ class AIModelPriceForm
                 ->description('价格按指定计费单位的 Token 数填写；使用记录会保存请求发生时计算出的成本。')
                 ->schema([
                     Select::make('provider')
-                        ->label('供应商')
+                        ->label('服务商')
                         ->options(['openai' => 'OpenAI', 'deepseek' => 'DeepSeek'])
                         ->required()
                         ->native(false),

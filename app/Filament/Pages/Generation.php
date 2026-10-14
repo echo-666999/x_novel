@@ -66,22 +66,22 @@ class Generation extends Page implements HasTable
                 ->columns(['default' => 2, 'lg' => 4])
                 ->schema([
                     TextEntry::make('recovery_failed')
-                        ->label('Failed')
+                        ->label('已失败')
                         ->state(fn (): int => $this->recoveryCounts()['failed'])
                         ->badge()
                         ->color(fn (): string => $this->recoveryCounts()['failed'] > 0 ? 'danger' : 'gray'),
                     TextEntry::make('recovery_blocked')
-                        ->label('Blocked')
+                        ->label('已阻塞')
                         ->state(fn (): int => $this->recoveryCounts()['blocked'])
                         ->badge()
                         ->color(fn (): string => $this->recoveryCounts()['blocked'] > 0 ? 'danger' : 'gray'),
                     TextEntry::make('recovery_recoverable')
-                        ->label('Recoverable')
+                        ->label('可恢复')
                         ->state(fn (): int => $this->recoveryCounts()['recoverable'])
                         ->badge()
                         ->color(fn (): string => $this->recoveryCounts()['recoverable'] > 0 ? 'warning' : 'gray'),
                     TextEntry::make('recovery_needs_attention')
-                        ->label('Needs Attention')
+                        ->label('需要关注')
                         ->state(fn (): int => $this->recoveryCounts()['needs_attention'])
                         ->badge()
                         ->color(fn (): string => $this->recoveryCounts()['needs_attention'] > 0 ? 'warning' : 'gray'),
@@ -95,12 +95,12 @@ class Generation extends Page implements HasTable
     {
         return [
             Action::make('resumeNext')
-                ->label('Resume')
+                ->label('继续执行')
                 ->icon('heroicon-o-play')
                 ->visible(fn (): bool => $this->nextRecoverableRun() !== null)
                 ->action(fn () => $this->resumeNext()),
             Action::make('retryNext')
-                ->label('Retry')
+                ->label('重试')
                 ->icon('heroicon-o-arrow-path')
                 ->color('warning')
                 ->visible(fn (): bool => $this->nextRetryableRun() !== null)
@@ -108,7 +108,7 @@ class Generation extends Page implements HasTable
                 ->modalDescription('按失败 Run 已冻结的路由、容量和请求预算重试；已经成功的 Artifact 会保留。')
                 ->action(fn () => $this->retryNext()),
             Action::make('restartNext')
-                ->label('Restart')
+                ->label('重启')
                 ->icon('heroicon-o-arrow-path-rounded-square')
                 ->color('warning')
                 ->visible(fn (): bool => $this->nextRestartableRun() !== null)
@@ -116,12 +116,12 @@ class Generation extends Page implements HasTable
                 ->modalDescription('按当前 Summary Route 与请求预算创建新的冻结合同；旧 Run、旧 Plan 和 Canonical Artifact 保持不变。')
                 ->action(fn () => $this->restartNext()),
             Action::make('openReview')
-                ->label('Open Review')
+                ->label('审校')
                 ->icon('heroicon-o-inbox')
                 ->color('gray')
                 ->url(ReviewPage::getUrl()),
             Action::make('openContext')
-                ->label('Open Context')
+                ->label('内容')
                 ->icon('heroicon-o-document-magnifying-glass')
                 ->color('gray')
                 ->visible(fn (): bool => $this->contextRun() !== null)
@@ -178,7 +178,7 @@ class Generation extends Page implements HasTable
                     ->placeholder('—')
                     ->toggleable(),
                 TextColumn::make('provider')
-                    ->label('Provider')
+                    ->label('服务商')
                     ->formatStateUsing(fn (?string $state): string => $state === null ? '旧记录未保存 Provider' : $state)
                     ->badge()
                     ->color('gray'),
@@ -216,7 +216,7 @@ class Generation extends Page implements HasTable
                     ->modalCancelActionLabel('关闭')
                     ->schema($this->runInspectorSchema()),
                 Action::make('retry')
-                    ->label('Retry')
+                    ->label('重试')
                     ->icon('heroicon-o-arrow-path')
                     ->color('warning')
                     ->visible(fn (GenerationRun $record): bool => $this->canRetry($record))
@@ -224,12 +224,12 @@ class Generation extends Page implements HasTable
                     ->modalDescription(fn (GenerationRun $record): string => '将按冻结合同重试 '.$record->stage->getLabel().'，不会读取后台刚修改的模型路由或预算。')
                     ->action(fn (GenerationRun $record) => $this->dispatchRun($record, retry: true)),
                 Action::make('resume')
-                    ->label('Resume')
+                    ->label('继续执行')
                     ->icon('heroicon-o-play')
                     ->visible(fn (GenerationRun $record): bool => $this->canResume($record))
                     ->action(fn (GenerationRun $record) => $this->dispatchRun($record, retry: false)),
                 Action::make('recover')
-                    ->label('恢复')
+                    ->label('故障恢复')
                     ->icon('heroicon-o-arrow-path-rounded-square')
                     ->color('warning')
                     ->visible(fn (GenerationRun $record): bool => $this->canRecover($record))
@@ -246,7 +246,7 @@ class Generation extends Page implements HasTable
                             ->send();
                     }),
                 Action::make('restart')
-                    ->label('Restart')
+                    ->label('重启')
                     ->icon('heroicon-o-arrow-path-rounded-square')
                     ->color('warning')
                     ->visible(fn (GenerationRun $record): bool => $this->canRestart($record))
@@ -255,7 +255,7 @@ class Generation extends Page implements HasTable
                     ->modalDescription('创建新的 Summary 冻结合同并重新生成；不会修改旧 Plan、旧 Run 或 Canonical Artifact。')
                     ->action(fn (GenerationRun $record) => $this->restartRun($record)),
                 Action::make('openChapter')
-                    ->label('Open Chapter')
+                    ->label('章节')
                     ->icon('heroicon-o-arrow-top-right-on-square')
                     ->color('gray')
                     ->visible(fn (GenerationRun $record): bool => $record->chapter_id !== null)
@@ -282,7 +282,7 @@ class Generation extends Page implements HasTable
                 TextEntry::make('bible_version')->label('Bible Version')->placeholder('—'),
             ]),
             Section::make('冻结路由、容量与请求预算')
-                ->description('冻结合同决定 Retry 的实际边界；后台之后修改的模型配置不会覆盖这里的值。')
+                ->description('冻结合同决定重试的实际边界；后台之后修改的模型配置不会覆盖这里的值。')
                 ->columns(2)
                 ->schema([
                     TextEntry::make('frozen_provider')

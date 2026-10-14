@@ -43,7 +43,7 @@ class CreateAIModelPrice extends CreateRecord
             return;
         }
 
-        $this->addError('data.model', '该供应商、模型和币种的价格已经存在。');
+        $this->addError('data.model', '该服务商、模型和币种的价格已经存在。');
         $this->halt();
     }
 }

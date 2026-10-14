@@ -31,8 +31,8 @@ beforeEach(function () {
 test('ai and costs navigation exposes only provider connections and model prices', function () {
     Livewire::test(ListAIProviderConnections::class)
         ->assertOk()
-        ->assertSee('供应商连接')
-        ->assertSee('暂无供应商连接');
+        ->assertSee('服务商连接')
+        ->assertSee('暂无服务商连接');
 
     Livewire::test(ListAIModelPrices::class)
         ->assertOk()
@@ -217,6 +217,36 @@ test('model routes are maintained from the model price page and drive runtime re
         ->toBe('high')
         ->and(app(AiSettingsResolver::class)->resolve(AiStage::Embedding)->model)
         ->toBe('database-routed-model');
+});
+
+test('model route modal presents its stage and help text in chinese', function () {
+    $component = Livewire::test(ListAIModelPrices::class)
+        ->assertActionExists(
+            'configureModelRoutes',
+            fn ($action): bool => $action->getModalDescription() === '只影响之后创建的生成任务；运行中的任务继续使用已经冻结的服务商、模型和推理程度。全书大纲模型必须先在模型价格记录中填写已核实容量并开启必要能力。',
+        )
+        ->mountAction('configureModelRoutes');
+
+    foreach ([
+        AiStage::OutlineFoundation->value => '全书大纲 · 基础设定',
+        AiStage::OutlineStructure->value => '全书大纲 · 整体结构',
+        AiStage::OutlineArcBeats->value => '全书大纲 · 故事线节点',
+        AiStage::OutlineBeatDetail->value => '全书大纲 · 节点细化',
+    ] as $stage => $label) {
+        $component
+            ->assertSchemaComponentExists(
+                "routes.{$stage}.model_price_id",
+                null,
+                fn ($schemaComponent): bool => $schemaComponent->getLabel() === $label.'模型',
+            )
+            ->assertSchemaComponentExists(
+                "routes.{$stage}.reasoning_effort",
+                null,
+                fn ($schemaComponent): bool => $schemaComponent->getLabel() === $label.'推理程度'
+                    && $schemaComponent->getPlaceholder() === '服务商默认值'
+                    && ($schemaComponent->getChildComponents('below_content')[0] ?? null)?->getContent() === '仅对支持推理程度参数的服务商生效。',
+            );
+    }
 });
 
 test('saving the four outline fields creates four independent database route records', function () {

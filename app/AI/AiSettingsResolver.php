@@ -94,7 +94,7 @@ class AiSettingsResolver
             $provider = $hasProviderOverride ? strtolower(trim($providerOverride)) : $baseProvider;
             $model = $hasModelOverride ? trim($modelOverride) : $baseModel;
             $this->assertOutlineRouteConfigured($stage, $provider, $model);
-            // 只覆盖模型时沿用基础供应商；显式覆盖供应商时必须验证该供应商凭据。
+            // 只覆盖模型时沿用基础服务商；显式覆盖服务商时必须验证该服务商凭据。
             $this->assertProviderIsUsable(
                 $provider,
                 requireCredential: true,

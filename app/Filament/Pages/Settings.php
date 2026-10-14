@@ -144,7 +144,7 @@ class Settings extends Page
                 TextEntry::make('generation_settings_source')
                     ->label('配置来源')
                     ->state(fn (): string => $this->generationSettingsSource()),
-                Text::make('供应商连接在“AI 与成本 → 供应商连接”维护；模型、容量、价格和各阶段路由在“模型价格”维护。')
+                Text::make('服务商连接在“AI 与成本 → 服务商连接”维护；模型、容量、价格和各阶段路由在“模型价格”维护。')
                     ->color('gray'),
             ]);
     }

@@ -870,7 +870,7 @@ Outline 使用更严格的精确路由合同：`outline_foundation`、`outline_s
 
 每个 Provider Run 在创建时冻结唯一 `route_key`、Provider、Model、Reasoning Effort、Prompt Version、Schema Version 和输出预算；Job 必须从 Run Snapshot 构造 Provider，不能重试时重新路由。证据修复、Schema 修复或字数修复使用独立 Run 和路由，因此不会与正文 Writer 的冻结值混淆。`provider_run_mismatch` 必须在请求前报告冻结值与解析值。
 
-供应商连接、模型价格、容量、能力和全部 Stage 路由都在管理后台维护；运行时代码不再读取这些项目的环境兼容值。Outline、章节阶段与修复子阶段的请求预算、审校上下文预算、计价币种、费用硬上限和 Embedding 维度保存在 `system_settings.generation`；尚未保存时只使用应用内置初始值。修改这些设置只影响新建或 Restart 的任务，Resume 继续读取原 Run、Plan 或 Batch 中的冻结值。Embedding 维度必须与 PostgreSQL 列类型一致。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
+服务商连接、模型价格、容量、能力和全部 Stage 路由都在管理后台维护；运行时代码不再读取这些项目的环境兼容值。Outline、章节阶段与修复子阶段的请求预算、审校上下文预算、计价币种、费用硬上限和 Embedding 维度保存在 `system_settings.generation`；尚未保存时只使用应用内置初始值。修改这些设置只影响新建或 Restart 的任务，Resume 继续读取原 Run、Plan 或 Batch 中的冻结值。Embedding 维度必须与 PostgreSQL 列类型一致。历史实际调用以 `generation_runs.provider`、`generation_runs.model_policy`、`usage_records.provider` 和 `usage_records.model` 为准；Migration 前的 Run 允许 `provider = null`，界面明确显示为旧记录未保存 Provider。
 
 ## 23. Observability
 

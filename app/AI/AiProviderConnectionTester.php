@@ -13,7 +13,7 @@ class AiProviderConnectionTester
     public function test(AIProviderConnection $connection): array
     {
         if (! $connection->is_enabled || blank($connection->api_key)) {
-            throw new AiProviderException('provider_not_configured', '供应商连接未启用或 API Key 未配置。', false);
+            throw new AiProviderException('provider_not_configured', '服务商连接未启用或 API Key 未配置。', false);
         }
 
         try {
@@ -24,13 +24,13 @@ class AiProviderConnectionTester
                 ->timeout($connection->timeout)
                 ->get('/models');
         } catch (ConnectionException $exception) {
-            throw new AiProviderException('provider_connection_failed', '供应商连接失败：'.$exception->getMessage(), true, previous: $exception);
+            throw new AiProviderException('provider_connection_failed', '服务商连接失败：'.$exception->getMessage(), true, previous: $exception);
         }
 
         if ($response->failed()) {
             throw new AiProviderException(
                 'provider_http_error',
-                '供应商返回 HTTP '.$response->status().'。',
+                '服务商返回 HTTP '.$response->status().'。',
                 $response->status() === 429 || $response->serverError(),
                 $response->status(),
             );

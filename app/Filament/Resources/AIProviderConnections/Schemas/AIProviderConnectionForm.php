@@ -18,7 +18,7 @@ class AIProviderConnectionForm
             Section::make('连接设置')
                 ->schema([
                     Select::make('provider')
-                        ->label('供应商')
+                        ->label('服务商')
                         ->options(['openai' => 'OpenAI', 'deepseek' => 'DeepSeek'])
                         ->required()
                         ->native(false)
@@ -32,7 +32,7 @@ class AIProviderConnectionForm
                         ->url()
                         ->required()
                         ->maxLength(AiSettingsService::URL_MAX_LENGTH)
-                        ->helperText('填写供应商提供的 HTTP 或 HTTPS API Base URL。'),
+                        ->helperText('填写服务商提供的 HTTP 或 HTTPS API Base URL。'),
                     TextInput::make('api_key')
                         ->label('API 密钥')
                         ->password()

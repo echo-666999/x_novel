@@ -18,7 +18,7 @@ class AIProviderConnectionsTable
     {
         return $table
             ->columns([
-                TextColumn::make('provider')->label('供应商')->badge()->sortable(),
+                TextColumn::make('provider')->label('服务商')->badge()->sortable(),
                 TextColumn::make('name')->label('连接名称')->searchable()->sortable(),
                 TextColumn::make('base_url')->label('API 地址')->limit(48)->copyable(),
                 TextColumn::make('masked_key')->label('API 密钥')->state('••••••••'),
@@ -33,7 +33,7 @@ class AIProviderConnectionsTable
                     ->sortable(),
             ])
             ->defaultSort('provider')
-            ->emptyStateHeading('暂无供应商连接')
+            ->emptyStateHeading('暂无服务商连接')
             ->emptyStateDescription('创建 OpenAI 或 DeepSeek 连接，并保存加密 API Key。')
             ->emptyStateIcon('heroicon-o-server-stack')
             ->recordActions([

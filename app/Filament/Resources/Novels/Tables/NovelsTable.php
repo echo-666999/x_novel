@@ -75,7 +75,7 @@ class NovelsTable
                         : null)
                     ->requiresConfirmation()
                     ->modalHeading(fn (Novel $record): string => "永久删除《{$record->title}》？")
-                    ->modalDescription('将物理删除整部小说及全部正文、Outline、Canonical State、记忆和生成追踪数据。成功后只能从数据库备份恢复。')
+                    ->modalDescription('将物理删除整部小说及全部正文、小说大纲、正式故事状态、记忆和生成追踪数据。成功后只能从数据库备份恢复。')
                     ->modalSubmitActionLabel('确认永久删除整部小说')
                     ->modalWidth('4xl')
                     ->fillForm(fn (Novel $record, DeleteNovelAction $delete): array => [
@@ -88,28 +88,28 @@ class NovelsTable
                             ->description('以下记录将从数据库物理删除，不保留应用内恢复入口。')
                             ->columns(4)
                             ->schema([
-                                TextEntry::make('impact.outlines')->label('Outlines'),
-                                TextEntry::make('impact.outline_volumes')->label('Outline Volumes'),
-                                TextEntry::make('impact.outline_arcs')->label('Outline Arcs'),
-                                TextEntry::make('impact.outline_beats')->label('Outline Beats'),
-                                TextEntry::make('impact.outline_milestones')->label('Milestones'),
-                                TextEntry::make('impact.volumes')->label('Volumes'),
-                                TextEntry::make('impact.story_arcs')->label('Story Arcs'),
-                                TextEntry::make('impact.chapters')->label('Chapters'),
-                                TextEntry::make('impact.plans')->label('Plans'),
-                                TextEntry::make('impact.scenes')->label('Scenes'),
-                                TextEntry::make('impact.state_versions')->label('State Versions'),
-                                TextEntry::make('impact.events')->label('Events'),
-                                TextEntry::make('impact.facts')->label('Facts'),
-                                TextEntry::make('impact.memories')->label('Memories'),
-                                TextEntry::make('impact.characters')->label('Characters'),
-                                TextEntry::make('impact.world_entities')->label('World Entities'),
-                                TextEntry::make('impact.foreshadowings')->label('Foreshadowings'),
-                                TextEntry::make('impact.runs')->label('Runs'),
-                                TextEntry::make('impact.artifacts')->label('Artifacts'),
-                                TextEntry::make('impact.reviews')->label('Reviews'),
-                                TextEntry::make('impact.usage')->label('Usage'),
-                                TextEntry::make('impact.bibles')->label('Bibles'),
+                                TextEntry::make('impact.outlines')->label('小说大纲'),
+                                TextEntry::make('impact.outline_volumes')->label('大纲分卷'),
+                                TextEntry::make('impact.outline_arcs')->label('大纲故事线'),
+                                TextEntry::make('impact.outline_beats')->label('大纲节点'),
+                                TextEntry::make('impact.outline_milestones')->label('里程碑'),
+                                TextEntry::make('impact.volumes')->label('分卷'),
+                                TextEntry::make('impact.story_arcs')->label('故事线'),
+                                TextEntry::make('impact.chapters')->label('章节'),
+                                TextEntry::make('impact.plans')->label('章节计划'),
+                                TextEntry::make('impact.scenes')->label('场景'),
+                                TextEntry::make('impact.state_versions')->label('故事状态版本'),
+                                TextEntry::make('impact.events')->label('故事事件'),
+                                TextEntry::make('impact.facts')->label('事实'),
+                                TextEntry::make('impact.memories')->label('记忆'),
+                                TextEntry::make('impact.characters')->label('人物'),
+                                TextEntry::make('impact.world_entities')->label('世界实体'),
+                                TextEntry::make('impact.foreshadowings')->label('伏笔'),
+                                TextEntry::make('impact.runs')->label('生成记录'),
+                                TextEntry::make('impact.artifacts')->label('生成产物'),
+                                TextEntry::make('impact.reviews')->label('审校记录'),
+                                TextEntry::make('impact.usage')->label('AI 用量'),
+                                TextEntry::make('impact.bibles')->label('小说圣经'),
                             ]),
                         TextInput::make('expected_title')
                             ->label('输入完整小说标题确认')

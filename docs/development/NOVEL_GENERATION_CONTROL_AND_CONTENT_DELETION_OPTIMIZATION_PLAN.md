@@ -393,7 +393,7 @@ flowchart TD
 - 每阶段都创建独立 Generation Run 和不可变 Artifact；Foundation、Skeleton、每个 Beat Detail 都有独立 `input_hash` 和幂等键。
 - 重复投递先查找相同输入的成功 Artifact；命中后直接进入下一阶段，不再次调用 Provider。
 - 某个 Beat Detail 失败时只重试该 Beat，不重做 Foundation、Skeleton 或已经成功的其他 Beat。
-- 如果 Provider 已接受请求但 Worker 在保存 Artifact 前崩溃，系统不能伪称已经实现外部请求 Exactly-once：供应商明确支持幂等键或按 Request ID 查询时才自动对账；否则只允许重试当前阶段，并在 Run 中记录 `provider_outcome_unknown`，最终 Outline 的数据库写入仍必须保持幂等。
+- 如果 Provider 已接受请求但 Worker 在保存 Artifact 前崩溃，系统不能伪称已经实现外部请求 Exactly-once：服务商明确支持幂等键或按 Request ID 查询时才自动对账；否则只允许重试当前阶段，并在 Run 中记录 `provider_outcome_unknown`，最终 Outline 的数据库写入仍必须保持幂等。
 - Pause 后不得派发新阶段；已经返回的结果可以保存为 Artifact，但 Finalize 和采用必须停止。
 - Worker Crash 后由数据库中的 Run/Artifact 判断缺失阶段并恢复，不能只依赖 Redis 中是否还有 Job。
 - 任一阶段输出截断、Schema 无效或引用不一致时，不得创建任何 Draft Outline 关系记录。
@@ -1346,7 +1346,7 @@ Rollback / Recovery
 
 - 把现有单次全量 `NovelPlanner::generate()` 拆为 Foundation、Skeleton、单 Main Beat Detail 和 Finalize。
 - `GenerateNovelOutlineJob` 只负责创建或恢复规划批次并派发下一缺失阶段。
-- 主 Generation Run 冻结整个批次的 Provider、Model、Reasoning Effort 和阶段 Prompt Versions；所有子阶段必须复用冻结配置，防止批次中途切换供应商或模型。
+- 主 Generation Run 冻结整个批次的 Provider、Model、Reasoning Effort 和阶段 Prompt Versions；所有子阶段必须复用冻结配置，防止批次中途切换服务商或模型。
 - 子阶段使用固定 `scope_type` 并以主 Run ID 作为 `scope_id`；继续复用 `GenerationStage::ChapterPlanning`。
 - Foundation、Skeleton、每个 Beat Detail 使用独立 Generation Run、Prompt Version、`input_hash`、幂等键和不可变 Artifact。
 - Foundation 只保存初始化候选 Artifact；不得提前创建正式 Bible、人物、世界实体或伏笔。

@@ -14,7 +14,7 @@ class AIModelPricesTable
     {
         return $table
             ->columns([
-                TextColumn::make('provider')->label('供应商')->badge()->searchable()->sortable(),
+                TextColumn::make('provider')->label('服务商')->badge()->searchable()->sortable(),
                 TextColumn::make('model')->label('模型')->searchable()->sortable(),
                 TextColumn::make('currency')->label('币种')->badge(),
                 TextColumn::make('billing_unit')->label('计费单位')->numeric()->sortable(),
@@ -29,7 +29,7 @@ class AIModelPricesTable
             ])
             ->defaultSort('model')
             ->emptyStateHeading('暂无模型价格')
-            ->emptyStateDescription('为实际使用的供应商模型配置 Token 价格。')
+            ->emptyStateDescription('为实际使用的服务商模型配置 Token 价格。')
             ->emptyStateIcon('heroicon-o-currency-dollar')
             ->recordActions([
                 EditAction::make(),
