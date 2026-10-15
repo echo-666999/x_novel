@@ -187,7 +187,10 @@ function completeNovelPipelineOutlineResponses(): array
         $structureVolume = collect($volume)->only(['key', 'title', 'goal', 'climax', 'target_words'])->all();
         $structureVolume['arcs'] = [];
         foreach ($volume['arcs'] as $arc) {
-            $structureVolume['arcs'][] = collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all();
+            $structureVolume['arcs'][] = [
+                ...collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all(),
+                'chapter_weight' => $arc['type'] === 'main' ? min(100, count($arc['beats'])) : 0,
+            ];
             $arcResponse = ['arc_key' => $arc['key'], 'beats' => []];
             foreach ($arc['beats'] as $beat) {
                 $milestones = $beat['milestones'];

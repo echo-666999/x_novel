@@ -31,13 +31,13 @@ class ResumeNovelOutlineGenerationAction
             if ($lockedBatch->status !== RunStatus::Failed) {
                 throw ValidationException::withMessages(['run' => '只有 failed Outline 主批次可以继续生成。']);
             }
+
+            $this->pipeline->assertNovelPlanningAvailable($lockedNovel);
+            $this->pipeline->assertResumeCompatible($lockedBatch);
             if (! $this->failurePolicy->allowsFrozenResume($lockedBatch)) {
                 // Resume 必须复用冻结路由；配置或预算类失败要修复配置后创建新批次。
                 throw ValidationException::withMessages(['run' => '当前失败不能继续冻结批次，请修复配置后重新生成候选。']);
             }
-
-            $this->pipeline->assertNovelPlanningAvailable($lockedNovel);
-            $this->pipeline->assertResumeCompatible($lockedBatch);
 
             $otherActiveBatch = GenerationRun::query()
                 ->where('novel_id', $lockedNovel->getKey())

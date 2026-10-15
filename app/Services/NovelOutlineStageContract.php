@@ -56,6 +56,7 @@ final class NovelOutlineStageContract
         $arc = $this->object([
             'key' => ['type' => 'string', 'pattern' => '^arc-[0-9]{2,}$', 'maxLength' => 64],
             'type' => ['type' => 'string', 'enum' => ['main', 'subplot'], 'maxLength' => self::MAX_SHORT_TEXT_LENGTH],
+            'chapter_weight' => ['type' => 'integer', 'minimum' => 0, 'maximum' => 100],
             'title' => $this->shortText(),
             'goal' => $this->text(),
             'stakes' => $this->text(),
@@ -172,9 +173,10 @@ final class NovelOutlineStageContract
             'volumes.*.climax' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'volumes.*.target_words' => ['required', 'integer', 'min:1'],
             'volumes.*.arcs' => ['required', 'array', 'min:1', 'max:'.self::MAX_ARCS_PER_VOLUME],
-            'volumes.*.arcs.*' => ['array:key,type,title,goal,stakes,completion_conditions'],
+            'volumes.*.arcs.*' => ['array:key,type,chapter_weight,title,goal,stakes,completion_conditions'],
             'volumes.*.arcs.*.key' => ['required', 'string', 'max:64', 'regex:/^arc-[0-9]{2,}$/'],
             'volumes.*.arcs.*.type' => ['required', Rule::in(['main', 'subplot'])],
+            'volumes.*.arcs.*.chapter_weight' => ['required', 'integer', 'between:0,100'],
             'volumes.*.arcs.*.title' => ['required', 'string', 'max:'.self::MAX_SHORT_TEXT_LENGTH],
             'volumes.*.arcs.*.goal' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
             'volumes.*.arcs.*.stakes' => ['required', 'string', 'max:'.self::MAX_TEXT_LENGTH],
@@ -189,6 +191,12 @@ final class NovelOutlineStageContract
             $volume['sequence'] = $volumeIndex + 1;
             foreach ($volume['arcs'] as $arcIndex => &$arc) {
                 $this->assertUniqueKey((string) $arc['key'], $arcKeys, 'Arc');
+                if (($arc['type'] === 'main' && (int) $arc['chapter_weight'] < 1)
+                    || ($arc['type'] === 'subplot' && (int) $arc['chapter_weight'] !== 0)) {
+                    throw ValidationException::withMessages([
+                        "volumes.{$volumeIndex}.arcs.{$arcIndex}.chapter_weight" => 'Main Arc 的 chapter_weight 必须为 1 至 100；Subplot 必须为 0。',
+                    ]);
+                }
                 $arc['sequence'] = $arcIndex + 1;
             }
             unset($arc);
@@ -307,6 +315,8 @@ final class NovelOutlineStageContract
 
         $targetVolumeContract = collect($lengthContract['volumes'] ?? [])
             ->firstWhere('volume_key', $targetArc['volume_key']);
+        $targetArcAllocation = collect(is_array($targetVolumeContract) ? ($targetVolumeContract['main_arc_allocations'] ?? []) : [])
+            ->firstWhere('arc_key', $targetArcKey);
 
         return [
             'foundation_summary' => $this->foundationSummary(
@@ -319,13 +329,16 @@ final class NovelOutlineStageContract
             ]),
             'length_contract' => $lengthContract === [] ? null : [
                 ...Arr::except($lengthContract, ['volumes']),
-                'target_volume' => $targetVolumeContract,
+                'target_volume' => is_array($targetVolumeContract)
+                    ? Arr::except($targetVolumeContract, ['main_arc_allocations'])
+                    : null,
+                'target_arc' => $targetArcAllocation,
                 'budget_accounting' => ($targetArc['type'] ?? null) === 'main'
-                    ? 'mainline_budget_must_cover_target_volume_chapters'
+                    ? 'mainline_budget_must_cover_target_arc_chapters'
                     : 'subplot_budget_may_share_mainline_chapters',
             ],
             'target_arc' => Arr::only($targetArc, [
-                'key', 'sequence', 'type', 'title', 'goal', 'stakes', 'completion_conditions',
+                'key', 'sequence', 'type', 'chapter_weight', 'title', 'goal', 'stakes', 'completion_conditions',
             ]),
             'adjacent_arcs' => [
                 'previous' => $targetIndex > 0 ? $this->arcSummary($arcs[$targetIndex - 1]) : null,

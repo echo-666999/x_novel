@@ -327,6 +327,23 @@ test('historical v4 outline progress still reads its frozen per stage route', fu
         ->and($progress->reasoningEffort)->toBe('medium');
 });
 
+test('historical v5 budget batches remain visible but cannot resume under the v6 arc allocation contract', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Planning]);
+    ogrProgressBatch($novel, RunStatus::Failed, [
+        'prompt_version' => NovelOutlinePipeline::VOLUME_BUDGET_BATCH_CONTRACT_VERSION,
+        'error_code' => 'provider_timeout',
+        'error_message' => 'request timed out',
+        'error_retryable' => true,
+        'error_metadata' => ['category' => 'external_temporary'],
+    ]);
+
+    $progress = app(NovelOutlineProgressResolver::class)->resolve($novel);
+
+    expect($progress->provider)->toBe('openai')
+        ->and($progress->model)->toBe('gpt-test')
+        ->and($progress->canResume)->toBeFalse();
+});
+
 test('outline progress exposes structure and arc denominators only after their sources exist', function () {
     $novel = Novel::factory()->create();
     $batch = ogrProgressBatch($novel);
@@ -459,6 +476,22 @@ test('a retryable current child failure derives retrying and keeps raw provider 
         ->and($progress->errorMessage)->not->toContain('/vendor/')
         ->and($progress->technicalError)->toBe($rawError)
         ->and(data_get($failedReference, 'usage.input_tokens'))->toBe(120);
+});
+
+test('outline length contract failure has a specific message and cannot resume', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Planning]);
+    ogrProgressBatch($novel, RunStatus::Failed, [
+        'error_code' => 'outline_length_contract_invalid',
+        'error_message' => 'Main Arc arc-01 分配目标为 67 章，但 Beat 预算合计为 2 章。',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'domain_validation'],
+    ]);
+
+    $progress = app(NovelOutlineProgressResolver::class)->resolve($novel);
+
+    expect($progress->errorCode)->toBe('outline_length_contract_invalid')
+        ->and($progress->errorMessage)->toBe('全书字数、分卷或主线章节预算不一致，请修正篇幅分配后重新生成候选。')
+        ->and($progress->canResume)->toBeFalse();
 });
 
 test('terminal batch failure reports failed scope label and exact resume capability', function () {

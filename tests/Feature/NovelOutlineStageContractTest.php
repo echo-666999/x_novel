@@ -27,6 +27,7 @@ function ogrStructurePayload(): array
                 'arcs' => [[
                     'key' => 'arc-01',
                     'type' => 'main',
+                    'chapter_weight' => 100,
                     'title' => '逃离边城',
                     'goal' => '离开边城',
                     'stakes' => '失败将永久失去自由',
@@ -41,7 +42,8 @@ function ogrStructurePayload(): array
                 'target_words' => 120_000,
                 'arcs' => [[
                     'key' => 'arc-02',
-                    'type' => 'subplot',
+                    'type' => 'main',
+                    'chapter_weight' => 100,
                     'title' => '旧盟约',
                     'goal' => '修复盟友关系',
                     'stakes' => '失去进入遗迹的线索',
@@ -263,6 +265,26 @@ test('outline length contract rejects unallocated words and an unreachable mainl
         ->toThrow(ValidationException::class, 'Main Beat 预算合计');
 });
 
+test('volume chapter targets sum to the frozen novel target even when per-volume ceilings would overcount', function () {
+    $service = app(NovelOutlineLengthContract::class);
+    $structure = ogrStructurePayload();
+    $structure['volumes'][0]['target_words'] = 1;
+    $structure['volumes'][1]['target_words'] = 19;
+    $contract = $service->allocateStructure(
+        app(NovelOutlineStageContract::class)->validateStructure($structure, 2),
+        $service->freeze(20, 10, 2),
+    );
+
+    expect($contract['target_chapter_count'])->toBe(2)
+        ->and(array_column($contract['volumes'], 'target_chapter_count'))->toBe([1, 1])
+        ->and(array_sum(array_column($contract['volumes'], 'target_chapter_count')))->toBe(2);
+});
+
+test('length contract rejects more volumes than the novel can contain before provider work starts', function () {
+    expect(fn () => app(NovelOutlineLengthContract::class)->freeze(5_000, 3_000, 3))
+        ->toThrow(ValidationException::class, '无法为每卷分配至少一章');
+});
+
 test('arc beats rejects wrong target cross arc data provider owned keys invalid budgets and extra fields', function (callable $mutate, string $targetArcKey) {
     $contract = app(NovelOutlineStageContract::class);
     $structure = $contract->validateStructure(ogrStructurePayload(), 2);
@@ -314,7 +336,7 @@ test('arc beats context includes the target volume length contract without prior
         'title' => '遗迹守门人',
     ];
     $structure = $contract->validateStructure($structurePayload, 2);
-    $length = app(NovelOutlineLengthContract::class)->validateStructure(
+    $length = app(NovelOutlineLengthContract::class)->allocateStructure(
         $structure,
         app(NovelOutlineLengthContract::class)->freeze(220_000, 10_000, 2),
     );
@@ -342,7 +364,12 @@ test('arc beats context includes the target volume length contract without prior
             'target_words' => 100_000,
             'target_chapter_count' => 10,
         ])
-        ->and(data_get($context, 'length_contract.budget_accounting'))->toBe('mainline_budget_must_cover_target_volume_chapters')
+        ->and(data_get($context, 'length_contract.target_arc'))->toBe([
+            'arc_key' => 'arc-01',
+            'chapter_weight' => 100,
+            'target_chapter_count' => 10,
+        ])
+        ->and(data_get($context, 'length_contract.budget_accounting'))->toBe('mainline_budget_must_cover_target_arc_chapters')
         ->and($context['target_arc']['key'])->toBe('arc-01')
         ->and($context['adjacent_arcs']['previous'])->toBeNull()
         ->and($context['adjacent_arcs']['next']['key'])->toBe('arc-02')
@@ -350,6 +377,48 @@ test('arc beats context includes the target volume length contract without prior
         ->and(json_encode($context, JSON_THROW_ON_ERROR))->not->toContain('arc-03')
         ->not->toContain('beat-01')
         ->not->toContain('"volumes"');
+});
+
+test('structure deterministically allocates a volume chapter target across multiple main arcs', function () {
+    $service = app(NovelOutlineLengthContract::class);
+    $structure = ogrStructurePayload();
+    $structure['volumes'][0]['arcs'][0]['chapter_weight'] = 2;
+    $structure['volumes'][0]['arcs'][] = [
+        ...$structure['volumes'][0]['arcs'][0],
+        'key' => 'arc-03',
+        'chapter_weight' => 1,
+    ];
+    $contract = $service->allocateStructure(
+        app(NovelOutlineStageContract::class)->validateStructure($structure, 2),
+        $service->freeze(220_000, 10_000, 2),
+    );
+
+    expect(data_get($contract, 'volumes.0.main_arc_allocations'))->toBe([
+        ['arc_key' => 'arc-01', 'chapter_weight' => 2, 'target_chapter_count' => 6],
+        ['arc_key' => 'arc-03', 'chapter_weight' => 1, 'target_chapter_count' => 4],
+    ])
+        ->and(array_sum(array_column(data_get($contract, 'volumes.0.main_arc_allocations'), 'target_chapter_count')))->toBe(10);
+});
+
+test('arc beats budget must cover only the allocated target of its main arc', function () {
+    $service = app(NovelOutlineLengthContract::class);
+    $structure = ogrStructurePayload();
+    $structure['volumes'][0]['arcs'][0]['chapter_weight'] = 2;
+    $structure['volumes'][0]['arcs'][] = [
+        ...$structure['volumes'][0]['arcs'][0],
+        'key' => 'arc-03',
+        'chapter_weight' => 1,
+    ];
+    $validStructure = app(NovelOutlineStageContract::class)->validateStructure($structure, 2);
+    $contract = $service->allocateStructure($validStructure, $service->freeze(220_000, 10_000, 2));
+    $validBeats = app(NovelOutlineStageContract::class)->validateArcBeats(ogrArcBeatsPayload(), 'arc-01', $validStructure);
+    $validBeats['beats'][1]['chapter_budget']['max'] = 1;
+
+    expect(fn () => $service->validateArcBeats($validBeats, 'arc-01', $contract))
+        ->toThrow(ValidationException::class, '分配目标为 6 章');
+
+    $validBeats['beats'][1]['chapter_budget']['max'] = 2;
+    $service->validateArcBeats($validBeats, 'arc-01', $contract);
 });
 
 test('outline stage capacity is checked against frozen context and model output limits', function () {
@@ -384,10 +453,10 @@ test('outline provider prompts use the central resolver and preserve determinist
     $versions = app(PromptVersionResolver::class);
 
     expect($versions->resolve(AiStage::OutlineFoundation))->toBe('novel-outline-foundation-v6+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v5+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v7+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v6+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v8+natural-planning-v3')
         ->and($versions->resolve(AiStage::OutlineBeatDetail))->toBe('novel-outline-beat-detail-v6+natural-planning-v3')
-        ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION)->toBe('novel-outline-skeleton-assembly-v4')
+        ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION)->toBe('novel-outline-skeleton-assembly-v5')
         ->and(NovelOutlinePipeline::LEGACY_SKELETON_PROMPT_VERSION)->toBe('novel-outline-skeleton-v1')
         ->and(ArtifactType::OutlineStructure->value)->toBe('outline_structure')
         ->and(ArtifactType::OutlineArcBeats->value)->toBe('outline_arc_beats');

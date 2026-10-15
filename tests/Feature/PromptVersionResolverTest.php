@@ -7,8 +7,8 @@ use App\Enums\AiStage;
 test('prompt versions follow the documented convention', function () {
     expect(app(PromptVersionResolver::class)->all())->toBe([
         'outline_foundation' => 'novel-outline-foundation-v6+natural-planning-v3',
-        'outline_structure' => 'novel-outline-structure-v5+natural-planning-v3',
-        'outline_arc_beats' => 'novel-outline-arc-beats-v7+natural-planning-v3',
+        'outline_structure' => 'novel-outline-structure-v6+natural-planning-v3',
+        'outline_arc_beats' => 'novel-outline-arc-beats-v8+natural-planning-v3',
         'outline_beat_detail' => 'novel-outline-beat-detail-v6+natural-planning-v3',
         'planner' => 'chapter-planner-v12+natural-planning-v3',
         'writer' => 'scene-writer-v16+natural-writing-v3',
@@ -24,8 +24,8 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
 })->with([
     'planner' => [AiStage::Planner, 'chapter-planner-v12+natural-planning-v3'],
     'outline foundation' => [AiStage::OutlineFoundation, 'novel-outline-foundation-v6+natural-planning-v3'],
-    'outline structure' => [AiStage::OutlineStructure, 'novel-outline-structure-v5+natural-planning-v3'],
-    'outline arc beats' => [AiStage::OutlineArcBeats, 'novel-outline-arc-beats-v7+natural-planning-v3'],
+    'outline structure' => [AiStage::OutlineStructure, 'novel-outline-structure-v6+natural-planning-v3'],
+    'outline arc beats' => [AiStage::OutlineArcBeats, 'novel-outline-arc-beats-v8+natural-planning-v3'],
     'outline beat detail' => [AiStage::OutlineBeatDetail, 'novel-outline-beat-detail-v6+natural-planning-v3'],
     'writer' => [AiStage::Writer, 'scene-writer-v16+natural-writing-v3'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v9'],

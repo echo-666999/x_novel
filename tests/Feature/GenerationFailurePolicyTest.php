@@ -3,6 +3,7 @@
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
+use App\Exceptions\OutlineLengthContractException;
 use App\Models\GenerationRun;
 use App\Services\GenerationFailurePolicy;
 use Illuminate\Database\QueryException;
@@ -83,6 +84,60 @@ test('outline worker contract mismatch requires a worker restart but keeps the f
     expect($failure->metadata['category'])->toBe('worker_version_mismatch')
         ->and($failure->recommendedAction)->toBe('重启 Horizon 后继续')
         ->and(app(GenerationFailurePolicy::class)->allowsFrozenResume($run))->toBeTrue();
+});
+
+test('outline resume only accepts temporary failures and honors the persisted category', function () {
+    $temporary = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'queue_dispatch_failed',
+        'error_retryable' => true,
+        'error_metadata' => ['category' => 'infrastructure_temporary'],
+    ]);
+    $domain = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'outline_stage_failed',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'domain_validation'],
+    ]);
+    $structured = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_invalid_json_response',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'structured_output'],
+    ]);
+    $manual = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => 'unexpected_outline_failure',
+        'error_retryable' => false,
+        'error_metadata' => ['category' => 'manual_attention'],
+    ]);
+    $policy = app(GenerationFailurePolicy::class);
+
+    expect($policy->allowsFrozenResume($temporary))->toBeTrue()
+        ->and($policy->allowsFrozenResume($domain))->toBeFalse()
+        ->and($policy->allowsFrozenResume($structured))->toBeFalse()
+        ->and($policy->allowsFrozenResume($manual))->toBeFalse();
+});
+
+test('outline length contract failures use a dedicated non resumable error code', function () {
+    $exception = OutlineLengthContractException::withMessages([
+        'length_contract' => '主线章节预算未覆盖冻结目标。',
+    ]);
+    $policy = app(GenerationFailurePolicy::class);
+    $failure = $policy->fromException($exception, 'outline_stage_domain_validation_failed');
+    $run = GenerationRun::factory()->create([
+        'status' => RunStatus::Failed,
+        'error_code' => $failure->code,
+        'error_message' => $failure->message,
+        'error_retryable' => $failure->retryable,
+        'error_metadata' => $failure->metadata,
+    ]);
+
+    expect($failure->code)->toBe(OutlineLengthContractException::ERROR_CODE)
+        ->and($failure->retryable)->toBeFalse()
+        ->and($failure->metadata['category'])->toBe('domain_validation')
+        ->and($failure->recommendedAction)->toBe('修正大纲篇幅分配后重新生成候选')
+        ->and($policy->allowsFrozenResume($run))->toBeFalse();
 });
 
 test('exhausted structured output budget recommends changing the model route or budget', function () {

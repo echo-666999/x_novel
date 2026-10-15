@@ -7,6 +7,7 @@ use App\Data\GenerationFailure;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Exceptions\ChapterPipelineProgressionException;
+use App\Exceptions\OutlineLengthContractException;
 use App\Models\GenerationRun;
 use Illuminate\Database\QueryException;
 use Illuminate\Validation\ValidationException;
@@ -15,12 +16,13 @@ use Throwable;
 
 final class GenerationFailurePolicy
 {
-    /** 冻结配置本身导致的失败，原批次 Resume 不可能读取修正后的新配置。 */
-    private const FROZEN_RESUME_BLOCKED_CATEGORIES = [
-        'provider_configuration',
-        'reasoning_budget_exhausted',
-        'visible_output_truncated',
-        'completion_budget_exhausted',
+    /** 只有不改变冻结输入即可恢复的临时故障，才允许继续同一 Outline 批次。 */
+    private const FROZEN_RESUME_ALLOWED_CATEGORIES = [
+        'external_temporary',
+        'infrastructure_temporary',
+        'worker_lost',
+        'worker_version_mismatch',
+        'workflow_deferred',
     ];
 
     private const LEGACY_RETRYABLE_CODES = [
@@ -33,10 +35,16 @@ final class GenerationFailurePolicy
 
     public function fromException(Throwable $exception, string $fallbackCode): GenerationFailure
     {
-        $code = $exception instanceof AiProviderException ? $exception->errorCode : $fallbackCode;
-        $retryable = $exception instanceof AiProviderException
-            ? $exception->retryable
-            : $exception instanceof QueryException || $exception instanceof RedisException;
+        $code = match (true) {
+            $exception instanceof AiProviderException => $exception->errorCode,
+            $exception instanceof OutlineLengthContractException => OutlineLengthContractException::ERROR_CODE,
+            default => $fallbackCode,
+        };
+        $retryable = match (true) {
+            $exception instanceof AiProviderException => $exception->retryable,
+            $exception instanceof OutlineLengthContractException => false,
+            default => $exception instanceof QueryException || $exception instanceof RedisException,
+        };
         $status = $exception instanceof AiProviderException ? $exception->statusCode : null;
         $requestId = $exception instanceof AiProviderException ? $exception->providerRequestId : null;
 
@@ -170,11 +178,10 @@ final class GenerationFailurePolicy
 
     public function allowsFrozenResume(GenerationRun $run): bool
     {
-        $metadata = is_array($run->error_metadata) ? $run->error_metadata : [];
-        $status = is_numeric($metadata['http_status'] ?? null) ? (int) $metadata['http_status'] : null;
-        $category = $this->category((string) ($run->error_code ?: 'generation_failed'), $status);
+        $failure = $this->forRun($run);
+        $category = $failure->metadata['category'] ?? 'manual_attention';
 
-        return ! in_array($category, self::FROZEN_RESUME_BLOCKED_CATEGORIES, true);
+        return in_array($category, self::FROZEN_RESUME_ALLOWED_CATEGORIES, true);
     }
 
     public function allowsFrozenChapterResume(GenerationRun $run): bool
@@ -200,6 +207,9 @@ final class GenerationFailurePolicy
 
     private function category(string $code, ?int $status = null, ?Throwable $exception = null): string
     {
+        if ($code === OutlineLengthContractException::ERROR_CODE) {
+            return 'domain_validation';
+        }
         if ($code === 'outline_worker_contract_mismatch') {
             return 'worker_version_mismatch';
         }
@@ -242,6 +252,9 @@ final class GenerationFailurePolicy
 
     private function recommendedAction(string $code, bool $retryable, ?int $status): string
     {
+        if ($code === OutlineLengthContractException::ERROR_CODE) {
+            return '修正大纲篇幅分配后重新生成候选';
+        }
         if ($code === 'outline_worker_contract_mismatch') {
             return '重启 Horizon 后继续';
         }

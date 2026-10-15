@@ -64,8 +64,11 @@ class NovelOutlinePipeline
     /** v4 多路由主批次合同；仅保留历史展示，旧冻结 Prompt 不得按新合同恢复。 */
     public const MULTI_ROUTE_BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v4';
 
-    /** 当前 v5 合同冻结跨阶段字数与章节预算；变化会创建新的批次输入身份。 */
-    public const BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v5';
+    /** v5 按卷汇总章节预算；仅保留历史展示，不能按新的 Arc 局部预算合同恢复。 */
+    public const VOLUME_BUDGET_BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v5';
+
+    /** 当前 v6 合同由 Structure 分配 Main Arc 章节目标，并在 Arc Beats 阶段就地校验。 */
+    public const BATCH_CONTRACT_VERSION = 'novel-outline-pipeline-v6';
 
     /** 旧 v2 批次使用的 Skeleton Provider Prompt；历史文本与版本必须保持不变。 */
     public const LEGACY_SKELETON_PROMPT_VERSION = 'novel-outline-skeleton-v1';
@@ -74,10 +77,10 @@ class NovelOutlinePipeline
     public const LEGACY_FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v1';
 
     /** Finalize 不调用 Provider，该版本标识字数合同与伏笔 Arc 归属的蓝图合并边界。 */
-    public const FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v3';
+    public const FINALIZE_CONTRACT_VERSION = 'novel-outline-finalize-v4';
 
     /** Structure 与各 Arc Beats 的确定性组装算法版本；Structure 辅助映射不会进入 Skeleton。 */
-    public const SKELETON_ASSEMBLY_ALGORITHM_VERSION = 'novel-outline-skeleton-assembly-v4';
+    public const SKELETON_ASSEMBLY_ALGORITHM_VERSION = 'novel-outline-skeleton-assembly-v5';
 
     public const SKELETON_MAX_TOKENS = 12_000;
 
@@ -619,7 +622,7 @@ class NovelOutlinePipeline
             outputName: 'novel_outline_structure',
             validate: function (array $data) use ($volumeCount, $foreshadowingCount, $batch): array {
                 $valid = $this->stageContract->validateStructure($data, $volumeCount, $foreshadowingCount);
-                $this->lengthContract->validateStructure($valid, $this->batchLengthContract($batch));
+                $this->lengthContract->allocateStructure($valid, $this->batchLengthContract($batch));
 
                 return $valid;
             },
@@ -635,11 +638,15 @@ class NovelOutlinePipeline
         $foundation = $this->requiredArtifact($batch, ArtifactType::OutlineFoundation);
         $structure = $this->requiredCurrentStructure($batch);
         $structureData = $this->payload($structure);
+        $allocatedLengthContract = $this->lengthContract->allocateStructure(
+            $structureData,
+            $this->batchLengthContract($batch),
+        );
         $modelContext = $this->stageContract->arcBeatsContext(
             $this->payload($foundation),
             $structureData,
             $arcKey,
-            $this->lengthContract->validateStructure($structureData, $this->batchLengthContract($batch)),
+            $allocatedLengthContract,
         );
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = $this->arcBeatsSystemPrompt();
@@ -656,7 +663,12 @@ class NovelOutlinePipeline
             prompt: $prompt,
             schema: $schema,
             outputName: 'novel_outline_arc_beats',
-            validate: fn (array $data): array => $this->stageContract->validateArcBeats($data, $arcKey, $structureData),
+            validate: function (array $data) use ($arcKey, $structureData, $allocatedLengthContract): array {
+                $valid = $this->stageContract->validateArcBeats($data, $arcKey, $structureData);
+                $this->lengthContract->validateArcBeats($valid, $arcKey, $allocatedLengthContract);
+
+                return $valid;
+            },
             sourceArtifacts: [$foundation, $structure],
             discriminator: $arcKey,
         );
@@ -685,7 +697,7 @@ class NovelOutlinePipeline
             'structure' => $this->artifactReference($structure),
             'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
         ];
-        $structureLengthContract = $this->lengthContract->validateStructure($structureData, $this->batchLengthContract($batch));
+        $structureLengthContract = $this->lengthContract->allocateStructure($structureData, $this->batchLengthContract($batch));
         $inputHash = $this->hash([
             'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
             'sources' => $sourceReferences,
@@ -712,23 +724,6 @@ class NovelOutlinePipeline
             ]);
         }
 
-        $this->assertStageArtifact($batch, $foundation, ArtifactType::OutlineFoundation, self::FOUNDATION_SCOPE);
-        $this->assertStageArtifact($batch, $structure, ArtifactType::OutlineStructure, self::STRUCTURE_SCOPE, null, $this->structureInputHash($batch, $foundation));
-        foreach ($arcArtifacts as $arcKey => $arcArtifact) {
-            $this->assertStageArtifact($batch, $arcArtifact, ArtifactType::OutlineArcBeats, self::ARC_BEATS_SCOPE, $arcKey, $this->arcBeatsInputHash($batch, $foundation, $structure, $arcKey));
-        }
-
-        // 伏笔归属是 Structure 到最终 Blueprint 的合并元数据，不属于标准 Outline 层级。
-        $skeleton = collect($structureData)->except('foreshadowing_owner_arc_keys')->all();
-        foreach ($skeleton['volumes'] as &$volume) {
-            foreach ($volume['arcs'] as &$arc) {
-                $arc['beats'] = $this->payload($arcArtifacts[(string) $arc['key']])['beats'];
-            }
-            unset($arc);
-        }
-        unset($volume);
-        $skeleton = $this->validateSkeleton($skeleton, (int) data_get($batch->context_snapshot, 'requested_volume_count'));
-        $lengthContract = $this->lengthContract->complete($skeleton, $this->batchLengthContract($batch));
         $attempt = ((int) $runs->clone()->max('attempt')) + 1;
         $run = GenerationRun::query()->create([
             'novel_id' => $batch->novel_id,
@@ -746,12 +741,39 @@ class NovelOutlinePipeline
                 'batch_run_id' => $batch->getKey(),
                 'algorithm' => self::SKELETON_ASSEMBLY_ALGORITHM_VERSION,
                 'source_artifacts' => $sourceReferences,
-                'length_contract' => $lengthContract,
+                'length_contract' => $structureLengthContract,
             ],
             'started_at' => now(),
         ]);
 
         try {
+            $this->assertStageArtifact($batch, $foundation, ArtifactType::OutlineFoundation, self::FOUNDATION_SCOPE);
+            $this->assertStageArtifact($batch, $structure, ArtifactType::OutlineStructure, self::STRUCTURE_SCOPE, null, $this->structureInputHash($batch, $foundation));
+            foreach ($arcArtifacts as $arcKey => $arcArtifact) {
+                $this->assertStageArtifact($batch, $arcArtifact, ArtifactType::OutlineArcBeats, self::ARC_BEATS_SCOPE, $arcKey, $this->arcBeatsInputHash($batch, $foundation, $structure, $arcKey));
+            }
+
+            // 伏笔归属和篇幅权重是阶段间合同，不进入标准 Outline 层级。
+            $skeleton = collect($structureData)->except('foreshadowing_owner_arc_keys')->all();
+            foreach ($skeleton['volumes'] as &$volume) {
+                foreach ($volume['arcs'] as &$arc) {
+                    unset($arc['chapter_weight']);
+                    $arc['beats'] = $this->payload($arcArtifacts[(string) $arc['key']])['beats'];
+                }
+                unset($arc);
+            }
+            unset($volume);
+            $skeleton = $this->validateSkeleton($skeleton, (int) data_get($batch->context_snapshot, 'requested_volume_count'));
+            $lengthContract = $this->lengthContract->complete(
+                $skeleton,
+                $this->batchLengthContract($batch),
+                $structureLengthContract,
+            );
+            $run->update(['context_snapshot' => [
+                ...$run->context_snapshot,
+                'length_contract' => $lengthContract,
+            ]]);
+
             return DB::transaction(function () use ($run, $batch, $sourceReferences, $skeleton, $lengthContract): GenerationArtifact {
                 $data = [
                     'batch_run_id' => $batch->getKey(),
@@ -846,7 +868,7 @@ class NovelOutlinePipeline
                     'structure' => $this->artifactReference($structure),
                     'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
                 ],
-                'length_contract' => $this->lengthContract->validateStructure(
+                'length_contract' => $this->lengthContract->allocateStructure(
                     $this->payload($structure),
                     $this->batchLengthContract($batch),
                 ),
@@ -881,24 +903,6 @@ class NovelOutlinePipeline
             $orderedDetails[$beatKey] = $artifact;
         }
         $details = $orderedDetails;
-        foreach ($details as $beatKey => $artifact) {
-            $this->assertStageArtifact(
-                $batch,
-                $artifact,
-                ArtifactType::OutlineBeatDetail,
-                self::BEAT_DETAIL_SCOPE,
-                $beatKey,
-                $this->beatDetailInputHash($batch, $foundation, $skeleton, $beatKey),
-            );
-        }
-
-        $outline = $this->mergeOutline($skeletonData, $details);
-        $this->outlineValidator->assertValid($outline);
-        $foundationData = $this->payload($foundation);
-        if ($structure !== null) {
-            $foundationData = $this->attachForeshadowingOwners($foundationData, $this->payload($structure));
-        }
-        $this->assertFoundationReferences($foundationData, $outline);
         $lineage = [
             'batch_run_id' => $batch->getKey(),
             'foundation' => $this->artifactReference($foundation),
@@ -909,24 +913,16 @@ class NovelOutlinePipeline
             $lineage['structure'] = $this->artifactReference($structure);
             $lineage['arc_beats'] = collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all();
         }
-        $lengthContract = $this->isLegacyBatch($batch)
-            ? null
-            : $this->lengthContract->complete($outline, $this->batchLengthContract($batch));
-        $blueprint = array_filter([
-            ...$foundationData,
-            'outline' => $outline,
-            'length_contract' => $lengthContract,
-            'lineage' => $lineage,
-        ], static fn (mixed $value): bool => $value !== null);
+        $frozenLengthContract = $this->isLegacyBatch($batch) ? null : data_get($skeleton->data, 'length_contract');
         $finalizeContractVersion = $this->isLegacyBatch($batch)
             ? self::LEGACY_FINALIZE_CONTRACT_VERSION
             : self::FINALIZE_CONTRACT_VERSION;
         $inputHash = $this->isLegacyBatch($batch)
-            ? $this->hash($blueprint['lineage'])
+            ? $this->hash($lineage)
             : $this->hash([
                 'contract' => $finalizeContractVersion,
-                'lineage' => $blueprint['lineage'],
-                'length_contract' => $lengthContract,
+                'lineage' => $lineage,
+                'length_contract' => $frozenLengthContract,
             ]);
 
         $reusableRun = $this->stageRuns($batch, self::FINALIZE_SCOPE)
@@ -952,11 +948,46 @@ class NovelOutlinePipeline
             'prompt_version' => $finalizeContractVersion,
             'provider' => null,
             'model_policy' => null,
-            'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'lineage' => $blueprint['lineage']],
+            'context_snapshot' => ['batch_run_id' => $batch->getKey(), 'lineage' => $lineage],
             'started_at' => now(),
         ]);
 
         try {
+            foreach ($details as $beatKey => $artifact) {
+                $this->assertStageArtifact(
+                    $batch,
+                    $artifact,
+                    ArtifactType::OutlineBeatDetail,
+                    self::BEAT_DETAIL_SCOPE,
+                    $beatKey,
+                    $this->beatDetailInputHash($batch, $foundation, $skeleton, $beatKey),
+                );
+            }
+
+            $outline = $this->mergeOutline($skeletonData, $details);
+            $this->outlineValidator->assertValid($outline);
+            $foundationData = $this->payload($foundation);
+            if ($structure !== null) {
+                $foundationData = $this->attachForeshadowingOwners($foundationData, $this->payload($structure));
+            }
+            $this->assertFoundationReferences($foundationData, $outline);
+            if (! $this->isLegacyBatch($batch) && ! is_array($frozenLengthContract)) {
+                throw ValidationException::withMessages(['length_contract' => 'Skeleton Artifact 缺少冻结的字数分配合同。']);
+            }
+            $lengthContract = $this->isLegacyBatch($batch)
+                ? null
+                : $this->lengthContract->complete(
+                    $outline,
+                    $this->batchLengthContract($batch),
+                    $frozenLengthContract,
+                );
+            $blueprint = array_filter([
+                ...$foundationData,
+                'outline' => $outline,
+                'length_contract' => $lengthContract,
+                'lineage' => $lineage,
+            ], static fn (mixed $value): bool => $value !== null);
+
             return DB::transaction(function () use ($run, $batch, $blueprint, $outline): GenerationArtifact {
                 $artifact = $run->artifacts()->create([
                     'type' => ArtifactType::OutlineBlueprint,
@@ -1125,7 +1156,9 @@ PROMPT;
 
 每个 Volume 的 target_words 必须是可执行的正整数；全部 Volume target_words 之和必须精确等于输入 length_contract.novel_target_words。分卷时同时参考 length_contract.chapter_target_words 与 target_chapter_count，避免把大部分字数挤入少数卷或生成无法承载目标篇幅的结构。
 
-每个 Arc 必须围绕一条可持续发展的冲突线，明确参与者、目标、阻力、失败代价和可验证的完成条件。主线负责改变全书核心局势，支线必须对人物选择、主线资源或后续风险产生实际影响，不得成为脱离主线的装饰。
+每个 Arc 必须围绕一条可持续发展的冲突线，明确参与者、目标、阻力、失败代价和可验证的完成条件。主线负责改变全书核心局势，支线必须对人物选择、主线资源或后续风险产生实际影响，不得成为脱离主线的装饰。每个 Volume 至少包含一个 Main Arc。
+
+chapter_weight 只表示同一 Volume 内各 Main Arc 之间的相对篇幅权重，不是章节数或百分比。Main Arc 必须填写 1 至 100，篇幅越大权重越高；Subplot 必须填写 0。Laravel 会结合该卷按字数折算的章节总数，按权重确定性分配每个 Main Arc 的精确目标章节数，Arc Beats 阶段不得再按整卷章节数自行猜测。
 
 foreshadowing_owner_arc_keys 必须与输入 foundation.foreshadowings 保持完全相同的顺序和数量。每一项只能填写本次响应中实际生成的 Arc Key，或在伏笔确实跨越多个 Arc、属于全书级约束、无法合理归属单一 Arc 时填写 null。不得按标题重新排序，不得返回 Arc 标题、对象或数据库 ID。
 
@@ -1148,7 +1181,7 @@ arc_key 必须逐字复制 target_arc.key。每个 Beat 都必须包含新的行
 
 chapter_budget 表示完成该 Beat 的合理章节范围，不是单章字数，也不是必须填满的篇幅。预算必须符合输入中的 pacing；快节奏开篇应压缩纯铺垫，并尽早完成核心设定落地、首次有效行动或不可逆选择。
 
-输入 length_contract.target_volume 给出本卷目标字数折算后的目标章节数。主线 Arc 的 Beat 预算会在 Skeleton Assembly 按卷相加，其合计区间必须覆盖该目标章节数；支线可能与主线共用同一章，不计入这项总量核对，但仍需给出自身合理的停留范围。
+输入 length_contract.target_volume 给出所属卷信息；Main Arc 还会在 length_contract.target_arc.target_chapter_count 中得到 Structure 阶段已确定的本 Arc 目标章节数。当前 Main Arc 的全部 Beat 预算合计区间必须覆盖这个本地目标，不能按整卷目标重复编制预算。Subplot 的 length_contract.target_arc 为 null，它可能与主线共用同一章，不计入全书章节总量，但仍需给出自身合理的停留范围。
 
 acceptance_criteria 必须描述正文能够证明的事件或结果，不得使用“人物意识到”“关系得到深化”“主题得到体现”等抽象结论。must_include 只保留完成该 Beat 不可缺少的事项。人物和世界实体候选只在该 Beat 确实需要首次引入时创建，否则返回空数组。候选只描述 Beat 级引入资格，不得返回 target_scene_sequence；具体目标 Scene 由章节规划阶段根据本章 Scene Plans 决定。
 
@@ -1794,7 +1827,7 @@ PROMPT;
                 'structure' => $this->artifactReference($structure),
                 'arc_beats' => collect($arcArtifacts)->map(fn (GenerationArtifact $artifact): array => $this->artifactReference($artifact))->all(),
             ],
-            'length_contract' => $this->lengthContract->validateStructure(
+            'length_contract' => $this->lengthContract->allocateStructure(
                 $this->payload($structure),
                 $this->batchLengthContract($batch),
             ),
@@ -2699,7 +2732,7 @@ PROMPT;
             $this->payload($foundation),
             $structureData,
             $arcKey,
-            $this->lengthContract->validateStructure($structureData, $this->batchLengthContract($batch)),
+            $this->lengthContract->allocateStructure($structureData, $this->batchLengthContract($batch)),
         );
         $schema = $this->stageContract->arcBeatsSchema();
         $systemPrompt = $this->arcBeatsSystemPrompt();

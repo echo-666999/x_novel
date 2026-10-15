@@ -13,8 +13,8 @@ return [
     */
     'versions' => [
         'outline_foundation' => 'novel-outline-foundation-v6',
-        'outline_structure' => 'novel-outline-structure-v5',
-        'outline_arc_beats' => 'novel-outline-arc-beats-v7',
+        'outline_structure' => 'novel-outline-structure-v6',
+        'outline_arc_beats' => 'novel-outline-arc-beats-v8',
         'outline_beat_detail' => 'novel-outline-beat-detail-v6',
         'planner' => 'chapter-planner-v12',
         'writer' => 'scene-writer-v16',

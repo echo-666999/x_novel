@@ -19,6 +19,7 @@ use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
+use App\Exceptions\OutlineLengthContractException;
 use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Jobs\AssembleNovelOutlineSkeletonJob;
@@ -37,6 +38,7 @@ use App\Models\Novel;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\User;
+use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationSettingsService;
 use App\Services\NovelOutlinePipeline;
@@ -185,7 +187,10 @@ function stagedNovelBlueprintResponses(?array $blueprint = null): array
         $structureVolume = collect($volume)->only(['key', 'title', 'goal', 'climax', 'target_words'])->all();
         $structureVolume['arcs'] = [];
         foreach ($volume['arcs'] as $arc) {
-            $structureVolume['arcs'][] = collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all();
+            $structureVolume['arcs'][] = [
+                ...collect($arc)->only(['key', 'type', 'title', 'goal', 'stakes', 'completion_conditions'])->all(),
+                'chapter_weight' => $arc['type'] === 'main' ? min(100, count($arc['beats'])) : 0,
+            ];
             $arcResponse = ['arc_key' => $arc['key'], 'beats' => []];
             foreach ($arc['beats'] as $beat) {
                 if ($arc['type'] === 'main') {
@@ -392,10 +397,10 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and($fake->requests()[1]->systemPrompt)->toContain('相邻 Volume 不得只是规模更大的同类事件')
         ->and($fake->requests()[1]->systemPrompt)->toContain('全部 Volume target_words 之和必须精确等于')
         ->and($fake->requests()[1]->systemPrompt)->toContain('foreshadowing_owner_arc_keys 必须与输入 foundation.foreshadowings 保持完全相同的顺序和数量')
-        ->and($fake->requests()[1]->prompt)->toContain('"length_contract":{"schema_version":1')
+        ->and($fake->requests()[1]->prompt)->toContain('"length_contract":{"schema_version":2')
         ->and($fake->requests()[2]->systemPrompt)->toContain('拆成完成该冲突所需的最少且充分的 Beats')
         ->and($fake->requests()[2]->systemPrompt)->toContain('target_arc 是唯一需要细化的 Arc')
-        ->and($fake->requests()[2]->systemPrompt)->toContain('主线 Arc 的 Beat 预算会在 Skeleton Assembly 按卷相加')
+        ->and($fake->requests()[2]->systemPrompt)->toContain('当前 Main Arc 的全部 Beat 预算合计区间必须覆盖这个本地目标')
         ->and($fake->requests()[2]->prompt)->toContain('"target_chapter_count":67')
         ->and($firstArcBeatsContext)->toHaveKeys(['outline', 'target_volume', 'target_arc', 'adjacent_arcs'])
         ->and($firstArcBeatsContext)->not->toHaveKey('structure')
@@ -453,7 +458,7 @@ test('ai planning creates a reusable blueprint without changing planning tables'
         ->and(data_get($fake->requests()[1]->responseSchema, 'properties.volumes.items.properties.arcs.items.properties'))->not->toHaveKey('beats')
         ->and(data_get($fake->requests()[2]->responseSchema, 'properties.beats.items.required'))->toContain('chapter_budget');
     expect(data_get($first->data, 'length_contract'))->toMatchArray([
-        'schema_version' => 1,
+        'schema_version' => 2,
         'novel_target_words' => 200_000,
         'chapter_target_words' => 3_000,
         'target_chapter_count' => 67,
@@ -827,6 +832,36 @@ test('domain validation failure keeps its error meaning and closes the outline b
         ->and($child->error_code)->not->toBe('outline_stage_result_uncertain')
         ->and($batch->fresh()->status)->toBe(RunStatus::Failed)
         ->and($batch->fresh()->error_code)->toBe('outline_stage_domain_validation_failed');
+});
+
+test('arc budget failure records the dedicated outline length contract error', function () {
+    $novel = Novel::factory()->create(['status' => NovelStatus::Draft, 'target_words' => 200000]);
+    $blueprint = novelBlueprint();
+    foreach ($blueprint['outline']['volumes'][0]['arcs'][0]['beats'] as &$beat) {
+        $beat['chapter_budget'] = ['min' => 1, 'max' => 1];
+    }
+    unset($beat);
+    $fake = stagedNovelBlueprintProvider($blueprint);
+    app()->instance(AiProvider::class, $fake);
+    $pipeline = app(NovelOutlinePipeline::class);
+    $batch = $pipeline->startOrResume($novel, 1);
+    $pipeline->generateFoundation($batch);
+    $pipeline->generateStructure($batch);
+
+    (new GenerateNovelArcBeatsJob($batch->getKey(), 'arc-01'))->handle($pipeline);
+
+    $child = $novel->generationRuns()
+        ->where('scope_type', NovelOutlinePipeline::ARC_BEATS_SCOPE)
+        ->sole();
+    $batch->refresh();
+    expect($child->status)->toBe(RunStatus::Failed)
+        ->and($child->error_code)->toBe(OutlineLengthContractException::ERROR_CODE)
+        ->and($child->error_retryable)->toBeFalse()
+        ->and(data_get($child->error_metadata, 'category'))->toBe('domain_validation')
+        ->and($batch->status)->toBe(RunStatus::Failed)
+        ->and($batch->error_code)->toBe(OutlineLengthContractException::ERROR_CODE)
+        ->and(data_get($batch->error_metadata, 'child_run_id'))->toBe($child->getKey())
+        ->and(app(GenerationFailurePolicy::class)->allowsFrozenResume($batch))->toBeFalse();
 });
 
 test('truncated outline output closes the batch without repeating the same request', function () {
@@ -1442,7 +1477,7 @@ test('a succeeded v4 outline batch is not reused as a v5 length contract batch',
 
     expect($current->getKey())->not->toBe($historical->getKey())
         ->and($current->prompt_version)->toBe(NovelOutlinePipeline::BATCH_CONTRACT_VERSION)
-        ->and(data_get($current->context_snapshot, 'length_contract.schema_version'))->toBe(1);
+        ->and(data_get($current->context_snapshot, 'length_contract.schema_version'))->toBe(2);
 });
 
 test('outline request budget exceeding model capacity is rejected before batch creation', function () {
@@ -1627,6 +1662,10 @@ test('outline dispatch follows frozen arc sources while assembly validates the f
     Queue::assertNotPushed(GenerateNovelArcBeatsJob::class, fn (GenerateNovelArcBeatsJob $job): bool => $job->arcKey === 'arc-01');
     expect(fn () => $pipeline->assembleSkeleton($batch->refresh()))
         ->toThrow(ValidationException::class, '输入指纹');
+    $failedAssembly = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::SKELETON_ASSEMBLY_SCOPE)->sole();
+    expect($failedAssembly->status)->toBe(RunStatus::Failed)
+        ->and($failedAssembly->error_code)->toBe('outline_skeleton_assembly_failed')
+        ->and(data_get($failedAssembly->error_metadata, 'category'))->toBe('domain_validation');
 });
 
 test('outline dispatch rejects an arc whose successful run has a different frozen source', function () {
@@ -2070,7 +2109,11 @@ test('outline dispatch follows frozen beat sources while finalize validates the 
     Queue::assertNotPushed(GenerateNovelBeatDetailJob::class);
     expect(fn () => $pipeline->finalize($batch->refresh()))
         ->toThrow(ValidationException::class, '输入指纹');
-    expect($novel->outlines()->count())->toBe(0);
+    $failedFinalize = $novel->generationRuns()->where('scope_type', NovelOutlinePipeline::FINALIZE_SCOPE)->sole();
+    expect($novel->outlines()->count())->toBe(0)
+        ->and($failedFinalize->status)->toBe(RunStatus::Failed)
+        ->and($failedFinalize->error_code)->toBe('outline_finalize_failed')
+        ->and(data_get($failedFinalize->error_metadata, 'category'))->toBe('domain_validation');
 });
 
 test('outline dispatch rejects a beat whose successful run has a different frozen source', function () {

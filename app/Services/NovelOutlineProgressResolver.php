@@ -680,6 +680,7 @@ final class NovelOutlineProgressResolver
 
         if (in_array($batch->prompt_version, [
             NovelOutlinePipeline::MULTI_ROUTE_BATCH_CONTRACT_VERSION,
+            NovelOutlinePipeline::VOLUME_BUDGET_BATCH_CONTRACT_VERSION,
             NovelOutlinePipeline::BATCH_CONTRACT_VERSION,
         ], true)) {
             $routeKey = match ($currentStage) {
@@ -769,6 +770,7 @@ final class NovelOutlineProgressResolver
             'provider_authentication_failed', 'provider_not_configured', 'provider_disabled', 'provider_unsupported', 'provider_run_mismatch', 'provider_run_missing', 'provider_run_route_missing', 'outline_route_not_configured', 'model_run_mismatch' => 'Outline 独立路由配置不完整，请检查对应 Stage 的 Provider、Model 与推理程度。',
             'outline_stage_structured_output_invalid', 'outline_stage_schema_invalid' => 'AI 返回的大纲格式不符合要求，未保存该结果。',
             'outline_stage_domain_validation_failed' => 'AI 返回的大纲内容未通过业务校验。',
+            'outline_length_contract_invalid' => '全书字数、分卷或主线章节预算不一致，请修正篇幅分配后重新生成候选。',
             'outline_stage_result_uncertain' => 'AI 结果保存状态无法确认，需要检查运行详情后继续。',
             'worker_interrupted', StalledRunRecoveryService::ERROR_CODE => '生成 Worker 已中断，可从最近成功阶段继续。',
             default => match ($metadata['category'] ?? null) {
