@@ -42,6 +42,7 @@ class OutlineProgressResolver
         $volume = $novel->volumes()
             ->where('status', VolumeStatus::Active->value)
             ->with('sourceOutlineVolume')
+            ->orderBy('sequence')
             ->first();
         if ($volume?->sourceOutlineVolume === null
             || $volume->sourceOutlineVolume->novel_outline_id !== $outline->getKey()) {
@@ -53,6 +54,7 @@ class OutlineProgressResolver
             ->where('type', StoryArcType::Main->value)
             ->where('status', StoryArcStatus::Active->value)
             ->with('sourceOutlineArc')
+            ->orderBy('sequence')
             ->first();
         if ($runtimeArc?->sourceOutlineArc === null
             || $runtimeArc->sourceOutlineArc->novel_outline_id !== $outline->getKey()

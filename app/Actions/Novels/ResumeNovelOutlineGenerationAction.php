@@ -6,6 +6,7 @@ use App\Enums\RunStatus;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Services\GenerationFailurePolicy;
+use App\Services\GenerationRunLease;
 use App\Services\NovelOutlinePipeline;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -16,6 +17,7 @@ class ResumeNovelOutlineGenerationAction
     public function __construct(
         private readonly NovelOutlinePipeline $pipeline,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly GenerationRunLease $runLease,
     ) {}
 
     /** failed 批次只能经领域检查恢复，不能直接重放 failed_jobs。 */
@@ -65,15 +67,14 @@ class ResumeNovelOutlineGenerationAction
                 'previous_error_code' => $lockedBatch->error_code,
                 'previous_finished_at' => $lockedBatch->finished_at?->toISOString(),
             ];
+            $lockedBatch = $this->runLease->claim($lockedBatch);
             $lockedBatch->update([
-                'status' => RunStatus::Running,
                 'context_snapshot' => $context,
                 'error_code' => null,
                 'error_message' => null,
                 'error_retryable' => null,
                 'error_metadata' => null,
                 'finished_at' => null,
-                'started_at' => $lockedBatch->started_at ?? now(),
             ]);
 
             return $lockedBatch->refresh();

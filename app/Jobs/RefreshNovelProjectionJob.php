@@ -3,7 +3,9 @@
 namespace App\Jobs;
 
 use App\Enums\GenerationStage;
+use App\Models\Chapter;
 use App\Models\Novel;
+use App\Services\AutoStopService;
 use App\Services\GenerationFailurePolicy;
 use App\Services\ProjectionRebuilder;
 use Illuminate\Bus\Queueable;
@@ -45,8 +47,9 @@ class RefreshNovelProjectionJob implements ShouldBeUnique, ShouldQueue
         return "novel:{$this->novelId}:state:{$this->stateVersionId}";
     }
 
-    public function handle(ProjectionRebuilder $rebuilder): void
+    public function handle(ProjectionRebuilder $rebuilder, ?AutoStopService $autoStop = null): void
     {
+        $autoStop ??= app(AutoStopService::class);
         $novel = Novel::query()->find($this->novelId);
 
         if ($novel === null) {
@@ -59,12 +62,37 @@ class RefreshNovelProjectionJob implements ShouldBeUnique, ShouldQueue
 
         try {
             $rebuilder->rebuild($novel);
+            $autoStop->resolvePostCommitFailure($novel, 'projection');
         } catch (Throwable $exception) {
             if (app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::MemorySummary)) {
                 throw $exception;
             }
 
+            $chapter = $this->sourceChapter($novel);
+            if ($chapter !== null) {
+                $autoStop->recordPostCommitFailure($chapter, 'projection', $exception);
+            }
             $this->fail($exception);
         }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        if ($exception === null) {
+            return;
+        }
+
+        $novel = Novel::query()->find($this->novelId);
+        $chapter = $novel === null ? null : $this->sourceChapter($novel);
+        if ($chapter !== null) {
+            app(AutoStopService::class)->recordPostCommitFailure($chapter, 'projection', $exception);
+        }
+    }
+
+    private function sourceChapter(Novel $novel): ?Chapter
+    {
+        return $novel->storyStateVersions()
+            ->whereKey($this->stateVersionId)
+            ->first()?->chapter;
     }
 }

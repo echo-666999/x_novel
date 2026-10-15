@@ -167,7 +167,7 @@ class NovelOutlinePipeline
                 ->where('scope_id', $locked->getKey())
                 ->max('attempt')) + 1;
 
-            return GenerationRun::query()->create([
+            $run = GenerationRun::query()->create([
                 'novel_id' => $locked->getKey(),
                 'scope_type' => self::BATCH_SCOPE,
                 'scope_id' => $locked->getKey(),
@@ -181,6 +181,8 @@ class NovelOutlinePipeline
                 'model_policy' => null,
                 'context_snapshot' => $context,
             ]);
+
+            return $this->runLease->queue($run);
         });
     }
 
@@ -204,9 +206,8 @@ class NovelOutlinePipeline
 
             $novel = Novel::query()->lockForUpdate()->findOrFail($locked->novel_id);
             $this->assertNovelPlanningAvailable($novel);
+            $locked = $this->runLease->claim($locked);
             $locked->update([
-                'status' => RunStatus::Running,
-                'started_at' => $locked->started_at ?? now(),
                 'finished_at' => null,
                 'error_code' => null,
                 'error_message' => null,

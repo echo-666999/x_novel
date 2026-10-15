@@ -591,9 +591,11 @@ Paragraph
 Scene
 ```
 
-自动路径禁止 Whole Chapter Rewrite。多 Scene 连续性从最早受影响 Scene 有限级联；能唯一定位到单一 Scene、且不改变冻结目标与关键结果的 Milestone 局部验收冲突可进入 Scene Rewrite。章功能、Milestone/Handoff 身份或目标本身、关键结果以及无法安全定位的问题返回 Plan 修订或进入 `NEEDS_ATTENTION`。
+自动路径禁止 Whole Chapter Rewrite。多 Scene 连续性从最早受影响 Scene 有限级联；能唯一定位到单一 Scene、且不改变冻结目标与关键结果的 Milestone 局部验收冲突可进入 Scene Rewrite。章功能、Milestone/Handoff 身份或目标本身、关键结果等章节级结构问题创建新的 Plan Version 并重建 Scene；无法安全分类的问题才进入 `NEEDS_ATTENTION`。局部 Rewrite 达到上限后，最多再执行一次受次数、费用和耗时硬限制的 Plan/Scene 全量重建，不得用整章 Rewrite 绕过该边界。
 
 每次 Rewrite 必须创建新的 Artifact。
+
+内容自愈使用独立 `content_repair` Generation Run 和 `context` Artifact 保存修复类型、来源、诊断、次数、费用、耗时与结果。该 Run 只协调修复，不代替 Planning、Scene、Review 等真实阶段 Run；所有 Provider Usage 仍归属实际请求 Run。
 
 禁止覆盖旧版本。
 
@@ -820,6 +822,8 @@ outline_blueprint   Laravel Finalize 校验后的完整候选来源包
 ```
 
 Artifact 均不可变。`outline_skeleton` 与 `outline_blueprint` 必须保存有序来源 ID、checksum 和算法版本，且不产生 AI Request Log 或 Usage Record。Structure、全部 Arc Beats、Skeleton 和全部 Beat Detail 必须属于同一 Novel、同一主批次；Finalize 不能按“最新 Artifact”猜测来源。
+
+每条 Artifact 还保存 `input_hash`、可空的 `source_artifact_id` 和 `validation_status`。`input_hash` 必须等于产生它的 Run 输入身份；直接上游同时保存在独立外键和 Artifact 数据中，二者不得冲突；只有 `validated` 可以被恢复、审校或 Canonical Commit 选择。`pending` 与 `rejected` 只保留审计，不得进入正式来源链。
 
 Artifact 原则：
 

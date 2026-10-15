@@ -276,11 +276,11 @@ test('post commit resume redispatches the idempotent derivative chain without re
     expect($point->key)->toBe('post_commit')
         ->and($chapter->fresh()->canonical_artifact_id)->toBe($artifact->getKey())
         ->and(StoryStateVersion::query()->where('novel_id', $novel->getKey())->count())->toBe(2);
-    Queue::assertPushedWithChain(UpdateMemoryJob::class, [
-        GenerateCanonicalChapterSummaryJob::class,
-        RefreshNovelProjectionJob::class,
+    Queue::assertPushedWithChain(GenerateCanonicalChapterSummaryJob::class, [
         ContinueAutoGenerationJob::class,
     ]);
+    Queue::assertPushed(UpdateMemoryJob::class);
+    Queue::assertPushed(RefreshNovelProjectionJob::class);
     Queue::assertNotPushed(CommitChapterJob::class);
 });
 

@@ -8,5 +8,5 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
-Schedule::command('generation:mark-stalled')->everyMinute()->withoutOverlapping();
+Schedule::command('generation:recover-automatic')->everyMinute()->withoutOverlapping();
 Schedule::command('horizon:snapshot')->everyFiveMinutes()->withoutOverlapping();

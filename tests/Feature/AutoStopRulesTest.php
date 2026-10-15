@@ -7,10 +7,13 @@ use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\ChapterStatus;
+use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
+use App\Enums\RunStatus;
 use App\Jobs\PlanChapterJob;
 use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Services\AutoStopService;
@@ -55,6 +58,70 @@ test('a final provider retry failure from a queue job disables auto generation',
     (new PlanChapterJob($chapter->getKey()))->failed(new AiProviderException('provider_timeout', 'timeout', true));
 
     expect(data_get($novel->fresh()->settings, 'auto_stop.code'))->toBe('provider_retry_exhausted');
+});
+
+test('an unclassified terminal failure is never discarded without a persisted stop reason', function () {
+    [$novel, $chapter] = autoStopChapter();
+
+    app(AutoStopService::class)->stopForFailure($chapter->getKey(), new RuntimeException('unexpected failure'));
+
+    expect(data_get($novel->fresh()->settings, 'auto_generate'))->toBeFalse()
+        ->and(data_get($novel->fresh()->settings, 'auto_stop.code'))->toBe('generation_failed')
+        ->and(data_get($novel->fresh()->settings, 'auto_stop.reason'))->toContain('unexpected failure');
+});
+
+test('an older failed run does not replace the current terminal exception diagnosis', function () {
+    [$novel, $chapter] = autoStopChapter();
+    GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Failed,
+        'error_code' => 'provider_not_configured',
+        'error_message' => 'older failure',
+    ]);
+
+    app(AutoStopService::class)->stopForFailure($chapter->getKey(), new RuntimeException('current failure'));
+
+    expect(data_get($novel->fresh()->settings, 'auto_stop.code'))->toBe('generation_failed')
+        ->and(data_get($novel->fresh()->settings, 'auto_stop.reason'))->toContain('current failure');
+});
+
+test('post commit recovery counters reset when the failed canonical source changes', function () {
+    [$novel, $chapter] = autoStopChapter();
+    $chapter->update(['canonical_artifact_id' => 11]);
+    $novel->update(['settings' => [
+        'auto_generate' => true,
+        'post_commit_failures' => [
+            'summary' => [
+                'chapter_id' => $chapter->getKey(),
+                'canonical_artifact_id' => 10,
+                'occurrences' => 4,
+                'recovery_attempts' => 3,
+                'exhausted_at' => now()->toISOString(),
+            ],
+        ],
+    ]]);
+
+    app(AutoStopService::class)->recordPostCommitFailure($chapter, 'summary', new RuntimeException('new source'));
+
+    expect(data_get($novel->fresh()->settings, 'post_commit_failures.summary.occurrences'))->toBe(1)
+        ->and(data_get($novel->fresh()->settings, 'post_commit_failures.summary.recovery_attempts'))->toBe(0)
+        ->and(data_get($novel->fresh()->settings, 'post_commit_failures.summary.exhausted_at'))->toBeNull();
+});
+
+test('a preflight failure before the first chapter still persists a novel level stop reason', function () {
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Generating,
+        'settings' => ['auto_generate' => true],
+    ]);
+
+    app(AutoStopService::class)->stopForPreflight(
+        $novel,
+        new AiProviderException('provider_not_configured', 'provider missing', false),
+    );
+
+    expect(data_get($novel->fresh()->settings, 'auto_generate'))->toBeFalse()
+        ->and(data_get($novel->fresh()->settings, 'auto_stop.code'))->toBe('provider_not_configured')
+        ->and(data_get($novel->fresh()->settings, 'auto_stop.reason'))->toContain('provider missing');
 });
 
 test('post commit volume gate failure disables auto generation and queues no next chapter', function () {

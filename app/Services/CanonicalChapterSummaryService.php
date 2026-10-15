@@ -24,7 +24,7 @@ use Throwable;
 
 class CanonicalChapterSummaryService
 {
-    /** Summary Restart 冻结合同版本，用于区分人工重启与普通阶段复用。 */
+    /** Summary Restart 冻结合同版本，用于区分重新解析当前配置与普通阶段复用。 */
     public const RESTART_CONTRACT_VERSION = 'canonical-summary-restart-v1';
 
     public function __construct(
@@ -244,7 +244,8 @@ class CanonicalChapterSummaryService
     }
 
     /**
-     * 显式 Restart 才能读取当前 Summary 配置；同一 Restart 的 Queue 重试继续复用首个 Run 已持久化的合同。
+     * 只有经 UI 或自动恢复器授权的 Restart 才能读取当前 Summary 配置；
+     * 同一 Restart 的 Queue 重试继续复用首个 Run 已持久化的合同。
      *
      * @return array{settings: ResolvedAiSettings, prompt_version: string, route: array<string, mixed>, contract_source: string, recovery_contract_run_id: null, restart_source_run_id: int}
      */

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ArtifactType;
+use App\Enums\ArtifactValidationStatus;
 use Database\Factories\GenerationArtifactFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -17,6 +18,9 @@ use LogicException;
     'content',
     'data',
     'checksum',
+    'input_hash',
+    'source_artifact_id',
+    'validation_status',
 ])]
 class GenerationArtifact extends Model
 {
@@ -27,6 +31,21 @@ class GenerationArtifact extends Model
 
     protected static function booted(): void
     {
+        static::creating(function (GenerationArtifact $artifact): void {
+            $run = $artifact->generationRun()->firstOrFail();
+            if (filled($artifact->input_hash) && ! hash_equals((string) $run->input_hash, (string) $artifact->input_hash)) {
+                throw new LogicException('Artifact input hash must match its Generation Run.');
+            }
+            $artifact->input_hash = $run->input_hash;
+            $sourceId = data_get($artifact->data, 'source_artifact_id');
+            if (is_numeric($sourceId) && $artifact->source_artifact_id !== null
+                && (int) $artifact->source_artifact_id !== (int) $sourceId) {
+                throw new LogicException('Artifact source column and payload must identify the same upstream artifact.');
+            }
+            $artifact->source_artifact_id ??= is_numeric($sourceId) ? (int) $sourceId : null;
+            $artifact->validation_status ??= ArtifactValidationStatus::Validated;
+        });
+
         static::updating(function (): never {
             throw new LogicException('Generation artifacts are immutable; create a new version instead.');
         });
@@ -42,6 +61,11 @@ class GenerationArtifact extends Model
         return $this->belongsTo(GenerationRun::class);
     }
 
+    public function sourceArtifact(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'source_artifact_id');
+    }
+
     /** @return array<string, string> */
     protected function casts(): array
     {
@@ -49,6 +73,7 @@ class GenerationArtifact extends Model
             'type' => ArtifactType::class,
             'version' => 'integer',
             'data' => 'array',
+            'validation_status' => ArtifactValidationStatus::class,
             'created_at' => 'datetime',
         ];
     }

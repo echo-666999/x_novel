@@ -7,7 +7,7 @@
 - 在项目根目录先执行与本次改动直接相关的目标测试，再执行 `php artisan test`；前端资源有变化时执行 `npm run build`。
 - 记录每条测试命令的测试数、断言数、跳过数、失败数和执行时间。不得把上一次发布或另一环境的结果当成本次结果。
 - 执行 `php artisan migrate:status`，逐项确认没有未执行 Migration，并把命令输出时间和结论写入发布记录。
-- 执行 `php artisan schedule:list`，确认包含 `generation:mark-stalled` 和 `horizon:snapshot`。
+- 执行 `php artisan schedule:list`，确认包含 `generation:recover-automatic` 和 `horizon:snapshot`。
 - 检查 Settings 页面的“系统健康”，处理所有“需要处理”项。
 - 在“设置 → 生成参数”确认计价币种，并至少配置每日硬上限、单本小说总上限或单章上限中的一项。
 - 在“AI 与成本”核实启用的服务商连接、模型价格、容量与全部 Stage 路由，在“设置 → 生成参数”核实费用上限、请求预算和向量维度；不要把 API Key 复制进发布记录。

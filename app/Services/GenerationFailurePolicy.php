@@ -189,10 +189,6 @@ final class GenerationFailurePolicy
         $failure = $this->forRun($run);
         $category = $failure->metadata['category'] ?? 'manual_attention';
 
-        if ($category === 'provider_configuration') {
-            return false;
-        }
-
         // 章节预算类错误只有在冻结合同仍有更高档、且失败记录明确标记可重试时才能继续。
         if (in_array($category, [
             'reasoning_budget_exhausted',
@@ -202,7 +198,8 @@ final class GenerationFailurePolicy
             return $failure->retryable;
         }
 
-        return true;
+        // 其余仅允许不改变语义输入的临时故障；领域校验、状态冲突和未知错误必须重建来源链。
+        return in_array($category, self::FROZEN_RESUME_ALLOWED_CATEGORIES, true);
     }
 
     private function category(string $code, ?int $status = null, ?Throwable $exception = null): string

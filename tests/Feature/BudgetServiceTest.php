@@ -6,7 +6,9 @@ use App\AI\Data\AiResponse;
 use App\AI\Exceptions\BudgetExceededException;
 use App\AI\Providers\BudgetGuardAiProvider;
 use App\AI\Providers\FakeAiProvider;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\UsageRecord;
 use App\Services\GenerationSettingsService;
@@ -115,6 +117,33 @@ test('a request below all limits reaches the provider', function () {
 
     expect($provider->generate($request))->toBe($response)
         ->and($fake->requests())->toBe([$request]);
+});
+
+test('projected maximum request cost is reserved before provider execution', function () {
+    setGlobalBudgetsForTest(daily: 1.5, novel: 1.5, chapter: 1.5);
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['status' => 'running']);
+    AIModelPrice::query()->create([
+        'provider' => 'openai', 'model' => 'priced-model', 'currency' => 'USD', 'billing_unit' => 1,
+        'context_window_tokens' => 100_000, 'max_output_tokens' => 10_000,
+        'supports_structured_output' => true, 'supports_reasoning_effort' => true,
+        'input_price' => 0, 'cached_input_price' => 0, 'output_price' => 1,
+        'is_enabled' => true,
+    ]);
+    $fake = (new FakeAiProvider)->enqueue(budgetResponse());
+    $provider = new BudgetGuardAiProvider($fake, app(BudgetService::class));
+
+    expect(fn () => $provider->generate(new AiRequest(
+        model: 'priced-model',
+        provider: 'openai',
+        prompt: '请求不会发出',
+        maxTokens: 2,
+        metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $novel->getKey(), 'chapter_id' => $chapter->getKey()],
+    )))->toThrow(BudgetExceededException::class);
+
+    expect($fake->requests())->toBe([])
+        ->and((float) $run->fresh()->reserved_cost)->toBe(0.0);
 });
 
 test('mismatched novel and chapter context is rejected before the provider call', function () {

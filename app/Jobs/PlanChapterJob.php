@@ -4,14 +4,18 @@ namespace App\Jobs;
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\ContentRepairType;
 use App\Enums\GenerationStage;
 use App\Exceptions\GenerationPreflightException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
+use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Services\AutoStopService;
 use App\Services\ChapterPlanner;
+use App\Services\ContentSelfHealingService;
 use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -19,7 +23,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
-class PlanChapterJob implements ShouldBeUnique, ShouldQueue
+class PlanChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
@@ -36,8 +40,11 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
         return app(GenerationFailurePolicy::class)->backoff(GenerationStage::ChapterPlanning);
     }
 
-    public function __construct(public readonly int $chapterId, public readonly bool $regenerate = false)
-    {
+    public function __construct(
+        public readonly int $chapterId,
+        public readonly bool $regenerate = false,
+        public readonly ?int $contentRepairRunId = null,
+    ) {
         $this->onQueue('generation');
     }
 
@@ -46,16 +53,21 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
         return 'chapter:'.$this->chapterId;
     }
 
-    public function handle(ChapterPlanner $planner, ?AdvanceChapterPipelineAction $advance = null): void
-    {
+    public function handle(
+        ChapterPlanner $planner,
+        ?AdvanceChapterPipelineAction $advance = null,
+        ?ContentSelfHealingService $contentSelfHealing = null,
+    ): void {
         if ($this->stopWhenChapterWasDeleted($this->chapterId)) {
             return;
         }
 
         $advance ??= app(AdvanceChapterPipelineAction::class);
-
+        $contentSelfHealing ??= app(ContentSelfHealingService::class);
         try {
-            $plan = $planner->generate($this->chapterId, $this->regenerate);
+            $plan = $this->contentRepairRunId === null
+                ? $planner->generate($this->chapterId, $this->regenerate)
+                : $planner->generate($this->chapterId, $this->regenerate, $this->contentRepairRunId);
             if ($plan !== null) {
                 if (! $this->advanceAfterSuccessfulStage(
                     $advance,
@@ -65,6 +77,80 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
                     return;
                 }
             }
+
+            $this->releaseGenerationDispatch();
+        } catch (ValidationException $exception) {
+            $chapter = Chapter::query()->with('novel.canonicalStateVersion')->findOrFail($this->chapterId);
+            $currentRepair = $this->contentRepairRunId === null
+                ? $contentSelfHealing->activeForChapter($chapter)
+                : GenerationRun::query()->find($this->contentRepairRunId);
+            if ($currentRepair !== null && $contentSelfHealing->type($currentRepair) !== ContentRepairType::PlanValidation) {
+                $maxNested = (int) config('generation.content_self_healing.plan_validation.max_attempts', 1);
+                $nestedFailures = $chapter->generationRuns()
+                    ->where('stage', GenerationStage::ChapterPlanning)
+                    ->where('error_code', 'plan_validation_failed')
+                    ->where('started_at', '>=', $currentRepair->started_at)
+                    ->count();
+                if ($nestedFailures < $maxNested) {
+                    $this->releaseGenerationDispatch();
+                    if (! $this->dispatchGenerationJob(new self(
+                        chapterId: $this->chapterId,
+                        regenerate: true,
+                        contentRepairRunId: $currentRepair->getKey(),
+                    ))) {
+                        $dispatchException = new AiProviderException('content_repair_dispatch_failed', '自动重规划任务未能进入队列。', false);
+                        $contentSelfHealing->fail($currentRepair, $dispatchException->errorCode, $dispatchException->getMessage());
+                        $this->fail($dispatchException);
+                    }
+
+                    return;
+                }
+
+                $contentSelfHealing->fail($currentRepair, 'content_repair_plan_validation_exhausted', $exception->getMessage(), [
+                    'validation_errors' => $exception->errors(),
+                ]);
+                $this->releaseGenerationDispatch();
+                $this->fail(new AiProviderException(
+                    'content_repair_plan_validation_exhausted',
+                    '章节重建中的 Plan 连续校验失败，已达到自动重规划上限。',
+                    false,
+                    previous: $exception,
+                ));
+
+                return;
+            }
+
+            $failedRun = $chapter->generationRuns()
+                ->where('stage', GenerationStage::ChapterPlanning)
+                ->where('error_code', 'plan_validation_failed')
+                ->latest('id')
+                ->first();
+            try {
+                $repair = $contentSelfHealing->start(
+                    $chapter,
+                    ContentRepairType::PlanValidation,
+                    ['planning_run_id' => $failedRun?->getKey()],
+                    [
+                        'validation_errors' => $exception->errors(),
+                        'failed_candidate' => data_get($failedRun?->error_metadata, 'plan_candidate'),
+                    ],
+                );
+            } catch (AiProviderException $limitException) {
+                $this->releaseGenerationDispatch();
+                $this->fail($limitException);
+
+                return;
+            }
+            $this->releaseGenerationDispatch();
+            if (! $this->dispatchGenerationJob(new self(
+                chapterId: $this->chapterId,
+                regenerate: true,
+                contentRepairRunId: $repair->getKey(),
+            ))) {
+                $dispatchException = new AiProviderException('content_repair_dispatch_failed', '自动重规划任务未能进入队列。', false);
+                $contentSelfHealing->fail($repair, $dispatchException->errorCode, $dispatchException->getMessage());
+                $this->fail($dispatchException);
+            }
         } catch (AiProviderException $exception) {
             if (app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::ChapterPlanning)) {
                 throw $exception;
@@ -72,20 +158,12 @@ class PlanChapterJob implements ShouldBeUnique, ShouldQueue
 
             $this->releaseGenerationDispatch();
             $this->fail($exception);
-
-            return;
-        } catch (GenerationPreflightException|ValidationException $exception) {
+        } catch (GenerationPreflightException $exception) {
             $this->releaseGenerationDispatch();
             $this->fail($exception);
-
-            return;
         } catch (Throwable $exception) {
             $this->handleUnexpectedGenerationFailure($exception);
-
-            return;
         }
-
-        $this->releaseGenerationDispatch();
     }
 
     public function failed(?Throwable $exception): void

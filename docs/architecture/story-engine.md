@@ -1634,7 +1634,7 @@ Critical 伏笔必须进入：
 Chapter Plan validation
 ```
 
-当 `due_to` 已经成为 Canonical 且伏笔仍未终止时，普通下一章规划必须阻止，只允许带审计依据的修复章、延期或放弃。High、Medium、Low 只产生 Warning，不阻止普通章节；Volume Gate 与 Ending Audit 仍独立执行。
+当 `due_to` 已经成为 Canonical 且伏笔仍未终止时，普通下一章规划必须转入带审计依据的受限修复：系统最多自动尝试一次新 Plan，逾期 Critical 项的 `allowed_model_actions` 只能为 `pay_off`，不得用 `reinforce`、延期或放弃逃避兑现，也不得改变无关 Outline 结果。该计划仍须通过普通 Plan Validation、正文 Coverage、Review 和 Canonical Commit；尝试失败或达到次数、费用、耗时上限后停止。人工延期或放弃仍只能使用既有的显式授权入口。High、Medium、Low 只产生 Warning，不阻止普通章节；Volume Gate 与 Ending Audit 仍独立执行。
 
 旧 `due` 内容状态和 `foreshadowing_due` Event 只允许兼容读取与迁移，不得继续写入。
 

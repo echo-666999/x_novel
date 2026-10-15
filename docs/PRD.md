@@ -202,16 +202,24 @@ Chapter
 → 自动生成
 → 自动 Review
 → 自动重写
+→ 必要时受限重规划 / 章节重建
 → Review PASS
 → 按小说级 auto_commit 选择自动提交或用户确认
 → Canonical Commit
+→ 正式摘要
+→ 自动推进 Arc / Volume / Ending
+→ 下一章或 Completed
 ```
 
 `auto_commit` 是小说级运行策略，默认关闭。恢复该设置前遗留的同名键不自动生效；新建小说的默认模式或章节启动入口会写入 `auto_commit_configured=true`，运行时才读取 `auto_commit`。PASS 只表示章节通过审校；在 Canonical Commit 事务成功前仍不是 Canonical Chapter，也不得更新 Story State、Story Events 或正式 Memory。关闭时流水线停在 PASS 等待用户确认；开启时 Laravel 只能把真实 PASS 的当前 Draft 派发给现有 `CanonicalCommitService`，并继续执行 Pause、State Version、Artifact 来源、事务和幂等门禁。
 
 章节启动入口明确提供三种模式，并直接写入既有 `auto_generate / auto_commit`：当前章生成到审校为 `false / false`；连续生成且逐章确认提交为 `true / false`；全自动连续生成为 `true / true`。模式必须在章节预检成功后保存，不能通过独立 Toggle 组合出未展示的运行方式；手工停止连续生成时回到当前章生成到审校模式。
 
-除等待提交或安全自动提交外，只有以下异常才提前进入人工处理：
+全自动连续生成启用后，Laravel 在每章 Canonical Summary 完成后确定性推进运行态主线 Arc；当前卷主线全部完成时必须通过 `VolumeCompletionGate`，随后自动激活下一卷及顺序最早的未完成主线。最后一卷完成后自动进入 `completing`、执行 Ending Audit，并只在审计 PASS 时调用 `CompleteNovelAction`。模型不能自行切换 Arc、Volume 或宣告完结。
+
+内容自愈由 Laravel 驱动：Plan 确定性校验失败时自动重新规划；章节功能、Milestone、Handoff、剧情结果或跨 Scene 结构问题创建新 Plan Version 并重建 Scene；局部 Rewrite 耗尽后最多升级一次章节重建；Critical 逾期伏笔最多进入一次只能选择 `pay_off` 的受限规划。每种修复必须分别限制次数、系统计价币种下的最大费用和总耗时，并保存 Generation Run、不可变 Context Artifact、来源与终止诊断。达到任一上限后停止，不得继续调用 Provider。
+
+除等待提交或安全自动提交外，只有在上述受限内容自愈未适用、失败或达到硬上限后，异常才提前进入人工处理：
 
 - 硬事实冲突；
 - 连续多次 Rewrite 失败；
@@ -231,7 +239,7 @@ Chapter
 - 不得重复更新状态；
 - 能从最近 Artifact / Run 恢复。
 
-恢复必须以 PostgreSQL 中的 Run、Artifact 和章节状态为依据。Current Bible 的叙事基线或完整 Style Profile 缺失时，生成前置检查必须以 `current_bible_incomplete` 停止；用户在“小说圣经”创建新的完整版本后才能重试，不得回退到旧 Editorial。Rewrite 达到上限后必须停在 NEEDS_ATTENTION，由用户人工修改后重新审校，或在没有 Hard Conflict 且满足 Override 条件时明确填写原因后人工通过。
+恢复必须以 PostgreSQL 中的 Run、Artifact 和章节状态为依据。定时恢复任务自动认领 Worker 丢失和 Commit 后派发缺口，按恢复次数上限复用有效 Artifact；达到上限后写入明确的 `auto_stop` 诊断。Current Bible 的叙事基线或完整 Style Profile 缺失时，生成前置检查必须以 `current_bible_incomplete` 停止；用户在“小说圣经”创建新的完整版本后才能重试，不得回退到旧 Editorial。局部 Rewrite 达到上限后最多升级一次受限章节重建；重建仍未通过或触及次数、费用、耗时上限时才停止并等待人工修改，任何人工通过仍须满足无 Hard Conflict 和明确原因等 Override 条件。
 
 章节阶段产物成功后，如果选择或派发下一阶段发生异常，当前 `Generation Run` 必须继续保持 `succeeded`，并在独立的 `progression_failure` 中持久化错误码、原始原因、分类、可恢复性、推荐动作、发生时间和恢复时间。章节工作台与 Generation 页面必须显示“阶段成功 · 推进异常”，不得只显示成功 Run，也不得把已经验证的 Artifact 反向标记为失败。恢复时复用该成功 Run / Artifact，推进成功后标记异常已恢复，不能再次请求同一阶段 Provider。
 
@@ -1717,17 +1725,16 @@ ReviewChapterJob
               └ true  → 安全派发
                          ↓
                     CommitChapterJob
-              ↓
-         UpdateMemoryJob
-              ↓
-GenerateCanonicalChapterSummaryJob
-              ↓
- RefreshNovelProjectionJob
-              ↓
- ContinueAutoGenerationJob
+                         ↓
+            GenerateCanonicalChapterSummaryJob
+                         ↓
+                 ContinueAutoGenerationJob
+
+独立副作用：UpdateMemoryJob → GenerateEmbeddingJob
+独立副作用：RefreshNovelProjectionJob
 ```
 
-Post-Commit 派生任务使用上述顺序 Queue Chain。Memory、Summary 或 Projection 失败都不会回滚已经成功的 Canonical Commit，但会停止自动续写并保留可恢复的 Generation Run。Embedding 由 Memory 独立派发和重试，不阻塞下一章。手动或自动生成下一章时，上一正式章必须已有 `chapters.summary`；缺失时应进入摘要恢复操作。
+Post-Commit 只有 Summary 是自动续章的硬前置，必需链为 `GenerateCanonicalChapterSummaryJob → ContinueAutoGenerationJob`。Memory/Embedding 与 Projection 独立派发、独立重试，失败不阻塞下一章，并在 PostgreSQL 诊断中留下自动恢复点。任何提交后恢复达到上限时都必须持久化停止原因，不能保持 `auto_generate=true` 后静默失去任务。手动或自动生成下一章时，上一正式章必须已有 `chapters.summary`。
 
 Context Builder MVP 可以作为 Service：
 
@@ -2193,6 +2200,8 @@ Filament “AI 与成本”只提供“服务商连接”和“模型价格”�
 服务商连接、API Key 与 Timeout 通过“AI 与成本 → 服务商连接”保存；模型价格、容量、能力和 Stage 路由通过“AI 与成本 → 模型价格”保存。计价币种、费用硬上限、Outline、章节阶段、修复子阶段的可见输出与推理预留预算、审校上下文预算和 Embedding 维度通过“设置 → 生成参数”保存到 `system_settings.generation`。Provider、Model、价格或全局生成参数在数据库缺失或无效时明确阻止新请求，不读取旧 `system_settings.ai`、`config/ai.php`、`config/generation.php` 业务回退；新安装由数据库迁移写入一次性初始生成参数，之后只由 UI 维护。Embedding 维度保存时必须与 PostgreSQL `memories.embedding` 的实际向量维度一致。
 
 启动 AI Outline 前，页面必须预览四个 Provider 任务的有效 Provider、Model、推理程度、配置来源、Prompt Version、请求预算、推理预留、已核实容量及配置错误；错误必须同时显示稳定错误码和用户文案。缺少任一独立路由、已启用模型价格记录、正整数容量、有效请求预算或结构化输出能力时，预览必须标记不可启动；配置推理程度时还必须确认该模型支持 `reasoning_effort`。全局路由和小说级新选择在保存边界执行同一适用性校验，服务端不得创建 Batch、子 Run 或发出 Provider 请求。新建 v6 Outline 主批次在开始时按四条有效路由分别读取对应 `ai_model_prices` 记录，并冻结 Foundation、Structure、Arc Beats、Beat Detail 各自的 Provider、Model、推理程度、Prompt Version、模型价格记录 ID、容量、能力、结构化输出额度、推理 Token 预留及字数合同；Structure 必须为同卷 Main Arc 提供相对篇幅权重，Laravel 确定性换算每个 Main Arc 的目标章节数，Arc Beats 必须在本次请求内证明 Beat 预算覆盖该 Arc 的目标。Batch 和 Stage 的 `input_hash` 都必须包含相应冻结合同，后台修改配置不得改变已存在批次或复用边界。内部统一的 `max_completion_tokens` 请求预算为结构化输出额度与推理预留之和，Provider 适配器再映射为对应 API 参数；四个阶段在创建子 Run 前统一校验该总额不超过模型最大输出和扣除估算输入后的剩余上下文。Schema 的集合和文本字段必须声明数量与长度上限，避免合法但无界的结构化响应耗尽输出预算。子 Run 和重试只能读取该任务的冻结值。后台修改价格记录、路由或小说设置不得改变已存在批次，v3 批次继续按原单路由快照及升级前请求上限执行，v4、v5 批次仅供历史追踪，未完成批次不得按 v6 合同 Resume。运行详情必须分别显示冻结路由、静态模型容量、实际请求预算、容量门禁快照、Provider 适配器实际发送的非敏感参数、`reasoning_tokens` 和完成预算分类，不能用计划值冒充已发送参数。确定性的 Skeleton Assembly、Chapter Assembly 与 Outline Finalize 不配置模型。页面不得回显 API Key，日志不得记录密钥明文或密文。成本硬限制按 UI 中的全局设置和小说设置执行。
+
+费用 Hard Limit 的请求前检查必须包含本次最大可能费用。系统按当前计价币种的模型价格、完整 Prompt 的保守输入 Token 上界和最大完成 Token 计算预留，并在数据库事务内用“已结算费用 + 其他活动 Run 预留 + 本次预留”同时核对每日、单书和单章上限。请求成功、失败或抛出异常后都必须释放预留；Worker 丢失恢复同样清零预留，不能让并发请求透支，也不能留下永久占用。
 
 达到 hard limit：
 

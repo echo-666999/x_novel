@@ -10,6 +10,7 @@ use App\Data\StateValidationResult;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\EventType;
 use App\Enums\ForeshadowingImportance;
 use App\Enums\ForeshadowingStatus;
@@ -18,6 +19,7 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\StateFindingSeverity;
+use App\Jobs\PlanChapterJob;
 use App\Jobs\ReviewChapterJob;
 use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
@@ -845,7 +847,7 @@ test('deterministic review failure skips the reviewer and persists executable re
     $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
 
     expect($fake->requests())->toHaveCount(0)
-        ->and($review->decision)->toBe(ReviewDecision::NeedsAttention)
+        ->and($review->decision)->toBe(ReviewDecision::Rewrite)
         ->and(data_get($review->artifact->data, 'semantic_review_performed'))->toBeFalse()
         ->and(data_get($review->artifact->data, 'scores_status'))->toBe('not_evaluated')
         ->and(data_get($review->artifact->data, 'repair_advice.action'))->toBe('rebuild_plan_or_scenes')
@@ -881,11 +883,35 @@ test('chapter structural finding produces plan scene repair advice and never dis
     (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
     $review = Review::query()->latest('id')->firstOrFail();
 
-    expect($review->decision)->toBe(ReviewDecision::NeedsAttention)
+    expect($review->decision)->toBe(ReviewDecision::Rewrite)
         ->and(data_get($review->artifact->data, 'findings.0.auto_fixable'))->toBeTrue()
         ->and(data_get($review->artifact->data, 'rewrite_scope'))->toBeNull()
         ->and(data_get($review->artifact->data, 'repair_advice.action'))->toBe('rebuild_plan_or_scenes');
     Queue::assertNotPushed(RewriteChapterJob::class);
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->regenerate
+        && $job->contentRepairRunId !== null);
+});
+
+test('rewrite exhaustion escalates once to a full chapter rebuild', function () {
+    Queue::fake();
+    config()->set('generation.max_rewrite_attempts', 0);
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $finding = [
+        'code' => 'STYLE_MISMATCH', 'dimension' => 'style', 'severity' => 'error',
+        'scope' => 'chapter', 'auto_fixable' => true, 'requires_human_decision' => false,
+        'message' => '全章叙述结构机械重复。', 'evidence' => '林舟守住城门',
+    ];
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(compactReviewResponse([$finding])));
+
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class));
+
+    $repair = $fixture['chapter']->generationRuns()->where('stage', GenerationStage::ContentRepair)->sole();
+    expect(data_get($repair->context_snapshot, 'repair_type'))->toBe(ContentRepairType::RewriteExhaustion->value)
+        ->and(data_get($repair->context_snapshot, 'diagnostics.finding_codes'))->toContain('REWRITE_EXHAUSTED')
+        ->and($repair->status)->toBe(RunStatus::Running);
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->regenerate
+        && $job->contentRepairRunId === $repair->getKey());
 });
 
 test('semantic and milestone findings in one scene share the automatic rewrite scope', function () {

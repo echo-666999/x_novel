@@ -922,6 +922,12 @@ test('state changes workspace builds and displays a candidate patch preview', fu
     $novel = Novel::factory()->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create();
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create(['type' => ArtifactType::ChapterDraft]);
     $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'stage' => GenerationStage::EventExtraction,
         'status' => RunStatus::Succeeded,
@@ -931,7 +937,7 @@ test('state changes workspace builds and displays a candidate patch preview', fu
         'type' => ArtifactType::EventCandidate,
         'data' => [
             'status' => 'candidate',
-            'source_artifact_id' => 99,
+            'source_artifact_id' => $draft->getKey(),
             'events' => [[
                 'event_type' => 'character_moved',
                 'subject_type' => 'character',
@@ -967,7 +973,7 @@ test('state changes workspace builds and displays a candidate patch preview', fu
     $page
         ->assertSee('候选，尚未生效')
         ->assertSee('审校 PASS 后提交正式版本')
-        ->assertSee('正文 #99 → 事件 #'.$eventRun->artifacts()->where('type', ArtifactType::EventCandidate)->value('id').' → 状态补丁 #')
+        ->assertSee('正文 #'.$draft->getKey().' → 事件 #'.$eventRun->artifacts()->where('type', ArtifactType::EventCandidate)->value('id').' → 状态补丁 #')
         ->assertSee('characters.12.location')
         ->assertSee('洛阳')
         ->assertSee('character_moved')
@@ -980,6 +986,12 @@ test('state changes workspace never presents an older candidate patch as current
     $novel = Novel::factory()->create();
     app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create();
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create(['type' => ArtifactType::ChapterDraft]);
     $eventRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'stage' => GenerationStage::EventExtraction,
         'status' => RunStatus::Succeeded,
@@ -988,7 +1000,7 @@ test('state changes workspace never presents an older candidate patch as current
     $oldCandidate = GenerationArtifact::factory()->for($eventRun)->create([
         'type' => ArtifactType::EventCandidate,
         'version' => 1,
-        'data' => ['status' => 'candidate', 'source_artifact_id' => 99, 'events' => []],
+        'data' => ['status' => 'candidate', 'source_artifact_id' => $draft->getKey(), 'events' => []],
     ]);
     GenerationArtifact::factory()->for($eventRun)->create([
         'type' => ArtifactType::StatePatch,
@@ -1015,7 +1027,7 @@ test('state changes workspace never presents an older candidate patch as current
     $currentCandidate = GenerationArtifact::factory()->for($eventRun)->create([
         'type' => ArtifactType::EventCandidate,
         'version' => 2,
-        'data' => ['status' => 'candidate', 'source_artifact_id' => 99, 'events' => []],
+        'data' => ['status' => 'candidate', 'source_artifact_id' => $draft->getKey(), 'events' => []],
     ]);
 
     Livewire::test(ViewNovelChapter::class, [

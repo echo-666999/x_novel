@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Generation\GenerateNextChapterAction;
 use App\Data\ResumePoint;
+use App\Enums\AiStage;
 use App\Enums\ArtifactType;
+use App\Enums\ArtifactValidationStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
@@ -29,6 +31,7 @@ class ResumeResolver
         private readonly RewriteScopeResolver $rewriteScopeResolver,
         private readonly CanonicalPostCommitDispatcher $postCommitDispatcher,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly GenerationArtifactLocator $artifacts,
     ) {}
 
     public function detect(Novel $novel): ResumePoint
@@ -141,7 +144,8 @@ class ResumeResolver
         $latest = $query->latest('id')->first();
         if ($latest === null
             || $latest->status !== RunStatus::Failed
-            || $this->failurePolicy->allowsFrozenChapterResume($latest)) {
+            || ($this->failurePolicy->allowsFrozenChapterResume($latest)
+                && $this->frozenRunStillCurrent($latest))) {
             return $point;
         }
 
@@ -153,6 +157,50 @@ class ResumeResolver
             $point->sceneId,
             canResume: false,
         );
+    }
+
+    /** Resume 只能重放原 Admission；State、Bible、Route、Prompt 或来源 Artifact 任一变化都必须 Restart。 */
+    private function frozenRunStillCurrent(GenerationRun $run): bool
+    {
+        $chapter = $run->chapter()->with(['novel.canonicalStateVersion', 'latestPlan'])->first();
+        if ($chapter === null
+            || strlen((string) $run->input_hash) !== 64
+            || (int) $run->state_version !== (int) $chapter->novel->canonicalStateVersion?->version) {
+            return false;
+        }
+
+        $stage = match ($run->stage) {
+            GenerationStage::SceneGeneration => AiStage::Writer,
+            GenerationStage::ChapterAssembly, GenerationStage::Rewrite => AiStage::Rewrite,
+            GenerationStage::CoverageJudgment, GenerationStage::EventExtraction => AiStage::Extractor,
+            GenerationStage::Review => AiStage::Reviewer,
+            GenerationStage::MemorySummary => AiStage::Summary,
+            default => null,
+        };
+        if ($stage !== null) {
+            $route = data_get($chapter->latestPlan?->admission_snapshot, "routes.{$stage->value}");
+            if (! is_array($route)
+                || (string) ($route['provider'] ?? '') !== (string) $run->provider
+                || (string) ($route['model'] ?? '') !== (string) $run->model_policy
+                || (string) ($route['prompt_version'] ?? '') !== (string) $run->prompt_version
+                || (int) data_get($chapter->latestPlan?->admission_snapshot, 'bible_version') !== (int) $run->bible_version) {
+                return false;
+            }
+        }
+
+        $sourceId = data_get($run->error_metadata, 'source_artifact_id')
+            ?? data_get($run->context_snapshot, 'source_artifact_id')
+            ?? data_get($run->context_snapshot, 'draft.artifact_id')
+            ?? data_get($run->context_snapshot, 'chapter_draft.artifact_id');
+        if (! is_numeric($sourceId)) {
+            return true;
+        }
+
+        return GenerationArtifact::query()
+            ->whereKey((int) $sourceId)
+            ->where('validation_status', ArtifactValidationStatus::Validated)
+            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
+            ->exists();
     }
 
     public function resume(Novel $novel): ResumePoint
@@ -213,44 +261,36 @@ class ResumeResolver
 
     private function latestDraft(Chapter $chapter): ?GenerationArtifact
     {
-        return GenerationArtifact::query()
-            ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('chapter_id', $chapter->getKey())
-                ->whereNull('scene_id')
-                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
-            ->latest('id')
-            ->first();
+        return $this->artifacts->latestForChapter(
+            $chapter->getKey(),
+            [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft],
+        );
     }
 
     private function currentEventCandidate(Chapter $chapter, GenerationArtifact $draft): ?GenerationArtifact
     {
         $stateVersion = $chapter->novel->canonicalStateVersion?->version;
 
-        return GenerationArtifact::query()
-            ->where('type', ArtifactType::EventCandidate)
-            ->where('data->source_artifact_id', $draft->getKey())
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('chapter_id', $chapter->getKey())
-                ->where('state_version', $stateVersion)
-                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
-            ->latest('id')
-            ->first();
+        return $this->artifacts->latestForChapter(
+            $chapter->getKey(),
+            ArtifactType::EventCandidate,
+            $draft->getKey(),
+            $stateVersion,
+        );
     }
 
     private function currentStatePatch(Chapter $chapter, GenerationArtifact $candidate): ?GenerationArtifact
     {
         $stateVersion = $chapter->novel->canonicalStateVersion?->version;
 
-        return GenerationArtifact::query()
-            ->where('type', ArtifactType::StatePatch)
-            ->where('data->source_artifact_id', $candidate->getKey())
-            ->where('data->expected_state_version', $stateVersion)
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('chapter_id', $chapter->getKey())
-                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
-            ->latest('id')
-            ->first();
+        $patch = $this->artifacts->latestForChapter(
+            $chapter->getKey(),
+            ArtifactType::StatePatch,
+            $candidate->getKey(),
+            $stateVersion,
+        );
+
+        return (int) data_get($patch?->data, 'expected_state_version', -1) === $stateVersion ? $patch : null;
     }
 
     private function advance(Novel $novel, ResumePoint $point): void

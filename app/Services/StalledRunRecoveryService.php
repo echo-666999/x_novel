@@ -25,6 +25,7 @@ class StalledRunRecoveryService
         GenerationStage::Review,
         GenerationStage::Rewrite,
         GenerationStage::Commit,
+        GenerationStage::MemorySummary,
     ];
 
     public function __construct(
@@ -36,11 +37,16 @@ class StalledRunRecoveryService
     public function markStalledRuns(): int
     {
         return GenerationRun::query()
-            ->where('status', RunStatus::Running)
+            ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
             // 主批次是协调记录而非正在占用 Worker 的 Provider Run，不能按 Worker 心跳判停滞。
             ->where('scope_type', '!=', NovelOutlinePipeline::BATCH_SCOPE)
             ->whereIn('stage', self::RECOVERABLE_STAGES)
-            ->where('updated_at', '<=', $this->runLease->cutoff())
+            ->where(function ($query): void {
+                $query->where('lease_expires_at', '<=', now())
+                    ->orWhere(fn ($legacy) => $legacy
+                        ->whereNull('lease_expires_at')
+                        ->where('updated_at', '<=', $this->runLease->cutoff()));
+            })
             ->update([
                 'status' => RunStatus::Failed,
                 'error_code' => self::ERROR_CODE,
@@ -48,12 +54,16 @@ class StalledRunRecoveryService
                 'error_retryable' => false,
                 'error_metadata' => ['category' => 'worker_lost'],
                 'finished_at' => now(),
+                'lease_expires_at' => null,
+                'lease_token' => null,
+                'reserved_cost' => 0,
             ]);
     }
 
     public function isStalled(GenerationRun $run): bool
     {
-        return $run->status === RunStatus::Running
+        return in_array($run->stage, self::RECOVERABLE_STAGES, true)
+            && in_array($run->status, [RunStatus::Queued, RunStatus::Running], true)
             && $this->runLease->isExpired($run);
     }
 
@@ -107,6 +117,9 @@ class StalledRunRecoveryService
                     'error_retryable' => false,
                     'error_metadata' => ['category' => 'worker_lost'],
                     'finished_at' => now(),
+                    'lease_expires_at' => null,
+                    'lease_token' => null,
+                    'reserved_cost' => 0,
                 ]);
 
                 $lockedRun->refresh();

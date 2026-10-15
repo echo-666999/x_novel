@@ -15,6 +15,7 @@ use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\ForeshadowingPlanAction;
 use App\Enums\ForeshadowingTimingStatus;
 use App\Enums\GenerationStage;
@@ -53,9 +54,10 @@ class ChapterPlanner
         private readonly InvalidateChapterPlanDownstreamAction $invalidatePlanDownstream,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
+        private readonly ContentSelfHealingService $contentSelfHealing,
     ) {}
 
-    public function generate(int $chapterId, bool $regenerate = false): ?ChapterPlan
+    public function generate(int $chapterId, bool $regenerate = false, ?int $contentRepairRunId = null): ?ChapterPlan
     {
         $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'volume'])->findOrFail($chapterId);
         $novel = $chapter->novel;
@@ -64,9 +66,45 @@ class ChapterPlanner
             throw new AiProviderException('novel_paused', '小说已暂停，不能开始新的规划阶段。', false);
         }
 
-        $this->foreshadowingPlanningGate->assertModelPlanningAllowed($chapter);
+        $repairRun = $contentRepairRunId === null ? null : GenerationRun::query()
+            ->whereKey($contentRepairRunId)
+            ->where('chapter_id', $chapter->getKey())
+            ->where('stage', GenerationStage::ContentRepair)
+            ->firstOrFail();
+        $criticalOverdue = $this->foreshadowingPlanningGate->criticalOverdue($chapter);
+        if ($criticalOverdue->isNotEmpty() && $repairRun === null) {
+            $repairRun = $this->contentSelfHealing->start(
+                $chapter,
+                ContentRepairType::CriticalForeshadowing,
+                ['foreshadowing_ids' => $criticalOverdue->modelKeys()],
+                ['overdue' => $criticalOverdue->map->only(['id', 'title', 'due_from_chapter', 'due_to_chapter'])->all()],
+            );
+        }
+        if ($criticalOverdue->isNotEmpty()
+            && ($repairRun === null || $this->contentSelfHealing->type($repairRun) !== ContentRepairType::CriticalForeshadowing)) {
+            $this->foreshadowingPlanningGate->assertModelPlanningAllowed($chapter);
+        }
 
         $context = $this->context($chapter, $regenerate);
+        if ($repairRun !== null) {
+            $this->contentSelfHealing->assertWithinLimits($repairRun);
+            $context['content_self_healing'] = $this->contentSelfHealing->planningContext($repairRun);
+            if ($this->contentSelfHealing->type($repairRun) === ContentRepairType::CriticalForeshadowing) {
+                $restrictedIds = collect((array) data_get($repairRun->context_snapshot, 'source.foreshadowing_ids'))
+                    ->map(fn (mixed $id): int => (int) $id)
+                    ->all();
+                $context['foreshadowings_requiring_action'] = collect($context['foreshadowings_requiring_action'])
+                    ->map(function (array $foreshadowing) use ($restrictedIds): array {
+                        if (in_array((int) $foreshadowing['id'], $restrictedIds, true)) {
+                            $foreshadowing['allowed_model_actions'] = ['pay_off'];
+                            $foreshadowing['restricted_repair'] = true;
+                        }
+
+                        return $foreshadowing;
+                    })
+                    ->all();
+            }
+        }
         $frozenRetry = $this->frozenRetryContract($chapter, $context, $regenerate);
         if ($frozenRetry === null) {
             $settings = $this->settingsResolver->resolve(AiStage::Planner, $novel);
@@ -123,6 +161,10 @@ class ChapterPlanner
         if ($reused) {
             $planId = data_get($run->context_snapshot, 'chapter_plan_id');
 
+            if ($repairRun !== null) {
+                $this->contentSelfHealing->completeIfPlanScoped($repairRun);
+            }
+
             return is_numeric($planId) ? ChapterPlan::query()->find((int) $planId) : null;
         }
 
@@ -136,6 +178,7 @@ class ChapterPlanner
                 reasoningEffort: $settings->reasoningEffort,
                 systemPrompt: $this->systemPrompt($novel),
                 prompt: '请根据以下权威上下文创建下一章可执行计划。除固定 JSON 字段和枚举值外，所有自然语言内容必须使用简体中文。'
+                    .($repairRun === null ? '' : '这是一次受限内容修复。必须针对 content_self_healing.diagnostics 修正上次问题；不得原样返回失败候选，也不得改变未被诊断涉及的 Outline、State、Locked Fact 或章节目标。')
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
                     .'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。'
@@ -156,6 +199,7 @@ class ChapterPlanner
                     'novel_id' => $novel->getKey(),
                     'chapter_id' => $chapter->getKey(),
                     'stage' => AiStage::Planner->value,
+                    'content_repair_run_id' => $repairRun?->getKey(),
                 ],
             );
             $requestSnapshot = $this->outputCapacity->assertRequestAgainstContract(
@@ -166,6 +210,7 @@ class ChapterPlanner
                 $budget,
             );
             $this->outputCapacity->recordRequestSnapshot($run, 'chapter_planning', $requestSnapshot);
+            $this->contentSelfHealing->assertCanRequest($request);
             $response = $this->provider->generate($request);
 
             $payload = ChapterPlanPayload::validate(
@@ -178,7 +223,12 @@ class ChapterPlanner
             $candidate->setRelation('chapter', $chapter);
             $this->planValidator->validate($candidate)->assertCanGenerate();
 
-            return $this->complete($run, $chapter, $payload, $response->content, $context['state_version'], $regenerate);
+            $plan = $this->complete($run, $chapter, $payload, $response->content, $context['state_version'], $regenerate);
+            if ($repairRun !== null) {
+                $this->contentSelfHealing->completeIfPlanScoped($repairRun);
+            }
+
+            return $plan;
         } catch (Throwable $exception) {
             if ($exception instanceof AiProviderException && is_array($budget)) {
                 // 只有冻结预算确实存在更高一档时才允许重试，避免相同参数重复计费。
@@ -193,6 +243,14 @@ class ChapterPlanner
                 );
             }
             $this->fail($run, $exception, $failedCandidate);
+            if ($repairRun !== null
+                && $exception instanceof ValidationException
+                && $this->contentSelfHealing->type($repairRun) === ContentRepairType::PlanValidation) {
+                $this->contentSelfHealing->fail($repairRun, 'content_repair_plan_validation_failed', $exception->getMessage(), [
+                    'planning_run_id' => $run->getKey(),
+                    'validation_errors' => $exception->errors(),
+                ]);
+            }
             throw $exception;
         }
     }

@@ -94,7 +94,7 @@ class SystemHealthService
     private function scheduler(): SystemHealthCheck
     {
         $scheduleFile = file_get_contents(base_path('routes/console.php')) ?: '';
-        $hasRecovery = str_contains($scheduleFile, "Schedule::command('generation:mark-stalled')");
+        $hasRecovery = str_contains($scheduleFile, "Schedule::command('generation:recover-automatic')");
         $hasSnapshot = str_contains($scheduleFile, "Schedule::command('horizon:snapshot')");
 
         return new SystemHealthCheck(
@@ -141,9 +141,16 @@ class SystemHealthService
 
     private function costLimit(): SystemHealthCheck
     {
-        $configured = collect(app(GenerationSettingsService::class)->budgetSettings())->contains(fn ($value): bool => is_numeric($value));
+        $limits = app(GenerationSettingsService::class)->budgetSettings();
+        $configured = collect(['daily_hard_limit', 'novel_total_limit', 'chapter_max_cost'])
+            ->every(fn (string $key): bool => is_numeric($limits[$key] ?? null) && (float) $limits[$key] > 0);
 
-        return new SystemHealthCheck('cost_limit', '成本硬限额', $configured ? 'healthy' : 'warning', $configured ? '至少配置了一项 Provider 请求硬限额。' : '未配置 Daily、Novel 或 Chapter 成本硬限额。');
+        return new SystemHealthCheck(
+            'cost_limit',
+            '成本硬限额',
+            $configured ? 'healthy' : 'warning',
+            $configured ? '每日、单书和单章 Provider 请求硬限额均已配置。' : '请在“设置 → 生成参数”配置每日、单书和单章三项成本硬限额。',
+        );
     }
 
     private function emergencyStop(): SystemHealthCheck

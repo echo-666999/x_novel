@@ -6,6 +6,7 @@ use App\Actions\Generation\CheckNextAction;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Models\Chapter;
+use App\Services\AutoStopService;
 use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -47,8 +48,9 @@ class ContinueAutoGenerationJob implements ShouldBeUnique, ShouldQueue
         return "continue-generation:{$this->chapterId}:{$this->canonicalArtifactId}:{$this->stateVersionId}";
     }
 
-    public function handle(CheckNextAction $checkNextAction): void
+    public function handle(CheckNextAction $checkNextAction, ?AutoStopService $autoStop = null): void
     {
+        $autoStop ??= app(AutoStopService::class);
         $chapter = Chapter::query()->with('novel')->find($this->chapterId);
 
         if ($chapter === null) {
@@ -59,19 +61,40 @@ class ContinueAutoGenerationJob implements ShouldBeUnique, ShouldQueue
         if ($chapter->status !== ChapterStatus::Canonical
             || (int) $chapter->canonical_artifact_id !== $this->canonicalArtifactId
             || (int) $novel->canonical_state_version_id !== $this->stateVersionId
-            || blank($chapter->summary)
             || $chapter->sequence !== $novel->current_chapter_sequence) {
+            return;
+        }
+
+        if (blank($chapter->summary)) {
+            $exception = new \RuntimeException('当前 Canonical Chapter 缺少正式摘要，自动续章不能继续。');
+            $autoStop->recordPostCommitFailure($chapter, 'continuation', $exception);
+            $this->fail($exception);
+
             return;
         }
 
         try {
             $checkNextAction->handle($novel, $chapter->getKey());
+            $autoStop->resolvePostCommitFailure($novel, 'continuation');
         } catch (Throwable $exception) {
             if (app(GenerationFailurePolicy::class)->shouldQueueRetry($exception, GenerationStage::MemorySummary)) {
                 throw $exception;
             }
 
+            $autoStop->recordPostCommitFailure($chapter, 'continuation', $exception);
             $this->fail($exception);
+        }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        if ($exception === null) {
+            return;
+        }
+
+        $chapter = Chapter::query()->find($this->chapterId);
+        if ($chapter !== null) {
+            app(AutoStopService::class)->recordPostCommitFailure($chapter, 'continuation', $exception);
         }
     }
 }

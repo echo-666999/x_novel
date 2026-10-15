@@ -606,12 +606,12 @@ class ChapterReviewer
                 $findings[] = [
                     'code' => 'REWRITE_EXHAUSTED',
                     'dimension' => 'workflow',
-                    'severity' => 'ambiguous',
+                    'severity' => 'error',
                     'scene_id' => null,
                     'scope' => 'chapter',
-                    'auto_fixable' => false,
-                    'requires_human_decision' => true,
-                    'message' => '自动 Rewrite 已达到最大 '.config('generation.max_rewrite_attempts', 2).' 次，需要人工处理。',
+                    'auto_fixable' => true,
+                    'requires_human_decision' => false,
+                    'message' => '自动 Rewrite 已达到最大 '.config('generation.max_rewrite_attempts', 2).' 次，应升级为一次受限章节重建。',
                     'evidence' => '已完成 '.$rewriteAttempts.' 次自动 Rewrite。',
                     'source' => 'rewrite_loop',
                 ];
@@ -849,6 +849,7 @@ class ChapterReviewer
     /** @return array<string, mixed> */
     private function unresolvedRewriteScopeFinding(string $reason): array
     {
+        $rebuildable = $reason === 'plan_or_scene_rebuild_required';
         $reasonLabel = match ($reason) {
             'paragraph_evidence_not_unique' => '段落证据无法唯一定位到一个当前 Scene。',
             'invalid_scene_reference' => 'Finding 未引用当前章节中的有效 Scene。',
@@ -864,12 +865,14 @@ class ChapterReviewer
         return [
             'code' => 'REWRITE_SCOPE_UNRESOLVED',
             'dimension' => 'workflow',
-            'severity' => 'ambiguous',
+            'severity' => $rebuildable ? 'error' : 'ambiguous',
             'scene_id' => null,
             'scope' => 'chapter',
-            'auto_fixable' => false,
-            'requires_human_decision' => true,
-            'message' => '无法自动选择安全的 Rewrite 范围，需要人工处理。',
+            'auto_fixable' => $rebuildable,
+            'requires_human_decision' => ! $rebuildable,
+            'message' => $rebuildable
+                ? '问题属于章节结构层，应自动创建新 Plan 并重建 Scene。'
+                : '无法自动选择安全的 Rewrite 范围，需要人工处理。',
             'evidence' => $reasonLabel,
             'source' => 'rewrite_scope_resolver',
         ];

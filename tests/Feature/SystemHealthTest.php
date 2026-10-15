@@ -5,8 +5,8 @@ use App\Enums\ChapterStatus;
 use App\Jobs\UpdateMemoryJob;
 use App\Models\Chapter;
 use App\Models\Novel;
-use App\Services\SystemHealthService;
 use App\Services\GenerationSettingsService;
+use App\Services\SystemHealthService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Queue;
@@ -19,7 +19,11 @@ test('system health exposes every mvp release checklist category without secrets
     seedAllAiModelRoutesForTest();
     $service = app(GenerationSettingsService::class);
     $settings = $service->settings();
-    $settings['budget']['daily_hard_limit'] = 10;
+    $settings['budget'] = [
+        'daily_hard_limit' => 10,
+        'novel_total_limit' => 100,
+        'chapter_max_cost' => 2,
+    ];
     $service->save($settings, null);
 
     $checks = app(SystemHealthService::class)->checks()->keyBy('key');
@@ -62,6 +66,6 @@ test('horizon listens to both queues and release scheduler jobs are registered',
 
     Artisan::call('schedule:list');
     expect(Artisan::output())
-        ->toContain('generation:mark-stalled')
+        ->toContain('generation:recover-automatic')
         ->toContain('horizon:snapshot');
 });

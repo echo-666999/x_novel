@@ -4,9 +4,11 @@ namespace App\Actions\Generation;
 
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\BudgetService;
+use App\AI\Exceptions\AiProviderException;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
@@ -25,6 +27,8 @@ use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\Review;
 use App\Services\AutoStopService;
+use App\Services\ContentSelfHealingService;
+use App\Services\GenerationArtifactLocator;
 use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationOutputCapacityGuard;
 use App\Services\GenerationRunLease;
@@ -54,6 +58,8 @@ class AdvanceChapterPipelineAction
         private readonly PlanAdmissionService $planAdmission,
         private readonly PlanCoverageJudgmentRepairer $coverageJudgment,
         private readonly LegacyAdmissionRecoveryContract $legacyRecovery,
+        private readonly ContentSelfHealingService $contentSelfHealing,
+        private readonly GenerationArtifactLocator $artifacts,
     ) {}
 
     /** 按持久化来源链选择唯一下一阶段，Coverage 复核必须先于任何内容 Rewrite 决策。 */
@@ -67,6 +73,10 @@ class AdvanceChapterPipelineAction
 
             if (! $this->canAdvance($chapter)) {
                 return;
+            }
+            $activeRepair = $this->contentSelfHealing->activeForChapter($chapter);
+            if ($activeRepair !== null) {
+                $this->contentSelfHealing->assertWithinLimits($activeRepair);
             }
 
             $latestDraft = $this->latestChapterDraft($chapter);
@@ -100,10 +110,13 @@ class AdvanceChapterPipelineAction
                 return;
             }
 
-            $candidate = $this->latestArtifact($chapter, ArtifactType::EventCandidate);
-            if ($candidate === null
-                || (int) data_get($candidate->data, 'source_artifact_id') !== $draft->getKey()
-                || $candidate->generationRun->state_version !== $chapter->novel->canonicalStateVersion?->version) {
+            $candidate = $this->artifacts->latestForChapter(
+                $chapter->getKey(),
+                ArtifactType::EventCandidate,
+                $draft->getKey(),
+                $chapter->novel->canonicalStateVersion?->version,
+            );
+            if ($candidate === null) {
                 $nextStage = GenerationStage::EventExtraction;
                 // Worker 丢失后的统一推进仍要携带旧 Admission 恢复 Run，不能退回 Plan v1 读取容量。
                 $nextJob = new ExtractStoryEventsJob(
@@ -114,9 +127,13 @@ class AdvanceChapterPipelineAction
                 return;
             }
 
-            $patch = $this->latestArtifact($chapter, ArtifactType::StatePatch);
+            $patch = $this->artifacts->latestForChapter(
+                $chapter->getKey(),
+                ArtifactType::StatePatch,
+                $candidate->getKey(),
+                $chapter->novel->canonicalStateVersion?->version,
+            );
             if ($patch === null
-                || (int) data_get($patch->data, 'source_artifact_id') !== $candidate->getKey()
                 || (int) data_get($patch->data, 'expected_state_version', -1) !== $chapter->novel->canonicalStateVersion?->version) {
                 $this->statePatchBuilder->build($chapter->getKey());
             }
@@ -184,15 +201,10 @@ class AdvanceChapterPipelineAction
 
     private function latestChapterDraft(Chapter $chapter): ?GenerationArtifact
     {
-        return GenerationArtifact::query()
-            ->whereIn('type', [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft])
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('chapter_id', $chapter->getKey())
-                ->whereNull('scene_id')
-                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
-            ->with('generationRun')
-            ->latest('id')
-            ->first();
+        return $this->artifacts->latestForChapter(
+            $chapter->getKey(),
+            [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft],
+        );
     }
 
     private function currentDraft(Chapter $chapter, ?GenerationArtifact $draft = null): ?GenerationArtifact
@@ -259,15 +271,67 @@ class AdvanceChapterPipelineAction
     private function advanceReviewDecision(Chapter $chapter, GenerationArtifact $draft, Review $review): array
     {
         if ($review->decision === ReviewDecision::Pass) {
+            $this->contentSelfHealing->completeAfterReview($chapter);
+
             return $this->nextAfterPass($chapter, $draft, $review);
         }
 
+        $repairAdvice = data_get($review->artifact?->data, 'repair_advice');
+        if (is_array($repairAdvice) && ($repairAdvice['action'] ?? null) === 'rebuild_plan_or_scenes') {
+            $findingCodes = collect($review->findings)
+                ->filter(fn (mixed $finding): bool => is_array($finding))
+                ->pluck('code')
+                ->filter(fn (mixed $code): bool => is_string($code))
+                ->values()
+                ->all();
+            $repairType = in_array('REWRITE_EXHAUSTED', $findingCodes, true)
+                ? ContentRepairType::RewriteExhaustion
+                : ContentRepairType::ChapterStructure;
+
+            try {
+                $repair = $this->contentSelfHealing->start(
+                    $chapter,
+                    $repairType,
+                    ['review_id' => $review->getKey(), 'draft_artifact_id' => $draft->getKey()],
+                    ['repair_advice' => $repairAdvice, 'finding_codes' => $findingCodes],
+                );
+            } catch (AiProviderException $exception) {
+                $chapter->update(['status' => ChapterStatus::Blocked]);
+                $this->autoStop->stopForFailure($chapter->getKey(), $exception);
+
+                return [null, null];
+            }
+
+            return [GenerationStage::ChapterPlanning, new PlanChapterJob(
+                chapterId: $chapter->getKey(),
+                regenerate: true,
+                contentRepairRunId: $repair->getKey(),
+            )];
+        }
+
         if ($review->decision !== ReviewDecision::Rewrite) {
+            $activeRepair = $this->contentSelfHealing->activeForChapter($chapter);
+            if ($activeRepair !== null) {
+                $this->contentSelfHealing->fail(
+                    $activeRepair,
+                    'content_repair_review_not_passed',
+                    '章节重建后的 Review 未通过，自动修复已结束。',
+                    ['review_id' => $review->getKey(), 'decision' => $review->decision->value],
+                );
+            }
+
             return [null, null];
         }
 
         $scope = $this->rewriteScopeResolver->resolveReview($chapter, $review);
         if (! $scope->isResolved()) {
+            $this->autoStop->stop(
+                $chapter->novel,
+                'rewrite_scope_unresolved',
+                '审校要求重写，但无法解析安全的自动重写范围。',
+                '根据 Review Finding 重建 Plan 或受影响 Scene。',
+            );
+
             return [null, null];
         }
 
@@ -297,21 +361,34 @@ class AdvanceChapterPipelineAction
 
         $expectedStateVersion = $chapter->novel->canonicalStateVersion?->version;
         if ($expectedStateVersion === null || $review->generationRun?->state_version !== $expectedStateVersion) {
-            return [null, null];
+            throw ValidationException::withMessages([
+                'auto_commit' => 'PASS Review 的 State Version 已不是当前 Canonical Story State，不能静默跳过提交。',
+            ]);
         }
 
-        $candidate = $this->latestArtifact($chapter, ArtifactType::EventCandidate);
-        if ($candidate === null
-            || $candidate->generationRun?->state_version !== $expectedStateVersion
-            || (int) data_get($candidate->data, 'source_artifact_id') !== $draft->getKey()) {
-            return [null, null];
+        $candidate = $this->artifacts->latestForChapter(
+            $chapter->getKey(),
+            ArtifactType::EventCandidate,
+            $draft->getKey(),
+            $expectedStateVersion,
+        );
+        if ($candidate === null) {
+            throw ValidationException::withMessages([
+                'auto_commit' => 'PASS Review 缺少与当前 Draft 和 State Version 匹配的 Event Candidate。',
+            ]);
         }
 
-        $patch = $this->latestArtifact($chapter, ArtifactType::StatePatch);
+        $patch = $this->artifacts->latestForChapter(
+            $chapter->getKey(),
+            ArtifactType::StatePatch,
+            $candidate->getKey(),
+            $expectedStateVersion,
+        );
         if ($patch === null
-            || (int) data_get($patch->data, 'source_artifact_id') !== $candidate->getKey()
             || (int) data_get($patch->data, 'expected_state_version', -1) !== $expectedStateVersion) {
-            return [null, null];
+            throw ValidationException::withMessages([
+                'auto_commit' => 'PASS Review 缺少与当前 Event Candidate 匹配的 State Patch。',
+            ]);
         }
 
         return [GenerationStage::Commit, new CommitChapterJob($chapter->getKey(), $review->getKey())];
@@ -358,15 +435,7 @@ class AdvanceChapterPipelineAction
 
     private function latestArtifact(Chapter $chapter, ArtifactType $type): ?GenerationArtifact
     {
-        return GenerationArtifact::query()
-            ->where('type', $type)
-            ->whereHas('generationRun', fn ($query) => $query
-                ->where('chapter_id', $chapter->getKey())
-                ->whereIn('status', [RunStatus::Succeeded, RunStatus::Failed]))
-            ->with('generationRun')
-            ->latest('version')
-            ->latest('id')
-            ->first();
+        return $this->artifacts->latestForChapter($chapter->getKey(), $type);
     }
 
     private function regenerationBatchIdBefore(Chapter $chapter, int $sequence): ?string
@@ -418,6 +487,7 @@ class AdvanceChapterPipelineAction
     private function hasFreshRun(int $chapterId): bool
     {
         return Chapter::query()->findOrFail($chapterId)->generationRuns()
+            ->where('stage', '!=', GenerationStage::ContentRepair)
             ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
             ->get()
             ->contains(fn ($run): bool => $this->runLease->isFresh($run));
@@ -434,6 +504,8 @@ class AdvanceChapterPipelineAction
 
     private function dispatch(ShouldQueue&ShouldBeUnique $job): void
     {
-        $this->dispatcher->dispatch($job);
+        if (! $this->dispatcher->dispatch($job) && ! $this->dispatcher->isPending($job)) {
+            throw new \RuntimeException('下一生成阶段未能取得待执行标记，流程没有进入队列。');
+        }
     }
 }

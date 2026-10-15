@@ -92,8 +92,7 @@ class ChapterRewriter
         }
         $attempt = $this->attemptCount($chapter) + 1;
         if ($attempt > (int) config('generation.max_rewrite_attempts', 2)) {
-            $this->markExhausted($chapter, $review);
-            throw new AiProviderException('rewrite_exhausted', 'Rewrite 已达到最大 2 次，已转为需要人工处理。', false);
+            throw new AiProviderException('rewrite_exhausted', 'Rewrite 已达到最大 2 次，应升级为一次受限章节重建。', false);
         }
 
         $findingHash = hash('sha256', json_encode($findings, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
@@ -726,7 +725,15 @@ class ChapterRewriter
         });
     }
 
-    private function markExhausted(Chapter $chapter, Review $source): Review
+    public function markExhausted(int $chapterId): Review
+    {
+        $chapter = Chapter::query()->findOrFail($chapterId);
+        $source = $this->latestReview($chapter);
+
+        return $this->persistExhaustedReview($chapter, $source);
+    }
+
+    private function persistExhaustedReview(Chapter $chapter, Review $source): Review
     {
         return DB::transaction(function () use ($chapter, $source): Review {
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());

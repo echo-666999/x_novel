@@ -77,10 +77,12 @@ GenerateNextChapterAction
 自动策略或用户确认提交
 → CommitChapterJob → CanonicalCommitService
 → Persist Milestone / Beat Completion（满足时）
-→ UpdateMemoryJob
 → GenerateCanonicalChapterSummaryJob
-→ RefreshNovelProjectionJob
 → ContinueAutoGenerationJob → CheckNextAction
+→ NovelLifecycleAdvancer → 下一 Arc / 下一 Volume / Ending Audit / Completed
+
+独立副作用：UpdateMemoryJob → GenerateEmbeddingJob
+独立副作用：RefreshNovelProjectionJob
 ```
 
 `GenerateEmbeddingJob` 由 Memory 更新独立派发并重试，不在阻塞自动续写的 Queue Chain 中。
@@ -88,6 +90,8 @@ GenerateNextChapterAction
 `PASS` 是 Review Decision，不是 Canonical 状态。`ReviewChapterJob` 只在 Review Artifact 对应当前 Draft、小说未暂停、`settings.auto_commit_configured=true` 且 `settings.auto_commit=true` 时自动派发 Commit；遗留的未确认 `auto_commit` 键保持惰性。关闭时只允许用户确认动作启动 Commit。两条路径都调用同一 `CommitChapterJob → CanonicalCommitService`，不得复制或绕过提交门禁。
 
 `AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan Admission、Scene、Deterministic Assembly、Coverage Judgment、Event Extraction、Review 和局部 Rewrite 成功后都调用该动作，不再各自维护后续分支。
+
+内容自愈由 `ContentSelfHealingService` 统一建立 `content_repair` Run 和不可变 Context Artifact。Plan 校验失败生成带完整校验错误与失败候选的新规划请求；Review 的 `rebuild_plan_or_scenes` 建议直接创建新 Plan Version，随后由现有下游失效机制从 Scene 重新生成；Rewrite 耗尽只允许升级一次相同重建；Critical 逾期伏笔只允许一次 `pay_off` 规划。四类修复分别按 `config/generation.php` 的 `max_attempts / max_cost / max_elapsed_seconds` 执行硬限制。费用门禁在 Provider 调用前使用已发生费用加本次最大可能费用判断，时间从修复 Run 创建时起算并包含队列等待；任一门禁失败都会持久化失败诊断并停止自动推进。
 
 阶段执行结果与流程推进结果分开记录。Provider 或确定性阶段完成并写入有效 Artifact 后，Run 保持 `succeeded`；随后 `AdvanceChapterPipelineAction` 的选择、校验或派发异常写入该 Run 的 `progression_failure` JSONB，不覆盖 `error_code / error_message`，也不把 Scene 或 Chapter 的成功阶段反向改成失败。所有章节生成 Job 通过同一推进边界记录错误并停止自动续写；Generation 页面、章节运行记录、场景运行详情和流水线时间轴显示“阶段成功 · 推进异常”。同一成功 Run 再次推进成功时只写入 `resolved_at`，保留原始故障证据且不重复调用 Provider。
 
@@ -683,18 +687,16 @@ Embedding 失败只 Retry。
 summary:{canonical_artifact_checksum}:{summary_prompt_version}
 ```
 
-Canonical Commit 后按以下 Queue Chain 执行：
+Canonical Commit 后按以下必需 Queue Chain 执行：
 
 ```text
-UpdateMemoryJob
-→ GenerateCanonicalChapterSummaryJob
-→ RefreshNovelProjectionJob
+GenerateCanonicalChapterSummaryJob
 → ContinueAutoGenerationJob
 ```
 
-Memory、摘要或 Projection 失败不回滚正文，但阻止本次自动续写并在 Generation 恢复中心留下恢复点。Embedding 独立重试，不阻塞下一章。Summary Job 必须核对任务携带的 Canonical Artifact ID；来源已经变化时安全结束，不覆盖新摘要。
+`UpdateMemoryJob → GenerateEmbeddingJob` 与 `RefreshNovelProjectionJob` 是独立副作用，不属于阻塞链。它们失败不回滚正文，也不阻塞下一章；Summary 失败会阻止续章。所有提交后失败都持久化来源和恢复次数，定时 `generation:recover-automatic` 从 PostgreSQL 自动恢复，达到上限后写入明确停止原因。Summary Job 必须核对任务携带的 Canonical Artifact ID；来源已经变化时按陈旧任务安全结束，不覆盖新摘要。
 
-Summary 分别冻结可见输出和隐藏推理预留；默认三档推理预留为 `8,000 / 16,000 / 24,000` Token。已经 Canonical 的章节仍沿用原 Plan Admission，普通 Retry 不读取新配置。若最高冻结预算耗尽，Generation 恢复中心提供显式 `Restart`：它以失败 Summary Run 和当前 Canonical Artifact 为来源，读取一次当前 Summary Route/预算，并把完整合同冻结进新的 Summary Run；同一 Restart 的 Queue 重试只读取该 Run 快照。旧 Plan、旧 Run 和 Canonical Artifact 均不修改。
+Summary 分别冻结可见输出和隐藏推理预留；默认三档推理预留为 `8,000 / 16,000 / 24,000` Token。已经 Canonical 的章节仍沿用原 Plan Admission，普通 Retry 不读取新配置。若最高冻结预算耗尽，Generation 恢复中心的显式 `Restart` 或定时自动恢复器可以当前失败 Summary Run 和 Canonical Artifact 为来源，读取一次当前 Summary Route/预算，并把完整合同冻结进新的 Summary Run；同一 Restart 的 Queue 重试只读取该 Run 快照。旧 Plan、旧 Run 和 Canonical Artifact 均不修改。
 
 下一章准备度和 Filament 展示调用同一个 `NovelGenerationReadiness::nextChapter()`：重新解析 Current Main Beat、最早未完成 Milestone、Handoff、上一 Canonical Artifact/Summary、State Version、暂停/停止条件和 Post-Commit 派生状态。`GenerateNextChapterAction` 在 Novel 行锁内再次消费该结果；Summary 缺失会阻断，Memory/Embedding 缺失或失败不会阻断。
 
@@ -714,7 +716,9 @@ Filament 将上述两个内部布尔值收敛为一个“启动章节生成”�
 
 ```text
 Chapter N Commit
-→ Post-Commit
+→ Canonical Summary
+→ NovelLifecycleAdvancer
+→ 自动推进 Arc / Volume / Ending
 → Check Stop Conditions
 → GenerateNextChapterAction
 → Chapter N+1
@@ -765,7 +769,7 @@ Plan 已完成 → Scene 1
 无 Plan → Plan
 ```
 
-Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v5 主批次，旧批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
+Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢复的 `failed` 批次恢复为 `running`，确认没有其他活动 Batch/子 Run，并在事务提交后调用唯一 `dispatchNext()`。它不得直接重放 `failed_jobs` payload；成功 Artifact 只有在输入指纹、Prompt Version、类型、来源链和 checksum 都匹配时才可复用。Resume 只处理可沿用冻结配置的临时故障，并继续使用原批次冻结的路由、容量和预算；Provider 配置、冻结路由或完成预算类失败必须修复配置后执行 Restart。Restart 通过正常启动入口以当前配置创建新的 v6 主批次，旧批次及其 Run、Artifact、Usage、输入指纹和快照保持不可变。
 
 章节恢复操作先在事务内还原小说的生成状态，再在事务提交后调用统一推进器，避免在数据库事务完成前派发 Job。PASS 的恢复点标记为“等待提交正式章节”；恢复只解除暂停，不派发 `CommitChapterJob`。技术 Retry 与 Resume 复用原 Run 或 Plan Admission 冻结的 Route、Prompt、容量和分档预算；尤其 Chapter Planner 位于 Admission 之前，必须从最近一个同来源、可重试的失败 Run 还原合同，不能在 Queue Retry 时重新解析后台配置。Provider 配置失败或冻结最高档的完成预算失败返回不可恢复点，修复后通过显式 Restart 创建新的来源链。Generation 运行详情分别显示冻结路由、静态容量、预算档位及升档原因、容量门禁、实际发送参数、Usage 和完成预算分类；恢复链额外显示路由合同来源、恢复合同 Run ID、冻结来源 Artifact、实际 Provider 请求数，以及 `chapter_recovery` Artifact 中的四条完整阶段路由。章节工作台把章节恢复合同显示为独立时间轴节点，同时显示当前 Stage、停止原因和下一可执行操作，分阶段按钮只用于调试、指定重跑和故障恢复。
 
@@ -775,11 +779,13 @@ Outline Resume 必须通过领域 Action 锁定 Novel 与主批次，把可恢�
 
 ## 19. Crash Recovery
 
-Worker Crash 可能留下 `generation_runs.status=running`。维护任务识别超时 Run，并标记 failed，例如 `error_code=worker_lost`。
+Worker Crash 或派发缺口可能留下超时的 `queued / running` Run。新建 queued Outline 主批次必须保存 `queued_at`、唯一 `lease_token` 和 `lease_expires_at`；Worker 认领后切换为 running 并写入 `heartbeat_at`。`generation:recover-automatic` 会先重新投递租约过期且仍为 queued 的主批次，再把运行租约过期的阶段标记为 `failed / worker_lost`，从 PostgreSQL 中认领恢复点并调用统一 Resume；同一 Run 的恢复次数和最近错误保存在 Context Snapshot。达到上限后持久化失败或小说级 `auto_stop`，不得无限重派。
 
 Outline 子阶段的不可重试错误或自动重试耗尽时，失败回调必须在行锁内把仍属于该活动尝试的主批次收口为 `failed`。延迟到达的旧 Job 或失败回调不得覆盖已成功或已取消的批次。Provider 请求失败、响应截断或 Schema/领域校验失败均表示当前阶段没有有效 Artifact；只有 Provider 响应已经通过全部校验而结果持久化是否成功无法确认时，才使用“结果不确定”错误分类。
 
-恢复时根据 Artifact + input_hash 决定 reuse 或 retry。若经过 Schema/业务校验的不可变 Artifact 已经持久化，但 Worker 在把 Run 标记为 succeeded 前崩溃，恢复流程复用该 Artifact 并从其后续合法阶段继续；没有 Artifact 的失败 Run 才重试当前阶段。Chapter Draft 恢复后仍必须依次完成 Event Candidate、State Patch 和 Review。
+恢复时根据 Artifact 的 `input_hash + source_artifact_id + validation_status` 决定 reuse 或 retry。选择器同时约束 Chapter、State Version 和 Run 输入身份，禁止先取“最新”再宽松比对来源。若 `validation_status=validated` 的不可变 Artifact 已经持久化，但 Worker 在把 Run 标记为 succeeded 前崩溃，恢复流程复用该 Artifact 并从其后续合法阶段继续；`pending/rejected` 或来源不匹配的 Artifact 不得进入后续链。Chapter Draft 恢复后仍必须依次完成 Event Candidate、State Patch 和 Review。
+
+每次实际 Provider 请求在发送前把完整系统 Prompt、消息、输出 Schema、采样参数、请求预算、Reasoning Effort 和有效 Prompt Version 写入 `generation_runs.context_snapshot.prompt_execution`，并保存规范化 checksum。同一 Run 再次执行时若 checksum、Provider、Model 或 Prompt Version 变化，请求必须在 Provider 调用前失败；Prompt 文本变化必须提升版本并创建新的 Run/Input Hash。
 
 错误分类：
 
@@ -920,11 +926,12 @@ stage:{stage}
 | Outline 批次失败 | 子阶段终止后主批次持久化为 `failed`；成功且来源匹配的 Foundation、Structure、Arc Beats、Skeleton 或 Beat Detail Artifact 保留 | 临时故障点击“继续 AI 生成”并沿用冻结路由；配置、冻结路由或完成预算类失败修复设置后点击“重新生成候选”，由 Restart 使用当前配置创建新 v4 批次，旧批次保持不变 |
 | 已启动章节必须立即采用新 Bible | 旧来源链保持不可变，不能把旧 Bible 的 Rewrite/Review 提交到新 Bible | 先执行 `novel:recover-bible-chapter` dry-run；审核完整差异、来源链、State 基线和 plan hash 后，使用相同 Expected Bible/State 与 hash 显式 `--execute`。系统创建新 Bible Version，并从 Chapter Planning 重新推进 |
 | Stage/Provider 失败 | 成功的 Run/Artifact 保留；不得靠重放全部流水线覆盖历史产物 | 在“Generation → 恢复中心”查看错误和可重试性；可重试失败使用“重试”，暂停小说使用“恢复”。章节工作台的分阶段按钮仅用于定位后的调试或恢复 |
-| Rewrite 耗尽 | 最后一次复审转为 `NEEDS_ATTENTION`，不再自动派发 Rewrite | 在章节工作台“审校”中“人工修改正文”并自动重走 Event/Patch/Review；无 Hard Conflict 且符合 Override 条件时可填写原因“人工通过（Override）” |
+| Rewrite 耗尽 | 不再派发局部 Rewrite；自动升级一次受限 Plan/Scene 重建 | 重建仍未通过或触及次数、费用、耗时上限后，在章节工作台查看内容自愈 Run 与 Review Findings，再人工修改正文或计划 |
+| 内容自愈达到上限 | `content_repair` Run 持久化具体上限、已用费用或耗时并停止自动推进 | 检查失败候选、Review Findings 与费用配置；修正根因后显式重新启动，不自动清零历史尝试 |
 | Review PASS | `auto_commit=false` 时等待提交；开启时仅在未暂停且来源链有效时派发 Canonical Commit | 关闭时在章节工作台点击“提交正式章节”；开启时查看 Commit 结果；小说暂停时不会自动提交 |
 | NEEDS_ATTENTION / BLOCK | 自动推进停止；Hard Finding 不允许普通 Override | 按 Findings 修订正文或修复状态前置条件，再重新审校；历史 Review 和 Artifact 保留 |
 
-“启动章节生成”的前置检查会先对当前小说执行一次原子化停滞清理：只把超过 `stalled_run_after_seconds` 的 `running` Run 标记为 `failed / worker_lost`，再判断是否仍有 `queued / running` Run 或其他活跃章节；近期 Run 与仍在排队的任务不得误清理。该清理独立提交，即使后续因另一个真实活跃工作流而拒绝生成，过期 Run 也不会回滚成 `running`。`php artisan generation:mark-stalled` 继续承担全局定时清理，之后仍应通过“Generation → 恢复中心”按持久化状态恢复。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
+“启动章节生成”的前置检查会先对当前小说执行一次原子化停滞清理：只把超过 `stalled_run_after_seconds` 的 `queued / running` Worker 阶段 Run 标记为 `failed / worker_lost`，再判断是否仍有真实活动 Run 或其他活跃章节；近期 Run 不得误清理。跨 Job 的 `content_repair` 是协调 Run，不按 Worker 心跳处理。Scheduler 每分钟运行 `php artisan generation:recover-automatic`，自动恢复 Worker 丢失、正式摘要派发缺口及 Memory/Projection/Continuation 失败，并按内容自愈自己的费用与总耗时合同关闭遗留修复；`generation:mark-stalled` 保留为只标记不恢复的诊断命令。`php artisan story:rebuild-state NOVEL_ID --dry-run` 和 `php artisan memory:rebuild NOVEL_ID` 分别用于正式状态校验和 Canonical Memory 重建，不用于绕过 Review 或提交草稿。
 
 Bible 变更恢复命令默认只读：
 

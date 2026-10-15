@@ -5,10 +5,14 @@ namespace App\AI;
 use App\AI\Data\AiRequest;
 use App\AI\Data\BudgetUsage;
 use App\AI\Exceptions\BudgetExceededException;
+use App\Models\AIModelPrice;
 use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\SystemSetting;
 use App\Models\UsageRecord;
 use App\Services\GenerationSettingsService;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 
 class BudgetService
@@ -29,16 +33,63 @@ class BudgetService
 
     public function assertCanRequest(AiRequest $request): void
     {
-        $this->assertAvailable($this->dailyUsage());
+        $projected = $this->projectedCost($request);
+        $this->assertAvailable($this->dailyUsage(), $projected, $this->reservedCost());
 
         [$novel, $chapter] = $this->resolveContext($request);
 
         if ($novel !== null) {
-            $this->assertAvailable($this->novelUsage($novel));
+            $this->assertAvailable($this->novelUsage($novel), $projected, $this->reservedCost($novel->getKey()));
         }
 
         if ($chapter !== null) {
-            $this->assertAvailable($this->chapterUsage($chapter, $novel));
+            $this->assertAvailable($this->chapterUsage($chapter, $novel), $projected, $this->reservedCost($novel?->getKey(), $chapter->getKey()));
+        }
+    }
+
+    /** 原子写入本次请求的最大费用预留；返回需要在 finally 中释放的 Run ID。 */
+    public function reserve(AiRequest $request): ?int
+    {
+        $runId = $request->metadata['generation_run_id'] ?? null;
+        if (! is_numeric($runId)) {
+            $this->assertCanRequest($request);
+
+            return null;
+        }
+
+        return DB::transaction(function () use ($request, $runId): int {
+            // 所有费用预留先锁同一全局设置行，使每日限额在多小说并发时也不会透支。
+            SystemSetting::query()->lockForUpdate()->findOrFail(SystemSetting::GENERATION);
+            $run = GenerationRun::query()->lockForUpdate()->find((int) $runId);
+            if ($run === null) {
+                // Route 层负责返回稳定的 provider_run_missing；预算装饰器不能掩盖该诊断。
+                return 0;
+            }
+            [$novel, $chapter] = $this->resolveContext($request);
+            $projected = $this->projectedCost($request, requirePrice: true);
+
+            $this->assertAvailable($this->dailyUsage(), $projected, $this->reservedCost(excludeRunId: $run->getKey()));
+            if ($novel !== null) {
+                $this->assertAvailable($this->novelUsage($novel), $projected, $this->reservedCost($novel->getKey(), excludeRunId: $run->getKey()));
+            }
+            if ($chapter !== null) {
+                $this->assertAvailable(
+                    $this->chapterUsage($chapter, $novel),
+                    $projected,
+                    $this->reservedCost($novel?->getKey(), $chapter->getKey(), $run->getKey()),
+                );
+            }
+
+            $run->update(['reserved_cost' => $projected]);
+
+            return $run->getKey();
+        }, 3) ?: null;
+    }
+
+    public function release(?int $runId): void
+    {
+        if ($runId !== null) {
+            GenerationRun::query()->whereKey($runId)->update(['reserved_cost' => 0]);
         }
     }
 
@@ -71,11 +122,49 @@ class BudgetService
         );
     }
 
-    private function assertAvailable(BudgetUsage $usage): void
+    private function assertAvailable(BudgetUsage $usage, float $projected = 0, float $reserved = 0): void
     {
-        if ($usage->reached()) {
-            throw new BudgetExceededException($usage->scope, $usage->used, $usage->limit);
+        $committed = $usage->used + max(0, $reserved);
+        if ($usage->reached() || ($usage->limit !== null && $committed + max(0, $projected) > $usage->limit)) {
+            throw new BudgetExceededException($usage->scope, round($committed + max(0, $projected), 6), $usage->limit);
         }
+    }
+
+    public function projectedCost(AiRequest $request, bool $requirePrice = false): float
+    {
+        $provider = strtolower(trim((string) $request->provider));
+        $price = $provider === '' ? null : AIModelPrice::query()
+            ->where('provider', $provider)
+            ->where('model', $request->model)
+            ->where('currency', $this->settings->currency())
+            ->where('is_enabled', true)
+            ->first();
+        if ($price === null) {
+            if ($requirePrice && collect($this->settings->budgetSettings())->contains(fn (mixed $limit): bool => $this->limit($limit) !== null)) {
+                throw new InvalidArgumentException('启用费用 Hard Limit 时，Provider Route 必须存在同币种的已启用模型价格。');
+            }
+
+            return 0.0;
+        }
+
+        // UTF-8 字节数是无需 Provider tokenizer 的保守输入 Token 上界；输出使用请求允许的最大值。
+        $inputUpperBound = strlen(json_encode($request->resolvedMessages(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE));
+        $unit = max(1, (int) $price->billing_unit);
+
+        return round((
+            $inputUpperBound * (float) ($price->input_price ?? 0)
+            + max(0, $request->maxTokens) * (float) ($price->output_price ?? 0)
+        ) / $unit, 6);
+    }
+
+    private function reservedCost(?int $novelId = null, ?int $chapterId = null, ?int $excludeRunId = null): float
+    {
+        return (float) GenerationRun::query()
+            ->whereIn('status', ['queued', 'running'])
+            ->when($novelId !== null, fn ($query) => $query->where('novel_id', $novelId))
+            ->when($chapterId !== null, fn ($query) => $query->where('chapter_id', $chapterId))
+            ->when($excludeRunId !== null, fn ($query) => $query->whereKeyNot($excludeRunId))
+            ->sum('reserved_cost');
     }
 
     /** @return array{0: Novel|null, 1: Chapter|null} */

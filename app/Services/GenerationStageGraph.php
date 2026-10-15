@@ -14,6 +14,7 @@ final class GenerationStageGraph
     {
         return match ($stage) {
             GenerationStage::ChapterPlanning => [GenerationStage::SceneGeneration],
+            GenerationStage::ContentRepair => [GenerationStage::ChapterPlanning],
             // 恢复合同不重跑 Planner/Writer，只允许进入已有正文之后的合法节点。
             GenerationStage::ChapterRecovery => [
                 GenerationStage::ChapterAssembly,
@@ -43,6 +44,13 @@ final class GenerationStageGraph
                 GenerationStage::CoverageJudgment, GenerationStage::EventExtraction, GenerationStage::Review,
                 GenerationStage::Rewrite, GenerationStage::Commit, GenerationStage::MemorySummary,
                 GenerationStage::Embedding,
+            ],
+            GenerationStage::ContentRepair => [
+                GenerationStage::ChapterPlanning, GenerationStage::SceneGeneration,
+                GenerationStage::ChapterAssembly, GenerationStage::CoverageJudgment,
+                GenerationStage::EventExtraction, GenerationStage::Review,
+                GenerationStage::Rewrite, GenerationStage::Commit,
+                GenerationStage::MemorySummary, GenerationStage::Embedding,
             ],
             GenerationStage::ChapterRecovery => [
                 GenerationStage::ChapterAssembly, GenerationStage::CoverageJudgment,
@@ -84,6 +92,7 @@ final class GenerationStageGraph
     {
         return match ($stage) {
             GenerationStage::ChapterPlanning => [ArtifactType::ChapterPlan],
+            GenerationStage::ContentRepair => [ArtifactType::Context],
             GenerationStage::ChapterRecovery => [ArtifactType::Context],
             GenerationStage::SceneGeneration => [ArtifactType::SceneDraft, ArtifactType::Context],
             GenerationStage::ChapterAssembly => [ArtifactType::ChapterDraft],

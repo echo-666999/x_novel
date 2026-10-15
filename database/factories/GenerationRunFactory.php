@@ -37,6 +37,11 @@ class GenerationRunFactory extends Factory
             'error_retryable' => null,
             'error_metadata' => null,
             'progression_failure' => null,
+            'queued_at' => null,
+            'lease_expires_at' => null,
+            'lease_token' => null,
+            'heartbeat_at' => null,
+            'reserved_cost' => 0,
             'started_at' => null,
             'finished_at' => null,
         ];

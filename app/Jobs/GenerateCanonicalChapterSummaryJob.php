@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
 use App\Models\Chapter;
+use App\Services\AutoStopService;
 use App\Services\CanonicalChapterSummaryService;
 use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
@@ -49,8 +50,9 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
         return "chapter-summary:{$this->chapterId}:{$this->canonicalArtifactId}:{$restart}";
     }
 
-    public function handle(CanonicalChapterSummaryService $summaries): void
+    public function handle(CanonicalChapterSummaryService $summaries, ?AutoStopService $autoStop = null): void
     {
+        $autoStop ??= app(AutoStopService::class);
         $chapter = Chapter::query()->find($this->chapterId);
 
         if ($chapter === null) {
@@ -63,8 +65,12 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
 
         try {
             $summaries->generate($this->chapterId, $this->restartSourceRunId);
+            $autoStop->resolvePostCommitFailure($chapter->novel, 'summary');
         } catch (AiProviderException $exception) {
             if (! $exception->retryable) {
+                $autoStop->recordPostCommitFailure($chapter, 'summary', $exception, [
+                    'restart_source_run_id' => $this->restartSourceRunId,
+                ]);
                 $this->fail($exception);
 
                 return;
@@ -72,6 +78,9 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
 
             throw $exception;
         } catch (ValidationException $exception) {
+            $autoStop->recordPostCommitFailure($chapter, 'summary', $exception, [
+                'restart_source_run_id' => $this->restartSourceRunId,
+            ]);
             $this->fail($exception);
         } catch (Throwable $exception) {
             $failure = app(GenerationFailurePolicy::class)
@@ -81,7 +90,24 @@ class GenerateCanonicalChapterSummaryJob implements ShouldBeUnique, ShouldQueue
                 throw $exception;
             }
 
+            $autoStop->recordPostCommitFailure($chapter, 'summary', $exception, [
+                'restart_source_run_id' => $this->restartSourceRunId,
+            ]);
             $this->fail($exception);
+        }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        if ($exception === null) {
+            return;
+        }
+
+        $chapter = Chapter::query()->find($this->chapterId);
+        if ($chapter !== null) {
+            app(AutoStopService::class)->recordPostCommitFailure($chapter, 'summary', $exception, [
+                'restart_source_run_id' => $this->restartSourceRunId,
+            ]);
         }
     }
 }

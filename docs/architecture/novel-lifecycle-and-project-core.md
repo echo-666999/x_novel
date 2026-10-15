@@ -414,11 +414,11 @@ sequenceDiagram
     Commit->>DB: update Novel state pointer and chapter sequence
     Commit->>DB: project Story Arc progress
     Commit->>DB: COMMIT
-    Commit-->>Queue: UpdateMemoryJob
-    Queue->>Queue: GenerateCanonicalChapterSummaryJob
-    Queue->>Queue: RefreshNovelProjectionJob
+    Commit-->>Queue: GenerateCanonicalChapterSummaryJob
     Queue->>Queue: ContinueAutoGenerationJob
     Queue->>Commit: CheckNextAction after required derived work succeeds
+    Commit-->>Queue: UpdateMemoryJob（独立副作用）
+    Commit-->>Queue: RefreshNovelProjectionJob（独立副作用）
 ```
 
 事务必须满足 All or Nothing。不能出现“章节已 canonical，但 State 没更新”或“事件已写入，但章节仍是 draft”。
@@ -452,9 +452,9 @@ Canonical Commit 会：
 
 它以 Story Event 为来源幂等创建短记忆，按事件类型归类为人物里程碑、关系、物品、伏笔、世界、地点、Arc 等，再派发 `GenerateEmbeddingJob`。Draft、被拒绝的 Rewrite 和未提交事件不能创建正式 Memory。
 
-正式提交后的阻塞链为 `UpdateMemoryJob → GenerateCanonicalChapterSummaryJob → RefreshNovelProjectionJob → ContinueAutoGenerationJob`。前三项任一失败都不撤销正式章节，但会停止自动续写。Embedding 由 Memory 独立派发，可以单独重试，不阻塞下一章。摘要任务只在 Chapter 的 `canonical_artifact_id` 仍与任务来源一致时写入 `chapters.summary`。
+正式提交后的阻塞链为 `GenerateCanonicalChapterSummaryJob → ContinueAutoGenerationJob`。`UpdateMemoryJob → GenerateEmbeddingJob` 与 `RefreshNovelProjectionJob` 独立派发，可以单独失败和恢复，不阻塞下一章。摘要任务只在 Chapter 的 `canonical_artifact_id` 仍与任务来源一致时写入 `chapters.summary`。提交后失败保存在 `novels.settings.post_commit_failures`，定时恢复器按当前 Canonical 来源重新派发；达到自动恢复上限后写入 `auto_stop`。
 
-Summary 默认冻结 `8,000 / 16,000 / 24,000` Token 的递增推理预留。历史 Plan 的 Summary 预算耗尽后，普通 Retry 继续服从原冻结合同；显式 Restart 才能按当前配置创建新的 Summary Run 合同。新合同冻结失败 Run、Canonical Artifact、Provider、Model、Prompt、容量和请求预算，同一 Restart 的后续 Queue 重试不得重新解析配置。下一章准备度按每章最新 Review 判断，已被后续 PASS/Override 解决的历史 NEEDS_ATTENTION 不再阻塞。
+Summary 默认冻结 `8,000 / 16,000 / 24,000` Token 的递增推理预留。历史 Plan 的 Summary 预算耗尽后，普通 Retry 继续服从原冻结合同；UI 显式 Restart 或定时自动恢复器识别到同一 Canonical Artifact 的冻结预算耗尽失败后，才可按当前配置创建新的 Summary Run 合同。新合同冻结失败 Run、Canonical Artifact、Provider、Model、Prompt、容量和请求预算，同一 Restart 的后续 Queue 重试不得重新解析配置。下一章准备度按每章最新 Review 判断，已被后续 PASS/Override 解决的历史 NEEDS_ATTENTION 不再阻塞。
 
 ### 8.2 下一章是否自动启动
 
@@ -494,7 +494,7 @@ Active Volume 必须通过 `VolumeCompletionGate` 才能完成，检查项包括
 - 到期伏笔，关键伏笔会 BLOCK；
 - 本卷最新 Review 不存在未处理的 NEEDS_ATTENTION/BLOCK。
 
-当前实现提供人工“完成分卷”操作。未发现完成当前卷后自动激活下一卷的工作流；运营者需要在规划界面把下一卷和相应 Story Arc 切换为 active，再继续生成。
+`NovelLifecycleAdvancer` 在正式摘要完成后选择顺序最早的未完成主线 Arc；PostgreSQL 部分唯一索引进一步保证同一本小说任何时刻最多一条 `type=main,status=active` 的运行态 Arc，支线不受该索引影响。当前卷没有未完成主线时，必须先通过 `VolumeCompletionGate`，再完成当前卷并激活下一卷。最后一卷完成后自动进入 `completing`，执行 Ending Audit；审计 PASS 后调用 `CompleteNovelAction`，BLOCK 则保存明确停止原因。
 
 ## 10. 暂停、恢复、失败与回滚
 
@@ -531,7 +531,7 @@ flowchart TD
     H -- "人工处理" --> N["保持暂停"]
 ```
 
-恢复会还原暂停前的 `generating` 或 `completing` 状态，并由统一阶段推进器继续。PASS Review 的恢复点不会擅自替用户提交正式章节。
+恢复会还原暂停前的 `generating` 或 `completing` 状态，并由统一阶段推进器继续。PASS Review 的恢复点不会擅自替用户提交正式章节。`generation:recover-automatic` 每分钟检测超时的 queued/running Run、Worker 丢失记录和提交后失败；只恢复可机械判定的断点，并设置次数上限。用户主动暂停、Locked Fact、成本硬限制和领域冲突不会被该任务绕过。
 
 ### 10.3 Retry 与复用
 
@@ -559,7 +559,7 @@ flowchart TD
 
 ### 11.1 进入收束期
 
-用户在小说概览执行“进入收束期”，`EnterCompletingModeAction` 将状态从 `generating` 改为 `completing`。这是显式操作，当前没有根据字数自动切换收束状态的代码。
+用户仍可在小说概览提前执行“进入收束期”。全自动模式下，最后一个 Volume 通过完成门禁且没有下一卷时，`NovelLifecycleAdvancer` 会把状态从 `generating` 改为 `completing`；该判断基于冻结 Outline 和正式完成事件，不按估算字数提前切换。
 
 收束期仍使用同一章节生产链，但 Planner 会读取 Closure Debt 和 Ending Contract，目标从持续扩张转为关闭故事义务。
 
@@ -713,13 +713,13 @@ Ending Contract、Closure Debt 和 Ending Audit 确保系统不仅会继续生�
 
 以下结论来自当前代码核查：
 
-1. Post-Commit 已使用 `UpdateMemoryJob → GenerateCanonicalChapterSummaryJob → RefreshNovelProjectionJob → ContinueAutoGenerationJob` 的 Queue Chain；Embedding 由 Memory 独立派发，不阻塞下一章。
+1. Post-Commit 必需链为 `GenerateCanonicalChapterSummaryJob → ContinueAutoGenerationJob`；Memory/Embedding 和 Projection 是独立副作用，不阻塞下一章。
 2. `MemoryUpdater` 使用确定性的 `memory-policy-v1` 从 Story Event 建立 Memory；`GenerateCanonicalChapterSummaryJob` 调用 `CanonicalChapterSummaryService` 使用有效版本 `summary-v2+natural-summary-v3` 生成正式章节摘要，不属于 Memory 建立步骤。
-3. 当前分卷完成由人工触发 `VolumeCompletionGate`；未发现自动激活下一卷的工作流。
-4. 进入收束期由用户显式执行 `EnterCompletingModeAction`；未发现按目标字数自动进入 `completing` 的流程。
+3. `NovelLifecycleAdvancer` 自动推进主线 Arc，通过 `VolumeCompletionGate` 后完成当前卷并激活下一卷。
+4. 最后一卷完成后自动进入 `completing`，执行 Ending Audit，并只在 PASS 时完成小说；用户仍可提前进入收束期。
 5. `auto_commit` 默认关闭；Review PASS 本身不会自动改变 Canonical Story State。
 
-这些边界不影响主链的正确性；后续若实现自动卷切换或自动收束触发，需要同步修改本文件与对应架构文档。
+自动生命周期只处理可由正式数据确定的状态转换；Ending Audit BLOCK、Locked Fact、成本上限和用户暂停继续保持安全停止。
 
 ## 16. 关键不变量检查清单
 

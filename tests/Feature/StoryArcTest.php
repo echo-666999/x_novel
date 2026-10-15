@@ -12,6 +12,25 @@ use Illuminate\Support\Facades\Schema;
 
 uses(RefreshDatabase::class);
 
+test('database allows only one active main arc for a novel', function () {
+    $novel = Novel::factory()->create();
+    $first = StoryArc::factory()->for($novel)->create([
+        'type' => StoryArcType::Main,
+        'status' => StoryArcStatus::Active,
+    ]);
+
+    expect(fn () => StoryArc::factory()->for($novel)->create([
+        'type' => StoryArcType::Main,
+        'status' => StoryArcStatus::Active,
+    ]))->toThrow(QueryException::class)
+        ->and($first->fresh()->status)->toBe(StoryArcStatus::Active);
+
+    StoryArc::factory()->for($novel)->create([
+        'type' => StoryArcType::Subplot,
+        'status' => StoryArcStatus::Active,
+    ]);
+});
+
 test('a story arc belongs to its novel and optional volume and casts domain fields', function () {
     $novel = Novel::factory()->create();
     $volume = Volume::factory()->for($novel)->create();

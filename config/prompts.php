@@ -1,6 +1,11 @@
 <?php
 
 return [
+    /* 每次实际 Provider 请求保存完整 Prompt、Schema 与参数，并以 checksum 防止同一 Run 漂移。 */
+    'reproducibility' => [
+        'schema_version' => 1,
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Provider 阶段 Prompt 基础版本

@@ -43,8 +43,33 @@ return [
     // Generation Run 在多久未更新后可判定为 Worker 丢失或任务卡死，单位：秒。
     'stalled_run_after_seconds' => (int) env('STALLED_RUN_AFTER_SECONDS', 480),
 
+    // queued Run 必须在该时间内被 Worker 认领；过期后由定时恢复任务重新投递，单位：秒。
+    'queued_run_lease_seconds' => 300,
+
     // 生成 Job 的唯一锁和重复派发抑制时长，单位：秒。
     'pending_job_seconds' => (int) env('GENERATION_PENDING_JOB_SECONDS', 900),
+
+    // Worker 丢失或提交后断点允许的自动恢复次数；达到上限后持久化安全停止原因。
+    'automatic_recovery' => [
+        'max_attempts' => 3,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | 内容自愈硬上限
+    |--------------------------------------------------------------------------
+    |
+    | max_attempts 按章节和修复类型独立累计；max_cost 使用系统当前计价币种；
+    | max_elapsed_seconds 从修复审计 Run 创建时开始计算，并覆盖队列等待时间。
+    | Provider 请求会按“已发生费用 + 本次最大可能费用”预检，不能透支修复额度。
+    |
+    */
+    'content_self_healing' => [
+        'plan_validation' => ['max_attempts' => 2, 'max_cost' => 2.0, 'max_elapsed_seconds' => 900],
+        'chapter_structure' => ['max_attempts' => 1, 'max_cost' => 8.0, 'max_elapsed_seconds' => 1_800],
+        'rewrite_exhaustion' => ['max_attempts' => 1, 'max_cost' => 8.0, 'max_elapsed_seconds' => 1_800],
+        'critical_foreshadowing' => ['max_attempts' => 1, 'max_cost' => 2.0, 'max_elapsed_seconds' => 900],
+    ],
 
     // 单个场景构建 Prompt 上下文时可使用的 Token 预算。
     'scene_context_token_budget' => (int) env('SCENE_CONTEXT_TOKEN_BUDGET', 12_000),

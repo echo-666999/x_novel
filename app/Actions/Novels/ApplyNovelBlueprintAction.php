@@ -12,6 +12,7 @@ use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
 use App\Enums\RunStatus;
 use App\Enums\StoryArcStatus;
+use App\Enums\StoryArcType;
 use App\Enums\VolumeStatus;
 use App\Enums\WorldEntityStatus;
 use App\Models\GenerationArtifact;
@@ -88,6 +89,10 @@ class ApplyNovelBlueprintAction
             $arcs = collect();
             $selected->load('volumes.arcs');
             foreach ($selected->volumes as $volumeData) {
+                $firstMainArcId = $volumeData->arcs
+                    ->where('type', StoryArcType::Main)
+                    ->sortBy(fn ($arc): int => $arc->mainline_sequence ?? PHP_INT_MAX)
+                    ->first()?->getKey();
                 $volume = $locked->volumes()->create([
                     'source_outline_volume_id' => $volumeData->getKey(),
                     'sequence' => $volumeData->sequence,
@@ -109,7 +114,11 @@ class ApplyNovelBlueprintAction
                         'stakes' => $arcData->stakes,
                         'completion_conditions' => $arcData->completion_conditions,
                         'progress' => 0,
-                        'status' => $volumeData->sequence === 1 ? StoryArcStatus::Active : StoryArcStatus::Planned,
+                        // 当前卷只激活顺序最早的主线；支线同时开放给 Planner，后续主线由生命周期推进器激活。
+                        'status' => $volumeData->sequence === 1
+                            && ($arcData->type === StoryArcType::Subplot || $arcData->getKey() === $firstMainArcId)
+                                ? StoryArcStatus::Active
+                                : StoryArcStatus::Planned,
                     ]);
                     $arcs->put($arcData->arc_key, $arc);
                 }

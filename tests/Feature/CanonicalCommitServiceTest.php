@@ -327,6 +327,7 @@ function addCharacterIntroductionToCanonicalFixture(array $fixture): void
 }
 
 test('canonical commit atomically persists events state and pointers', function () {
+    Queue::fake();
     $fixture = canonicalCommitFixture();
 
     $version = app(CanonicalCommitService::class)->commit($fixture['data']);
@@ -339,11 +340,11 @@ test('canonical commit atomically persists events state and pointers', function 
         ->and(StoryEvent::query()->count())->toBe(1)
         ->and(StoryEvent::query()->sole()->state_version)->toBe(1)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(2);
-    Queue::assertPushedWithChain(UpdateMemoryJob::class, [
-        GenerateCanonicalChapterSummaryJob::class,
-        RefreshNovelProjectionJob::class,
+    Queue::assertPushedWithChain(GenerateCanonicalChapterSummaryJob::class, [
         ContinueAutoGenerationJob::class,
     ]);
+    Queue::assertPushed(UpdateMemoryJob::class);
+    Queue::assertPushed(RefreshNovelProjectionJob::class);
 });
 
 test('canonical commit closes accepted arc beats and world entity candidates exactly once and rollback reverses them', function () {

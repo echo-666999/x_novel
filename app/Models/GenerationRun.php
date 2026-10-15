@@ -34,6 +34,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
     'error_retryable',
     'error_metadata',
     'progression_failure',
+    'queued_at',
+    'lease_expires_at',
+    'lease_token',
+    'heartbeat_at',
+    'reserved_cost',
     'started_at',
     'finished_at',
 ])]
@@ -109,6 +114,10 @@ class GenerationRun extends Model
             'error_retryable' => 'boolean',
             'error_metadata' => 'array',
             'progression_failure' => 'array',
+            'queued_at' => 'datetime',
+            'lease_expires_at' => 'datetime',
+            'heartbeat_at' => 'datetime',
+            'reserved_cost' => 'decimal:6',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];

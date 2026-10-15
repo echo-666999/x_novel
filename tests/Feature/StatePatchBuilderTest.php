@@ -22,6 +22,12 @@ function statePatchFixture(array $events): array
     $novel = Novel::factory()->create();
     $state = app(InitializeNovelStateAction::class)->handle($novel);
     $chapter = Chapter::factory()->for($novel)->create();
+    $draftRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly,
+        'status' => RunStatus::Succeeded,
+        'state_version' => $state->version,
+    ]);
+    $draft = GenerationArtifact::factory()->for($draftRun)->create(['type' => ArtifactType::ChapterDraft]);
     $run = GenerationRun::factory()->for($novel)->for($chapter)->create([
         'stage' => GenerationStage::EventExtraction,
         'status' => RunStatus::Succeeded,
@@ -29,7 +35,7 @@ function statePatchFixture(array $events): array
     ]);
     $artifact = GenerationArtifact::factory()->for($run)->create([
         'type' => ArtifactType::EventCandidate,
-        'data' => ['status' => 'candidate', 'source_artifact_id' => 999, 'events' => $events],
+        'data' => ['status' => 'candidate', 'source_artifact_id' => $draft->getKey(), 'events' => $events],
     ]);
 
     return compact('novel', 'state', 'chapter', 'run', 'artifact');

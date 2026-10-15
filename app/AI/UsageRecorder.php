@@ -8,10 +8,14 @@ use App\AI\Data\EmbeddingRequest;
 use App\AI\Data\EmbeddingResponse;
 use App\Enums\AiStage;
 use App\Models\UsageRecord;
+use App\Services\PromptExecutionContract;
 
 class UsageRecorder
 {
-    public function __construct(private readonly AiCostCalculator $costCalculator) {}
+    public function __construct(
+        private readonly AiCostCalculator $costCalculator,
+        private readonly PromptExecutionContract $promptContracts,
+    ) {}
 
     public function record(AiRequest $request, AiResponse $response): UsageRecord
     {
@@ -37,6 +41,7 @@ class UsageRecorder
                 'substage' => $request->metadata['substage'] ?? null,
                 'route_key' => $request->metadata['route_key'] ?? null,
                 'prompt_version' => $request->promptVersion,
+                'prompt_checksum' => $this->promptContracts->make($request)['checksum'],
                 // OpenAI 与 DeepSeek 适配器都只发送显式冻结的 reasoning_effort；这里记录实际请求意图供运行审计。
                 'reasoning_effort_sent' => $request->reasoningEffort,
                 'max_output_tokens' => $request->maxTokens,

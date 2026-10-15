@@ -6,9 +6,9 @@ use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
-use App\Models\GenerationArtifact;
 use App\Models\Review;
 use App\Services\CanonicalCommitService;
+use App\Services\GenerationArtifactLocator;
 use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -73,26 +73,31 @@ class CommitChapterJob implements ShouldBeUnique, ShouldQueue
             ->with(['artifact', 'generationRun'])
             ->findOrFail($this->reviewId);
         $artifactId = (int) data_get($review->artifact?->data, 'source_artifact_id', 0);
-        $artifact = $artifactId > 0 ? GenerationArtifact::query()->find($artifactId) : null;
-        $candidate = $artifact === null ? null : GenerationArtifact::query()
-            ->where('type', ArtifactType::EventCandidate)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
-            ->latest('version')
-            ->latest('id')
-            ->get()
-            ->first(fn (GenerationArtifact $candidate): bool => (int) data_get($candidate->data, 'source_artifact_id') === $artifact->getKey());
-        $patch = $candidate === null ? null : GenerationArtifact::query()
-            ->where('type', ArtifactType::StatePatch)
-            ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $this->chapterId))
-            ->latest('version')
-            ->latest('id')
-            ->get()
-            ->first(fn (GenerationArtifact $patch): bool => (int) data_get($patch->data, 'source_artifact_id') === $candidate->getKey());
+        $locator = app(GenerationArtifactLocator::class);
+        $artifact = $artifactId > 0 ? $locator->findValidated(
+            $artifactId,
+            $this->chapterId,
+            [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft],
+        ) : null;
+        $stateVersion = $review->generationRun?->state_version;
+        $candidate = $artifact === null || $stateVersion === null ? null : $locator->latestForChapter(
+            $this->chapterId,
+            ArtifactType::EventCandidate,
+            $artifact->getKey(),
+            $stateVersion,
+        );
+        $patch = $candidate === null || $stateVersion === null ? null : $locator->latestForChapter(
+            $this->chapterId,
+            ArtifactType::StatePatch,
+            $candidate->getKey(),
+            $stateVersion,
+        );
 
         if ($review->generationRun?->chapter_id !== $this->chapterId
             || $artifact === null
             || $candidate === null
             || $patch === null
+            || (int) data_get($patch->data, 'expected_state_version', -1) !== $stateVersion
             || $review->generationRun->state_version === null) {
             throw ValidationException::withMessages([
                 'commit' => 'Canonical Commit 的冻结输入不完整。',

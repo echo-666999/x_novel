@@ -884,28 +884,66 @@ test('the planner selects foreshadowings by the shared target chapter timing rul
         ]);
 });
 
-test('critical overdue foreshadowing stops the planner before a run or provider call', function () {
+test('critical overdue foreshadowing receives one restricted payoff planning attempt', function () {
     [$chapter, $character] = plannerChapter();
     $chapter->update(['sequence' => 2]);
-    Foreshadowing::factory()->for($chapter->novel)->create([
+    $overdue = Foreshadowing::factory()->for($chapter->novel)->create([
         'title' => '必须回收的王冠裂痕',
         'importance' => 'critical',
         'status' => ForeshadowingStatus::Reinforced,
         'due_from_chapter' => 1,
         'due_to_chapter' => 1,
     ]);
-    $fake = (new FakeAiProvider)->enqueue(plannerResponse(plannerPayload($character->getKey())));
+    $payload = plannerPayload($character->getKey(), ['foreshadowing_actions' => [[
+        'foreshadowing_id' => $overdue->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确揭示王冠裂痕的成因并解决其造成的核心冲突。',
+        'reason' => null,
+    ]]]);
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
     app()->instance(AiProvider::class, $fake);
 
-    try {
-        app(ChapterPlanner::class)->generate($chapter->getKey());
-        test()->fail('Expected overdue critical foreshadowing to stop automatic planning.');
-    } catch (GenerationPreflightException $exception) {
-        expect($exception->reason)->toBe('critical_foreshadowing_overdue')
-            ->and($exception->getMessage())->toContain('必须回收的王冠裂痕')
-            ->and($fake->requests())->toHaveCount(0)
-            ->and($chapter->generationRuns()->count())->toBe(0);
-    }
+    $plan = app(ChapterPlanner::class)->generate($chapter->getKey());
+    $repair = $chapter->generationRuns()->where('stage', GenerationStage::ContentRepair)->sole();
+
+    expect($plan->foreshadowing_actions)->toHaveCount(1)
+        ->and(data_get($plan->foreshadowing_actions, '0.action'))->toBe('pay_off')
+        ->and($fake->requests())->toHaveCount(1)
+        ->and(data_get($fake->requests()[0]->metadata, 'content_repair_run_id'))->toBe($repair->getKey())
+        ->and(data_get($chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->sole()->context_snapshot, 'foreshadowings_requiring_action.0.allowed_model_actions'))->toBe(['pay_off'])
+        ->and($repair->status)->toBe(RunStatus::Succeeded);
+});
+
+test('critical payoff repair can replan an invalid candidate without opening a second payoff campaign', function () {
+    [$chapter, $character] = plannerChapter();
+    $chapter->update(['sequence' => 2]);
+    $overdue = Foreshadowing::factory()->for($chapter->novel)->create([
+        'title' => '必须兑现的旧约',
+        'importance' => 'critical',
+        'status' => ForeshadowingStatus::Reinforced,
+        'due_from_chapter' => 1,
+        'due_to_chapter' => 1,
+    ]);
+    $invalid = plannerPayload($character->getKey());
+    $valid = plannerPayload($character->getKey(), ['foreshadowing_actions' => [[
+        'foreshadowing_id' => $overdue->getKey(),
+        'action' => 'pay_off',
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '正文明确兑现旧约并形成不可逆结果。',
+        'reason' => null,
+    ]]]);
+    app()->instance(AiProvider::class, (new FakeAiProvider)
+        ->enqueue(plannerResponse($invalid))
+        ->enqueue(plannerResponse($valid)));
+
+    (new PlanChapterJob($chapter->getKey()))->handle(app(ChapterPlanner::class));
+
+    $repairs = $chapter->generationRuns()->where('stage', GenerationStage::ContentRepair)->get();
+    expect($repairs)->toHaveCount(1)
+        ->and(data_get($repairs->first()->context_snapshot, 'repair_type'))->toBe('critical_foreshadowing')
+        ->and($repairs->first()->status)->toBe(RunStatus::Succeeded)
+        ->and(data_get($chapter->plans()->sole()->foreshadowing_actions, '0.action'))->toBe('pay_off');
 });
 
 test('a new bible applies only after explicitly restarting the chapter pipeline', function () {
@@ -1284,17 +1322,29 @@ test('business-invalid plan candidate and all validation errors remain traceable
     }
 });
 
-test('the queue job does not retry schema or business validation failures', function () {
+test('the queue job automatically replans schema or business validation failures', function () {
     [$chapter, $character] = plannerChapter();
-    $payload = plannerPayload($character->getKey());
-    unset($payload['scene_plans'][0]['outcome']);
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(plannerResponse($payload)));
+    $invalid = plannerPayload($character->getKey());
+    unset($invalid['scene_plans'][0]['outcome']);
+    $valid = plannerPayload($character->getKey());
+    $fake = (new FakeAiProvider)
+        ->enqueue(plannerResponse($invalid))
+        ->enqueue(plannerResponse($valid));
+    app()->instance(AiProvider::class, $fake);
 
     (new PlanChapterJob($chapter->getKey()))->handle(app(ChapterPlanner::class));
 
-    expect($chapter->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
-        ->and($chapter->generationRuns()->sole()->error_code)->toBe('plan_validation_failed')
-        ->and($chapter->plans()->count())->toBe(0);
+    $planningRuns = $chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->oldest('id')->get();
+    $repair = $chapter->generationRuns()->where('stage', GenerationStage::ContentRepair)->sole();
+
+    expect($planningRuns)->toHaveCount(2)
+        ->and($planningRuns[0]->error_code)->toBe('plan_validation_failed')
+        ->and($planningRuns[1]->status)->toBe(RunStatus::Succeeded)
+        ->and($repair->status)->toBe(RunStatus::Succeeded)
+        ->and(data_get($repair->context_snapshot, 'diagnostics.validation_errors'))->not->toBeEmpty()
+        ->and($repair->artifacts()->where('type', ArtifactType::Context)->count())->toBe(1)
+        ->and($chapter->plans()->count())->toBe(1)
+        ->and(collect($fake->requests())->where('metadata.stage', AiStage::Planner->value))->toHaveCount(2);
 });
 
 test('a canonical state change during provider execution blocks stale plan persistence', function () {

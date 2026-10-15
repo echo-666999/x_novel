@@ -7,6 +7,7 @@ enum GenerationStage: string
 {
     case ChapterPlanning = 'chapter_planning';
     case ChapterRecovery = 'chapter_recovery';
+    case ContentRepair = 'content_repair';
     case SceneGeneration = 'scene_generation';
     case ChapterAssembly = 'chapter_assembly';
     case EventExtraction = 'event_extraction';
@@ -24,6 +25,7 @@ enum GenerationStage: string
         return match ($this) {
             self::ChapterPlanning => '章节规划',
             self::ChapterRecovery => '旧 Admission 章节恢复',
+            self::ContentRepair => '内容自愈',
             self::SceneGeneration => '场景生成',
             self::ChapterAssembly => '章节组装',
             self::EventExtraction => '事件提取',

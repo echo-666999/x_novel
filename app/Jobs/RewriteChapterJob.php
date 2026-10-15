@@ -5,12 +5,14 @@ namespace App\Jobs;
 use App\Actions\Chapters\StartChapterRewriteAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
+use App\Enums\ContentRepairType;
 use App\Enums\GenerationStage;
 use App\Exceptions\GenerationStageDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Models\Chapter;
 use App\Services\AutoStopService;
 use App\Services\ChapterRewriter;
+use App\Services\ContentSelfHealingService;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationProgressionFailureRecorder;
 use Illuminate\Bus\Queueable;
@@ -94,6 +96,29 @@ class RewriteChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
                         $progressionException,
                     );
                     $this->fail($progressionException);
+                }
+
+                return;
+            }
+            if ($exception->errorCode === 'rewrite_exhausted') {
+                $chapter = Chapter::query()->with('latestReview')->findOrFail($this->chapterId);
+                try {
+                    $repair = app(ContentSelfHealingService::class)->start(
+                        $chapter,
+                        ContentRepairType::RewriteExhaustion,
+                        ['review_id' => $chapter->latestReview?->getKey()],
+                        ['reason' => 'rewrite_exhausted'],
+                    );
+                    $this->releaseGenerationDispatch();
+                    $this->dispatchGenerationJob(new PlanChapterJob(
+                        chapterId: $this->chapterId,
+                        regenerate: true,
+                        contentRepairRunId: $repair->getKey(),
+                    ));
+                } catch (AiProviderException $repairException) {
+                    $rewriter->markExhausted($this->chapterId);
+                    $this->releaseGenerationDispatch();
+                    $this->fail($repairException);
                 }
 
                 return;
