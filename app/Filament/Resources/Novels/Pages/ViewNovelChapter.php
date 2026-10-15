@@ -98,7 +98,7 @@ class ViewNovelChapter extends ViewRecord
     {
         $chapter = $this->chapter();
 
-        return "第 {$chapter->sequence} 章 · {$chapter->title}";
+        return $chapter->title;
     }
 
     public function getSubheading(): ?string

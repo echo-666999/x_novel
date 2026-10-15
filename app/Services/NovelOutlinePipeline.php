@@ -621,8 +621,23 @@ class NovelOutlinePipeline
             prompt: $prompt,
             schema: $schema,
             outputName: 'novel_outline_structure',
-            validate: function (array $data) use ($volumeCount, $foreshadowingCount, $batch): array {
+            validate: function (array $data) use ($volumeCount, $foreshadowingCount, $batch, $foundationData): array {
                 $valid = $this->stageContract->validateStructure($data, $volumeCount, $foreshadowingCount);
+                // Foundation 中的主角身份是全书级来源，不能只留在人物表而从 Outline 消失。
+                foreach ($foundationData['characters'] ?? [] as $character) {
+                    if (($character['role'] ?? null) !== '主角') {
+                        continue;
+                    }
+                    foreach ($character['profile'] ?? [] as $profile) {
+                        if (! is_string($profile) || trim($profile) === '' || in_array($profile, $valid['must_include'], true)) {
+                            continue;
+                        }
+                        if (count($valid['must_include']) >= NovelOutlineStageContract::MAX_LIST_ITEMS) {
+                            throw \Illuminate\Validation\ValidationException::withMessages(['must_include' => '全书必须包含项已满，无法保留 Foundation 主角设定；请重新生成 Structure。']);
+                        }
+                        $valid['must_include'][] = $profile;
+                    }
+                }
                 $this->lengthContract->allocateStructure($valid, $this->batchLengthContract($batch));
 
                 return $valid;
@@ -1164,6 +1179,8 @@ chapter_weight 只表示同一 Volume 内各 Main Arc 之间的相对篇幅权�
 foreshadowing_owner_arc_keys 必须与输入 foundation.foreshadowings 保持完全相同的顺序和数量。每一项只能填写本次响应中实际生成的 Arc Key，或在伏笔确实跨越多个 Arc、属于全书级约束、无法合理归属单一 Arc 时填写 null。不得按标题重新排序，不得返回 Arc 标题、对象或数据库 ID。
 
 开篇所在 Volume 和首条主线 Arc 应尽早交付输入中的核心设定与主要冲突，不得用多个 Arc 重复铺陈苏醒、身份确认、背景介绍或同一情绪。
+
+foundation.characters 中主角的 profile 是全书身份与经历来源。必须让全书 summary 或 must_include，以及开篇 Volume 和首条主线 Arc 的目标，清楚承接这些具体经历；不得把特殊经历压缩成泛泛的身份标签。
 
 只返回符合 Schema 的严格 JSON。只生成全书、Volume 与 Arc，不得返回 Beat、Milestone、Handoff、sequence、mainline_sequence 或数据库 ID。Volume Key 与 Arc Key 必须全局唯一并符合 Schema。除固定键名与枚举值外，所有自然语言使用简体中文。
 PROMPT;

@@ -94,6 +94,7 @@ class ChapterPlanFactory extends Factory
                 ->orderBy('id')->firstOrFail()->getKey(),
             'version' => 1,
             'chapter_function' => fake()->sentence(),
+            'chapter_title' => '暗潮初现',
             'arc_contribution' => fake()->sentence(),
             'arc_contributions' => [],
             'character_candidates' => [],

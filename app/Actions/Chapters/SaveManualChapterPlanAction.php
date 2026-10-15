@@ -11,6 +11,7 @@ use App\Enums\SceneStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationRun;
+use App\Services\ChapterTitle;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanAdmissionService;
 use App\Services\PlanValidator;
@@ -37,6 +38,9 @@ final class SaveManualChapterPlanAction
      */
     public function handle(Chapter $chapter, array $data, ?int $userId): array
     {
+        $chapterTitle = ChapterTitle::format($chapter->sequence, (string) ($data['chapter_title'] ?? ''));
+        $contributionScene = filter_var($data['primary_contribution_scene_sequence'] ?? 1, FILTER_VALIDATE_INT);
+        unset($data['primary_contribution_scene_sequence']);
         $currentPlan = $chapter->latestPlan()->first();
         // 手工计划也必须冻结 Current Outline 的完整父链，不能创建空来源或由用户提交数据库 ID。
         $target = $this->outlineProgress->resolve($chapter->novel);
@@ -57,7 +61,7 @@ final class SaveManualChapterPlanAction
             'beat_index' => $target->beat['sequence'],
             'milestone_key' => $target->milestone['key'],
             'milestone_sequence' => $target->milestone['sequence'],
-            'target_scene_sequence' => 1,
+            'target_scene_sequence' => $contributionScene,
             'acceptance_criteria' => $target->milestone['acceptance_criteria'][0],
         ]];
         $data['must_reveal'] = array_values(array_unique([
@@ -78,6 +82,18 @@ final class SaveManualChapterPlanAction
                 'transition_from_previous' => $scene['transition_from_previous'] ?? null,
             ],
         )->values()->all();
+        $targetIndex = (int) $contributionScene - 1;
+        if (isset($data['scene_plans'][$targetIndex])) {
+            $criterion = (string) $target->milestone['acceptance_criteria'][0];
+            $outcome = (string) ($data['scene_plans'][$targetIndex]['outcome'] ?? '');
+            if (! str_contains($outcome, $criterion)) {
+                $data['scene_plans'][$targetIndex]['outcome'] = trim($outcome).'；并完成：'.$criterion;
+            }
+            $data['scene_plans'][$targetIndex]['outcome_allowed'] = array_values(array_unique([
+                ...$data['scene_plans'][$targetIndex]['outcome_allowed'],
+                $criterion,
+            ]));
+        }
         $data['required_facts'] = array_map('intval', $data['required_facts'] ?? []);
         $data['character_candidates'] = $currentPlan?->character_candidates ?? [];
         $data['world_entity_candidates'] = $currentPlan?->world_entity_candidates ?? [];
@@ -96,6 +112,7 @@ final class SaveManualChapterPlanAction
         $reusable = $this->planAdmission->reusableReadyPlan($chapter, $admission['input_hash']);
 
         if ($reusable !== null) {
+            $chapter->update(['title' => $chapterTitle]);
             return ['status' => 'reused', 'plan' => $reusable];
         }
 
@@ -115,7 +132,7 @@ final class SaveManualChapterPlanAction
             ]);
         }
 
-        $plan = DB::transaction(function () use ($chapter, $data, $version, $admission, $fromSceneSequence): ChapterPlan {
+        $plan = DB::transaction(function () use ($chapter, $data, $version, $admission, $fromSceneSequence, $chapterTitle): ChapterPlan {
             $chapter->plans()->where('status', PlanStatus::Ready)->update(['status' => PlanStatus::Superseded]);
             $plan = $chapter->plans()->create([
                 'version' => $version,
@@ -159,6 +176,7 @@ final class SaveManualChapterPlanAction
             ]);
             $this->invalidatePlanDownstream->execute($chapter, $fromSceneSequence);
             $this->syncScenes->execute($chapter, fromSceneSequence: $fromSceneSequence);
+            $chapter->update(['title' => $chapterTitle]);
 
             return $plan;
         });

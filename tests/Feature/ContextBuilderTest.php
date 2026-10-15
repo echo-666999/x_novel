@@ -77,6 +77,7 @@ function contextFixture(array $bibleOverrides = []): array
 
 test('context builder freezes l0 and the requested canonical l1 with trace metadata', function () {
     $fixture = contextFixture();
+    $fixture['character']->update(['role' => '主角', 'profile' => ['曾在现代村镇组织救灾。']]);
     $snapshot = app(ContextBuilder::class)->build(new ContextRequest(
         novelId: $fixture['novel']->getKey(),
         chapterId: $fixture['chapter']->getKey(),
@@ -100,6 +101,7 @@ test('context builder freezes l0 and the requested canonical l1 with trace metad
         ->and($data['model'])->toBe('writer-test')
         ->and($data['l0']['bible_hard_constraints'])->toBe(['魔法不能复活死者'])
         ->and($data['l0']['ending_contract'])->toBe(['主角必须回到故乡'])
+        ->and(data_get($data, 'l1.protagonists.0.profile'))->toBe(['曾在现代村镇组织救灾。'])
         ->and($data['l0']['locked_and_required_facts'][0]['id'])->toBe($fixture['lockedFact']->getKey())
         ->and($data['l0']['world_rules'][0]['id'])->toBe($fixture['world']->getKey())
         ->and($data['l1']['canonical_story_state'])->toBe($fixture['state']->state)

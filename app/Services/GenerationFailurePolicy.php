@@ -210,7 +210,7 @@ final class GenerationFailurePolicy
         if ($code === 'outline_worker_contract_mismatch') {
             return 'worker_version_mismatch';
         }
-        if ($code === 'review_contract_output_invalid' || $code === 'review_contract_repair_invalid') {
+        if (in_array($code, ['review_contract_output_invalid', 'review_contract_repair_invalid', 'review_evidence_output_invalid', 'review_evidence_repair_invalid'], true)) {
             return 'structured_output';
         }
         if ($code === StalledRunRecoveryService::ERROR_CODE || $code === 'worker_interrupted') {
@@ -260,6 +260,9 @@ final class GenerationFailurePolicy
         }
         if ($code === 'review_contract_output_invalid') {
             return '自动修复冻结审计数组后继续审校';
+        }
+        if ($code === 'review_evidence_output_invalid') {
+            return '自动修复逐字证据后继续审校';
         }
         if ($code === 'review_contract_repair_invalid' || $code === 'review_contract_repair_failed') {
             return '检查审校合同修复 Run 和原始响应';

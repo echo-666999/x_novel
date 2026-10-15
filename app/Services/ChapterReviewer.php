@@ -14,6 +14,7 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Exceptions\ReviewContractRepairDeferredException;
+use App\Exceptions\ReviewEvidenceRepairDeferredException;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -59,6 +60,7 @@ class ChapterReviewer
         private readonly GenerationRequestBudget $requestBudget,
         private readonly PlanCoverageJudgmentRepairer $coverageJudgment,
         private readonly ReviewContractAuditRepairer $reviewContractRepairer,
+        private readonly ReviewEvidenceRepairer $reviewEvidenceRepairer,
         private readonly JsonSchemaValidator $schemaValidator,
         private readonly ChapterStageRouteResolver $routeResolver,
         private readonly GenerationSettingsService $generationSettings,
@@ -209,8 +211,15 @@ class ChapterReviewer
             data_set($runSnapshot, 'generation_preferences.review_prompt_capacity', $capacityEstimate);
             $run->update(['context_snapshot' => $runSnapshot]);
 
-            $checkpoint = $this->latestReviewContractCheckpoint($chapter, $draft, $inputHash);
-            if ($checkpoint !== null) {
+            $evidenceCheckpoint = $this->latestReviewEvidenceCheckpoint($chapter, $draft, $inputHash);
+            $checkpoint = $evidenceCheckpoint === null
+                ? $this->latestReviewContractCheckpoint($chapter, $draft, $inputHash)
+                : null;
+            if ($evidenceCheckpoint !== null) {
+                // 原始审校与合同修复已经完成；恢复时只重试尚未完成的逐字证据修复。
+                $payload = $evidenceCheckpoint['payload'];
+                $schemaRepairs = $evidenceCheckpoint['schema_repairs'];
+            } elseif ($checkpoint !== null) {
                 // 主审校响应已经在上一 Job 持久化；本次只允许一次独立合同修复请求。
                 $repair = $this->reviewContractRepairer->repair(
                     $run,
@@ -247,6 +256,20 @@ class ChapterReviewer
                 }
             }
             if (! array_key_exists('recommended_decision', $payload)) {
+                $invalidEvidence = $this->reviewEvidenceRepairer->invalidAudits($payload, $draft, $context, $chapter);
+                if ($invalidEvidence !== []) {
+                    if ($evidenceCheckpoint === null) {
+                        $this->saveReviewEvidenceCheckpoint($run, $draft, $inputHash, $payload, $schemaRepairs);
+                        throw new ReviewEvidenceRepairDeferredException(count($invalidEvidence));
+                    }
+                    $repair = $this->reviewEvidenceRepairer->repair($run, $chapter, $draft, $payload, $context, $invalidEvidence);
+                    $payload = $repair['payload'];
+                    $schemaRepairs[] = [
+                        'type' => 'review_evidence',
+                        'generation_run_id' => $repair['generation_run_id'],
+                        'artifact_id' => $repair['artifact_id'],
+                    ];
+                }
                 $payload = CompactReviewPayload::expand(
                     $payload,
                     $chapter,
@@ -467,6 +490,50 @@ class ChapterReviewer
         return is_array($payload) && is_array($fields) && $fields !== []
             ? ['payload' => $payload, 'fields' => array_values(array_filter($fields, 'is_string'))]
             : null;
+    }
+
+    /** @return array{payload: array<string, mixed>, schema_repairs: array<int, mixed>}|null */
+    private function latestReviewEvidenceCheckpoint(Chapter $chapter, GenerationArtifact $draft, string $inputHash): ?array
+    {
+        $artifact = GenerationArtifact::query()
+            ->where('type', ArtifactType::Context)
+            ->where('input_hash', $inputHash)
+            ->where('source_artifact_id', $draft->getKey())
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->where('stage', GenerationStage::Review))
+            ->latest('id')->get()
+            ->first(fn (GenerationArtifact $candidate): bool => data_get($candidate->data, 'role') === 'review_evidence_payload');
+        $payload = data_get($artifact?->data, 'payload');
+
+        return is_array($payload)
+            ? ['payload' => $payload, 'schema_repairs' => (array) data_get($artifact->data, 'schema_repairs', [])]
+            : null;
+    }
+
+    /** @param array<string, mixed> $payload @param array<int, mixed> $schemaRepairs */
+    private function saveReviewEvidenceCheckpoint(
+        GenerationRun $run,
+        GenerationArtifact $draft,
+        string $inputHash,
+        array $payload,
+        array $schemaRepairs,
+    ): void {
+        $data = [
+            'role' => 'review_evidence_payload',
+            'source_artifact_id' => $draft->getKey(),
+            'input_hash' => $inputHash,
+            'payload' => $payload,
+            'schema_repairs' => $schemaRepairs,
+        ];
+        $encoded = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $run->artifacts()->create([
+            'type' => ArtifactType::Context,
+            'version' => ((int) $run->artifacts()->where('type', ArtifactType::Context)->max('version')) + 1,
+            'content' => null,
+            'data' => $data,
+            'checksum' => hash('sha256', $encoded),
+        ]);
     }
 
     /** @param array<string, mixed> $payload @param array<int, string> $fields */

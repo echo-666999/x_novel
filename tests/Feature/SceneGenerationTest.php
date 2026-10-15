@@ -1172,7 +1172,7 @@ test('manual plan save marks the admitted version ready', function () {
 
     $result = app(SaveManualChapterPlanAction::class)->handle(
         $fixture['chapter'],
-        $fixture['plan']->semanticPayload(),
+        ['chapter_title' => '灯塔夜潮', ...$fixture['plan']->semanticPayload()],
         null,
     );
 

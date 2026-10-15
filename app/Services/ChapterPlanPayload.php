@@ -18,7 +18,7 @@ final class ChapterPlanPayload
             'type' => 'object',
             'additionalProperties' => false,
             'required' => [
-                'novel_outline_id', 'chapter_function', 'arc_contribution', 'arc_contributions', 'character_candidates', 'reader_promise', 'target_words',
+                'novel_outline_id', 'chapter_function', 'chapter_title', 'arc_contribution', 'arc_contributions', 'character_candidates', 'reader_promise', 'target_words',
                 'pov_character_id', 'tone', 'time_anchor', 'hook_type', 'must_reveal',
                 'may_hint', 'must_not_reveal', 'required_facts', 'forbidden_conflicts',
                 'foreshadowing_actions', 'world_entity_candidates', 'scene_plans',
@@ -26,6 +26,7 @@ final class ChapterPlanPayload
             'properties' => [
                 'novel_outline_id' => ['type' => 'integer', 'minimum' => 1],
                 'chapter_function' => ['type' => 'string'],
+                'chapter_title' => ['type' => 'string', 'minLength' => 2, 'maxLength' => 80],
                 'arc_contribution' => ['type' => 'string'],
                 'arc_contributions' => [
                     'type' => 'array',
@@ -213,9 +214,10 @@ final class ChapterPlanPayload
             }
         }
 
-        return Validator::make($payload, [
+        $validated = Validator::make($payload, [
             'novel_outline_id' => ['required', 'integer', 'min:1'],
             'chapter_function' => ['required', 'string'],
+            'chapter_title' => ['required', 'string', 'min:2', 'max:80'],
             'arc_contribution' => ['required', 'string'],
             'arc_contributions' => ['present', 'array'],
             'arc_contributions.*.role' => ['required', 'string', 'in:primary,secondary'],
@@ -285,5 +287,11 @@ final class ChapterPlanPayload
             'scene_plans.*.time_anchor' => ['nullable', 'string'],
             'scene_plans.*.transition_from_previous' => ['nullable', 'string'],
         ])->validate();
+
+        if (preg_match('/^第[零一二三四五六七八九十百千万两\d\s]+章[\s·:：、.-]*$/u', trim($validated['chapter_title']))) {
+            throw ValidationException::withMessages(['chapter_title' => '章节标题必须包含具体章名，不能只有章节序号。']);
+        }
+
+        return $validated;
     }
 }

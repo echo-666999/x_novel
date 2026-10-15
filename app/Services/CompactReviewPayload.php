@@ -190,7 +190,13 @@ final class CompactReviewPayload
             return collect(array_values($audits))->map(function (mixed $audit, int $index) use ($contracts, $identity, $field, $chapter, $normalizeEvidence, $unboundStatus): array {
                 self::assertAudit($audit, $field);
                 $evidence = $normalizeEvidence($audit['evidence']);
-                $sceneId = self::sceneIdForEvidence($chapter, $evidence);
+                $targetSequence = is_array($contracts[$index]) ? data_get($contracts[$index], 'target_scene_sequence') : null;
+                $targetScene = is_numeric($targetSequence) ? $chapter->scenes->firstWhere('sequence', (int) $targetSequence) : null;
+                $sceneId = $targetScene === null
+                    ? self::sceneIdForEvidence($chapter, $evidence)
+                    : (is_string($evidence) && $evidence !== '' && str_contains((string) $targetScene->currentArtifact?->content, $evidence)
+                        ? (int) $targetScene->getKey()
+                        : null);
                 $status = $audit['status'];
 
                 if ($unboundStatus !== null

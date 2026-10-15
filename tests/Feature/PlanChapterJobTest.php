@@ -76,6 +76,7 @@ function plannerPayload(int $characterId, array $overrides = []): array
     return [
         'novel_outline_id' => $target->outlineId,
         'chapter_function' => '迫使主角离开安全区',
+        'chapter_title' => '灯塔前的抉择',
         'arc_contribution' => '推进失踪船队主线',
         'arc_contributions' => [[
             'role' => 'primary',
@@ -785,6 +786,8 @@ test('the model payload cannot authorize defer or abandon actions', function (st
 
 test('the planner creates a validated plan artifact and succeeds its run', function () {
     [$chapter, $character] = plannerChapter();
+    $chapter->novel->update(['premise' => '主角曾是现代村官，在抢险救灾中牺牲后回到古代。']);
+    $character->update(['role' => '主角', 'profile' => ['现代村官在抢险救灾中牺牲。']]);
     $chapter->novel->update(['settings' => [
         'generation' => ['chapter_target_words' => 4_200],
         'editorial' => ['primary_style' => 'austere', 'secondary_styles' => [], 'style_parameters' => []],
@@ -798,17 +801,20 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
     $run = $chapter->generationRuns()->sole();
 
     expect($plan->status)->toBe(PlanStatus::Ready)
+        ->and($plan->chapter_title)->toBe('灯塔前的抉择')
+        ->and($chapter->fresh()->title)->toBe('第一章 灯塔前的抉择')
         ->and($plan->novel_outline_id)->toBe($chapter->novel->current_outline_id)
         ->and($plan->scene_plans)->toHaveCount(1)
-        ->and(data_get($plan->scene_plans, '0.outcome_allowed'))->toBe(['寻找无人看守的小船'])
+        ->and(data_get($plan->scene_plans, '0.outcome'))->toContain('完整父链存在。')
+        ->and(data_get($plan->scene_plans, '0.outcome_allowed'))->toBe(['寻找无人看守的小船', '完整父链存在。'])
         ->and(data_get($plan->scene_plans, '0.outcome_forbidden'))->toBe(['取得港务官正式许可'])
         ->and($plan->target_words)->toBe(4_200)
         ->and($chapter->scenes()->count())->toBe(1)
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v12+natural-planning-v3')
-        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v12+natural-planning-v3')
+        ->and($run->prompt_version)->toBe('chapter-planner-v13+natural-planning-v3')
+        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v13+natural-planning-v3')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -818,6 +824,8 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($run->artifacts()->sole()->type)->toBe(ArtifactType::ChapterPlan)
         ->and($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->prompt)->toContain('通俗爽快')
+        ->and($fake->requests()[0]->prompt)->toContain('主角曾是现代村官，在抢险救灾中牺牲后回到古代。')
+        ->and($fake->requests()[0]->prompt)->toContain('现代村官在抢险救灾中牺牲。')
         ->and($fake->requests()[0]->prompt)->not->toContain('冷峻克制')
         ->and($fake->requests()[0]->prompt)->toContain('active_facts 为空时必须返回 []')
         ->and($fake->requests()[0]->prompt)->toContain('outcome_allowed')

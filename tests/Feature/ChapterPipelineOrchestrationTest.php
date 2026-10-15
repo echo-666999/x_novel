@@ -798,6 +798,7 @@ final class ChapterPipelineFixtureProvider implements AiProvider
         return [
             'novel_outline_id' => $target->outlineId,
             'chapter_function' => '迫使主角离开安全区',
+            'chapter_title' => '灯塔前的抉择',
             'arc_contribution' => '推进灯塔主线',
             'arc_contributions' => [[
                 'role' => 'primary',

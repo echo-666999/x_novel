@@ -184,6 +184,8 @@ class ChapterPlanner
                     .'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。'
                     .'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择；除 target_scene_sequence 外必须逐字段复制，没有 Candidate 时必须返回 []。每个已选 Candidate 的 target_scene_sequence 必须由本章实际 scene_plans 决定，并指向正文首次引入该对象的 Scene。只把当前 Milestone 的 must_include 合并到 must_reveal；不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
                     .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据，并在本章计划中指定目标 Scene，不需要新实体时返回 []。'
+                    .'chapter_title 必须是有辨识度的简短章名，只写章名正文，不写“第几章”，应对应本章实际转折而非复述全书主题。'
+                    .'主线 arc_contributions 的 target_scene_sequence 必须选在实际完成 acceptance_criteria 的场景；对应 scene_plans 的 outcome_allowed 必须明确列出这项验收结果，不能把验收放到另一场景才完成。'
                     .'target_words 必须逐字复制 length_contract.chapter_target_words；chapter_budget 是当前 Beat 可停留的章节数范围，不是单章字数。'
                     .'每个伏笔动作必须指定目标 Scene 序号和可由正文验收的 acceptance_criteria。模型禁止选择 defer 或 abandon；这两类动作只能由用户在计划编辑页明确授权。'
                     .'每个 Scene 的 outcome_allowed 必须列出该结果允许的具体行为，outcome_forbidden 必须列出会反转或越过该结果的行为；没有边界项时返回 []。'
@@ -323,6 +325,27 @@ class ChapterPlanner
             $contribution['milestone_sequence'] = (int) $outlineTarget['primary_milestone_sequence'];
         }
         unset($contribution);
+
+        foreach ($payload['arc_contributions'] as $contribution) {
+            if (($contribution['role'] ?? null) !== 'primary') {
+                continue;
+            }
+            $index = ((int) ($contribution['target_scene_sequence'] ?? 0)) - 1;
+            if (! isset($payload['scene_plans'][$index])) {
+                continue;
+            }
+            $criterion = (string) ($contribution['acceptance_criteria'] ?? '');
+            if ($criterion !== '') {
+                $outcome = (string) ($payload['scene_plans'][$index]['outcome'] ?? '');
+                if (! str_contains($outcome, $criterion)) {
+                    $payload['scene_plans'][$index]['outcome'] = trim($outcome).'；并完成：'.$criterion;
+                }
+                $payload['scene_plans'][$index]['outcome_allowed'] = array_values(array_unique([
+                    ...($payload['scene_plans'][$index]['outcome_allowed'] ?? []),
+                    $criterion,
+                ]));
+            }
+        }
 
         foreach (['character_candidates', 'world_entity_candidates'] as $field) {
             $contracts = collect($outlineTarget[$field] ?? [])->keyBy('candidate_key');
@@ -586,6 +609,7 @@ class ChapterPlanner
                     'context_snapshot' => [...($run->context_snapshot ?? []), 'chapter_plan_id' => $reusable->getKey(), 'plan_reused' => true],
                     'finished_at' => now(),
                 ]);
+                $chapter->update(['title' => ChapterTitle::format($chapter->sequence, $reusable->chapter_title ?: $payload['chapter_title'])]);
 
                 return $reusable;
             }
@@ -605,7 +629,10 @@ class ChapterPlanner
             ]);
             $this->invalidatePlanDownstream->execute($chapter);
             $this->syncScenes->execute($chapter);
-            $chapter->update(['status' => ChapterStatus::Generating]);
+            $chapter->update([
+                'status' => ChapterStatus::Generating,
+                'title' => ChapterTitle::format($chapter->sequence, $payload['chapter_title']),
+            ]);
 
             return $plan;
         });
@@ -673,7 +700,7 @@ class ChapterPlanner
         }
 
         $context = [
-            'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'status' => $novel->status->value],
+            'novel' => ['id' => $novel->getKey(), 'title' => $novel->title, 'premise' => $novel->premise, 'status' => $novel->status->value],
             'generation_preferences' => [
                 'chapter_target_words' => (int) $lengthContract['chapter_target_words'],
             ],
@@ -697,7 +724,7 @@ class ChapterPlanner
                 ])->all(),
             'existing_world_entities' => $novel->worldEntities()->where('status', 'active')->get()
                 ->map->only(['id', 'type', 'name', 'description'])->all(),
-            'characters' => $novel->characters()->get()->map->only(['id', 'name', 'role', 'status', 'goals', 'knowledge'])->all(),
+            'characters' => $novel->characters()->get()->map->only(['id', 'name', 'role', 'profile', 'motivation', 'personality', 'abilities', 'knowledge', 'current_state', 'status'])->all(),
             'active_facts' => $novel->facts()->where('status', 'active')->get()->map->only(['id', 'subject_type', 'subject_id', 'predicate', 'value', 'locked'])->all(),
             'foreshadowings_requiring_action' => $this->foreshadowingContext($chapter),
             'recent_summaries' => $novel->chapters()

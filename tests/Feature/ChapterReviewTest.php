@@ -788,6 +788,80 @@ test('review contract omission is checkpointed and repaired by one isolated prov
         ->and(data_get($review->artifact->data, 'schema_repairs.0.fields'))->toBe(['arc_beat_audits']);
 });
 
+test('unverifiable review citation is checkpointed then repaired without repeating the full review', function () {
+    $fixture = reviewFixture();
+    bindStateValidation(new StateValidationResult([]));
+    $invalid = compactReviewResponse()->structuredData;
+    $invalid['chapter_plan_completion']['evidence'] = '林舟完成了守城任务。';
+    $repair = ['repairs' => [['evidence' => '林舟守住城门']]];
+    $fake = (new FakeAiProvider)
+        ->enqueue(new AiResponse(
+            content: json_encode($invalid, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            structuredData: $invalid,
+            inputTokens: 100, outputTokens: 80, cachedTokens: 0, latencyMs: 100,
+            providerRequestId: 'review-invalid-evidence', model: 'review-test',
+        ))
+        ->enqueue(new AiResponse(
+            content: json_encode($repair, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            structuredData: $repair,
+            inputTokens: 30, outputTokens: 15, cachedTokens: 0, latencyMs: 50,
+            providerRequestId: 'review-evidence-repair', model: 'review-test',
+        ));
+    app()->instance(AiProvider::class, $fake);
+
+    $advance = Mockery::mock(AdvanceChapterPipelineAction::class);
+    $advance->shouldReceive('handle')->once()->with($fixture['chapter']->getKey())->andReturn(GenerationStage::Review);
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle(app(ChapterReviewer::class), $advance);
+    expect(Review::query()->count())->toBe(0)
+        ->and($fake->requests())->toHaveCount(1);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+    $reviewRuns = GenerationRun::query()->where('stage', GenerationStage::Review)->orderBy('id')->get();
+    $repairRun = GenerationRun::query()->where('stage', GenerationStage::ReviewRepair)->sole();
+    $checkpoint = GenerationArtifact::query()->get()->first(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'role') === 'review_evidence_payload');
+
+    expect($fake->requests())->toHaveCount(2)
+        ->and($fake->requests()[1]->promptVersion)->toBe('review-evidence-repair-v1')
+        ->and($reviewRuns)->toHaveCount(2)
+        ->and($reviewRuns[0]->error_code)->toBe('review_evidence_output_invalid')
+        ->and($repairRun->status)->toBe(RunStatus::Succeeded)
+        ->and($checkpoint)->not->toBeNull()
+        ->and(data_get($review->artifact->data, 'chapter_plan_completion.evidence'))->toBe('林舟守住城门')
+        ->and(data_get($review->artifact->data, 'schema_repairs.0.generation_run_id'))->toBe($repairRun->getKey());
+});
+
+test('repeated evidence binds to the planned arc scene when it appears in multiple scenes', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $plan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(), 'beat_key' => $plan->primaryOutlineBeat->beat_key,
+        'beat_index' => 1, 'target_scene_sequence' => 1, 'acceptance_criteria' => '守住城门。',
+    ]]]);
+    foreach ([1, 2] as $sequence) {
+        $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => $sequence]);
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scene_id' => $scene->getKey(), 'scope_type' => 'scene', 'scope_id' => $scene->getKey(),
+            'stage' => GenerationStage::SceneGeneration, 'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft, 'content' => '林舟守住城门',
+        ]);
+        $scene->update(['current_artifact_id' => $artifact->getKey()]);
+    }
+    $payload = compactReviewResponse()->structuredData;
+    $payload['arc_beat_audits'] = [['status' => 'fulfilled', 'evidence' => '林舟守住城门']];
+    $payload['arc_completion_audits'] = [['status' => 'not_met', 'evidence' => null]];
+    $chapter = $fixture['chapter']->fresh(['latestPlan', 'scenes.currentArtifact']);
+    $expanded = CompactReviewPayload::expand(
+        $payload, $chapter, $fixture['draft'],
+        app(OutlineCompletionService::class)->contract($chapter), [],
+    );
+
+    expect(data_get($expanded, 'arc_beat_audits.0.status'))->toBe('fulfilled')
+        ->and(data_get($expanded, 'arc_beat_audits.0.scene_id'))->toBe($chapter->scenes->firstWhere('sequence', 1)->getKey());
+});
+
 test('historical reviewer v16 admission keeps the frozen v16 system prompt', function () {
     $fixture = reviewFixture();
     $plan = $fixture['chapter']->latestPlan;

@@ -343,6 +343,7 @@ test('arc beats context includes the target volume length contract without prior
     $context = $contract->arcBeatsContext(ogrFoundationPayload(), $structure, 'arc-01', $length);
 
     expect($context)->toHaveKeys(['foundation_summary', 'outline', 'target_volume', 'length_contract', 'target_arc', 'adjacent_arcs'])
+        ->and(data_get($context, 'foundation_summary.characters.0.profile'))->toBe(['少年'])
         ->and($context)->not->toHaveKey('structure')
         ->and($context['outline'])->toBe([
             'title' => '星火长夜',
@@ -373,7 +374,7 @@ test('arc beats context includes the target volume length contract without prior
         ->and($context['target_arc']['key'])->toBe('arc-01')
         ->and($context['adjacent_arcs']['previous'])->toBeNull()
         ->and($context['adjacent_arcs']['next']['key'])->toBe('arc-02')
-        ->and($context['foundation_summary']['characters'][0])->not->toHaveKey('profile')
+        ->and($context['foundation_summary']['characters'][0])->toHaveKey('profile')
         ->and(json_encode($context, JSON_THROW_ON_ERROR))->not->toContain('arc-03')
         ->not->toContain('beat-01')
         ->not->toContain('"volumes"');
@@ -453,8 +454,8 @@ test('outline provider prompts use the central resolver and preserve determinist
     $versions = app(PromptVersionResolver::class);
 
     expect($versions->resolve(AiStage::OutlineFoundation))->toBe('novel-outline-foundation-v6+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v6+natural-planning-v3')
-        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v8+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineStructure))->toBe('novel-outline-structure-v7+natural-planning-v3')
+        ->and($versions->resolve(AiStage::OutlineArcBeats))->toBe('novel-outline-arc-beats-v9+natural-planning-v3')
         ->and($versions->resolve(AiStage::OutlineBeatDetail))->toBe('novel-outline-beat-detail-v6+natural-planning-v3')
         ->and(NovelOutlinePipeline::SKELETON_ASSEMBLY_ALGORITHM_VERSION)->toBe('novel-outline-skeleton-assembly-v5')
         ->and(NovelOutlinePipeline::LEGACY_SKELETON_PROMPT_VERSION)->toBe('novel-outline-skeleton-v1')

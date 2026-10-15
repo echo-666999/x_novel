@@ -6,6 +6,7 @@ use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
 use App\Exceptions\ReviewContractRepairDeferredException;
+use App\Exceptions\ReviewEvidenceRepairDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
@@ -74,7 +75,7 @@ class ReviewChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
             }
 
             $this->releaseGenerationDispatch();
-        } catch (ReviewContractRepairDeferredException) {
+        } catch (ReviewContractRepairDeferredException|ReviewEvidenceRepairDeferredException) {
             $this->releaseGenerationDispatch();
             $advance->handle($this->chapterId);
 

@@ -77,6 +77,8 @@ class ContextBuilder
             ->get();
 
         $foreshadowingContract = $this->foreshadowingContextContract->build($plan, $bible, $state);
+        $protagonists = $novel->characters()->where('role', '主角')->orderBy('id')->get()
+            ->map(fn ($character): array => $character->only(['id', 'name', 'role', 'profile', 'motivation', 'personality', 'abilities']))->all();
         $l0 = [
             'bible_hard_constraints' => $bible->hard_constraints ?? [],
             'ending_contract' => $bible->ending_contract ?? [],
@@ -106,9 +108,10 @@ class ContextBuilder
             ],
             'foreshadowing_contract' => $foreshadowingContract,
         ];
-        $l1 = ['canonical_story_state' => $state->state];
+        $l1 = ['canonical_story_state' => $state->state, 'protagonists' => $protagonists];
         $l4 = $this->narrativeStyleProfile->contractForBible($bible);
         $characterIds = collect([$plan->pov_character_id])
+            ->merge(collect($protagonists)->pluck('id'))
             ->merge(collect($plan->scene_plans ?? [])->pluck('pov_character_id'))
             ->merge($facts->where('subject_type', 'character')->pluck('subject_id'))
             ->filter()->map(fn ($id): int => (int) $id)->unique()->sort()->values()->all();

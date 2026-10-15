@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'primary_outline_milestone_id',
     'version',
     'chapter_function',
+    'chapter_title',
     'arc_contribution',
     'arc_contributions',
     'character_candidates',

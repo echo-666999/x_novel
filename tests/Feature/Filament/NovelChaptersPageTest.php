@@ -200,6 +200,7 @@ test('the owner can create a complete executable chapter plan without ai', funct
         ->assertTableActionExists('managePlan', fn ($action): bool => $action->isModalSlideOver())
         ->callTableAction('managePlan', $chapter, data: [
             'chapter_function' => '迫使主角离开安全区',
+            'chapter_title' => '灯塔前的抉择',
             'arc_contribution' => '推进失踪案主线',
             'reader_promise' => '揭示旧信的第一层来源',
             'target_words' => 3_200,
@@ -237,7 +238,7 @@ test('the owner can create a complete executable chapter plan without ai', funct
         ->and($plan->required_facts)->toBe([$fact->getKey()])
         ->and($plan->due_foreshadowings)->toBe([])
         ->and(data_get($plan->foreshadowing_actions, '0.foreshadowing_id'))->toBe($foreshadowing->getKey())
-        ->and($plan->scene_plans[0]['outcome'])->toBe('林舟带走残缺旧信')
+        ->and($plan->scene_plans[0]['outcome'])->toBe('林舟带走残缺旧信；并完成：完整父链存在。')
         ->and($plan->status)->toBe(PlanStatus::Ready);
 });
 
@@ -298,6 +299,7 @@ test('manual defer stores current user and canonical authorization context', fun
     Livewire::test(ManageNovelChapters::class, ['record' => $novel->getRouteKey()])
         ->callTableAction('managePlan', $chapter, data: [
             'chapter_function' => '处理伏笔延期',
+            'chapter_title' => '旧信的回声',
             'arc_contribution' => '重新安排兑现时机',
             'reader_promise' => '说明延期造成的新风险',
             'target_words' => 3_000,

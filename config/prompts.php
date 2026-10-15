@@ -18,10 +18,10 @@ return [
     */
     'versions' => [
         'outline_foundation' => 'novel-outline-foundation-v6',
-        'outline_structure' => 'novel-outline-structure-v6',
-        'outline_arc_beats' => 'novel-outline-arc-beats-v8',
+        'outline_structure' => 'novel-outline-structure-v7',
+        'outline_arc_beats' => 'novel-outline-arc-beats-v9',
         'outline_beat_detail' => 'novel-outline-beat-detail-v6',
-        'planner' => 'chapter-planner-v12',
+        'planner' => 'chapter-planner-v13',
         'writer' => 'scene-writer-v16',
         'extractor' => 'event-extractor-v9',
         'reviewer' => 'reviewer-v20',

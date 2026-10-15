@@ -37,6 +37,12 @@ final class ChapterPlanEditorSchema
                 ->description('说明本章为什么存在、推进哪条故事线，以及向读者兑现什么。')
                 ->columns(['default' => 1, 'md' => 2])
                 ->schema([
+                    TextInput::make('chapter_title')
+                        ->label('章节标题')
+                        ->helperText('只填写章名，不包含“第几章”。')
+                        ->maxLength(80)
+                        ->required()
+                        ->columnSpanFull(),
                     Textarea::make('chapter_function')
                         ->label('章节功能')
                         ->rows(3)
@@ -44,6 +50,13 @@ final class ChapterPlanEditorSchema
                     Textarea::make('arc_contribution')
                         ->label('故事线贡献')
                         ->rows(3)
+                        ->required(),
+                    TextInput::make('primary_contribution_scene_sequence')
+                        ->label('主线验收场景序号')
+                        ->helperText('主线验收条件必须在指定场景的正文中实际完成。')
+                        ->integer()
+                        ->minValue(1)
+                        ->default(1)
                         ->required(),
                     Textarea::make('reader_promise')
                         ->label('读者承诺')
@@ -225,6 +238,8 @@ final class ChapterPlanEditorSchema
 
         if ($plan === null) {
             return [
+                'chapter_title' => preg_replace('/^第[零一二三四五六七八九十百千万两\d\s]+章[\s·:：、.-]*/u', '', $chapter->title) ?: '',
+                'primary_contribution_scene_sequence' => 1,
                 'target_words' => $this->chapterTargetWords($chapter->novel),
                 'must_reveal' => [],
                 'may_hint' => [],
@@ -240,6 +255,7 @@ final class ChapterPlanEditorSchema
 
         return [
             ...$plan->only([
+                'chapter_title',
                 'chapter_function',
                 'arc_contribution',
                 'reader_promise',
@@ -258,6 +274,8 @@ final class ChapterPlanEditorSchema
                 'scene_plans',
                 'status',
             ]),
+            'chapter_title' => $plan->chapter_title ?: (preg_replace('/^第[零一二三四五六七八九十百千万两\d\s]+章[\s·:：、.-]*/u', '', $chapter->title) ?: ''),
+            'primary_contribution_scene_sequence' => (int) data_get($plan->arc_contributions, '0.target_scene_sequence', 1),
             'target_words' => $this->chapterTargetWords($chapter->novel),
         ];
     }

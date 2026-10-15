@@ -56,6 +56,7 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
     ]);
     ChapterPlan::factory()->for($chapter)->create([
         'chapter_function' => '迫使主角离开安全区',
+        'chapter_title' => '灯塔前的抉择',
         'arc_contribution' => '推进失踪船队主线',
         'reader_promise' => '确认钟声来自沉没灯塔',
     ]);
@@ -76,7 +77,7 @@ test('chapter detail is the workspace for all chapter pipeline stages', function
         'chapter' => $chapter->getRouteKey(),
     ])
         ->assertOk()
-        ->assertSee('第 12 章 · 旧港夜航')
+        ->assertSee('旧港夜航')
         ->assertSee('章节工作台')
         ->assertSeeTextInOrder([
             '概览',

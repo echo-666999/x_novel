@@ -416,7 +416,7 @@ final class NovelOutlineStageContract
             ]),
             'characters' => collect($foundation['characters'] ?? [])->map(fn (array $character): array => Arr::only(
                 $character,
-                ['name', 'role', 'motivation', 'current_state'],
+                ['name', 'role', 'profile', 'motivation', 'current_state'],
             ))->values()->all(),
             'world_entities' => collect($foundation['world_entities'] ?? [])->map(fn (array $entity): array => Arr::only(
                 $entity,

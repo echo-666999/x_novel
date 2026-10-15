@@ -48,6 +48,7 @@ test('planning preview shows the complete chapter plan in reading order', functi
     ]);
     $plan = ChapterPlan::factory()->for($chapter)->create([
         'chapter_function' => '迫使主角离开安全区',
+        'chapter_title' => '灯塔前的抉择',
         'arc_contribution' => '推进失踪船队主线',
         'reader_promise' => '确认钟声来自沉没灯塔',
         'pov_character_id' => $pov->getKey(),
