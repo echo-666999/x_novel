@@ -5,6 +5,7 @@ namespace App\Filament\Pages;
 use App\Enums\ReviewDecision;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Review as ReviewModel;
+use App\Services\ChapterRepairRecommendation;
 use App\Services\DraftRewriteDiff;
 use BackedEnum;
 use Filament\Actions\ViewAction;
@@ -79,7 +80,7 @@ class Review extends Page implements HasTable
                     ->formatStateUsing(fn (ReviewDecision $state): string => $state->getLabel())
                     ->badge()->color(fn (ReviewDecision $state): string => $state->getColor()),
                 TextColumn::make('top_finding')->label('首要问题')
-                    ->state(fn (ReviewModel $record): string => $this->topFinding($record)['message'] ?? '无 Findings')
+                    ->state(fn (ReviewModel $record): string => $this->topFinding($record)['message'] ?? '无待处理问题')
                     ->description(fn (ReviewModel $record): ?string => $this->findingDescription($this->topFinding($record)))
                     ->wrap()->limit(80),
                 TextColumn::make('score')->label('总分')->suffix(' / 100')->numeric(2)->alignEnd()->sortable(),
@@ -129,23 +130,34 @@ class Review extends Page implements HasTable
                 TextEntry::make('pacing_score')->label('节奏 / 悬念 · 10%'),
                 TextEntry::make('style_score')->label('文风 / 可读性 · 10%'),
             ]),
-            Section::make('Findings')->schema([
-                RepeatableEntry::make('findings')->hiddenLabel()->schema([
-                    TextEntry::make('message')->label('问题')->columnSpanFull(),
-                    TextEntry::make('severity')->label('处理级别')->badge()->formatStateUsing(fn (string $state): string => match ($state) {
-                        'hard' => '阻塞',
-                        'error' => '必须修复',
-                        'warning', 'soft' => '非阻塞建议',
-                        'ambiguous' => '需要人工判断',
-                        default => $state,
-                    }),
-                    TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
-                    TextEntry::make('code')->label('规则代码')->fontFamily('mono')->placeholder('—'),
-                    TextEntry::make('evidence')->label('证据')->placeholder('—')->columnSpanFull(),
-                    TextEntry::make('related_fact_id')->label('相关 Fact')->formatStateUsing(fn (int $state): string => '#'.$state)->placeholder('—'),
-                    TextEntry::make('related_state_path')->label('Story State Path')->fontFamily('mono')->placeholder('—'),
-                ])->columns(3),
-            ]),
+            Section::make('问题与修改建议')
+                ->description('修改建议由已持久化的规则代码、处理范围和证据确定性生成，不会改写原审校结论。')
+                ->visible(fn (ReviewModel $record): bool => $record->decision !== ReviewDecision::Pass && ! empty($record->findings))
+                ->schema([
+                    RepeatableEntry::make('finding_recommendations')
+                        ->hiddenLabel()
+                        ->state(fn (ReviewModel $record): array => $this->findingRecommendationRows($record))
+                        ->schema([
+                            TextEntry::make('message')->label('问题')->columnSpanFull(),
+                            TextEntry::make('severity')->label('处理级别')->badge()->formatStateUsing(fn (string $state): string => match ($state) {
+                                'hard' => '阻塞',
+                                'error' => '必须修复',
+                                'warning', 'soft' => '非阻塞建议',
+                                'ambiguous' => '需要人工判断',
+                                default => $state,
+                            }),
+                            TextEntry::make('dimension')->label('维度')->placeholder('状态一致性'),
+                            TextEntry::make('code')->label('规则代码')->fontFamily('mono')->placeholder('—'),
+                            TextEntry::make('evidence')->label('证据')->placeholder('—')->columnSpanFull(),
+                            TextEntry::make('problem_layer')->label('修改层级')->badge(),
+                            TextEntry::make('recommended_action')->label('如何修改')->columnSpan(2),
+                            TextEntry::make('target_fields')->label('建议调整项')->listWithLineBreaks(),
+                            TextEntry::make('affected_stages')->label('修改后需重建')->listWithLineBreaks(),
+                            TextEntry::make('recovery_entry')->label('操作入口')->columnSpanFull(),
+                            TextEntry::make('related_fact_id')->label('相关 Fact')->formatStateUsing(fn (int $state): string => '#'.$state)->placeholder('—'),
+                            TextEntry::make('related_state_path')->label('Story State Path')->fontFamily('mono')->placeholder('—'),
+                        ])->columns(3),
+                ]),
             Section::make('Draft / Rewrite Diff')
                 ->description('比较重写前后正文，并核对 Finding 的复审状态。')
                 ->visible(fn (ReviewModel $record): bool => app(DraftRewriteDiff::class)->forReview($record) !== null)
@@ -159,6 +171,10 @@ class Review extends Page implements HasTable
     /** @return array<string, mixed> */
     private function topFinding(ReviewModel $review): array
     {
+        if ($review->decision === ReviewDecision::Pass) {
+            return [];
+        }
+
         return collect($review->findings)->sortBy(fn (array $finding): int => match ($finding['severity'] ?? null) {
             'hard' => 0, 'error' => 1, 'ambiguous' => 2, 'warning', 'soft' => 3, default => 4,
         })->first() ?? [];
@@ -168,6 +184,29 @@ class Review extends Page implements HasTable
     private function findingDescription(array $finding): ?string
     {
         return $finding === [] ? null : collect([$finding['code'] ?? null, $finding['dimension'] ?? null])->filter()->implode(' · ');
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function findingRecommendationRows(ReviewModel $review): array
+    {
+        $recommendation = app(ChapterRepairRecommendation::class);
+
+        return collect($review->findings ?? [])
+            ->filter(fn (mixed $finding): bool => is_array($finding))
+            ->map(function (array $finding) use ($recommendation): array {
+                $repair = $recommendation->fromFinding($finding);
+
+                return [
+                    ...$finding,
+                    'problem_layer' => $repair['problem_layer'],
+                    'recommended_action' => $repair['recommended_action'],
+                    'target_fields' => $repair['target_fields'],
+                    'affected_stages' => $repair['affected_stages'],
+                    'recovery_entry' => $repair['recovery_entry'],
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     private function chapterUrl(ReviewModel $review): string

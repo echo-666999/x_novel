@@ -74,12 +74,42 @@ test('review inbox can switch to all decisions and links to chapter review', fun
     Livewire::test(ReviewPage::class)
         ->filterTable('inbox', 'all')
         ->assertCanSeeTableRecords([$review])
+        ->assertSee('无待处理问题')
         ->assertSee(NovelResource::getUrl('chapter', [
             'record' => $novel->getKey(),
             'chapter' => $chapter->getKey(),
             'tab' => 'review',
         ]), false)
         ->assertTableActionExists('inspect', fn ($action): bool => $action->isModalSlideOver());
+});
+
+test('review finding inspector explains how to repair each finding', function () {
+    $novel = Novel::factory()->create(['title' => '照夜长河']);
+    $chapter = Chapter::factory()->for($novel)->create(['sequence' => 1, 'title' => '雨夜初醒']);
+    $review = inboxReview($novel, $chapter, ReviewDecision::NeedsAttention, '正文与当前 Milestone 验收条件发生冲突。');
+    $review->update([
+        'findings' => [[
+            'severity' => 'error',
+            'dimension' => 'progress',
+            'scope' => 'chapter',
+            'code' => 'MILESTONE_CONTRADICTED',
+            'message' => '正文与当前 Milestone 验收条件发生冲突。',
+            'evidence' => '刘据的腰里忽然一阵抽紧。',
+        ]],
+    ]);
+
+    Livewire::test(ReviewPage::class)
+        ->assertTableActionExists('inspect', fn ($action): bool => $action->isModalSlideOver());
+
+    $method = new ReflectionMethod(ReviewPage::class, 'findingRecommendationRows');
+    $rows = $method->invoke(app(ReviewPage::class), $review->fresh());
+
+    expect($rows)->toHaveCount(1)
+        ->and($rows[0]['problem_layer'])->toBe('Outline / Milestone')
+        ->and($rows[0]['recommended_action'])->toBe('修订未来 Outline 或从当前 Outline 重新规划本章')
+        ->and($rows[0]['target_fields'])->toContain('Milestone 验收条件（里程碑完成标准）')
+        ->and($rows[0]['affected_stages'])->toContain('Chapter Plan（章节计划）', 'Review（叙事审校）')
+        ->and($rows[0]['recovery_entry'])->toContain('从 Outline 重建章节');
 });
 
 test('review inbox has an actionable empty state', function () {

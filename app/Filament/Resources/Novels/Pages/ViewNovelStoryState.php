@@ -55,18 +55,18 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
 
     /** @var array<string, string> */
     private const DOMAINS = [
-        'characters' => '人物',
-        'relationships' => '关系',
-        'locations' => '地点',
-        'items' => '物品',
-        'world' => '世界',
-        'timeline' => '时间线',
-        'open_threads' => '开放线索',
-        'foreshadowings' => '伏笔',
+        'characters'      => '人物',
+        'relationships'   => '关系',
+        'locations'       => '地点',
+        'items'           => '物品',
+        'world'           => '世界',
+        'timeline'        => '时间线',
+        'open_threads'    => '开放线索',
+        'foreshadowings'  => '伏笔',
         'reader_promises' => '读者承诺',
-        'facts' => '事实',
-        'story_events' => '故事事件',
-        'state_diff' => '版本差异',
+        'facts'           => '事实',
+        'story_events'    => '故事事件',
+        'state_diff'      => '版本差异',
     ];
 
     #[Url(as: 'version')]

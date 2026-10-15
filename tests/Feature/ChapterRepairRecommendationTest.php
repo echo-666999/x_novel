@@ -1,9 +1,18 @@
 <?php
 
+use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
+use App\Models\Chapter;
+use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\Novel;
+use App\Models\Review;
 use App\Services\ChapterRepairRecommendation;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+uses(RefreshDatabase::class);
 
 test('persisted findings map to deterministic repair layers and entries', function (array $finding, string $layer, string $entry) {
     $recommendation = app(ChapterRepairRecommendation::class)->fromFinding($finding);
@@ -55,6 +64,45 @@ test('persisted findings map to deterministic repair layers and entries', functi
     ], 'Canonical Fact / State', 'canonical_fact'],
 ]);
 
+test('finding recommendation shows the problem before its verbatim evidence', function () {
+    $recommendation = app(ChapterRepairRecommendation::class)->fromFinding([
+        'code' => 'PLAN_DEVIATION',
+        'dimension' => 'plan',
+        'scope' => 'chapter',
+        'message' => '正文偏离冻结的章节计划。',
+        'evidence' => '她先洗手，随后才把水煮沸。',
+    ]);
+
+    expect($recommendation['confirmed_evidence'])->toBe([
+        '问题：正文偏离冻结的章节计划。',
+        '证据：她先洗手，随后才把水煮沸。',
+    ]);
+});
+
+test('a passed review does not produce repair recommendations from retained findings', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::Pass,
+        'findings' => [[
+            'code' => 'NON_BLOCKING_NOTE',
+            'scope' => 'chapter',
+            'message' => '保留的非阻塞审计说明。',
+            'evidence' => '一段正文证据。',
+        ]],
+    ]);
+
+    expect(app(ChapterRepairRecommendation::class)->forChapter($chapter))->toBe([]);
+});
+
 test('review capacity failures require a new plan admission instead of retrying the same frozen plan', function () {
     $run = new GenerationRun([
         'stage' => GenerationStage::Review,
@@ -68,7 +116,8 @@ test('review capacity failures require a new plan admission instead of retrying 
 
     expect($recommendation['problem_layer'])->toBe('Chapter Plan')
         ->and($recommendation['recovery_key'])->toBe('edit_plan')
-        ->and($recommendation['target_fields'])->toBe(['admission_snapshot.capacity.review'])
+        ->and($recommendation['confirmed_evidence'])->toBe(['问题：Reviewer Route 容量不足。'])
+        ->and($recommendation['target_fields'])->toBe(['admission_snapshot.capacity.review（审校容量冻结配置）'])
         ->and($recommendation['recommended_action'])->toContain('新的 Plan Version');
 });
 
@@ -86,7 +135,7 @@ test('scene budget exhaustion requires a new plan admission instead of replaying
 
     expect($recommendation['problem_layer'])->toBe('Chapter Plan')
         ->and($recommendation['recovery_key'])->toBe('edit_plan')
-        ->and($recommendation['target_fields'])->toBe(['admission_snapshot.routes.writer.request_budgets'])
+        ->and($recommendation['target_fields'])->toBe(['admission_snapshot.routes.writer.request_budgets（正文生成请求预算）'])
         ->and($recommendation['recommended_action'])->toContain('新的 Plan Version');
 });
 

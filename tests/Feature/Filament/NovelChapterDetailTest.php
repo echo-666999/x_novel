@@ -26,6 +26,7 @@ use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\Review;
 use App\Models\Scene;
+use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Models\UsageRecord;
 use App\Models\User;
@@ -39,6 +40,11 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
+});
+
+test('collapsible schema controls have simplified Chinese labels', function () {
+    expect(__('filament-schemas::components.section.actions.expand.label'))->toBe('展开此区域')
+        ->and(__('filament-schemas::components.section.actions.collapse.label'))->toBe('收起此区域');
 });
 
 test('chapter detail is the workspace for all chapter pipeline stages', function () {
@@ -350,12 +356,140 @@ test('needs attention review exposes manual edit and override actions instead of
         ->mountAction($editPlanAction)
         ->assertActionMounted($editPlanAction)
         ->assertSchemaStateSet(fn (array $state): bool => $state['chapter_function'] === $chapter->latestPlan->chapter_function)
-        ->assertSee('建议字段')
-        ->assertSee('影响范围')
+        ->assertSee('问题：需要人工判断。')
+        ->assertSee('建议字段（含中文说明）')
+        ->assertSee('chapter_function（章节功能）')
+        ->assertSee('影响范围（含中文说明）')
+        ->assertSee('Scene（场景正文生成）')
         ->assertSee('恢复入口')
         ->assertDontSee('人工修改局部正文')
         ->assertSee('人工通过（Override）')
         ->assertDontSee('强制重新审校');
+});
+
+test('passed review hides retained findings from the repair recommendation panel', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
+    ChapterPlan::factory()->for($chapter)->create();
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::Pass,
+        'findings' => [[
+            'code' => 'NON_BLOCKING_NOTE',
+            'scope' => 'chapter',
+            'message' => '已经通过后保留的审计说明。',
+            'evidence' => '不应继续显示为待修复问题。',
+        ]],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('当前 Review 已通过')
+        ->assertDontSee('人工修复建议')
+        ->assertDontSee('问题清单')
+        ->assertDontSee('已经通过后保留的审计说明。');
+});
+
+test('planning completion evidence explains the frozen condition and includes every candidate type', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
+    $plan = ChapterPlan::factory()->for($chapter)->create();
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1]);
+    $plan->update([
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $arc->getKey(),
+            'beat_key' => 'beat-water',
+            'beat_index' => 1,
+            'milestone_key' => 'beat-water-milestone-01',
+            'milestone_sequence' => 1,
+            'acceptance_criteria' => '刘据因凉水清洗的乳具出现蜷腹、拒乳和哭闹。',
+            'target_scene_sequence' => 1,
+        ]],
+        'character_candidates' => [[
+            'candidate_key' => 'character-wan',
+            'name' => '阿绾',
+            'introduction_reason' => '承担日常照料与观察职责',
+            'target_scene_sequence' => 1,
+        ]],
+        'world_entity_candidates' => [[
+            'candidate_key' => 'entity-milk-vessel',
+            'name' => '乳具',
+            'introduction_reason' => '承载饮水卫生风险',
+            'target_scene_sequence' => 1,
+        ]],
+    ]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => [
+            'arc_beat_audits' => [[
+                'arc_id' => $arc->getKey(),
+                'beat_key' => 'beat-water',
+                'status' => 'fulfilled',
+                'evidence' => '冰凉的奶水滑进喉咙，肚腹突然绞紧。',
+                'scene_id' => $scene->getKey(),
+            ]],
+            'character_candidate_audits' => [[
+                'candidate_key' => 'character-wan',
+                'status' => 'missing',
+                'evidence' => null,
+                'scene_id' => $scene->getKey(),
+            ]],
+            'world_entity_candidate_audits' => [[
+                'candidate_key' => 'entity-milk-vessel',
+                'status' => 'introduced',
+                'evidence' => '乳具边缘很硬，带着一股凉气。',
+                'scene_id' => $scene->getKey(),
+            ]],
+        ],
+    ]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::NeedsAttention,
+    ]);
+
+    $component = Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('规划完成依据')
+        ->assertSee('验收条件')
+        ->assertSee('支持该条件的正文原句')
+        ->assertSee('故事线节拍')
+        ->assertSee($arc->title)
+        ->assertSee('第 1 个节拍（beat-water）')
+        ->assertSee('刘据因凉水清洗的乳具出现蜷腹、拒乳和哭闹。')
+        ->assertSee('冰凉的奶水滑进喉咙，肚腹突然绞紧。')
+        ->assertSee('人物候选')
+        ->assertSee('阿绾（character-wan）')
+        ->assertSee('明确引入持续性人物「阿绾」；引入目的：承担日常照料与观察职责。')
+        ->assertSee('世界实体候选')
+        ->assertSee('乳具（entity-milk-vessel）')
+        ->assertSee('明确引入世界实体「乳具」；引入目的：承载饮水卫生风险。')
+        ->assertSee('场景 1')
+        ->assertSee('已完成')
+        ->assertSee('未完成')
+        ->assertSee('已引入');
+
+    $issues = new ReflectionMethod(ViewNovelChapter::class, 'planningReviewHasIssues');
+
+    expect($issues->invoke($component->instance()))->toBeTrue();
 });
 
 test('an overlength review exposes the dedicated acceptance action instead of ordinary override', function () {

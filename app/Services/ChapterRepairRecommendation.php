@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\GenerationStage;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Models\Chapter;
 use App\Models\GenerationRun;
@@ -29,10 +30,14 @@ final class ChapterRepairRecommendation
             ->latest('id')
             ->first();
 
-        $recommendations = collect($review?->findings ?? [])
-            ->filter(fn (mixed $finding): bool => is_array($finding))
-            ->map(fn (array $finding): array => $this->fromFinding($finding))
-            ->values();
+        // PASS 已经表示当前审校结论允许提交；其中保留的非阻塞 Finding 只用于审计，不能继续显示成待修复事项。
+        $reviewRequiresRepair = $review !== null && $review->decision !== ReviewDecision::Pass;
+        $recommendations = $reviewRequiresRepair
+            ? collect($review->findings ?? [])
+                ->filter(fn (mixed $finding): bool => is_array($finding))
+                ->map(fn (array $finding): array => $this->fromFinding($finding))
+                ->values()
+            : collect();
 
         $failedRun = $chapter->generationRuns()
             ->where('id', '>', $planningBoundary)
@@ -44,7 +49,7 @@ final class ChapterRepairRecommendation
             $recommendations->push($this->fromRun($failedRun));
         }
 
-        if ($recommendations->isEmpty() && $review !== null) {
+        if ($recommendations->isEmpty() && $reviewRequiresRepair) {
             $recommendations->push($this->workflowFallback($review));
         }
 
@@ -63,7 +68,7 @@ final class ChapterRepairRecommendation
                 $row['problem_layer'],
                 $row['recommended_action'],
                 $row['scene_id'] ?? '',
-                $row['confirmed_evidence'],
+                json_encode($row['confirmed_evidence'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             ]))
             ->values()
             ->all();
@@ -238,17 +243,24 @@ final class ChapterRepairRecommendation
     }
 
     /** @param array<string, mixed> $finding */
-    private function evidence(array $finding): string
+    private function evidence(array $finding): array
     {
-        $evidence = $finding['evidence'] ?? null;
-        if (is_string($evidence) && trim($evidence) !== '') {
-            return trim($evidence);
-        }
-        if (is_array($evidence) && $evidence !== []) {
-            return json_encode($evidence, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '已有结构化证据。';
+        $result = [];
+        $message = trim((string) ($finding['message'] ?? ''));
+        if ($message !== '') {
+            $result[] = '问题：'.$message;
         }
 
-        return (string) ($finding['message'] ?? '已持久化问题没有提供正文证据。');
+        $evidence = $finding['evidence'] ?? null;
+        if (is_string($evidence) && trim($evidence) !== '') {
+            $result[] = '证据：'.trim($evidence);
+        }
+        if (is_array($evidence) && $evidence !== []) {
+            $encoded = json_encode($evidence, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            $result[] = '证据：'.($encoded ?: '已有结构化证据。');
+        }
+
+        return $result !== [] ? $result : ['问题：已持久化 Finding 没有提供问题说明或正文证据。'];
     }
 
     /** @param array<string, mixed> $finding */
@@ -295,18 +307,82 @@ final class ChapterRepairRecommendation
      * @param  array<int, string>  $affected
      * @return array<string, mixed>
      */
-    private function row(string $layer, string $evidence, string $action, array $fields, array $affected, string $entry, string $recoveryKey, ?string $code, ?int $sceneId = null): array
+    private function row(string $layer, string|array $evidence, string $action, array $fields, array $affected, string $entry, string $recoveryKey, ?string $code, ?int $sceneId = null): array
     {
         return [
             'problem_layer' => $layer,
-            'confirmed_evidence' => $evidence,
+            'confirmed_evidence' => is_array($evidence) ? $evidence : ['问题：'.trim($evidence)],
             'recommended_action' => $action,
-            'target_fields' => $fields,
-            'affected_stages' => $affected,
+            'target_fields' => array_map($this->describeTargetField(...), $fields),
+            'affected_stages' => array_map($this->describeAffectedStage(...), $affected),
             'recovery_entry' => $entry,
             'recovery_key' => $recoveryKey,
             'error_code' => $code,
             'scene_id' => $sceneId,
         ];
+    }
+
+    private function describeTargetField(string $field): string
+    {
+        if (str_starts_with($field, 'Fact #')) {
+            return $field.'（正式事实）';
+        }
+        if (str_starts_with($field, 'scene_plans[')) {
+            return $field.'（目标场景计划）';
+        }
+        if (preg_match('/^Scene \d+ 正文$/', $field) === 1) {
+            return $field.'（场景正文）';
+        }
+
+        return match ($field) {
+            'Canonical State' => 'Canonical State（正式故事状态）',
+            'Milestone 验收条件' => 'Milestone 验收条件（里程碑完成标准）',
+            'Beat Handoff' => 'Beat Handoff（节拍交接条件）',
+            'must_include / must_not_include' => 'must_include / must_not_include（必须包含 / 禁止包含）',
+            'chapter_function' => 'chapter_function（章节功能）',
+            'reader_promise' => 'reader_promise（读者承诺）',
+            'required_facts' => 'required_facts（必需事实）',
+            'forbidden_conflicts' => 'forbidden_conflicts（禁止冲突）',
+            'scene_plans' => 'scene_plans（场景计划）',
+            'goal' => 'goal（场景目标）',
+            'conflict' => 'conflict（场景冲突）',
+            'turn' => 'turn（场景转折）',
+            'outcome' => 'outcome（场景结果）',
+            'admission_snapshot.capacity.review' => 'admission_snapshot.capacity.review（审校容量冻结配置）',
+            'admission_snapshot.routes.writer.request_budgets' => 'admission_snapshot.routes.writer.request_budgets（正文生成请求预算）',
+            'admission_snapshot.routes.rewrite.request_budgets' => 'admission_snapshot.routes.rewrite.request_budgets（重写请求预算）',
+            'Chapter Plan Candidate' => 'Chapter Plan Candidate（章节计划候选）',
+            'Chapter Plan' => 'Chapter Plan（章节计划）',
+            'Outline Target' => 'Outline Target（大纲目标）',
+            'Review Findings' => 'Review Findings（审校问题清单）',
+            '受影响 Scene' => '受影响 Scene（受影响场景）',
+            '失败 Scene' => '失败 Scene（失败场景）',
+            default => $this->describeStatePath($field),
+        };
+    }
+
+    private function describeStatePath(string $field): string
+    {
+        return preg_match('/^[A-Za-z_][A-Za-z0-9_.\[\]-]*$/', $field) === 1
+            ? $field.'（正式状态字段路径）'
+            : $field;
+    }
+
+    private function describeAffectedStage(string $stage): string
+    {
+        return match ($stage) {
+            'Canonical State' => 'Canonical State（正式故事状态）',
+            'Context' => 'Context（上下文构建）',
+            'Chapter Plan' => 'Chapter Plan（章节计划）',
+            'Scene' => 'Scene（场景正文生成）',
+            'Assembly' => 'Assembly（章节组装）',
+            'Event' => 'Event（故事事件提取）',
+            'Patch' => 'Patch（状态补丁生成）',
+            'Review' => 'Review（叙事审校）',
+            '当前 Scene Artifact' => '当前 Scene Artifact（当前场景产物）',
+            '后续 Scene' => '后续 Scene（后续场景）',
+            '当前及后续 Scene' => '当前及后续 Scene（当前及后续场景）',
+            default => $stage,
+        };
     }
 }

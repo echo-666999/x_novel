@@ -42,8 +42,8 @@ use App\Services\ChapterRepairRecommendation;
 use App\Services\DraftLengthPolicy;
 use App\Services\DraftRewriteDiff;
 use App\Services\GenerationJobDispatcher;
-use App\Services\GenerationSettingsService;
 use App\Services\GenerationOutputCapacityGuard;
+use App\Services\GenerationSettingsService;
 use App\Services\LatestCanonicalChapterRollback;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
@@ -563,7 +563,7 @@ class ViewNovelChapter extends ViewRecord
                             TextEntry::make('problem_layer')->label('问题层级')->badge(),
                             TextEntry::make('scene_reference')->label('目标 Scene')->placeholder('—'),
                             TextEntry::make('recommended_action')->label('建议操作'),
-                            TextEntry::make('confirmed_evidence')->label('确认问题 / 证据')->columnSpanFull(),
+                            TextEntry::make('confirmed_evidence')->label('确认问题 / 证据')->listWithLineBreaks()->columnSpanFull(),
                             TextEntry::make('target_fields')->label('建议字段')->listWithLineBreaks(),
                             TextEntry::make('affected_stages')->label('影响范围')->listWithLineBreaks(),
                             TextEntry::make('recovery_entry')->label('恢复入口')->columnSpanFull(),
@@ -654,19 +654,28 @@ class ViewNovelChapter extends ViewRecord
                     'continuity_score' => '事实 / 连续性 · 25%', 'plan_score' => '计划遵循 · 15%', 'character_score' => '人物一致性 · 15%',
                     'progress_score' => '剧情推进 · 15%', 'repetition_score' => '重复度 · 10%', 'pacing_score' => '节奏 / 悬念 · 10%', 'style_score' => '文风 / 可读性 · 10%',
                 ])->map(fn ($label, $field) => TextEntry::make("review_{$field}")->label($label)->state(fn () => $this->latestReview()?->{$field} ?? '—'))->values()->all()),
-            Section::make('规划验收')
-                ->description('Story Arc Beat 和 World Entity Candidate 只有通过正文逐字证据验收后才会进入 Canonical Commit。')
+            Section::make('规划完成依据')
+                ->description('逐项对照冻结的验收条件和当前正文；已完成项默认折叠，未完成或冲突项自动展开。')
                 ->visible(fn (): bool => $this->planningReviewRows() !== [])
+                ->collapsible()
+                ->collapsed(fn (): bool => ! $this->planningReviewHasIssues())
                 ->schema([
                     RepeatableEntry::make('planning_review_rows')->hiddenLabel()->state(fn (): array => $this->planningReviewRows())->schema([
                         TextEntry::make('kind')->label('类型')->badge(),
                         TextEntry::make('reference')->label('计划项'),
-                        TextEntry::make('status')->label('验收结果')->badge(),
-                        TextEntry::make('evidence')->label('正文证据')->placeholder('无')->columnSpanFull(),
-                    ])->columns(3),
+                        TextEntry::make('status')
+                            ->label('验收结果')
+                            ->badge()
+                            ->formatStateUsing(fn (string $state): string => $this->planningReviewStatusLabel($state))
+                            ->color(fn (string $state): string => $this->planningReviewStatusColor($state)),
+                        TextEntry::make('target_scene')->label('目标场景'),
+                        TextEntry::make('acceptance_criteria')->label('验收条件')->columnSpanFull(),
+                        TextEntry::make('evidence')->label('支持该条件的正文原句')->placeholder('未找到满足验收条件的正文原句。')->columnSpanFull(),
+                    ])->columns(['default' => 1, 'md' => 4]),
                 ]),
             Section::make('问题清单')
                 ->description('包含叙事审校发现和状态校验器的确定性检查结果。')
+                ->visible(fn (): bool => $this->latestReview()?->decision !== ReviewDecision::Pass)
                 ->schema([
                     RepeatableEntry::make('review_findings')->hiddenLabel()->state(fn (): array => $this->localizedReviewFindings())->schema([
                         TextEntry::make('message')->label('问题'),
@@ -963,24 +972,105 @@ class ViewNovelChapter extends ViewRecord
             ])->all();
     }
 
-    /** @return array<int, array{kind: string, reference: string, status: string, evidence: mixed}> */
+    /**
+     * 将 Review 中按位置冻结的规划验收恢复为用户可理解的名称、条件和目标场景。
+     *
+     * @return array<int, array{kind: string, reference: string, status: string, target_scene: string, acceptance_criteria: string, evidence: mixed}>
+     */
     private function planningReviewRows(): array
     {
         $data = $this->latestReview()?->artifact?->data ?? [];
-        $arcRows = collect(data_get($data, 'arc_beat_audits', []))->map(fn (array $audit): array => [
-            'kind' => 'Story Arc Beat',
-            'reference' => 'Arc #'.($audit['arc_id'] ?? '?').' · '.($audit['beat_key'] ?? '?'),
-            'status' => $audit['status'] ?? 'unknown',
-            'evidence' => $audit['evidence'] ?? null,
-        ]);
-        $worldRows = collect(data_get($data, 'world_entity_candidate_audits', []))->map(fn (array $audit): array => [
-            'kind' => 'World Entity',
-            'reference' => $audit['candidate_key'] ?? '?',
-            'status' => $audit['status'] ?? 'unknown',
-            'evidence' => $audit['evidence'] ?? null,
-        ]);
+        $plan = $this->chapter()->latestPlan;
+        $arcContracts = collect($plan?->arc_contributions ?? [])->keyBy(
+            fn (array $contract): string => ((int) ($contract['arc_id'] ?? 0)).':'.($contract['beat_key'] ?? ''),
+        );
+        $characterContracts = collect($plan?->character_candidates ?? [])->keyBy('candidate_key');
+        $worldContracts = collect($plan?->world_entity_candidates ?? [])->keyBy('candidate_key');
+        $arcTitles = $this->getRecord()->storyArcs()
+            ->whereIn('id', $arcContracts->pluck('arc_id')->filter()->map(fn ($id): int => (int) $id))
+            ->pluck('title', 'id');
 
-        return $arcRows->concat($worldRows)->values()->all();
+        $arcRows = collect(data_get($data, 'arc_beat_audits', []))->map(function (array $audit) use ($arcContracts, $arcTitles): array {
+            $arcId = (int) ($audit['arc_id'] ?? 0);
+            $beatKey = (string) ($audit['beat_key'] ?? '');
+            $contract = $arcContracts->get($arcId.':'.$beatKey, []);
+            $arcTitle = $arcTitles->get($arcId, $arcId > 0 ? "故事线 #{$arcId}" : '未知故事线');
+            $beatIndex = (int) ($contract['beat_index'] ?? 0);
+            $beatReference = $beatIndex > 0 ? "第 {$beatIndex} 个节拍" : '故事节拍';
+
+            return [
+                'kind' => '故事线节拍',
+                'reference' => "{$arcTitle} · {$beatReference}（{$beatKey}）",
+                'status' => (string) ($audit['status'] ?? 'unknown'),
+                'target_scene' => $this->planningTargetSceneLabel($contract),
+                'acceptance_criteria' => (string) ($contract['acceptance_criteria'] ?? '冻结计划未提供验收条件。'),
+                'evidence' => $audit['evidence'] ?? null,
+            ];
+        });
+        $characterRows = collect(data_get($data, 'character_candidate_audits', []))->map(
+            fn (array $audit): array => $this->planningCandidateReviewRow($audit, $characterContracts->get($audit['candidate_key'] ?? '', []), '人物候选'),
+        );
+        $worldRows = collect(data_get($data, 'world_entity_candidate_audits', []))->map(
+            fn (array $audit): array => $this->planningCandidateReviewRow($audit, $worldContracts->get($audit['candidate_key'] ?? '', []), '世界实体候选'),
+        );
+
+        return $arcRows->concat($characterRows)->concat($worldRows)->values()->all();
+    }
+
+    /** @param array<string, mixed> $audit @param array<string, mixed> $contract @return array<string, mixed> */
+    private function planningCandidateReviewRow(array $audit, array $contract, string $kind): array
+    {
+        $candidateKey = (string) ($audit['candidate_key'] ?? '');
+        $name = trim((string) ($contract['name'] ?? ''));
+        $reason = trim((string) ($contract['introduction_reason'] ?? ''));
+        $subject = $name !== '' ? "「{$name}」" : "候选项 {$candidateKey}";
+        $action = $kind === '人物候选' ? '明确引入持续性人物' : '明确引入世界实体';
+
+        return [
+            'kind' => $kind,
+            'reference' => $name === '' ? $candidateKey : "{$name}（{$candidateKey}）",
+            'status' => (string) ($audit['status'] ?? 'unknown'),
+            'target_scene' => $this->planningTargetSceneLabel($contract),
+            'acceptance_criteria' => $action.$subject.($reason === '' ? '。' : "；引入目的：{$reason}。"),
+            'evidence' => $audit['evidence'] ?? null,
+        ];
+    }
+
+    /** @param array<string, mixed> $contract */
+    private function planningTargetSceneLabel(array $contract): string
+    {
+        $sequence = (int) ($contract['target_scene_sequence'] ?? 0);
+
+        return $sequence > 0 ? "场景 {$sequence}" : '未指定';
+    }
+
+    private function planningReviewHasIssues(): bool
+    {
+        return collect($this->planningReviewRows())->contains(
+            fn (array $row): bool => ! in_array($row['status'], ['fulfilled', 'introduced'], true),
+        );
+    }
+
+    private function planningReviewStatusLabel(string $status): string
+    {
+        return match ($status) {
+            'fulfilled' => '已完成',
+            'introduced' => '已引入',
+            'missing', 'not_met' => '未完成',
+            'contradicted' => '与计划冲突',
+            'not_applicable' => '不适用',
+            default => '未知',
+        };
+    }
+
+    private function planningReviewStatusColor(string $status): string
+    {
+        return match ($status) {
+            'fulfilled', 'introduced' => 'success',
+            'contradicted' => 'danger',
+            'missing', 'not_met' => 'warning',
+            default => 'gray',
+        };
     }
 
     private function canonicalCommitContext(): ?CanonicalCommitData
