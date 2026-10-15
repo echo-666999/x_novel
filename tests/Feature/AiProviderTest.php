@@ -468,17 +468,25 @@ test('openai provider validates structured response data before returning it', f
         'usage' => [],
     ])]);
 
-    app(OpenAiProvider::class)->generate(new AiRequest(
-        model: 'test-model',
-        prompt: 'Ping',
-        responseSchema: [
-            'type' => 'object',
-            'additionalProperties' => false,
-            'required' => ['answer'],
-            'properties' => ['answer' => ['type' => 'string', 'minLength' => 1]],
-        ],
-    ));
-})->throws(AiProviderException::class, 'AI Provider 结构化输出不符合响应 Schema。');
+    try {
+        app(OpenAiProvider::class)->generate(new AiRequest(
+            model: 'test-model',
+            prompt: 'Ping',
+            responseSchema: [
+                'type' => 'object',
+                'additionalProperties' => false,
+                'required' => ['answer'],
+                'properties' => ['answer' => ['type' => 'string', 'minLength' => 1]],
+            ],
+        ));
+        $this->fail('Expected structured response validation failure was not thrown.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_schema_validation_failed')
+            ->and($exception->retryable)->toBeFalse()
+            ->and($exception->usageResponse?->structuredData)->toBe(['answer' => ''])
+            ->and($exception->usageResponse?->providerRequestId)->toBe('invalid-structured-response');
+    }
+});
 
 test('openai provider reports a structured output refusal', function () {
     Http::fake(['*' => Http::response([

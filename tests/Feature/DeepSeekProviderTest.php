@@ -10,8 +10,8 @@ use App\AI\UsageRecorder;
 use App\Enums\AiStage;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
-use App\Models\GenerationRun;
 use App\Models\AIProviderConnection;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\UsageRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -101,6 +101,10 @@ test('deepseek structured output failures are non retryable', function (string $
     } catch (AiProviderException $exception) {
         expect($exception->errorCode)->toBe($code)
             ->and($exception->retryable)->toBeFalse();
+        if ($code === 'provider_schema_validation_failed') {
+            expect($exception->usageResponse?->structuredData)->toBe(['answer' => 12])
+                ->and($exception->usageResponse?->providerRequestId)->toBe('deepseek-invalid');
+        }
     }
 })->with([
     'empty' => ['', 'provider_empty_json_response'],

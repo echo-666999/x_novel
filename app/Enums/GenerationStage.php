@@ -13,6 +13,7 @@ enum GenerationStage: string
     case EventExtraction = 'event_extraction';
     case CoverageJudgment = 'coverage_judgment';
     case Review = 'review';
+    case ReviewRepair = 'review_repair';
     case Rewrite = 'rewrite';
     case Commit = 'commit';
     case MemorySummary = 'memory_summary';
@@ -31,6 +32,7 @@ enum GenerationStage: string
             self::EventExtraction => '事件提取',
             self::CoverageJudgment => 'Coverage 语义复核',
             self::Review => '审校',
+            self::ReviewRepair => '审校合同修复',
             self::Rewrite => '重写',
             self::Commit => '正式提交',
             self::MemorySummary => '记忆摘要',

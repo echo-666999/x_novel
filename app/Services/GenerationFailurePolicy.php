@@ -210,6 +210,9 @@ final class GenerationFailurePolicy
         if ($code === 'outline_worker_contract_mismatch') {
             return 'worker_version_mismatch';
         }
+        if ($code === 'review_contract_output_invalid' || $code === 'review_contract_repair_invalid') {
+            return 'structured_output';
+        }
         if ($code === StalledRunRecoveryService::ERROR_CODE || $code === 'worker_interrupted') {
             return 'worker_lost';
         }
@@ -254,6 +257,12 @@ final class GenerationFailurePolicy
         }
         if ($code === 'outline_worker_contract_mismatch') {
             return '重启 Horizon 后继续';
+        }
+        if ($code === 'review_contract_output_invalid') {
+            return '自动修复冻结审计数组后继续审校';
+        }
+        if ($code === 'review_contract_repair_invalid' || $code === 'review_contract_repair_failed') {
+            return '检查审校合同修复 Run 和原始响应';
         }
         if ($code === StalledRunRecoveryService::ERROR_CODE) {
             return '恢复';

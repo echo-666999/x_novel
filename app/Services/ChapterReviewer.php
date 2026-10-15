@@ -5,6 +5,7 @@ namespace App\Services;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\JsonSchemaValidator;
 use App\AI\NarrativeProsePolicy;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
@@ -14,6 +15,7 @@ use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
+use App\Exceptions\ReviewContractRepairDeferredException;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -27,10 +29,13 @@ class ChapterReviewer
     /** 未调用 Reviewer Provider 时，确定性预检 Review Run 使用的合同版本。 */
     private const DETERMINISTIC_PREFLIGHT_CONTRACT_VERSION = 'deterministic-review-preflight-v1';
 
-    /** v16 必须供已冻结的历史 Chapter Plan 继续使用，不能用 v17 文本冒充。 */
+    /** v16 必须供已冻结的历史 Chapter Plan 继续使用，不能用新版文本冒充。 */
     private const SYSTEM_PROMPT_V16 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换，章节功能、Milestone、Handoff、剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
 
     private const SYSTEM_PROMPT_V17 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换。若只是一处原文或单一 Scene 的表达与 Milestone 验收条件冲突，且不需要改变冻结目标或关键剧情结果，应使用 paragraph 或 scene。章节功能、Milestone/Handoff 目标本身、关键剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
+
+    /** v18 明确紧凑审计数组与冻结输入的逐项映射，数量仍由动态 Schema 强制执行。 */
+    private const SYSTEM_PROMPT_V18 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须严格按 audit_contract 中声明的 source、count 和输入原顺序逐项返回：milestone_completion 对应 outline_completion_contract.milestone_criteria，beat_exit 对应 beat_exit_criteria，handoff_readiness 对应 handoff_checks，foreshadowing_audits 对应 foreshadowing_contract.actions，arc_beat_audits 对应 chapter_plan.arc_contributions，arc_completion_audits 对应 arc_contributions 中首次出现的去重 Arc，人物和世界实体候选审计分别对应 chapter_plan 的同名 candidates。不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换。若只是一处原文或单一 Scene 的表达与 Milestone 验收条件冲突，且不需要改变冻结目标或关键剧情结果，应使用 paragraph 或 scene。章节功能、Milestone/Handoff 目标本身、关键剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
 
     private const DIMENSIONS = ['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'];
 
@@ -66,6 +71,8 @@ class ChapterReviewer
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly PlanCoverageJudgmentRepairer $coverageJudgment,
+        private readonly ReviewContractAuditRepairer $reviewContractRepairer,
+        private readonly JsonSchemaValidator $schemaValidator,
         private readonly ChapterStageRouteResolver $routeResolver,
         private readonly GenerationSettingsService $generationSettings,
     ) {}
@@ -135,6 +142,26 @@ class ChapterReviewer
         $promptVersion = $resolvedRoute['prompt_version'];
         $reviewerRoute = $resolvedRoute['route'];
         $context['prompt_version'] = $promptVersion;
+        $contractCounts = CompactReviewPayload::contractCounts(
+            $chapter->latestPlan,
+            $context['outline_completion_contract'],
+            $foreshadowingContract,
+        );
+        if (str_starts_with($promptVersion, 'reviewer-v18+')) {
+            $context['audit_contract'] = [
+                'schema_version' => 1,
+                'arrays' => [
+                    'milestone_completion' => ['source' => 'outline_completion_contract.milestone_criteria', 'count' => $contractCounts['milestone_completion']],
+                    'beat_exit' => ['source' => 'outline_completion_contract.beat_exit_criteria', 'count' => $contractCounts['beat_exit']],
+                    'handoff_readiness' => ['source' => 'outline_completion_contract.handoff_checks', 'count' => $contractCounts['handoff_readiness']],
+                    'foreshadowing_audits' => ['source' => 'foreshadowing_contract.actions', 'count' => $contractCounts['foreshadowing_audits']],
+                    'arc_beat_audits' => ['source' => 'chapter_plan.arc_contributions', 'count' => $contractCounts['arc_beat_audits']],
+                    'arc_completion_audits' => ['source' => 'chapter_plan.arc_contributions 的首次出现去重 Arc', 'count' => $contractCounts['arc_completion_audits']],
+                    'character_candidate_audits' => ['source' => 'chapter_plan.character_candidates', 'count' => $contractCounts['character_candidate_audits']],
+                    'world_entity_candidate_audits' => ['source' => 'chapter_plan.world_entity_candidates', 'count' => $contractCounts['world_entity_candidate_audits']],
+                ],
+            ];
+        }
         $context['generation_preferences'] = $this->routeResolver->generationPreferences($resolvedRoute);
         $context['generation_preferences']['repair_request_budgets'] = collect($reviewerRoute['repair_request_budgets'])
             ->only(['review_schema', 'arc_completion'])
@@ -187,30 +214,60 @@ class ChapterReviewer
         }
 
         $budget = null;
+        $schemaRepairs = [];
         try {
             $budget = $this->resolveRequestBudget($run, $baseKey);
             $this->assertReviewCapacity($context, $budget['max_completion_tokens']);
 
-            $request = new AiRequest(
-                model: $settings->model,
-                provider: $settings->provider,
-                reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: $this->systemPrompt($promptVersion),
-                prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                temperature: .2, maxTokens: $budget['max_completion_tokens'], responseSchema: $this->schema(), promptVersion: $promptVersion,
-                metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
-            );
-            // 审校请求既受审校上下文策略限制，也必须通过模型真实容量和冻结请求预算门禁。
-            $this->outputCapacity->assertRequestWithinFrozenRoute(
-                $chapter,
-                $run,
-                AiStage::Reviewer,
-                $request,
-                'narrative_review',
-                $budget,
-            );
-            $response = $this->provider->generate($request);
-            $payload = StructuredOutput::require($response, 'review', 'Narrative Review');
+            $checkpoint = $this->latestReviewContractCheckpoint($chapter, $draft, $inputHash);
+            if ($checkpoint !== null) {
+                // 主审校响应已经在上一 Job 持久化；本次只允许一次独立合同修复请求。
+                $repair = $this->reviewContractRepairer->repair(
+                    $run,
+                    $chapter,
+                    $draft,
+                    $checkpoint['payload'],
+                    $checkpoint['fields'],
+                    $context,
+                    $contractCounts,
+                );
+                $payload = [...$checkpoint['payload'], ...$repair['audits']];
+                $schemaRepairs = [[
+                    'type' => 'review_contract',
+                    'fields' => $checkpoint['fields'],
+                    'generation_run_id' => $repair['generation_run_id'],
+                    'artifact_id' => $repair['artifact_id'],
+                ]];
+            } else {
+                $request = new AiRequest(
+                    model: $settings->model,
+                    provider: $settings->provider,
+                    reasoningEffort: $settings->reasoningEffort,
+                    systemPrompt: $this->systemPrompt($promptVersion),
+                    prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+                    temperature: .2,
+                    maxTokens: $budget['max_completion_tokens'],
+                    responseSchema: $this->schema($contractCounts),
+                    promptVersion: $promptVersion,
+                    metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
+                );
+                // 审校请求既受审校上下文策略限制，也必须通过模型真实容量和冻结请求预算门禁。
+                $this->outputCapacity->assertRequestWithinFrozenRoute(
+                    $chapter,
+                    $run,
+                    AiStage::Reviewer,
+                    $request,
+                    'narrative_review',
+                    $budget,
+                );
+                $response = $this->provider->generate($request);
+                $payload = StructuredOutput::require($response, 'review', 'Narrative Review');
+                $mismatches = CompactReviewPayload::contractMismatches($payload, $contractCounts);
+                if ($mismatches !== [] && $this->isRepairableContractPayload($payload, $mismatches)) {
+                    $this->saveReviewContractCheckpoint($run, $draft, $inputHash, $payload, $mismatches);
+                    throw new ReviewContractRepairDeferredException($mismatches);
+                }
+            }
             if (! array_key_exists('recommended_decision', $payload)) {
                 $payload = CompactReviewPayload::expand(
                     $payload,
@@ -220,6 +277,7 @@ class ChapterReviewer
                     $foreshadowingContract,
                 );
             }
+            $payload['schema_repairs'] = $schemaRepairs;
             $payload = $this->validate(
                 $payload,
                 $chapter,
@@ -239,6 +297,15 @@ class ChapterReviewer
 
             return $review;
         } catch (Throwable $e) {
+            if ($e instanceof AiProviderException
+                && $e->errorCode === 'provider_schema_validation_failed'
+                && is_array($e->usageResponse?->structuredData)) {
+                $mismatches = CompactReviewPayload::contractMismatches($e->usageResponse->structuredData, $contractCounts);
+                if ($mismatches !== [] && $this->isRepairableContractPayload($e->usageResponse->structuredData, $mismatches)) {
+                    $this->saveReviewContractCheckpoint($run, $draft, $inputHash, $e->usageResponse->structuredData, $mismatches);
+                    $e = new ReviewContractRepairDeferredException($mismatches);
+                }
+            }
             if ($e instanceof AiProviderException && is_array($budget)) {
                 // Reviewer 当前只有一档冻结预算，完成预算耗尽必须直接终止而不能同参数重试。
                 $e = $this->requestBudget->classifyRetry(
@@ -306,6 +373,7 @@ class ChapterReviewer
         $prompt = match ($baseVersion) {
             'reviewer-v16' => self::SYSTEM_PROMPT_V16,
             'reviewer-v17' => self::SYSTEM_PROMPT_V17,
+            'reviewer-v18' => self::SYSTEM_PROMPT_V18,
             default => throw new AiProviderException(
                 'review_prompt_version_unsupported',
                 "Narrative Review 无法恢复冻结 Prompt 版本 [{$promptVersion}]。",
@@ -427,9 +495,65 @@ class ChapterReviewer
         ];
     }
 
-    private function schema(): array
+    /** @param array<string, int>|null $contractCounts */
+    private function schema(?array $contractCounts = null): array
     {
-        return CompactReviewPayload::schema();
+        return CompactReviewPayload::schema($contractCounts);
+    }
+
+    /** @param array<string, mixed> $payload @param array<int, string> $fields */
+    private function isRepairableContractPayload(array $payload, array $fields): bool
+    {
+        return $this->schemaValidator->matches($payload, CompactReviewPayload::repairableSourceSchema($fields));
+    }
+
+    /**
+     * @return array{payload: array<string, mixed>, fields: array<int, string>}|null
+     */
+    private function latestReviewContractCheckpoint(Chapter $chapter, GenerationArtifact $draft, string $inputHash): ?array
+    {
+        $artifact = GenerationArtifact::query()
+            ->where('type', ArtifactType::Context)
+            ->where('input_hash', $inputHash)
+            ->where('source_artifact_id', $draft->getKey())
+            ->whereHas('generationRun', fn ($query) => $query
+                ->where('chapter_id', $chapter->getKey())
+                ->where('stage', GenerationStage::Review))
+            ->latest('id')
+            ->get()
+            ->first(fn (GenerationArtifact $candidate): bool => data_get($candidate->data, 'role') === 'review_contract_payload');
+        $payload = data_get($artifact?->data, 'payload');
+        $fields = data_get($artifact?->data, 'fields');
+
+        return is_array($payload) && is_array($fields) && $fields !== []
+            ? ['payload' => $payload, 'fields' => array_values(array_filter($fields, 'is_string'))]
+            : null;
+    }
+
+    /** @param array<string, mixed> $payload @param array<int, string> $fields */
+    private function saveReviewContractCheckpoint(
+        GenerationRun $run,
+        GenerationArtifact $draft,
+        string $inputHash,
+        array $payload,
+        array $fields,
+    ): GenerationArtifact {
+        $data = [
+            'role' => 'review_contract_payload',
+            'source_artifact_id' => $draft->getKey(),
+            'input_hash' => $inputHash,
+            'fields' => array_values($fields),
+            'payload' => $payload,
+        ];
+        $encoded = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        return $run->artifacts()->create([
+            'type' => ArtifactType::Context,
+            'version' => ((int) $run->artifacts()->where('type', ArtifactType::Context)->max('version')) + 1,
+            'content' => null,
+            'data' => $data,
+            'checksum' => hash('sha256', $encoded),
+        ]);
     }
 
     private function validate(array $payload, Chapter $chapter, GenerationArtifact $draft, array $foreshadowingContract, ?array $eventCandidate, bool $hasDeterministicRoute): array

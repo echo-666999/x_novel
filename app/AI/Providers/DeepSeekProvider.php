@@ -195,13 +195,25 @@ class DeepSeekProvider implements AiProvider
                 }
 
                 if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
+                    $invalidUsageResponse = new AiResponse(
+                        content: $usageResponse->content,
+                        structuredData: is_array($decoded) ? $decoded : null,
+                        inputTokens: $usageResponse->inputTokens,
+                        outputTokens: $usageResponse->outputTokens,
+                        cachedTokens: $usageResponse->cachedTokens,
+                        latencyMs: $usageResponse->latencyMs,
+                        providerRequestId: $usageResponse->providerRequestId,
+                        model: $usageResponse->model,
+                        metadata: $usageResponse->metadata,
+                        reasoningTokens: $usageResponse->reasoningTokens,
+                    );
                     throw new AiProviderException(
                         'provider_schema_validation_failed',
                         'DeepSeek JSON Output 不符合响应 Schema。',
                         false,
                         $response->status(),
                         providerRequestId: $usageResponse->providerRequestId,
-                        usageResponse: $usageResponse,
+                        usageResponse: $invalidUsageResponse,
                     );
                 }
                 $structuredData = $decoded;

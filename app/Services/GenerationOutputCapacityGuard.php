@@ -446,7 +446,7 @@ final class GenerationOutputCapacityGuard
         if ($contractSource === self::LEGACY_CHAPTER_RECOVERY_CONTRACT) {
             $expectedStages = match ($stage) {
                 AiStage::Extractor => [GenerationStage::EventExtraction],
-                AiStage::Reviewer => [GenerationStage::CoverageJudgment, GenerationStage::Review],
+                AiStage::Reviewer => [GenerationStage::CoverageJudgment, GenerationStage::Review, GenerationStage::ReviewRepair],
                 AiStage::Rewrite => [GenerationStage::Rewrite],
                 AiStage::Summary => [GenerationStage::MemorySummary],
                 default => [],

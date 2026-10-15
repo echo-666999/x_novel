@@ -855,16 +855,19 @@ chapter-planner-v12+natural-planning-v3
 scene-writer-v16+natural-writing-v3
 deterministic-assembly-v1
 event-extractor-v9
-reviewer-v17+natural-reviewing-v3
+reviewer-v18+natural-reviewing-v3
 rewrite-v14+natural-writing-v3
 review-schema-repair-v3
+review-contract-repair-v1
 arc-completion-repair-v2
 coverage-judgment-v2
 scene-length-repair-v2
 summary-v2+natural-summary-v3
 ```
 
-Reviewer v17 只对新建或重新 Admission 的 Chapter Plan 生效，它允许不改变冻结目标的局部 Milestone 验收冲突进入 Paragraph/Scene Rewrite。已冻结 `reviewer-v16+natural-reviewing-v3` 的历史 Plan 继续发送 v16 基础 Prompt；Laravel 的冲突证据与 Scene 归属修复同样对这些 Plan 生效。不得为了恢复旧 Plan 而用 v17 文本冒充 v16 运行。
+Reviewer v18 只对新建或重新 Admission 的 Chapter Plan 生效。它在 Prompt 中明确每个紧凑审计数组的冻结来源和数量；Laravel 同时把精确数量下推为动态 JSON Schema 的 `minItems/maxItems`。已冻结 v16/v17 的历史 Plan 继续发送原版本基础 Prompt，但共用同一确定性数量 Schema，不得用 v18 文本冒充历史版本。
+
+如果 Provider 仍返回数量不符合冻结合同的审计数组，Reviewer 会把已付费的原始结构化响应保存为 Context Artifact，并以 `review_contract_output_invalid` 结束当前 Review Run。下一个 Review Job 不再重做完整审校，而是创建独立 `review_repair` Run，使用 `review-contract-repair-v1` 只补齐缺失数组，然后由 Laravel 按位置恢复 Arc、Scene 和候选对象身份。修复请求拥有独立 Input Hash、Run、Artifact、Usage 和冻结 `review_schema` 预算，不得修改评分、Findings 或其他审计结论。
 
 `NarrativeProsePolicy` 的规划、写作、审校与摘要规则分别使用 `natural-planning-v3`、`natural-writing-v3`、`natural-reviewing-v3`、`natural-summary-v3`。四个版本在 `config/prompts.php` 独立维护，修改一种规则只使实际引用它的阶段形成新复用边界。Novel Planner 与 Chapter Planner 必须让相邻结构单元承担不同推进职责，禁止把同一次回忆、确认、情绪、揭示或准备拆分重复；Scene Writer 与局部 Rewrite 必须保持有限视角，让动作、对白、环境和心理服务当前目标与因果推进，避免无新增作用的记忆、意象、感受和结论重播；Reviewer 必须区分 `EXCESSIVE_REPETITION` 与 `STYLE_MISMATCH`，忽略有实际作用的回扣并合并相同根因；Canonical Summary 必须按字段职责记录最短因果链、状态变化和未决后果，保留原文不确定性并避免跨字段复述。Deterministic Assembler 不读取该策略。
 

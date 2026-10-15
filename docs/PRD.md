@@ -348,7 +348,7 @@ Coverage Judgment（存在计划 Coverage Finding 时）
 Event Extraction + State Validation
     ↓
 Compact Narrative Review
-    ↓
+    ↓（冻结审计数组漏项时自动创建独立 Review Repair）
 Paragraph / Scene Rewrite（必要时）
     ↓
 Review PASS
@@ -1605,9 +1605,9 @@ Scene
 
 不可提交。
 
-Review 调用前由 Laravel 确定性检查字数、Scene 顺序、Artifact Lineage、State Version、Locked Facts、Outline/Beat/Milestone/Handoff 身份、Coverage 和逐字 Evidence。Writer/Assembly 的 Coverage 是结构化自报，不得直接作为 Rewrite 事实；存在 `missing`、`contradicted` 或证据修复耗尽时，必须先按 Scene 创建独立 Coverage Judgment Run/Artifact。只有 Judgment 确认的缺失或反转才能成为 Rewrite 来源，Judgment 技术失败必须停止推进并显示失败 Run。模型只返回七维分数、紧凑语义审计和可执行 Findings，不重复生成权威 ID、顺序或完整 Coverage。`findings` 是语义问题集合的权威来源，最终 Decision 由 Laravel 合并确定性 Findings、分数和 Rewrite 预算后派生。
+Review 调用前由 Laravel 确定性检查字数、Scene 顺序、Artifact Lineage、State Version、Locked Facts、Outline/Beat/Milestone/Handoff 身份、Coverage 和逐字 Evidence。Writer/Assembly 的 Coverage 是结构化自报，不得直接作为 Rewrite 事实；存在 `missing`、`contradicted` 或证据修复耗尽时，必须先按 Scene 创建独立 Coverage Judgment Run/Artifact。只有 Judgment 确认的缺失或反转才能成为 Rewrite 来源，Judgment 技术失败必须停止推进并显示失败 Run。模型只返回七维分数、紧凑语义审计和可执行 Findings，不重复生成权威 ID、顺序或完整 Coverage。Laravel 按冻结合同为每个有序审计数组设置精确 `minItems/maxItems`；若 Provider 仍漏项，先持久化原响应，再以独立 `review_repair` Run 只补齐缺失数组，不得重做完整审校或改写其他结论。`findings` 是语义问题集合的权威来源，最终 Decision 由 Laravel 合并确定性 Findings、分数和 Rewrite 预算后派生。
 
-每个 Review Job 最多一次模型请求。状态声称有问题但没有 Finding 等 Schema/Evidence 修复必须作为具有独立 Input Hash、Run 和 Artifact 的子阶段执行，不得在 Review Job 内循环调用；失败进入 NEEDS_ATTENTION 并保留 `ai_request_log_id`。
+每个 Review Job 最多一次模型请求。状态声称有问题但没有 Finding 等 Schema/Evidence 修复，以及冻结审计数组漏项修复，必须作为具有独立 Input Hash、Run 和 Artifact 的子阶段执行，不得在同一 Review Job 内循环调用；失败进入 NEEDS_ATTENTION 并保留 Provider Request ID 与 Usage。
 
 普通 warning 按分数和可执行性分流：总分达到 `review_pass_score` 且没有其他门禁时允许 PASS，并保留为非阻塞建议；总分未达标且 warning 可执行时进入 REWRITE；auto-fixable error 进入 REWRITE；真正需要用户选择、没有安全修复路径或 Rewrite 耗尽时进入 NEEDS_ATTENTION。Hard Conflict 仍无条件 BLOCK。
 

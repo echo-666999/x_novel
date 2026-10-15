@@ -634,11 +634,11 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 | planner | `chapter-planner-v12+natural-planning-v3` |
 | writer | `scene-writer-v16+natural-writing-v3` |
 | extractor | `event-extractor-v9` |
-| reviewer | `reviewer-v17+natural-reviewing-v3` |
+| reviewer | `reviewer-v18+natural-reviewing-v3` |
 | rewrite | `rewrite-v14+natural-writing-v3` |
 | summary | `summary-v2+natural-summary-v3` |
 
-Reviewer v17 只用于新建或重新 Admission 的 Chapter Plan；已冻结 v16 的历史 Plan 必须继续使用 v16 基础 Prompt。局部 Milestone 冲突的 Scene 归属修复是 Laravel 确定性逻辑，同时适用于 v16/v17；Prompt 文本不得与 Run 记录的冻结版本错配。
+Reviewer v18 只用于新建或重新 Admission 的 Chapter Plan；已冻结 v16/v17 的历史 Plan 必须继续使用对应基础 Prompt。审计数组的精确数量约束、原响应检查点与独立 `review_repair` 自愈属于 Laravel 确定性逻辑，同时适用于 v16/v17/v18；Prompt 文本不得与 Run 记录的冻结版本错配。
 
 补充边界：
 

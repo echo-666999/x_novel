@@ -27,6 +27,7 @@ final class GenerationStageGraph
             GenerationStage::ChapterAssembly => [GenerationStage::CoverageJudgment, GenerationStage::EventExtraction],
             GenerationStage::CoverageJudgment => [GenerationStage::CoverageJudgment, GenerationStage::EventExtraction],
             GenerationStage::EventExtraction => [GenerationStage::Review],
+            GenerationStage::ReviewRepair => [GenerationStage::Review],
             GenerationStage::Review => [GenerationStage::Rewrite, GenerationStage::Commit],
             GenerationStage::Rewrite => [GenerationStage::ChapterAssembly],
             GenerationStage::Commit => [GenerationStage::MemorySummary],
@@ -77,6 +78,10 @@ final class GenerationStageGraph
                 GenerationStage::Review, GenerationStage::Rewrite, GenerationStage::Commit,
                 GenerationStage::MemorySummary, GenerationStage::Embedding,
             ],
+            GenerationStage::ReviewRepair => [
+                GenerationStage::Review, GenerationStage::Rewrite, GenerationStage::Commit,
+                GenerationStage::MemorySummary, GenerationStage::Embedding,
+            ],
             GenerationStage::Review => [
                 GenerationStage::Rewrite, GenerationStage::Commit,
                 GenerationStage::MemorySummary, GenerationStage::Embedding,
@@ -98,6 +103,7 @@ final class GenerationStageGraph
             GenerationStage::ChapterAssembly => [ArtifactType::ChapterDraft],
             GenerationStage::EventExtraction => [ArtifactType::EventCandidate, ArtifactType::StatePatch, ArtifactType::Context],
             GenerationStage::CoverageJudgment => [ArtifactType::Context],
+            GenerationStage::ReviewRepair => [ArtifactType::Context],
             GenerationStage::Review => [ArtifactType::ReviewResult],
             GenerationStage::Rewrite => [ArtifactType::RewriteDraft, ArtifactType::Context],
             GenerationStage::MemorySummary => [ArtifactType::Summary],

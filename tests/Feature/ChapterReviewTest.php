@@ -1,9 +1,11 @@
 <?php
 
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
+use App\AI\JsonSchemaValidator;
 use App\AI\Providers\FakeAiProvider;
 use App\Data\StateFinding;
 use App\Data\StateValidationResult;
@@ -640,6 +642,152 @@ test('compact narrative review schema excludes decisions database identities ord
         ->and($fake->requests()[0]->systemPrompt)->toContain('STYLE_MISMATCH');
 });
 
+test('compact review schema freezes the exact item count of every ordered audit contract', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $plan->update([
+        'arc_contributions' => [
+            ['arc_id' => 11, 'acceptance_criteria' => '完成主线转折。'],
+            ['arc_id' => 12, 'acceptance_criteria' => '留下下一卷入口。'],
+        ],
+        'character_candidates' => [['name' => '新角色']],
+        'world_entity_candidates' => [
+            ['name' => '新地点'],
+            ['name' => '新规则'],
+        ],
+    ]);
+    $outline = app(OutlineCompletionService::class)->contract($fixture['chapter']->fresh());
+    $counts = CompactReviewPayload::contractCounts(
+        $plan->fresh(),
+        $outline,
+        ['actions' => [['action' => 'plant'], ['action' => 'reinforce']]],
+    );
+    $schema = CompactReviewPayload::schema($counts);
+
+    expect($counts)->toMatchArray([
+        'arc_beat_audits' => 2,
+        'arc_completion_audits' => 2,
+        'character_candidate_audits' => 1,
+        'world_entity_candidate_audits' => 2,
+        'foreshadowing_audits' => 2,
+    ]);
+
+    foreach ($counts as $field => $count) {
+        expect(data_get($schema, "properties.{$field}.minItems"))->toBe($count)
+            ->and(data_get($schema, "properties.{$field}.maxItems"))->toBe($count);
+    }
+
+    $otherwiseValid = compactReviewResponse()->structuredData;
+    unset($otherwiseValid['arc_beat_audits']);
+    expect(app(JsonSchemaValidator::class)->matches(
+        $otherwiseValid,
+        CompactReviewPayload::repairableSourceSchema(['arc_beat_audits']),
+    ))->toBeTrue();
+    $otherwiseValid['scores']['continuity'] = 'invalid';
+    expect(app(JsonSchemaValidator::class)->matches(
+        $otherwiseValid,
+        CompactReviewPayload::repairableSourceSchema(['arc_beat_audits']),
+    ))->toBeFalse();
+});
+
+test('review contract omission is checkpointed and repaired by one isolated provider request', function () {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $sceneRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'scene_id' => $scene->getKey(),
+        'scope_type' => 'scene',
+        'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $sceneArtifact = GenerationArtifact::factory()->for($sceneRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => $fixture['draft']->content,
+        'checksum' => hash('sha256', $fixture['draft']->content),
+    ]);
+    $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
+
+    $plan = $fixture['chapter']->latestPlan;
+    $arc = StoryArc::query()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    $plan->update(['arc_contributions' => [[
+        'arc_id' => $arc->getKey(),
+        'beat_key' => $plan->primaryOutlineBeat->beat_key,
+        'beat_index' => 1,
+        'target_scene_sequence' => 1,
+        'acceptance_criteria' => '守住城门。',
+    ]]]);
+
+    $invalid = compactReviewResponse()->structuredData;
+    $invalid['arc_completion_audits'] = [['status' => 'not_met', 'evidence' => null]];
+    $invalidResponse = new AiResponse(
+        content: json_encode($invalid, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $invalid,
+        inputTokens: 100,
+        outputTokens: 80,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'review-contract-invalid',
+        model: 'review-test',
+    );
+    $repairData = ['arc_beat_audits' => [[
+        'status' => 'fulfilled',
+        'evidence' => '林舟守住城门',
+    ]]];
+    $repairResponse = new AiResponse(
+        content: json_encode($repairData, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $repairData,
+        inputTokens: 40,
+        outputTokens: 20,
+        cachedTokens: 0,
+        latencyMs: 50,
+        providerRequestId: 'review-contract-repair',
+        model: 'review-test',
+    );
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue($invalidResponse)->enqueue($repairResponse);
+    app()->instance(AiProvider::class, $fake);
+    $reviewer = app(ChapterReviewer::class);
+
+    $advance = Mockery::mock(AdvanceChapterPipelineAction::class);
+    $advance->shouldReceive('handle')
+        ->once()
+        ->with($fixture['chapter']->getKey())
+        ->andReturn(GenerationStage::Review);
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle($reviewer, $advance);
+    expect(Review::query()->count())->toBe(0);
+
+    $review = $reviewer->review($fixture['chapter']->getKey());
+    $requests = $fake->requests();
+    $reviewRuns = GenerationRun::query()->where('stage', GenerationStage::Review)->orderBy('id')->get();
+    $repairRun = GenerationRun::query()->where('stage', GenerationStage::ReviewRepair)->sole();
+    $checkpoint = GenerationArtifact::query()->get()->first(
+        fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'role') === 'review_contract_payload',
+    );
+    $repairArtifact = GenerationArtifact::query()->get()->first(
+        fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'role') === 'review_contract_repair',
+    );
+
+    expect($requests)->toHaveCount(2)
+        ->and(data_get($requests[0]->responseSchema, 'properties.arc_beat_audits.minItems'))->toBe(1)
+        ->and(data_get($requests[0]->responseSchema, 'properties.arc_beat_audits.maxItems'))->toBe(1)
+        ->and($requests[1]->promptVersion)->toBe('review-contract-repair-v1')
+        ->and($requests[1]->responseSchema['required'])->toBe(['arc_beat_audits'])
+        ->and(data_get($requests[1]->responseSchema, 'properties.arc_beat_audits.minItems'))->toBe(1)
+        ->and($requests[1]->prompt)->not->toContain('parent_review_input_hash')
+        ->and($requests[1]->prompt)->not->toContain('source_artifact_id')
+        ->and($reviewRuns)->toHaveCount(2)
+        ->and($reviewRuns[0]->status)->toBe(RunStatus::Failed)
+        ->and($reviewRuns[0]->error_code)->toBe('review_contract_output_invalid')
+        ->and($reviewRuns[1]->status)->toBe(RunStatus::Succeeded)
+        ->and($repairRun->status)->toBe(RunStatus::Succeeded)
+        ->and($checkpoint)->not->toBeNull()
+        ->and($repairArtifact)->not->toBeNull()
+        ->and(data_get($review->artifact->data, 'arc_beat_audits.0.arc_id'))->toBe($arc->getKey())
+        ->and(data_get($review->artifact->data, 'arc_beat_audits.0.scene_id'))->toBe($scene->getKey())
+        ->and(data_get($review->artifact->data, 'schema_repairs.0.generation_run_id'))->toBe($repairRun->getKey())
+        ->and(data_get($review->artifact->data, 'schema_repairs.0.fields'))->toBe(['arc_beat_audits']);
+});
+
 test('historical reviewer v16 admission keeps the frozen v16 system prompt', function () {
     $fixture = reviewFixture();
     $plan = $fixture['chapter']->latestPlan;
@@ -656,6 +804,25 @@ test('historical reviewer v16 admission keeps the frozen v16 system prompt', fun
         ->and($fake->requests()[0]->promptVersion)->toBe('reviewer-v16+natural-reviewing-v3')
         ->and($fake->requests()[0]->systemPrompt)->toContain('章节功能、Milestone、Handoff、剧情结果')
         ->and($fake->requests()[0]->systemPrompt)->not->toContain('单一 Scene 的表达与 Milestone 验收条件冲突');
+});
+
+test('historical reviewer v17 admission keeps the frozen v17 prompt and context contract', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $snapshot = $plan->admission_snapshot;
+    data_set($snapshot, 'routes.reviewer.prompt_version', 'reviewer-v17+natural-reviewing-v3');
+    $plan->update(['admission_snapshot' => $snapshot]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->promptVersion)->toBe('reviewer-v17+natural-reviewing-v3')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('单一 Scene 的表达与 Milestone 验收条件冲突')
+        ->and($fake->requests()[0]->systemPrompt)->not->toContain('audit_contract')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"audit_contract"');
 });
 
 test('forced review creates a fresh run and includes the extractor completion audit', function () {

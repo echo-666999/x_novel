@@ -319,7 +319,33 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                 }
 
                 if (! is_array($decoded) || ! $this->schemaValidator->matches($decodedObject, $schema)) {
-                    throw new AiProviderException('provider_schema_validation_failed', 'AI Provider 结构化输出不符合响应 Schema。', false, $response->status());
+                    // 保留已经产生费用的原始结构化对象，让上层可以只修复合同缺口，
+                    // 而不是丢弃整次审校后再次支付完整请求费用。
+                    $usageResponse = new AiResponse(
+                        content: $content,
+                        structuredData: is_array($decoded) ? $decoded : null,
+                        inputTokens: (int) $response->json('usage.prompt_tokens', 0),
+                        outputTokens: (int) $response->json('usage.completion_tokens', 0),
+                        cachedTokens: (int) $response->json('usage.prompt_tokens_details.cached_tokens', 0),
+                        latencyMs: $latencyMs,
+                        providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
+                        model: $model,
+                        metadata: [
+                            'finish_reason' => $finishReason,
+                            'refusal' => $refusal,
+                            'completion_limit_reason' => $completionLimitReason,
+                            'sent_parameters' => $this->observableSentParameters($sentPayload),
+                        ],
+                        reasoningTokens: $reasoningTokens,
+                    );
+                    throw new AiProviderException(
+                        'provider_schema_validation_failed',
+                        'AI Provider 结构化输出不符合响应 Schema。',
+                        false,
+                        $response->status(),
+                        providerRequestId: $usageResponse->providerRequestId,
+                        usageResponse: $usageResponse,
+                    );
                 }
 
                 $structuredData = $decoded;

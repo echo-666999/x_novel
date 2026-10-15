@@ -55,11 +55,13 @@ test('the declarative graph exposes only legal chapter downstream stages', funct
     expect($graph->next(GenerationStage::ChapterAssembly))->toBe([GenerationStage::CoverageJudgment, GenerationStage::EventExtraction])
         ->and($graph->next(GenerationStage::ContentRepair))->toBe([GenerationStage::ChapterPlanning])
         ->and($graph->next(GenerationStage::ChapterRecovery))->toContain(GenerationStage::ChapterAssembly, GenerationStage::CoverageJudgment, GenerationStage::EventExtraction, GenerationStage::Review, GenerationStage::Rewrite)
+        ->and($graph->next(GenerationStage::ReviewRepair))->toBe([GenerationStage::Review])
         ->and($graph->next(GenerationStage::CoverageJudgment))->toBe([GenerationStage::CoverageJudgment, GenerationStage::EventExtraction])
         ->and($graph->downstream(GenerationStage::SceneGeneration))->toContain(GenerationStage::ChapterAssembly, GenerationStage::CoverageJudgment, GenerationStage::Review, GenerationStage::Commit)
         ->and($graph->artifactsProducedBy(GenerationStage::CoverageJudgment))->toBe([ArtifactType::Context])
         ->and($graph->artifactsProducedBy(GenerationStage::ChapterRecovery))->toBe([ArtifactType::Context])
         ->and($graph->artifactsProducedBy(GenerationStage::ContentRepair))->toBe([ArtifactType::Context])
+        ->and($graph->artifactsProducedBy(GenerationStage::ReviewRepair))->toBe([ArtifactType::Context])
         ->and($graph->artifactsProducedBy(GenerationStage::Review))->toBe([ArtifactType::ReviewResult]);
 
     $graph->assertTransition(GenerationStage::Review, GenerationStage::Commit);

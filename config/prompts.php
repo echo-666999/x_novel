@@ -24,7 +24,7 @@ return [
         'planner'             => 'chapter-planner-v12',
         'writer'              => 'scene-writer-v16',
         'extractor'           => 'event-extractor-v9',
-        'reviewer'            => 'reviewer-v17',
+        'reviewer'            => 'reviewer-v18',
         'rewrite'             => 'rewrite-v14',
         'summary'             => 'summary-v2',
     ],

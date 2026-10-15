@@ -23,6 +23,7 @@ class StalledRunRecoveryService
         GenerationStage::CoverageJudgment,
         GenerationStage::EventExtraction,
         GenerationStage::Review,
+        GenerationStage::ReviewRepair,
         GenerationStage::Rewrite,
         GenerationStage::Commit,
         GenerationStage::MemorySummary,

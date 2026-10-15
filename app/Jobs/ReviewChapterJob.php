@@ -5,12 +5,13 @@ namespace App\Jobs;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
+use App\Exceptions\ReviewContractRepairDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
 use App\Services\GenerationFailurePolicy;
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -19,7 +20,8 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
-class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
+/** 合同修复会续投同类任务，因此唯一锁在开始处理时释放。 */
+class ReviewChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, PreventsDuplicateGeneration, Queueable, SerializesModels;
 
@@ -72,6 +74,11 @@ class ReviewChapterJob implements ShouldBeUnique, ShouldQueue
             }
 
             $this->releaseGenerationDispatch();
+        } catch (ReviewContractRepairDeferredException) {
+            $this->releaseGenerationDispatch();
+            $advance->handle($this->chapterId);
+
+            return;
         } catch (AiProviderException $e) {
             $policy = app(GenerationFailurePolicy::class);
             if ($policy->shouldQueueRetry($e, GenerationStage::Review)) {

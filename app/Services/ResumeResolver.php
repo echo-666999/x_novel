@@ -173,7 +173,7 @@ class ResumeResolver
             GenerationStage::SceneGeneration => AiStage::Writer,
             GenerationStage::ChapterAssembly, GenerationStage::Rewrite => AiStage::Rewrite,
             GenerationStage::CoverageJudgment, GenerationStage::EventExtraction => AiStage::Extractor,
-            GenerationStage::Review => AiStage::Reviewer,
+            GenerationStage::Review, GenerationStage::ReviewRepair => AiStage::Reviewer,
             GenerationStage::MemorySummary => AiStage::Summary,
             default => null,
         };

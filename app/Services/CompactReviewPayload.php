@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Enums\WorldEntityType;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use Illuminate\Validation\ValidationException;
 
@@ -15,12 +16,25 @@ final class CompactReviewPayload
 {
     private const DIMENSIONS = ['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'];
 
-    /** @return array<string, mixed> */
-    public static function schema(): array
+    /**
+     * @param  array<string, int>|null  $contractCounts
+     * @return array<string, mixed>
+     */
+    public static function schema(?array $contractCounts = null): array
     {
         $scores = array_fill_keys(self::DIMENSIONS, ['type' => 'number', 'minimum' => 0, 'maximum' => 100]);
         $audit = self::auditSchema(['fulfilled', 'not_met', 'contradicted']);
-        $compactList = fn (array $statuses): array => ['type' => 'array', 'items' => self::auditSchema($statuses)];
+        $compactList = function (array $statuses, string $field) use ($contractCounts): array {
+            $schema = ['type' => 'array', 'items' => self::auditSchema($statuses)];
+            if (is_int($contractCounts[$field] ?? null)) {
+                // 数量和顺序属于 Laravel 冻结合同。把精确数量下推到 Provider Schema，
+                // 避免模型漏项后才在业务校验阶段发现并浪费整次审校费用。
+                $schema['minItems'] = $contractCounts[$field];
+                $schema['maxItems'] = $contractCounts[$field];
+            }
+
+            return $schema;
+        };
 
         return [
             'type' => 'object',
@@ -34,9 +48,9 @@ final class CompactReviewPayload
             'properties' => [
                 'scores' => ['type' => 'object', 'additionalProperties' => false, 'required' => self::DIMENSIONS, 'properties' => $scores],
                 'chapter_plan_completion' => $audit,
-                'milestone_completion' => $compactList(['fulfilled', 'not_met', 'contradicted']),
-                'beat_exit' => $compactList(['fulfilled', 'not_met', 'contradicted']),
-                'handoff_readiness' => $compactList(['fulfilled', 'not_met', 'contradicted', 'not_applicable']),
+                'milestone_completion' => $compactList(['fulfilled', 'not_met', 'contradicted'], 'milestone_completion'),
+                'beat_exit' => $compactList(['fulfilled', 'not_met', 'contradicted'], 'beat_exit'),
+                'handoff_readiness' => $compactList(['fulfilled', 'not_met', 'contradicted', 'not_applicable'], 'handoff_readiness'),
                 'foreshadowing_audits' => ['type' => 'array', 'items' => [
                     'type' => 'object', 'additionalProperties' => false,
                     'required' => ['status', 'summary', 'evidence'],
@@ -45,11 +59,11 @@ final class CompactReviewPayload
                         'summary' => ['type' => 'string', 'minLength' => 1],
                         'evidence' => ['type' => ['string', 'null']],
                     ],
-                ]],
-                'arc_beat_audits' => $compactList(['fulfilled', 'missing', 'contradicted']),
-                'arc_completion_audits' => $compactList(['fulfilled', 'not_met']),
-                'character_candidate_audits' => $compactList(['introduced', 'missing', 'contradicted']),
-                'world_entity_candidate_audits' => $compactList(['introduced', 'missing', 'contradicted']),
+                ], ...self::arrayBounds($contractCounts, 'foreshadowing_audits')],
+                'arc_beat_audits' => $compactList(['fulfilled', 'missing', 'contradicted'], 'arc_beat_audits'),
+                'arc_completion_audits' => $compactList(['fulfilled', 'not_met'], 'arc_completion_audits'),
+                'character_candidate_audits' => $compactList(['introduced', 'missing', 'contradicted'], 'character_candidate_audits'),
+                'world_entity_candidate_audits' => $compactList(['introduced', 'missing', 'contradicted'], 'world_entity_candidate_audits'),
                 'unapproved_world_entities' => ['type' => 'array', 'items' => [
                     'type' => 'object', 'additionalProperties' => false,
                     'required' => ['name', 'type', 'evidence'],
@@ -83,6 +97,77 @@ final class CompactReviewPayload
                 ]],
             ],
         ];
+    }
+
+    /**
+     * 从冻结 Plan、Outline 与伏笔合同计算模型必须逐项返回的精确数量。
+     *
+     * @param  array<string, mixed>  $outlineContract
+     * @param  array<string, mixed>  $foreshadowingContract
+     * @return array<string, int>
+     */
+    public static function contractCounts(ChapterPlan $plan, array $outlineContract, array $foreshadowingContract): array
+    {
+        return [
+            'milestone_completion' => count((array) ($outlineContract['milestone_criteria'] ?? [])),
+            'beat_exit' => count((array) ($outlineContract['beat_exit_criteria'] ?? [])),
+            'handoff_readiness' => count((array) ($outlineContract['handoff_checks'] ?? [])),
+            'foreshadowing_audits' => count((array) ($foreshadowingContract['actions'] ?? [])),
+            'arc_beat_audits' => count((array) ($plan->arc_contributions ?? [])),
+            'arc_completion_audits' => collect($plan->arc_contributions ?? [])->pluck('arc_id')->map(fn ($id): int => (int) $id)->unique()->count(),
+            'character_candidate_audits' => count((array) ($plan->character_candidates ?? [])),
+            'world_entity_candidate_audits' => count((array) ($plan->world_entity_candidates ?? [])),
+        ];
+    }
+
+    /** @param array<string, mixed> $payload @param array<string, int> $counts @return array<int, string> */
+    public static function contractMismatches(array $payload, array $counts): array
+    {
+        return collect($counts)
+            ->filter(fn (int $expected, string $field): bool => ! is_array($payload[$field] ?? null)
+                || count($payload[$field]) !== $expected)
+            ->keys()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * 修复请求只能返回已经确认缺项的合同数组，不能借机改写评分或 Findings。
+     *
+     * @param  array<string, int>  $counts
+     * @param  array<int, string>  $fields
+     * @return array<string, mixed>
+     */
+    public static function repairSchema(array $counts, array $fields): array
+    {
+        $properties = self::schema($counts)['properties'];
+        $selected = collect($fields)->mapWithKeys(fn (string $field): array => [$field => $properties[$field]])->all();
+
+        return [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => array_values($fields),
+            'properties' => $selected,
+        ];
+    }
+
+    /**
+     * 校验原响应除待替换合同数组外仍完整有效，避免把其他 Schema 错误误判为可局部修复。
+     *
+     * @param  array<int, string>  $fields
+     * @return array<string, mixed>
+     */
+    public static function repairableSourceSchema(array $fields): array
+    {
+        $schema = self::schema();
+        $schema['required'] = array_values(array_diff($schema['required'], $fields));
+        foreach ($fields as $field) {
+            if (array_key_exists($field, $schema['properties'])) {
+                $schema['properties'][$field] = [];
+            }
+        }
+
+        return $schema;
     }
 
     /** @param array<string, mixed> $payload @param array<string, mixed> $outlineContract @param array<string, mixed> $foreshadowingContract @return array<string, mixed> */
@@ -231,6 +316,14 @@ final class CompactReviewPayload
             'status' => ['type' => 'string', 'enum' => $statuses],
             'evidence' => ['type' => ['string', 'null']],
         ]];
+    }
+
+    /** @param array<string, int>|null $counts @return array<string, int> */
+    private static function arrayBounds(?array $counts, string $field): array
+    {
+        return is_int($counts[$field] ?? null)
+            ? ['minItems' => $counts[$field], 'maxItems' => $counts[$field]]
+            : [];
     }
 
     private static function assertAudit(mixed $audit, string $field): void

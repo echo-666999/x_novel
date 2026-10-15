@@ -24,7 +24,9 @@ return [
         // Coverage 语义复核是独立 Provider 阶段，技术失败不能伪装成正文缺失后进入 Rewrite。
         'coverage_judgment' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => [], 'non_terminal_codes' => ['novel_paused']],
         // 章节审校：在确定性前置校验和 Coverage 复核完成后生成 Review。
-        'review' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => [], 'non_terminal_codes' => ['novel_paused', 'review_prerequisite_missing', 'coverage_judgment_pending']],
+        'review' => ['max_attempts' => 2, 'backoff' => [10], 'repairs' => ['contract'], 'non_terminal_codes' => ['novel_paused', 'review_prerequisite_missing', 'coverage_judgment_pending', 'review_contract_output_invalid']],
+        // 审校合同修复：独立补齐模型漏掉的冻结审计数组，不修改正文或其他审校结论。
+        'review_repair' => ['max_attempts' => 1, 'backoff' => [], 'repairs' => [], 'non_terminal_codes' => ['novel_paused']],
         // Rewrite 有 initial/retry/final 三档技术预算，Queue 必须允许三次投递才能真正到达最终档。
         'rewrite' => ['max_attempts' => 3, 'backoff' => [10, 30], 'repairs' => ['evidence', 'length'], 'non_terminal_codes' => ['novel_paused', 'rewrite_exhausted', 'coverage_judgment_required']],
         // 正式提交：通过 Canonical Commit 将已通过审校的章节写入正式故事状态。
