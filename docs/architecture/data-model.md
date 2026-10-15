@@ -591,7 +591,7 @@ Paragraph
 Scene
 ```
 
-自动路径禁止 Whole Chapter Rewrite。多 Scene 连续性从最早受影响 Scene 有限级联；章功能、Milestone/Handoff 或关键结果问题返回 Plan 修订，无法安全定位时进入 `NEEDS_ATTENTION`。
+自动路径禁止 Whole Chapter Rewrite。多 Scene 连续性从最早受影响 Scene 有限级联；能唯一定位到单一 Scene、且不改变冻结目标与关键结果的 Milestone 局部验收冲突可进入 Scene Rewrite。章功能、Milestone/Handoff 身份或目标本身、关键结果以及无法安全定位的问题返回 Plan 修订或进入 `NEEDS_ATTENTION`。
 
 每次 Rewrite 必须创建新的 Artifact。
 

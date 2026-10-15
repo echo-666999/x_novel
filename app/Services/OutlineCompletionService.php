@@ -498,13 +498,33 @@ class OutlineCompletionService
             );
         }
         if (data_get($payload, 'milestone_completion.status') === 'contradicted') {
-            $findings[] = $this->finding(
-                'MILESTONE_CONTRADICTED',
-                'progress',
-                null,
-                '正文与当前 Milestone 验收条件发生冲突。',
-                $this->firstEvidence(data_get($payload, 'milestone_completion.criteria', [])),
-            );
+            $contradictions = collect(data_get($payload, 'milestone_completion.criteria', []))
+                ->filter(fn (mixed $audit): bool => is_array($audit) && ($audit['status'] ?? null) === 'contradicted')
+                ->values();
+
+            if ($contradictions->isEmpty()) {
+                // 已验证的审计不会进入这里；保守保留章级处理，避免异常载荷被误判为可局部修复。
+                $findings[] = $this->finding(
+                    'MILESTONE_CONTRADICTED',
+                    'progress',
+                    null,
+                    '正文与当前 Milestone 验收条件发生冲突，但无法定位具体冲突项。',
+                    null,
+                );
+            }
+
+            foreach ($contradictions as $audit) {
+                $sceneId = is_int($audit['scene_id'] ?? null) ? $audit['scene_id'] : null;
+                $findings[] = $this->finding(
+                    'MILESTONE_CONTRADICTED',
+                    'progress',
+                    $sceneId,
+                    $sceneId === null
+                        ? '正文与当前 Milestone 验收条件发生冲突，但无法唯一定位所属 Scene。'
+                        : '正文在当前 Scene 中与 Milestone 验收条件发生局部冲突。',
+                    is_string($audit['evidence'] ?? null) ? $audit['evidence'] : null,
+                );
+            }
         }
 
         return $findings;
@@ -683,7 +703,7 @@ class OutlineCompletionService
             if ($scene === null || ($requiresEvidence && ! str_contains((string) $scene->currentArtifact?->content, (string) $evidence))) {
                 throw ValidationException::withMessages([$field => '完成证据的 Scene 不属于当前章节或逐字证据不在该 Scene 当前 Artifact 中。']);
             }
-        } elseif ($requiresEvidence && $field !== 'chapter_plan_completion') {
+        } elseif ($requiresEvidence && $field !== 'chapter_plan_completion' && $audit['status'] !== 'contradicted') {
             throw ValidationException::withMessages([$field => '完成条件的逐字证据必须绑定当前章节 Scene。']);
         }
     }
@@ -775,12 +795,6 @@ class OutlineCompletionService
                 ]);
             }
         }
-    }
-
-    /** @param array<int, array<string, mixed>> $audits */
-    private function firstEvidence(array $audits): ?string
-    {
-        return collect($audits)->pluck('evidence')->first(fn ($evidence): bool => is_string($evidence) && filled($evidence));
     }
 
     /** @return array<string, mixed> */

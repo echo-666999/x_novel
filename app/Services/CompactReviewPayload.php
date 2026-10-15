@@ -109,13 +109,16 @@ final class CompactReviewPayload
                 $status = $audit['status'];
 
                 if ($unboundStatus !== null
-                    && in_array($status, ['fulfilled', 'introduced', 'contradicted'], true)
+                    && in_array($status, ['fulfilled', 'introduced'], true)
                     && $sceneId === null) {
                     // 过短或跨 Scene 重复的证据不能证明某个 Scene 已完成条件。
                     // 保守降级为未完成，让业务 Review 产生可执行 Finding。
                     $status = $unboundStatus;
                     $evidence = null;
                 }
+
+                // 冲突证据即使因跨 Scene 重复而无法唯一定位，也不能降级成“未完成”后丢失。
+                // 保留 contradicted 与章节逐字证据，由 RewriteScopeResolver 导向章级处理。
 
                 return [
                     ...$identity($contracts[$index], $index),

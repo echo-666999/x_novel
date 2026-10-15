@@ -384,7 +384,7 @@ Scene Writer 从 `l0.foreshadowing_contract` 读取契约；Deterministic Assemb
 
 Review 的 `foreshadowing_audits` 必须与冻结动作契约逐项、同序对应，并同时读取当前 Chapter Draft 的最终 Coverage 与绑定该 Draft 的 Event Candidate。审校结果只有 `fulfilled / rewrite_required / needs_attention`：fulfilled 需要正文逐字 evidence、fulfilled Coverage 和匹配事件共同支持；当 fulfilled 审校的模型证据为拼接引用时，Laravel 使用同一伏笔 ID、动作和目标 Scene 下已经通过逐字校验的 Coverage Evidence。`rewrite_required / needs_attention` 的模型证据若包含多个分号或省略号分隔的片段，Laravel 逐段映射当前正文并保留最长的连续逐字片段；至少一段可验证时不因格式问题丢弃整个 Review，全部无法验证时仍拒绝。原始 Provider 响应保留在请求日志中。rewrite_required 表示可在不改变契约的前提下修复正文；needs_attention 表示必须由用户决定延期、放弃或改变兑现承诺。Laravel 将同一伏笔 ID、动作和目标 Scene 的 Coverage 与语义问题合并为一个 Finding，并以确定性 Finding 阻止到期 Critical 在未解决时 PASS。
 
-自动 Rewrite 只允许 Paragraph Patch 或单 Scene Rewrite。Paragraph Patch 必须逐字且唯一命中所属 Scene；Scene Rewrite 返回该 Scene 的 `content + self_check`，并重新校验 Coverage。跨 Scene 连续性从最早受影响 Scene 开始有限级联；涉及章功能、Milestone、Handoff 或关键剧情结果的问题必须创建新 Plan Version并级联重生成。任何局部修复都先回到 Deterministic Assembly，再重新执行 Event Extraction、State Patch 和 Review。Rewrite 不能写 Story Event、进度投影或 Canonical State。
+自动 Rewrite 只允许 Paragraph Patch 或单 Scene Rewrite。Paragraph Patch 必须逐字且唯一命中所属 Scene；Scene Rewrite 返回该 Scene 的 `content + self_check`，并重新校验 Coverage。跨 Scene 连续性从最早受影响 Scene 开始有限级联。唯一定位到单一 Scene、且不改变冻结目标与关键结果的 Milestone 局部验收冲突可由 Scene Rewrite 修正；章功能、Milestone/Handoff 身份或目标本身、关键剧情结果或无法唯一定位的问题必须创建新 Plan Version、级联重生成或进入 `NEEDS_ATTENTION`。任何局部修复都先回到 Deterministic Assembly，再重新执行 Event Extraction、State Patch 和 Review。Rewrite 不能写 Story Event、进度投影或 Canonical State。
 
 ## 8. Temporary Chapter State
 
@@ -538,11 +538,11 @@ Review 调用前，Laravel 先确定性检查字数、Scene 顺序、Artifact Li
 
 每个 Review Job 只发出一次认知请求。Schema/Evidence 修复如确有必要，必须作为具有独立输入指纹、Run 和 Artifact 的子阶段执行，不能在一个 Job 内循环调用 Provider。响应 Schema 和最大合法输出在调用前计算；无法容纳时请求前失败，再次截断进入明确配置处理，不保存半截 Review。
 
-规划契约的 Outline/Arc/Beat/Milestone ID、顺序、目标 Scene 和 Handoff 以冻结 Chapter Plan 与关系表为准，模型不得重建这些身份。Review 只判断正文是否满足验收语义；Laravel 将结果附着到权威契约并拒绝跨 Scene、跨 Chapter 或跨 Outline 的证据。
+规划契约的 Outline/Arc/Beat/Milestone ID、顺序、目标 Scene 和 Handoff 以冻结 Chapter Plan 与关系表为准，模型不得重建这些身份。Review 只判断正文是否满足验收语义；Laravel 将结果附着到权威契约。fulfilled/introduced 证据必须唯一绑定当前 Scene；contradicted 证据若因跨 Scene 重复而无法唯一定位，必须保留冲突结论并进入章级处理，不得降级为未满足或自动选择 Scene。跨 Chapter 或跨 Outline 证据始终拒绝。
 
 Rewrite 后的 Review 同时接收当前 Chapter Plan 下上一轮全部可修复 Findings 作为回归清单，为每项保存 `resolved / still_present / replaced` 结果，并继续执行七维全量检查；State、Plan Coverage 与字数问题仍由 Laravel 重新确定性检查。
 
-Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 只允许 Paragraph 或 Scene：Paragraph Finding 必须逐字且唯一命中一个当前 Scene Artifact；单一有效 `scene_id` 进入 Scene Rewrite；多 Scene 连续性从最早受影响 Scene 开始有限级联。章功能、关键结果、Milestone/Handoff 或无法唯一定位的问题不得回退整章 Rewrite，而应创建新 Plan Version、级联重生成或进入 `NEEDS_ATTENTION`。Review Artifact 固定保存不可变修复路由。
+Chapter Draft 中的结构化 `plan_findings` 与 Narrative/State/字数 Finding 一起进入 Laravel 决策。`RewriteScopeResolver` 只允许 Paragraph 或 Scene：Paragraph Finding 必须逐字且唯一命中一个当前 Scene Artifact；单一有效 `scene_id` 进入 Scene Rewrite；多 Scene 连续性从最早受影响 Scene 开始有限级联。仅与 Milestone 验收条件局部冲突、且能唯一定位到某个 Scene 的正文表达，可进入 Scene Rewrite；章功能、关键结果、Milestone/Handoff 身份或目标本身、以及无法唯一定位的问题不得回退整章 Rewrite，而应创建新 Plan Version、级联重生成或进入 `NEEDS_ATTENTION`。Review Artifact 固定保存不可变修复路由。
 
 `ReviewChapterJob` 保存结果后调用 `AdvanceChapterPipelineAction`。推进器只在 Decision 为 REWRITE 且范围、预算和状态允许时派发 `RewriteChapterJob`；PASS、NEEDS_ATTENTION 与 BLOCK 均停止。预算到限时保留已完成的 Review，写入 `budget_limit` 自动停止原因，不派发下一阶段；小说在结果保存后被暂停时同样不得派发。每个 Review Job 带有稳定的 operation ID，使同一强制审校投递被重复执行时复用已完成 Run，而新的人工强制审校仍可创建新 Run。
 
@@ -561,7 +561,7 @@ Rewrite Brief 必须明确问题、证据、必须保留、预期修复和禁止
 
 `NEEDS_ATTENTION` 必须提供问题层级、建议字段、影响范围和恢复路径。人工修改正文时创建新的 Scene Rewrite Artifact 并记录原因；修改 Plan 时创建新 Plan Version并从最早受影响 Scene 重建；Canonical Fact/State 问题必须使用受控 Correction 或回滚。没有 Hard Conflict 时的人工 Override 仍保留原 Review、Findings 和操作原因。
 
-`ChapterRepairRecommendation` 只读取当前 Planning Run 边界之后的持久化失败和 Review Findings，实时映射 `problem_layer`、`confirmed_evidence`、`recommended_action`、`target_fields`、`affected_stages` 与 `recovery_entry`。它不调用 Provider，也不保存第二份推荐状态。章节工作台据此显示唯一结构化入口：局部 paragraph 才允许人工 Scene 正文修订；Scene 问题从最早受影响 Scene 级联重建；Plan 与 Milestone/Handoff 分别进入新 Plan Version 或 Current Outline 重建；Locked Fact/Canonical State 进入受控事实修复或最新正式章回滚。
+`ChapterRepairRecommendation` 只读取当前 Planning Run 边界之后的持久化失败和 Review Findings，实时映射 `problem_layer`、`confirmed_evidence`、`recommended_action`、`target_fields`、`affected_stages` 与 `recovery_entry`。它不调用 Provider，也不保存第二份推荐状态。章节工作台据此显示唯一结构化入口：局部 paragraph 才允许人工 Scene 正文修订；能定位的 Scene 正文问题从最早受影响 Scene 级联重建；Plan 以及 Milestone/Handoff 身份或目标问题分别进入新 Plan Version 或 Current Outline 重建；Locked Fact/Canonical State 进入受控事实修复或最新正式章回滚。
 
 手工保存 Chapter Plan 必须创建成功的人工 Chapter Planning Run 与不可变 Chapter Plan Artifact，作为新来源链边界。旧 Draft、Event Candidate、State Patch 和 Review 保留审计，但边界之前的结果不再是当前提交候选。若只有 `scene_plans[N...]` 发生语义变化，更早 Scene Artifact 保持当前指针；从首个变化 Scene 开始同步 Plan、清除当前指针并复用 `RegenerateSceneSequenceAction` 级联重建。
 
@@ -849,7 +849,7 @@ chapter-planner-v12+natural-planning-v3
 scene-writer-v16+natural-writing-v3
 deterministic-assembly-v1
 event-extractor-v9
-reviewer-v16+natural-reviewing-v3
+reviewer-v17+natural-reviewing-v3
 rewrite-v14+natural-writing-v3
 review-schema-repair-v3
 arc-completion-repair-v2
@@ -857,6 +857,8 @@ coverage-judgment-v2
 scene-length-repair-v2
 summary-v2+natural-summary-v3
 ```
+
+Reviewer v17 只对新建或重新 Admission 的 Chapter Plan 生效，它允许不改变冻结目标的局部 Milestone 验收冲突进入 Paragraph/Scene Rewrite。已冻结 `reviewer-v16+natural-reviewing-v3` 的历史 Plan 继续发送 v16 基础 Prompt；Laravel 的冲突证据与 Scene 归属修复同样对这些 Plan 生效。不得为了恢复旧 Plan 而用 v17 文本冒充 v16 运行。
 
 `NarrativeProsePolicy` 的规划、写作、审校与摘要规则分别使用 `natural-planning-v3`、`natural-writing-v3`、`natural-reviewing-v3`、`natural-summary-v3`。四个版本在 `config/prompts.php` 独立维护，修改一种规则只使实际引用它的阶段形成新复用边界。Novel Planner 与 Chapter Planner 必须让相邻结构单元承担不同推进职责，禁止把同一次回忆、确认、情绪、揭示或准备拆分重复；Scene Writer 与局部 Rewrite 必须保持有限视角，让动作、对白、环境和心理服务当前目标与因果推进，避免无新增作用的记忆、意象、感受和结论重播；Reviewer 必须区分 `EXCESSIVE_REPETITION` 与 `STYLE_MISMATCH`，忽略有实际作用的回扣并合并相同根因；Canonical Summary 必须按字段职责记录最短因果链、状态变化和未决后果，保留原文不确定性并避免跨字段复述。Deterministic Assembler 不读取该策略。
 

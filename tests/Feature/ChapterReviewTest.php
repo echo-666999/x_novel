@@ -37,6 +37,7 @@ use App\Services\CompactReviewPayload;
 use App\Services\GenerationSettingsService;
 use App\Services\OutlineCompletionService;
 use App\Services\PlanningReviewAudit;
+use App\Services\RewriteScopeResolver;
 use App\Services\StateValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
@@ -630,9 +631,29 @@ test('compact narrative review schema excludes decisions database identities ord
         ->and($encoded)->not->toContain('target_scene_sequence')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得返回推荐 Decision')
         ->and($fake->requests()[0]->systemPrompt)->toContain('不得复述数据库 ID')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('单一 Scene 的表达与 Milestone 验收条件冲突')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('Milestone/Handoff 目标本身')
         ->and($fake->requests()[0]->systemPrompt)->toContain('必须区分“内容重复”和“文风失真”')
         ->and($fake->requests()[0]->systemPrompt)->toContain('EXCESSIVE_REPETITION')
         ->and($fake->requests()[0]->systemPrompt)->toContain('STYLE_MISMATCH');
+});
+
+test('historical reviewer v16 admission keeps the frozen v16 system prompt', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $snapshot = $plan->admission_snapshot;
+    data_set($snapshot, 'routes.reviewer.prompt_version', 'reviewer-v16+natural-reviewing-v3');
+    $plan->update(['admission_snapshot' => $snapshot]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->promptVersion)->toBe('reviewer-v16+natural-reviewing-v3')
+        ->and($fake->requests()[0]->systemPrompt)->toContain('章节功能、Milestone、Handoff、剧情结果')
+        ->and($fake->requests()[0]->systemPrompt)->not->toContain('单一 Scene 的表达与 Milestone 验收条件冲突');
 });
 
 test('forced review creates a fresh run and includes the extractor completion audit', function () {
@@ -741,6 +762,79 @@ test('compact review downgrades fulfilled outline evidence that cannot bind one 
         ->and(data_get($expanded, 'milestone_completion.criteria.0.scene_id'))->toBeNull();
 });
 
+test('milestone contradiction uses its own evidence and routes the affected scene to rewrite', function () {
+    $fixture = reviewFixture();
+    $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
+    $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'scene_id' => $scene->getKey(), 'scope_type' => 'scene', 'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration, 'status' => RunStatus::Succeeded,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($run)->create([
+        'type' => ArtifactType::SceneDraft, 'content' => $fixture['draft']->content,
+        'checksum' => hash('sha256', $fixture['draft']->content),
+    ]);
+    $scene->update(['current_artifact_id' => $artifact->getKey()]);
+    $payload = [
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '林舟守住城门', 'scene_id' => null],
+        'milestone_completion' => ['status' => 'contradicted', 'criteria' => [
+            ['status' => 'fulfilled', 'evidence' => '这条已满足的证据不应被当作冲突证据。', 'scene_id' => null],
+            ['status' => 'contradicted', 'evidence' => '林舟守住城门', 'scene_id' => $scene->getKey()],
+        ]],
+    ];
+
+    $findings = app(OutlineCompletionService::class)->findings($payload);
+    $scope = app(RewriteScopeResolver::class)->resolve(
+        $fixture['chapter']->fresh(['scenes.currentArtifact']),
+        $findings,
+    );
+
+    expect($findings)->toHaveCount(1)
+        ->and(data_get($findings, '0.code'))->toBe('MILESTONE_CONTRADICTED')
+        ->and(data_get($findings, '0.evidence'))->toBe('林舟守住城门')
+        ->and(data_get($findings, '0.scene_id'))->toBe($scene->getKey())
+        ->and(data_get($findings, '0.scope'))->toBe('scene')
+        ->and($scope->scope)->toBe('scene')
+        ->and($scope->sceneId)->toBe($scene->getKey());
+});
+
+test('milestone contradiction shared by multiple scenes remains a chapter level attention case', function () {
+    $fixture = reviewFixture();
+    foreach ([1, 2] as $sequence) {
+        $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => $sequence]);
+        $run = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+            'scene_id' => $scene->getKey(), 'scope_type' => 'scene', 'scope_id' => $scene->getKey(),
+            'stage' => GenerationStage::SceneGeneration, 'status' => RunStatus::Succeeded,
+        ]);
+        $artifact = GenerationArtifact::factory()->for($run)->create([
+            'type' => ArtifactType::SceneDraft, 'content' => $fixture['draft']->content,
+            'checksum' => hash('sha256', $fixture['draft']->content),
+        ]);
+        $scene->update(['current_artifact_id' => $artifact->getKey()]);
+    }
+
+    $payload = compactReviewResponse()->structuredData;
+    $payload['milestone_completion'][0] = ['status' => 'contradicted', 'evidence' => '林舟守住城门'];
+    $chapter = $fixture['chapter']->fresh(['latestPlan', 'scenes.currentArtifact']);
+    $service = app(OutlineCompletionService::class);
+    $expanded = CompactReviewPayload::expand(
+        $payload,
+        $chapter,
+        $fixture['draft'],
+        $service->contract($chapter),
+        [],
+    );
+    $validated = $service->validateReview($expanded, $chapter, $fixture['draft']);
+    $findings = $service->findings($validated);
+    $scope = app(RewriteScopeResolver::class)->resolve($chapter, $findings);
+
+    expect(data_get($validated, 'milestone_completion.status'))->toBe('contradicted')
+        ->and(data_get($validated, 'milestone_completion.criteria.0.evidence'))->toBe('林舟守住城门')
+        ->and(data_get($validated, 'milestone_completion.criteria.0.scene_id'))->toBeNull()
+        ->and(data_get($findings, '0.scope'))->toBe('chapter')
+        ->and($scope->isResolved())->toBeFalse()
+        ->and($scope->reason)->toBe('plan_or_scene_rebuild_required');
+});
+
 test('deterministic review failure skips the reviewer and persists executable repair advice', function () {
     $fixture = reviewFixture();
     $fixture['chapter']->latestPlan->update(['target_words' => 1_000]);
@@ -794,7 +888,7 @@ test('chapter structural finding produces plan scene repair advice and never dis
     Queue::assertNotPushed(RewriteChapterJob::class);
 });
 
-test('one semantic scene finding is mapped from evidence to its only rewrite scope', function () {
+test('semantic and milestone findings in one scene share the automatic rewrite scope', function () {
     $fixture = reviewFixture();
     $scene = Scene::factory()->for($fixture['chapter'])->create(['sequence' => 1]);
     $sceneRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
@@ -834,11 +928,20 @@ test('one semantic scene finding is mapped from evidence to its only rewrite sco
         'scope' => 'scene', 'auto_fixable' => true, 'requires_human_decision' => false,
         'message' => '本 Scene 文风不一致。', 'evidence' => '林舟守住城门',
     ];
-    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue(compactReviewResponse([$finding])));
+    $response = compactReviewResponse([$finding]);
+    $data = $response->structuredData;
+    $data['milestone_completion'][0] = ['status' => 'contradicted', 'evidence' => '林舟守住城门'];
+    $response = new AiResponse(
+        content: json_encode($data), structuredData: $data, inputTokens: 100, outputTokens: 80,
+        cachedTokens: 0, latencyMs: 100, providerRequestId: 'scene-milestone-review', model: 'review-test',
+    );
+    app()->instance(AiProvider::class, (new FakeAiProvider)->enqueue($response));
 
     $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
 
     expect($review->decision)->toBe(ReviewDecision::Rewrite)
         ->and(data_get($review->artifact->data, 'rewrite_scope.scope'))->toBe('scene')
-        ->and(data_get($review->artifact->data, 'rewrite_scope.scene_id'))->toBe($scene->getKey());
+        ->and(data_get($review->artifact->data, 'rewrite_scope.scene_id'))->toBe($scene->getKey())
+        ->and(collect($review->findings)->pluck('code')->all())->toContain('MILESTONE_CONTRADICTED', 'STYLE_MISMATCH')
+        ->and(collect($review->findings)->where('code', 'MILESTONE_CONTRADICTED')->first()['evidence'])->toBe('林舟守住城门');
 });

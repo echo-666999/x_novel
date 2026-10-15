@@ -27,6 +27,11 @@ class ChapterReviewer
     /** 未调用 Reviewer Provider 时，确定性预检 Review Run 使用的合同版本。 */
     private const DETERMINISTIC_PREFLIGHT_CONTRACT_VERSION = 'deterministic-review-preflight-v1';
 
+    /** v16 必须供已冻结的历史 Chapter Plan 继续使用，不能用 v17 文本冒充。 */
+    private const SYSTEM_PROMPT_V16 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换，章节功能、Milestone、Handoff、剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
+
+    private const SYSTEM_PROMPT_V17 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换。若只是一处原文或单一 Scene 的表达与 Milestone 验收条件冲突，且不需要改变冻结目标或关键剧情结果，应使用 paragraph 或 scene。章节功能、Milestone/Handoff 目标本身、关键剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
+
     private const DIMENSIONS = ['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'];
 
     private const WEIGHTS = ['continuity' => .25, 'plan' => .15, 'character' => .15, 'progress' => .15, 'repetition' => .10, 'pacing' => .10, 'style' => .10];
@@ -190,7 +195,7 @@ class ChapterReviewer
                 model: $settings->model,
                 provider: $settings->provider,
                 reasoningEffort: $settings->reasoningEffort,
-                systemPrompt: '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换，章节功能、Milestone、Handoff、剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。'.NarrativeProsePolicy::reviewing(),
+                systemPrompt: $this->systemPrompt($promptVersion),
                 prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                 temperature: .2, maxTokens: $budget['max_completion_tokens'], responseSchema: $this->schema(), promptVersion: $promptVersion,
                 metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
@@ -292,6 +297,23 @@ class ChapterReviewer
                 }
             }
         }
+    }
+
+    /** 按 Chapter Plan 冻结的基础版本选择真实 Prompt，禁止用新文本冒充历史版本。 */
+    private function systemPrompt(string $promptVersion): string
+    {
+        $baseVersion = explode('+', $promptVersion, 2)[0];
+        $prompt = match ($baseVersion) {
+            'reviewer-v16' => self::SYSTEM_PROMPT_V16,
+            'reviewer-v17' => self::SYSTEM_PROMPT_V17,
+            default => throw new AiProviderException(
+                'review_prompt_version_unsupported',
+                "Narrative Review 无法恢复冻结 Prompt 版本 [{$promptVersion}]。",
+                false,
+            ),
+        };
+
+        return $prompt.NarrativeProsePolicy::reviewing();
     }
 
     /** @param array<string, mixed> $context @param array<int, array<string, mixed>> $findings */

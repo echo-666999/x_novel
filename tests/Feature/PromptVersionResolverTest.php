@@ -13,7 +13,7 @@ test('prompt versions follow the documented convention', function () {
         'planner' => 'chapter-planner-v12+natural-planning-v3',
         'writer' => 'scene-writer-v16+natural-writing-v3',
         'extractor' => 'event-extractor-v9',
-        'reviewer' => 'reviewer-v16+natural-reviewing-v3',
+        'reviewer' => 'reviewer-v17+natural-reviewing-v3',
         'rewrite' => 'rewrite-v14+natural-writing-v3',
         'summary' => 'summary-v2+natural-summary-v3',
     ]);
@@ -29,7 +29,7 @@ test('each prompt stage resolves its current version', function (AiStage $stage,
     'outline beat detail' => [AiStage::OutlineBeatDetail, 'novel-outline-beat-detail-v6+natural-planning-v3'],
     'writer' => [AiStage::Writer, 'scene-writer-v16+natural-writing-v3'],
     'extractor' => [AiStage::Extractor, 'event-extractor-v9'],
-    'reviewer' => [AiStage::Reviewer, 'reviewer-v16+natural-reviewing-v3'],
+    'reviewer' => [AiStage::Reviewer, 'reviewer-v17+natural-reviewing-v3'],
     'rewrite' => [AiStage::Rewrite, 'rewrite-v14+natural-writing-v3'],
     'summary' => [AiStage::Summary, 'summary-v2+natural-summary-v3'],
 ]);
