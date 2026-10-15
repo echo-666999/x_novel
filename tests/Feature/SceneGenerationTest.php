@@ -7,6 +7,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\AI\Providers\ReproduciblePromptAiProvider;
 use App\AI\Providers\TrackingAiProvider;
 use App\AI\UsageRecorder;
 use App\Enums\AiStage;
@@ -34,8 +35,10 @@ use App\Services\DraftLengthPolicy;
 use App\Services\ForeshadowingCoverage;
 use App\Services\ForeshadowingCoverageEvidenceRepairer;
 use App\Services\GenerationStageFingerprint;
+use App\Services\GenerationSubstagePromptVersions;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanCoverageEvidenceRepairer;
+use App\Services\PromptExecutionContract;
 use App\Services\SceneDraftPayload;
 use App\Services\SceneDraftStructureRepairer;
 use App\Services\SceneExecutionClock;
@@ -711,7 +714,11 @@ test('scene job hands off before the hard timeout and resumes from the prose che
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse($content, selfCheck: $invalidCoverage))
         ->enqueue(sceneCoverageResponse(sceneSelfCheck($content)));
-    app()->instance(AiProvider::class, $fake);
+    app()->instance(AiProvider::class, new ReproduciblePromptAiProvider(
+        $fake,
+        app(PromptExecutionContract::class),
+        app(GenerationSubstagePromptVersions::class),
+    ));
     $clock = Mockery::mock(SceneExecutionClock::class);
     $clock->shouldReceive('start')->once()->andReturn(1);
     $clock->shouldReceive('elapsedSeconds')->twice()->andReturn(0, 200);
@@ -725,6 +732,9 @@ test('scene job hands off before the hard timeout and resumes from the prose che
         ->and($firstRun->error_code)->toBe('scene_stage_deferred')
         ->and($firstRun->artifacts()->where('type', ArtifactType::Context)->count())->toBe(1);
     Queue::assertPushed(GenerateSceneJob::class, 1);
+
+    // 旧版指纹可能因 Memory 检索分数漂移而不同；恢复仍应按完整权威上下文复用已付费检查点。
+    $firstRun->update(['input_hash' => hash('sha256', 'legacy-memory-score-drift')]);
 
     $resumeClock = Mockery::mock(SceneExecutionClock::class);
     $resumeClock->shouldReceive('start')->once()->andReturn(1);
@@ -883,13 +893,14 @@ test('scene snapshots keep the bible version frozen for the current chapter plan
         ->and(data_get($runs->last()->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快');
 });
 
-test('a final scene budget shortfall is expanded once before the chapter is blocked', function () {
+test('a final scene budget shortfall uses both frozen repair tiers before the chapter is blocked', function () {
     Queue::fake();
     $fixture = sceneGenerationFixture(1);
     setSceneGenerationTarget($fixture, 100);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse('过短场景'))
-        ->enqueue(sceneResponse('仍然过短'));
+        ->enqueue(sceneResponse('仍然过短'))
+        ->enqueue(sceneResponse('依旧过短'));
     app()->instance(AiProvider::class, $fake);
 
     (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
@@ -897,12 +908,15 @@ test('a final scene budget shortfall is expanded once before the chapter is bloc
 
     (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
 
+    (new GenerateSceneJob($fixture['scenes']->first()->getKey()))->handle(app(SceneGenerator::class));
+
     expect($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Failed)
         ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Blocked)
         ->and($fixture['scenes']->first()->generationRuns()->where('error_code', 'scene_budget_shortfall')->count())->toBe(1)
         ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts', fn ($query) => $query->where('type', ArtifactType::SceneDraft))->count())->toBe(0);
-    expect($fake->requests())->toHaveCount(2)
+    expect($fake->requests())->toHaveCount(3)
         ->and($fake->requests()[1]->systemPrompt)->toContain('场景扩写器')
+        ->and($fake->requests()[2]->maxTokens)->toBe(24_000)
         ->and($fake->requests()[1]->systemPrompt)->toContain('POV、时态、主文风')
         ->and($fake->requests()[1]->prompt)->toContain('"l4"')
         ->and($fake->requests()[1]->prompt)->toContain('通俗爽快');
@@ -923,6 +937,44 @@ test('a successful length expansion becomes the scene draft', function () {
         ->and($fixture['scenes']->first()->fresh()->status)->toBe(SceneStatus::Draft)
         ->and($fake->requests())->toHaveCount(2)
         ->and($fake->requests()[1]->prompt)->toContain('终局真相');
+});
+
+test('length repair reasoning exhaustion resumes with the frozen retry budget', function () {
+    $fixture = sceneGenerationFixture(1);
+    setSceneGenerationTarget($fixture, 100);
+    $truncated = new AiResponse(
+        content: '',
+        structuredData: null,
+        inputTokens: 100,
+        outputTokens: 12_000,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'length-repair-exhausted',
+        model: 'writer-test',
+        metadata: ['finish_reason' => 'length', 'refusal' => null, 'completion_limit_reason' => 'reasoning_budget_exhausted'],
+        reasoningTokens: 12_000,
+    );
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('短', 20)))
+        ->enqueue($truncated)
+        ->enqueue(sceneResponse(str_repeat('扩', 90)));
+    app()->instance(AiProvider::class, $fake);
+
+    try {
+        app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+        $this->fail('首档推理耗尽应中止当前 Run。');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('scene_length_repair_reasoning_budget_exhausted')
+            ->and($exception->retryable)->toBeTrue();
+    }
+
+    $artifact = app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey());
+
+    expect($artifact?->content)->toBe(str_repeat('扩', 90))
+        ->and($fake->requests())->toHaveCount(3)
+        ->and($fake->requests()[1]->maxTokens)->toBe(12_000)
+        ->and($fake->requests()[2]->maxTokens)->toBe(24_000)
+        ->and(data_get($fake->requests()[2]->metadata, 'repair_budget_tier'))->toBe('retry');
 });
 
 test('an overlength scene is compressed once before it becomes the current draft', function () {
@@ -970,7 +1022,8 @@ test('an overlength scene is rejected when compression still exceeds the hard ma
     setSceneGenerationTarget($fixture, 100);
     $fake = (new FakeAiProvider)
         ->enqueue(sceneResponse(str_repeat('超', 120)))
-        ->enqueue(sceneResponse(str_repeat('仍', 116)));
+        ->enqueue(sceneResponse(str_repeat('仍', 116)))
+        ->enqueue(sceneResponse(str_repeat('旧', 116)));
     app()->instance(AiProvider::class, $fake);
 
     expect(fn () => app(SceneGenerator::class)->generate($fixture['scenes']->first()->getKey()))
@@ -979,7 +1032,7 @@ test('an overlength scene is rejected when compression still exceeds the hard ma
     expect($fixture['scenes']->first()->fresh()->current_artifact_id)->toBeNull()
         ->and($fixture['scenes']->first()->generationRuns()->sole()->status)->toBe(RunStatus::Failed)
         ->and($fixture['scenes']->first()->generationRuns()->whereHas('artifacts', fn ($query) => $query->where('type', ArtifactType::SceneDraft))->count())->toBe(0)
-        ->and($fake->requests())->toHaveCount(2);
+        ->and($fake->requests())->toHaveCount(3);
 });
 
 test('cascade generation shifts an early scene shortfall to the next scene', function () {

@@ -233,6 +233,21 @@ class ContextBuilder
             throw new InvalidArgumentException('伏笔 Context Contract 缺少 Chapter Plan 或 Canonical State Version。');
         }
 
+        return $this->foreshadowingContractForPlan($chapter, $plan);
+    }
+
+    /** @return array<string, mixed> */
+    public function foreshadowingContractForPlan(Chapter $chapter, ChapterPlan $plan): array
+    {
+        $chapter->loadMissing('novel.canonicalStateVersion');
+        $state = $chapter->novel->canonicalStateVersion;
+        if ($state === null) {
+            throw new InvalidArgumentException('伏笔 Context Contract 缺少 Canonical State Version。');
+        }
+
+        if (! $plan->relationLoaded('chapter')) {
+            $plan->setRelation('chapter', $chapter);
+        }
         $bibleVersion = $this->bibleVersionForChapter($chapter);
         $bible = $chapter->novel->bibles()->where('version', $bibleVersion)->firstOrFail();
 

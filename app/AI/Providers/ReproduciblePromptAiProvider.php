@@ -7,6 +7,7 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\Models\GenerationRun;
+use App\Services\GenerationSubstagePromptVersions;
 use App\Services\PromptExecutionContract;
 use Illuminate\Support\Facades\DB;
 
@@ -16,6 +17,7 @@ final class ReproduciblePromptAiProvider implements AiProvider
     public function __construct(
         private readonly AiProvider $provider,
         private readonly PromptExecutionContract $contracts,
+        private readonly GenerationSubstagePromptVersions $substagePromptVersions,
     ) {}
 
     public function generate(AiRequest $request): AiResponse
@@ -37,19 +39,38 @@ final class ReproduciblePromptAiProvider implements AiProvider
     {
         DB::transaction(function () use ($runId, $request): void {
             $run = GenerationRun::query()->lockForUpdate()->findOrFail($runId);
+            $expectedPromptVersion = $this->substagePromptVersions->expectedFor($run, $request);
             if (blank($request->promptVersion)
-                || ! hash_equals((string) $run->prompt_version, (string) $request->promptVersion)) {
+                || blank($expectedPromptVersion)
+                || ! hash_equals((string) $expectedPromptVersion, (string) $request->promptVersion)) {
                 throw new AiProviderException(
                     'prompt_version_contract_mismatch',
                     'Provider 请求的 Prompt Version 与冻结 Generation Run 不一致。',
                     false,
                 );
             }
-            if (filled($request->provider) && filled($run->provider)
-                && ! hash_equals((string) $run->provider, (string) $request->provider)) {
+            $routeKey = trim((string) ($request->metadata['route_key'] ?? ''));
+            $substageRoute = $routeKey === ''
+                ? null
+                : data_get($run->context_snapshot, "generation_preferences.substage_routes.{$routeKey}");
+            if ($routeKey !== '' && ! is_array($substageRoute)) {
+                throw new AiProviderException(
+                    'provider_run_route_missing',
+                    "Generation Run 未冻结子阶段路由 [{$routeKey}]。",
+                    false,
+                );
+            }
+            $expectedProvider = is_array($substageRoute)
+                ? ($substageRoute['provider'] ?? null)
+                : $run->provider;
+            $expectedModel = is_array($substageRoute)
+                ? ($substageRoute['model'] ?? null)
+                : $run->model_policy;
+            if (filled($request->provider) && filled($expectedProvider)
+                && ! hash_equals((string) $expectedProvider, (string) $request->provider)) {
                 throw new AiProviderException('prompt_route_contract_mismatch', 'Prompt 请求 Provider 与冻结 Route 不一致。', false);
             }
-            if (filled($run->model_policy) && ! hash_equals((string) $run->model_policy, $request->model)) {
+            if (filled($expectedModel) && ! hash_equals((string) $expectedModel, $request->model)) {
                 throw new AiProviderException('prompt_route_contract_mismatch', 'Prompt 请求 Model 与冻结 Route 不一致。', false);
             }
 

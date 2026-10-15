@@ -691,6 +691,74 @@ test('scene generation is disabled immediately after it is queued', function () 
     $page->call('$refresh')->assertActionEnabled($action);
 });
 
+test('deferred scene stages are shown as recoverable handoffs instead of terminal errors', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $scene = Scene::factory()->for($chapter)->create([
+        'sequence' => 1,
+        'status' => SceneStatus::Generating,
+    ]);
+    GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'error_code' => 'scene_stage_deferred',
+        'error_message' => '已保存恢复点并交给新 Job。',
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('已保存恢复点 · 已转交')
+        ->assertSee('执行结果')
+        ->assertSee('等待新任务从恢复点继续；若未出现后续任务，执行故障恢复')
+        ->assertDontSee('已失败 · 请重试或执行恢复');
+});
+
+test('a deferred scene chain is presented as completed after its continuation succeeds', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    ChapterPlan::factory()->for($chapter)->create();
+    $scene = Scene::factory()->for($chapter)->create([
+        'sequence' => 1,
+        'status' => SceneStatus::Draft,
+    ]);
+    GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'scope_type' => 'scene',
+        'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'attempt' => 1,
+        'error_code' => 'scene_stage_deferred',
+        'error_message' => '已保存恢复点并交给新 Job。',
+    ]);
+    $succeeded = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'scope_type' => 'scene',
+        'scope_id' => $scene->getKey(),
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+        'attempt' => 2,
+    ]);
+    $artifact = GenerationArtifact::factory()->for($succeeded)->create([
+        'type' => ArtifactType::SceneDraft,
+        'version' => 1,
+        'content' => '恢复后成功生成的场景正文。',
+    ]);
+    $scene->update(['current_artifact_id' => $artifact->getKey()]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertOk()
+        ->assertSee('场景 1')
+        ->assertSee('已完成')
+        ->assertDontSee('等待新任务从恢复点继续；若未出现后续任务，执行故障恢复')
+        ->assertDontSee('人工修复建议');
+});
+
 test('scene workspace distinguishes current and historical artifact versions', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();

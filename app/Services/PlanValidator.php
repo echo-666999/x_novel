@@ -503,7 +503,7 @@ class PlanValidator
             }
         }
         $schemaVersion = (int) ($snapshot['schema_version'] ?? 0);
-        if (! in_array($schemaVersion, [2, PlanAdmissionService::SCHEMA_VERSION], true)) {
+        if (! in_array($schemaVersion, [2, 3, 4, PlanAdmissionService::SCHEMA_VERSION], true)) {
             // v1 没有冻结真实模型容量和分档预算，继续执行会把运行时配置误当成历史合同。
             $findings[] = $this->blocked(
                 'ADMISSION_CONTRACT_VERSION_UNSUPPORTED',
@@ -815,16 +815,51 @@ class PlanValidator
             );
         }
 
-        $reviewInput = (int) data_get($snapshot, 'capacity.review.estimated_input_words', 0);
+        $reviewInput = (int) data_get(
+            $snapshot,
+            $schemaVersion >= 4
+                ? 'capacity.review.estimated_input_tokens'
+                : 'capacity.review.estimated_input_words',
+            0,
+        );
         $reviewContext = (int) data_get($snapshot, 'capacity.review.context_token_budget', 0);
+        $reviewVisibleOutput = (int) data_get($snapshot, 'capacity.review.visible_output_tokens', 0);
+        $reviewReasoningReserve = (int) data_get($snapshot, 'capacity.review.reasoning_reserve_tokens', -1);
         $reviewOutput = (int) data_get($snapshot, 'capacity.review.max_completion_tokens', 0);
-        if ($reviewInput < 1 || $reviewContext < $reviewInput || $reviewOutput < 1) {
+        $reviewEstimator = data_get($snapshot, 'capacity.review.estimator_version');
+        $reviewChecksum = data_get($snapshot, 'capacity.review.input_checksum');
+        $reviewTotal = (int) data_get($snapshot, 'capacity.review.estimated_total_tokens', 0);
+        $invalidReviewEstimatorContract = $schemaVersion >= 4 && (
+            $reviewEstimator !== ReviewPromptCapacityEstimator::VERSION
+            || ! is_string($reviewChecksum)
+            || strlen($reviewChecksum) !== 64
+        );
+        $invalidReviewBudgetContract = $schemaVersion >= PlanAdmissionService::REVIEW_TOTAL_BUDGET_SCHEMA_VERSION
+            ? $reviewVisibleOutput < 1
+                || $reviewReasoningReserve < 0
+                || $reviewOutput !== $reviewVisibleOutput + $reviewReasoningReserve
+                || $reviewTotal !== $reviewInput + $reviewReasoningReserve + $reviewVisibleOutput
+            : $schemaVersion >= 4 && $reviewTotal !== $reviewInput + $reviewOutput;
+        $computedReviewTotal = $schemaVersion >= PlanAdmissionService::REVIEW_TOTAL_BUDGET_SCHEMA_VERSION
+            ? $reviewInput + $reviewReasoningReserve + $reviewVisibleOutput
+            : $reviewInput + $reviewOutput;
+        $reviewCapacityExceeded = $schemaVersion >= 4
+            ? $reviewContext < $computedReviewTotal
+            : $reviewContext < $reviewInput;
+        if ($reviewInput < 1
+            || $reviewCapacityExceeded
+            || $reviewOutput < 1
+            || $invalidReviewEstimatorContract
+            || $invalidReviewBudgetContract) {
+            $message = $schemaVersion >= PlanAdmissionService::REVIEW_TOTAL_BUDGET_SCHEMA_VERSION
+                ? "Reviewer 总预算 {$computedReviewTotal} Token（完整输入 {$reviewInput} + 推理预留 {$reviewReasoningReserve} + 可见输出 {$reviewVisibleOutput}）超过审校 Context {$reviewContext} Token，或冻结合同的组成与合计不一致。"
+                : '冻结的 Reviewer Prompt 估算合同、Context 或输出容量无法容纳本章审校。';
             $findings[] = $this->blocked(
                 'REVIEW_CAPACITY_EXCEEDED',
-                '冻结的 Reviewer Context 或输出容量无法容纳本章审校。',
+                $message,
                 'admission_snapshot.capacity.review',
                 $record,
-                '降低章节规模或提高 Reviewer Context/输出预算后重新执行 Plan Admission。',
+                '降低章节规模、推理预留或可见输出预算，或提高 Reviewer Context 后重新执行 Plan Admission。',
             );
         }
 

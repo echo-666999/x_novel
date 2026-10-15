@@ -762,7 +762,7 @@ Primary Contribution 使用 `novel_outline_arc_id + novel_outline_beat_id + nove
 
 Chapter Plan 必须冻结 Outline ID、Checksum、Primary Arc/Beat/Milestone ID 和 Handoff 契约。`admission_snapshot` 在 Scene 1 前同时冻结 Bible/State/Outline/Plan 来源，以及 `writer`、`extractor`、`reviewer`、`rewrite`、`summary` 五个下游 AI Stage 的 Route、Prompt Version、模型容量和分档请求预算；相同 `input_hash` 复用 Ready Plan，语义输入变化创建新 Plan Version。Generation Run 的 Context Snapshot 同时记录已完成 Milestone/Beat IDs、当前 Beat 已使用的 Canonical Chapter 数和章节预算；后续大纲修订不得把旧 Plan 静默改挂到新版本。
 
-Plan Admission v3 必须保留 v2 的模型静态容量与工作流请求预算合同，并新增 Current Outline 字数合同及其 Checksum。模型容量来自与冻结 Provider + Model 精确匹配且已启用的 `ai_model_prices` 记录；每档请求预算分别包含 `output_tokens`、`reasoning_reserve_tokens` 和两者之和 `max_completion_tokens`。任一 Stage 缺少已核实容量、缺少结构化输出能力、配置了不受支持的推理程度、预算超过模型最大输出或输入后的剩余上下文时，必须在 Provider 请求前失败。Chapter Planner 位于 Admission 之前，因此在其首个 Run 中独立冻结同样的路由、容量、字数和预算合同。历史 v2 Snapshot 继续按其原合同执行，不得静默补写 v3 字段。
+Plan Admission v5 必须保留 v4 的模型静态容量、工作流请求预算、Current Outline 字数合同、Reviewer Prompt 容量投影及其 Checksum。Admission 与运行时 Reviewer 必须使用同一个上下文构造器和容量估算器：按冻结 Prompt Version 执行相同模型上下文裁剪，对真实 `AiRequest` 的完整 messages 与响应 Schema 一次性估算，覆盖 System Prompt、用户指令、序列化 Context、消息包装和 Response Schema；分项 Token 仅用于诊断，不得相加后冒充完整请求估算。Admission 分别冻结 `visible_output_tokens`、`reasoning_reserve_tokens` 与两者之和 `max_completion_tokens`，并强制满足“完整输入估算 + 推理预留 + 可见输出 <= review context budget”，运行时再以实际草稿和实际所选预算档复算。模型容量来自与冻结 Provider + Model 精确匹配且已启用的 `ai_model_prices` 记录；每档请求预算分别包含 `output_tokens`、`reasoning_reserve_tokens` 和两者之和 `max_completion_tokens`。任一 Stage 缺少已核实容量、缺少结构化输出能力、配置了不受支持的推理程度、预算超过模型最大输出或输入后的剩余上下文时，必须在 Provider 请求前失败。Chapter Planner 位于 Admission 之前，因此在其首个 Run 中独立冻结同样的路由、容量、字数和预算合同。历史 v2/v3/v4 Snapshot 继续按各自原合同执行，不得静默补写 v5 字段。
 
 ---
 

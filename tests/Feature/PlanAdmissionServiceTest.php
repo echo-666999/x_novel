@@ -101,7 +101,7 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
     expect($admitted->checksum)->toHaveLength(64)
         ->and($admitted->input_hash)->toHaveLength(64)
         ->and($admitted->admitted_at)->not->toBeNull()
-        ->and(data_get($admitted->admission_snapshot, 'schema_version'))->toBe(3)
+        ->and(data_get($admitted->admission_snapshot, 'schema_version'))->toBe(5)
         ->and(data_get($admitted->admission_snapshot, 'state_version'))->toBe(0)
         ->and(data_get($admitted->admission_snapshot, 'outline_checksum'))->toHaveLength(64)
         ->and(data_get($admitted->admission_snapshot, 'outline_length_contract.chapter_target_words'))->toBe(3_000)
@@ -111,6 +111,24 @@ test('a valid plan is admitted with frozen sources routes and capacity without c
         ->and(data_get($admitted->admission_snapshot, 'routes.writer.provider'))->not->toBeEmpty()
         ->and(data_get($admitted->admission_snapshot, 'routes.reviewer.prompt_version'))->not->toBeEmpty()
         ->and(data_get($admitted->admission_snapshot, 'capacity.scene_allocations'))->toHaveCount(2)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.estimator_version'))->toBe('review-prompt-capacity-v1')
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.estimated_input_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.input_checksum'))->toHaveLength(64)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.input_breakdown.system_prompt_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.input_breakdown.user_instruction_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.input_breakdown.user_payload_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.input_breakdown.response_schema_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.visible_output_tokens'))->toBe(12_000)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.reasoning_reserve_tokens'))->toBe(8_000)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.max_completion_tokens'))->toBe(20_000)
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.estimated_total_tokens'))
+        ->toBe(
+            data_get($admitted->admission_snapshot, 'capacity.review.estimated_input_tokens')
+            + data_get($admitted->admission_snapshot, 'capacity.review.reasoning_reserve_tokens')
+            + data_get($admitted->admission_snapshot, 'capacity.review.visible_output_tokens'),
+        )
+        ->and(data_get($admitted->admission_snapshot, 'capacity.review.estimated_total_tokens'))
+        ->toBeLessThanOrEqual(data_get($admitted->admission_snapshot, 'capacity.review.context_token_budget'))
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.model_price_id'))->toBeInt()
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.context_window_tokens'))->toBe(1_050_000)
         ->and(data_get($admitted->admission_snapshot, 'routes.extractor.model_capacity.max_output_tokens'))->toBe(128_000)
@@ -423,8 +441,44 @@ test('writer and reviewer capacity are checked before admission', function () {
     } catch (ValidationException $exception) {
         $message = implode(' ', $exception->errors()['plan'] ?? []);
         expect($message)->toContain('[SCENE_OUTPUT_CAPACITY_EXCEEDED]')
-            ->and($message)->toContain('[REVIEW_CAPACITY_EXCEEDED]');
+            ->and($message)->toContain('[REVIEW_CAPACITY_EXCEEDED]')
+            ->and($message)->toContain('完整输入')
+            ->and($message)->toContain('推理预留')
+            ->and($message)->toContain('可见输出');
     }
+});
+
+test('review capacity rejects a frozen budget whose visible output and reasoning reserve do not equal the completion total', function () {
+    $plan = admissionReadyPlan(1);
+    $prepared = app(PlanAdmissionService::class)->prepare($plan);
+    $snapshot = $prepared['admission_snapshot'];
+    data_set($snapshot, 'capacity.review.visible_output_tokens', 11_999);
+
+    $result = app(PlanValidator::class)->validate($plan, $snapshot);
+    $finding = collect($result->findings)->firstWhere('code', 'REVIEW_CAPACITY_EXCEEDED');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding?->message)->toContain('冻结合同的组成与合计不一致');
+});
+
+test('review capacity rejects a total above context when input and completion budgets are separately legal', function () {
+    $plan = admissionReadyPlan(1);
+    $prepared = app(PlanAdmissionService::class)->prepare($plan);
+    $snapshot = $prepared['admission_snapshot'];
+    $inputTokens = (int) data_get($snapshot, 'capacity.review.estimated_input_tokens');
+    $completionTokens = (int) data_get($snapshot, 'capacity.review.max_completion_tokens');
+    $contextTokens = max($inputTokens, $completionTokens) + 1;
+    data_set($snapshot, 'capacity.review.context_token_budget', $contextTokens);
+
+    expect($inputTokens)->toBeLessThanOrEqual($contextTokens)
+        ->and($completionTokens)->toBeLessThanOrEqual($contextTokens)
+        ->and($inputTokens + $completionTokens)->toBeGreaterThan($contextTokens);
+
+    $result = app(PlanValidator::class)->validate($plan, $snapshot);
+    $finding = collect($result->findings)->firstWhere('code', 'REVIEW_CAPACITY_EXCEEDED');
+
+    expect($finding)->not->toBeNull()
+        ->and($finding?->message)->toContain("超过审校 Context {$contextTokens} Token");
 });
 
 test('the same admission input reuses the ready plan and a semantic change invalidates only its chapter pointers', function () {

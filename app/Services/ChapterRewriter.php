@@ -29,7 +29,7 @@ use Throwable;
 class ChapterRewriter
 {
     /** 注入 Rewrite、Coverage 复核、冻结路由和失败策略依赖。 */
-    public function __construct(private readonly AiProvider $provider, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget, private readonly PlanCoverageJudgmentRepairer $coverageJudgment, private readonly ChapterStageRouteResolver $routeResolver) {}
+    public function __construct(private readonly AiProvider $provider, private readonly DraftLengthPolicy $lengthPolicy, private readonly PreviousChapterEnding $previousChapterEnding, private readonly ContextBuilder $contextBuilder, private readonly GenerationRunCoordinator $runCoordinator, private readonly AutomaticRewriteCounter $rewriteCounter, private readonly RewriteScopeResolver $rewriteScopeResolver, private readonly PlanCoverageEvidenceRepairer $coverageEvidenceRepairer, private readonly GenerationFailurePolicy $failurePolicy, private readonly GenerationOutputCapacityGuard $outputCapacity, private readonly GenerationRequestBudget $requestBudget, private readonly PlanCoverageJudgmentRepairer $coverageJudgment, private readonly ChapterStageRouteResolver $routeResolver, private readonly GenerationSubstagePromptVersions $substagePromptVersions) {}
 
     /** 执行当前 Review 指定的局部 Rewrite，任何错误 Coverage 来源都先退回 Judgment。 */
     public function rewrite(int $chapterId, ?int $sceneId = null, bool $singleProviderCall = false): ?GenerationArtifact
@@ -155,6 +155,13 @@ class ChapterRewriter
             upstreamChecksums: [$source->checksum],
             frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
             contractVersion: $promptVersion,
+        );
+        $brief['generation_preferences']['substage_prompt_versions'] = $this->substagePromptVersions->inherit(
+            GenerationStage::Rewrite,
+            $chapter->getKey(),
+            $sceneId,
+            $inputHash,
+            $this->substagePromptVersions->rewrite($promptVersion),
         );
         $recoveryContractId = (int) data_get($brief, 'generation_preferences.recovery_contract_run_id', 0);
         $baseKey = "rewrite:{$source->getKey()}:{$findingHash}:{$attempt}:{$promptVersion}".

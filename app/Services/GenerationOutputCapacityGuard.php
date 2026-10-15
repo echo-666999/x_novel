@@ -50,10 +50,10 @@ final class GenerationOutputCapacityGuard
         }
 
         $schemaVersion = (int) ($snapshot['schema_version'] ?? 0);
-        if ($schemaVersion !== 2) {
+        if (! in_array($schemaVersion, [2, 3, 4, PlanAdmissionService::SCHEMA_VERSION], true)) {
             throw new AiProviderException(
                 'event_admission_contract_unsupported',
-                "[ADMISSION_CONTRACT_VERSION_UNSUPPORTED] 当前 Chapter Plan 使用 Admission v{$schemaVersion}，常规重新提取不能读取旧合同。请使用“恢复章节流程（Admission v1）”。",
+                "[ADMISSION_CONTRACT_VERSION_UNSUPPORTED] 当前 Chapter Plan 使用 Admission v{$schemaVersion}，常规重新提取不能读取该合同。Admission v1 请使用“恢复章节流程（Admission v1）”。",
                 false,
             );
         }

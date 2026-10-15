@@ -103,6 +103,24 @@ test('a passed review does not produce repair recommendations from retained find
     expect(app(ChapterRepairRecommendation::class)->forChapter($chapter))->toBe([]);
 });
 
+test('a successful deferred continuation does not remain an active business failure', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $deferred = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'error_code' => 'scene_stage_deferred',
+        'error_message' => '已保存恢复点并交给新 Job。',
+    ]);
+    GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Succeeded,
+        'attempt' => $deferred->attempt + 1,
+    ]);
+
+    expect(app(ChapterRepairRecommendation::class)->forChapter($chapter))->toBe([]);
+});
+
 test('review capacity failures require a new plan admission instead of retrying the same frozen plan', function () {
     $run = new GenerationRun([
         'stage' => GenerationStage::Review,

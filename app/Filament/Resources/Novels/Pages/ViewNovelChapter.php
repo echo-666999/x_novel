@@ -564,8 +564,8 @@ class ViewNovelChapter extends ViewRecord
                             TextEntry::make('scene_reference')->label('目标 Scene')->placeholder('—'),
                             TextEntry::make('recommended_action')->label('建议操作'),
                             TextEntry::make('confirmed_evidence')->label('确认问题 / 证据')->listWithLineBreaks()->columnSpanFull(),
-                            TextEntry::make('target_fields')->label('建议字段')->listWithLineBreaks(),
-                            TextEntry::make('affected_stages')->label('影响范围')->listWithLineBreaks(),
+                            TextEntry::make('target_fields')->label('建议字段（含中文说明）')->listWithLineBreaks(),
+                            TextEntry::make('affected_stages')->label('影响范围（含中文说明）')->listWithLineBreaks(),
                             TextEntry::make('recovery_entry')->label('恢复入口')->columnSpanFull(),
                         ])
                         ->columns(['default' => 1, 'md' => 2]),
@@ -1385,6 +1385,15 @@ class ViewNovelChapter extends ViewRecord
             ];
         }
 
+        if ($this->isDeferredRun($latestRun)) {
+            return [
+                'stage' => $latestRun->stage->getLabel().' · 已转交',
+                'reason' => $latestRun->error_code.' · '.$latestRun->error_message,
+                'next_action' => '等待新任务从恢复点继续；若未出现后续任务，执行故障恢复',
+                'color' => 'warning',
+            ];
+        }
+
         if ($latestRun !== null && in_array($latestRun->status, [RunStatus::Failed, RunStatus::Cancelled], true)) {
             return [
                 'stage' => $latestRun->stage->getLabel(),
@@ -1610,14 +1619,16 @@ class ViewNovelChapter extends ViewRecord
                     ->infolist([
                         TextEntry::make('scene_run_status_'.$scene->getKey())
                             ->label('状态')
-                            ->state($run?->hasUnresolvedProgressionFailure() ? '阶段成功 · 推进异常' : $run?->status)
+                            ->state($run?->hasUnresolvedProgressionFailure()
+                                ? '阶段成功 · 推进异常'
+                                : ($this->isDeferredRun($run) ? '已保存恢复点 · 已转交' : $run?->status))
                             ->badge()
-                            ->color($run?->hasUnresolvedProgressionFailure() ? 'danger' : null),
+                            ->color($run?->hasUnresolvedProgressionFailure() ? 'danger' : ($this->isDeferredRun($run) ? 'warning' : null)),
                         TextEntry::make('scene_run_provider_'.$scene->getKey())->label('Provider')->state($run?->provider ?? '旧记录未保存 Provider'),
                         TextEntry::make('scene_run_model_'.$scene->getKey())->label('模型')->state($run?->model_policy)->placeholder('—'),
                         TextEntry::make('scene_run_prompt_'.$scene->getKey())->label('提示词版本')->state($run?->prompt_version)->placeholder('—'),
                         TextEntry::make('scene_run_error_'.$scene->getKey())
-                            ->label('错误')
+                            ->label('执行结果')
                             ->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)
                             ->placeholder('—'),
                         TextEntry::make('scene_run_progression_error_'.$scene->getKey())
@@ -2381,7 +2392,9 @@ class ViewNovelChapter extends ViewRecord
                             ->get()
                             ->map(fn ($run): array => [
                                 'run' => '#'.$run->getKey().' · 第 '.$run->attempt.' 次尝试',
-                                'status' => $run->hasUnresolvedProgressionFailure() ? '阶段成功 · 推进异常' : $run->status->getLabel(),
+                                'status' => $run->hasUnresolvedProgressionFailure()
+                                    ? '阶段成功 · 推进异常'
+                                    : ($this->isDeferredRun($run) ? '已保存恢复点 · 已转交' : $run->status->getLabel()),
                                 'provider' => $run->provider ?? '旧记录未保存 Provider',
                                 'model' => $run->model_policy,
                                 'prompt_version' => $run->prompt_version,
@@ -2401,7 +2414,7 @@ class ViewNovelChapter extends ViewRecord
                             TextEntry::make('model')->label('模型')->placeholder('—'),
                             TextEntry::make('prompt_version')->label('提示词版本')->placeholder('—'),
                             TextEntry::make('state_version')->label('状态版本'),
-                            TextEntry::make('error')->label('错误'),
+                            TextEntry::make('error')->label('执行结果'),
                             TextEntry::make('progression_error')->label('流程推进异常')->columnSpanFull(),
                         ]),
                 ]),
@@ -2492,7 +2505,7 @@ class ViewNovelChapter extends ViewRecord
             ...($item['key'] === 'context' && $run?->context_snapshot !== null
                 ? ContextInspectorSchema::make(fn (mixed $record): GenerationRun => $run, 'timeline_context_')
                 : []),
-            TextEntry::make('timeline_detail_error_'.$item['key'])->label('错误')->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)->placeholder('—'),
+            TextEntry::make('timeline_detail_error_'.$item['key'])->label('执行结果')->state($run?->error_code === null ? null : $run->error_code.' · '.$run->error_message)->placeholder('—'),
             TextEntry::make('timeline_detail_progression_error_'.$item['key'])
                 ->label('流程推进异常')
                 ->state($run?->progression_failure === null ? null : data_get($run->progression_failure, 'code').' · '.data_get($run->progression_failure, 'message'))
@@ -2574,7 +2587,7 @@ class ViewNovelChapter extends ViewRecord
                 continue;
             }
 
-            if (in_array($item['state'], ['failed', 'progression_failed', 'running'], true)) {
+            if (in_array($item['state'], ['failed', 'progression_failed', 'running', 'deferred'], true)) {
                 $blocked = true;
                 $currentAssigned = true;
 
@@ -2598,11 +2611,13 @@ class ViewNovelChapter extends ViewRecord
     {
         $state = $run?->hasUnresolvedProgressionFailure()
             ? 'progression_failed'
+            : ($this->isDeferredRun($run)
+                ? 'deferred'
             : match ($run?->status) {
                 RunStatus::Failed, RunStatus::Cancelled => 'failed',
                 RunStatus::Queued, RunStatus::Running => 'running',
                 default => $complete ? 'completed' : 'waiting',
-            };
+            });
 
         return [
             'key' => $key,
@@ -2611,6 +2626,7 @@ class ViewNovelChapter extends ViewRecord
             'status' => match ($state) {
                 'completed' => '已完成',
                 'progression_failed' => '阶段成功 · 推进异常',
+                'deferred' => '已保存恢复点 · 已转交',
                 'running' => $run?->status->getLabel() ?? '运行中',
                 'failed' => $run?->status->getLabel() ?? '失败',
                 default => '等待中',
@@ -2645,6 +2661,7 @@ class ViewNovelChapter extends ViewRecord
         return match ($state) {
             'completed' => 'success',
             'running', 'current' => 'primary',
+            'deferred' => 'warning',
             'failed', 'progression_failed' => 'danger',
             default => 'gray',
         };
@@ -2656,9 +2673,16 @@ class ViewNovelChapter extends ViewRecord
             'completed' => 'heroicon-o-check-circle',
             'running' => 'heroicon-o-arrow-path',
             'current' => 'heroicon-o-play-circle',
+            'deferred' => 'heroicon-o-arrow-right-circle',
             'failed', 'progression_failed' => 'heroicon-o-exclamation-triangle',
             default => 'heroicon-o-clock',
         };
+    }
+
+    private function isDeferredRun(?GenerationRun $run): bool
+    {
+        return $run?->status === RunStatus::Failed
+            && in_array($run->error_code, ['scene_stage_deferred', 'generation_stage_deferred'], true);
     }
 
     private function chapter(): Chapter

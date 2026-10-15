@@ -5,6 +5,7 @@ use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\AI\Providers\ReproduciblePromptAiProvider;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
@@ -26,7 +27,9 @@ use App\Models\NovelBible;
 use App\Models\Review;
 use App\Models\Scene;
 use App\Services\ChapterRewriter;
+use App\Services\GenerationSubstagePromptVersions;
 use App\Services\OutlineProgressResolver;
+use App\Services\PromptExecutionContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 
@@ -333,7 +336,11 @@ test('rewrite job checkpoints a paid response and resumes repair in a new job at
         ->enqueue(sceneRewriteResponse(evidence: '他成功破门'))
         ->enqueue(truncatedRewriteResponse())
         ->enqueue(sceneRewriteCoverageResponse('破门'));
-    app()->instance(AiProvider::class, $fake);
+    app()->instance(AiProvider::class, new ReproduciblePromptAiProvider(
+        $fake,
+        app(PromptExecutionContract::class),
+        app(GenerationSubstagePromptVersions::class),
+    ));
 
     (new RewriteChapterJob(
         $fixture['chapter']->getKey(),

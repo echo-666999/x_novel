@@ -6,6 +6,7 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\Providers\FakeAiProvider;
+use App\AI\Providers\ReproduciblePromptAiProvider;
 use App\AI\UsageRecorder;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
@@ -29,6 +30,8 @@ use App\Models\Scene;
 use App\Models\StoryStateVersion;
 use App\Services\DeterministicStoryEventApplier;
 use App\Services\GenerationFailurePolicy;
+use App\Services\GenerationSubstagePromptVersions;
+use App\Services\PromptExecutionContract;
 use App\Services\StoryEventExtractor;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -838,7 +841,11 @@ test('event extraction job resumes evidence repair from a paid response checkpoi
         ]))
         ->enqueue(truncatedEventEvidenceResponse())
         ->enqueue(eventEvidenceRepairResponse(['林舟终于抵达洛阳城下。']));
-    app()->instance(AiProvider::class, $fake);
+    app()->instance(AiProvider::class, new ReproduciblePromptAiProvider(
+        $fake,
+        app(PromptExecutionContract::class),
+        app(GenerationSubstagePromptVersions::class),
+    ));
 
     (new ExtractStoryEventsJob($fixture['chapter']->getKey()))->handle(app(StoryEventExtractor::class));
 

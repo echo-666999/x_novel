@@ -806,6 +806,23 @@ test('historical reviewer v16 admission keeps the frozen v16 system prompt', fun
         ->and($fake->requests()[0]->systemPrompt)->not->toContain('单一 Scene 的表达与 Milestone 验收条件冲突');
 });
 
+test('reviewer rejects a stale admission prompt capacity estimator before provider use', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $snapshot = $plan->admission_snapshot;
+    data_set($snapshot, 'schema_version', 4);
+    data_set($snapshot, 'capacity.review.estimator_version', 'review-prompt-capacity-stale');
+    $plan->update(['admission_snapshot' => $snapshot]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(AiProviderException::class, '容量估算器与 Plan Admission 冻结版本不一致');
+
+    expect($fake->requests())->toBe([]);
+});
+
 test('historical reviewer v17 admission keeps the frozen v17 prompt and context contract', function () {
     $fixture = reviewFixture();
     $plan = $fixture['chapter']->latestPlan;
@@ -825,8 +842,214 @@ test('historical reviewer v17 admission keeps the frozen v17 prompt and context 
         ->and($fake->requests()[0]->prompt)->not->toContain('"audit_contract"');
 });
 
-test('forced review creates a fresh run and includes the extractor completion audit', function () {
+test('reviewer v20 keeps full completion contracts locally but sends each milestone requirement once', function () {
+    $fixture = reviewForeshadowingFixture('fulfilled', true);
+    $candidate = GenerationArtifact::query()
+        ->where('type', ArtifactType::EventCandidate)
+        ->latest('id')
+        ->firstOrFail();
+    $candidateData = $candidate->data;
+    data_set($candidateData, 'outline_completion.duplicated_evidence', str_repeat('重复里程碑证据', 6_000));
+    GenerationArtifact::factory()->for($candidate->generationRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'version' => $candidate->version + 1,
+        'content' => null,
+        'data' => $candidateData,
+        'checksum' => hash('sha256', json_encode($candidateData, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
+    ]);
+    bindStateValidation(new StateValidationResult([]));
+    $response = compactReviewResponse();
+    $data = $response->structuredData;
+    $data['foreshadowing_audits'] = [[
+        'status' => 'fulfilled',
+        'summary' => '伏笔已按计划兑现。',
+        'evidence' => '兑现了向同伴作出的承诺',
+    ]];
+    $response = new AiResponse(
+        content: json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $data,
+        inputTokens: 100,
+        outputTokens: 80,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'review-provider-context',
+        model: 'review-test',
+    );
+    $fake = (new FakeAiProvider)->enqueue($response);
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+    $run = $review->generationRun;
+    $milestoneCriterion = data_get($run->context_snapshot, 'outline_completion_contract.milestone_criteria.0');
+    $reviewEstimate = data_get($run->context_snapshot, 'generation_preferences.review_prompt_capacity');
+    $guardEstimate = data_get($run->context_snapshot, 'generation_preferences.provider_requests.0.estimated_input_tokens');
+
+    expect($review->decision)->toBe(ReviewDecision::Pass)
+        ->and($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->promptVersion)->toBe('reviewer-v20+natural-reviewing-v3')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"event_candidate"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"story_arc_beat_milestone_completed"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('重复里程碑证据')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"outline_completion_contract"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"audit_contract"')
+        ->and($fake->requests()[0]->prompt)->toContain('"outline_completion_requirements"')
+        ->and($milestoneCriterion)->toBeString()
+        ->and(substr_count($fake->requests()[0]->prompt, $milestoneCriterion))->toBe(1)
+        ->and(data_get($run->context_snapshot, 'event_candidate.artifact_id'))->toBeInt()
+        ->and(data_get($run->context_snapshot, 'event_candidate.events.0.event_type'))
+        ->toBe(EventType::ForeshadowingPaidOff->value)
+        ->and(mb_strlen((string) data_get($run->context_snapshot, 'event_candidate.outline_completion.duplicated_evidence')))
+        ->toBeGreaterThan(30_000)
+        ->and(data_get($run->context_snapshot, 'outline_completion_contract.checksum'))->toBeString()
+        ->and(data_get($run->context_snapshot, 'audit_contract.arrays.milestone_completion.count'))->toBeInt()
+        ->and(data_get($reviewEstimate, 'estimator_version'))->toBe('review-prompt-capacity-v1')
+        // Reviewer 与通用 Provider 门禁必须对同一 AiRequest 得出完全相同的输入估算。
+        ->and(data_get($reviewEstimate, 'estimated_input_tokens'))->toBe($guardEstimate)
+        ->and(data_get($reviewEstimate, 'input_checksum'))->toHaveLength(64)
+        ->and(data_get($reviewEstimate, 'input_breakdown.system_prompt_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($reviewEstimate, 'input_breakdown.user_instruction_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($reviewEstimate, 'input_breakdown.user_payload_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($reviewEstimate, 'input_breakdown.response_schema_tokens'))->toBeGreaterThan(0)
+        ->and(data_get($reviewEstimate, 'visible_output_tokens'))->toBe(12_000)
+        ->and(data_get($reviewEstimate, 'reasoning_reserve_tokens'))->toBe(8_000)
+        ->and(data_get($reviewEstimate, 'max_completion_tokens'))->toBe(20_000)
+        ->and(data_get($reviewEstimate, 'estimated_total_tokens'))->toBe(
+            data_get($reviewEstimate, 'estimated_input_tokens')
+            + data_get($reviewEstimate, 'reasoning_reserve_tokens')
+            + data_get($reviewEstimate, 'visible_output_tokens'),
+        );
+});
+
+test('reviewer v20 does not send a large event candidate when the plan has no foreshadowing actions', function () {
     $fixture = reviewFixture();
+    $state = $fixture['novel']->fresh()->canonicalStateVersion;
+    $marker = str_repeat('大型里程碑候选仅供本地校验', 4_000);
+    $eventRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => $state->version,
+    ]);
+    GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => [
+            'source_artifact_id' => $fixture['draft']->getKey(),
+            'outline_completion' => ['large_milestone_payload' => $marker],
+            'events' => [],
+        ],
+    ]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($review->decision)->toBe(ReviewDecision::Pass)
+        ->and($fixture['chapter']->latestPlan->foreshadowing_actions ?? [])->toBe([])
+        ->and($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->prompt)->not->toContain('"event_candidate"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('大型里程碑候选仅供本地校验')
+        ->and(data_get($review->generationRun->context_snapshot, 'event_candidate.outline_completion.large_milestone_payload'))
+        ->toBe($marker);
+});
+
+test('reviewer v20 still rejects a fulfilled foreshadowing audit without a matching local event candidate', function () {
+    $fixture = reviewForeshadowingFixture('fulfilled', false);
+    bindStateValidation(new StateValidationResult([]));
+    $response = compactReviewResponse();
+    $data = $response->structuredData;
+    $data['foreshadowing_audits'] = [[
+        'status' => 'fulfilled',
+        'summary' => '伏笔已按计划兑现。',
+        'evidence' => '兑现了向同伴作出的承诺',
+    ]];
+    $response = new AiResponse(
+        content: json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+        structuredData: $data,
+        inputTokens: 100,
+        outputTokens: 80,
+        cachedTokens: 0,
+        latencyMs: 100,
+        providerRequestId: 'review-local-event-validation',
+        model: 'review-test',
+    );
+    $fake = (new FakeAiProvider)->enqueue($response);
+    app()->instance(AiProvider::class, $fake);
+
+    expect(fn () => app(ChapterReviewer::class)->review($fixture['chapter']->getKey()))
+        ->toThrow(ValidationException::class, '缺少匹配 Event Candidate');
+
+    expect($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->prompt)->not->toContain('"event_candidate"');
+});
+
+test('a three scene chapter completes review within the 48000 token strategy', function () {
+    setGenerationSettingsForTest([
+        'review_context_token_budget' => 48_000,
+        'chapter_request_budgets.reviewer.initial.output_tokens' => 12_000,
+        'chapter_request_budgets.reviewer.initial.reasoning_reserve_tokens' => 8_000,
+    ]);
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $plan->update(['scene_plans' => collect(range(1, 3))->map(fn (int $sequence): array => [
+        'goal' => "推进第 {$sequence} 场目标",
+        'conflict' => "处理第 {$sequence} 场阻力",
+        'turn' => "形成第 {$sequence} 场转折",
+        'outcome' => "完成第 {$sequence} 场结果",
+        'outcome_allowed' => [],
+        'outcome_forbidden' => [],
+        'continuity_requirements' => [],
+        'transition_from_previous' => $sequence === 1 ? null : '承接上一场结果。',
+    ])->all()]);
+    foreach (range(1, 3) as $sequence) {
+        Scene::factory()->for($fixture['chapter'])->create([
+            'sequence' => $sequence,
+            'goal' => "推进第 {$sequence} 场目标",
+            'conflict' => "处理第 {$sequence} 场阻力",
+            'turn' => "形成第 {$sequence} 场转折",
+            'outcome' => "完成第 {$sequence} 场结果",
+        ]);
+    }
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    $review = app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+    $capacity = data_get($review->generationRun->context_snapshot, 'generation_preferences.review_prompt_capacity');
+
+    expect($review->decision)->toBe(ReviewDecision::Pass)
+        ->and($fixture['chapter']->scenes()->count())->toBe(3)
+        ->and($fake->requests())->toHaveCount(1)
+        ->and(data_get($capacity, 'estimated_total_tokens'))->toBeLessThanOrEqual(48_000)
+        ->and(data_get($review->generationRun->context_snapshot, 'generation_preferences.review_token_budget.context_token_budget'))
+        ->toBe(48_000);
+});
+
+test('historical reviewer v19 keeps its frozen outline and audit provider context', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $snapshot = $plan->admission_snapshot;
+    data_set($snapshot, 'routes.reviewer.prompt_version', 'reviewer-v19+natural-reviewing-v3');
+    $plan->update(['admission_snapshot' => $snapshot]);
+    bindStateValidation(new StateValidationResult([]));
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
+    app()->instance(AiProvider::class, $fake);
+
+    app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
+
+    expect($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->promptVersion)->toBe('reviewer-v19+natural-reviewing-v3')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"event_candidate"')
+        ->and($fake->requests()[0]->prompt)->toContain('"outline_completion_contract"')
+        ->and($fake->requests()[0]->prompt)->toContain('"audit_contract"')
+        ->and($fake->requests()[0]->prompt)->not->toContain('"outline_completion_requirements"');
+});
+
+test('historical reviewer v18 keeps its frozen provider context contract', function () {
+    $fixture = reviewFixture();
+    $plan = $fixture['chapter']->latestPlan;
+    $snapshot = $plan->admission_snapshot;
+    data_set($snapshot, 'routes.reviewer.prompt_version', 'reviewer-v18+natural-reviewing-v3');
+    $plan->update(['admission_snapshot' => $snapshot]);
     $state = $fixture['novel']->fresh()->canonicalStateVersion;
     $completion = [
         'milestone_completion' => ['status' => 'not_met'],
@@ -847,20 +1070,15 @@ test('forced review creates a fresh run and includes the extractor completion au
         ],
     ]);
     bindStateValidation(new StateValidationResult([]));
-    $fake = (new FakeAiProvider)
-        ->enqueue(compactReviewResponse())
-        ->enqueue(compactReviewResponse());
+    $fake = (new FakeAiProvider)->enqueue(compactReviewResponse());
     app()->instance(AiProvider::class, $fake);
-    $reviewer = app(ChapterReviewer::class);
 
-    $first = $reviewer->review($fixture['chapter']->getKey());
-    $second = $reviewer->review($fixture['chapter']->getKey(), true, 'fresh-review-request');
+    app(ChapterReviewer::class)->review($fixture['chapter']->getKey());
 
-    expect($fake->requests())->toHaveCount(2)
-        ->and($second->getKey())->not->toBe($first->getKey())
-        ->and($second->generation_run_id)->not->toBe($first->generation_run_id)
-        ->and(data_get($second->generationRun->context_snapshot, 'operation_id'))->toBe('fresh-review-request')
-        ->and($fake->requests()[1]->prompt)->toContain('"outline_completion":{"milestone_completion":{"status":"not_met"');
+    expect($fake->requests())->toHaveCount(1)
+        ->and($fake->requests()[0]->promptVersion)->toBe('reviewer-v18+natural-reviewing-v3')
+        ->and($fake->requests()[0]->prompt)->toContain('"event_candidate"')
+        ->and($fake->requests()[0]->prompt)->toContain('"outline_completion":{"milestone_completion":{"status":"not_met"');
 });
 
 test('compact review restores frozen contract order and database identities in Laravel', function () {

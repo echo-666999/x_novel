@@ -83,7 +83,8 @@ return [
     'scene_job_safety_margin_seconds' => (int) env('SCENE_JOB_SAFETY_MARGIN_SECONDS', 20),
 
     // Scene Draft 未达到长度要求时，最多执行的长度修复次数。
-    'max_length_repair_attempts' => 1,
+    // Scene 长度修复对应已冻结的 initial / retry 两档预算；两档都失败后才终止。
+    'max_length_repair_attempts' => 2,
 
     // Rewrite Draft 未达到长度要求时，最多执行的长度修复次数。
     'max_rewrite_length_repair_attempts' => 2,

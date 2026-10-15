@@ -112,6 +112,54 @@ test('deepseek structured output failures are non retryable', function (string $
     'schema mismatch' => ['{"answer":12}', 'provider_schema_validation_failed'],
 ]);
 
+test('deepseek normalizes object values only for schema fields declared as json object strings', function () {
+    Http::fake(['deepseek.example/*' => Http::response([
+        'id' => 'deepseek-json-object-string',
+        'model' => 'deepseek-chat',
+        'choices' => [[
+            'finish_reason' => 'stop',
+            'message' => ['content' => json_encode([
+                'temporary_state_delta' => ['刘据' => ['状态' => '安静']],
+                'declared_events' => [
+                    ['event_type' => 'character_status_changed', 'subject' => '刘据'],
+                ],
+                'label' => '保留普通字符串',
+            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)],
+        ]],
+        'usage' => ['prompt_tokens' => 12, 'completion_tokens' => 20],
+    ])]);
+
+    $response = app(DeepSeekProvider::class)->generate(new AiRequest(
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        responseSchema: [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['temporary_state_delta', 'declared_events', 'label'],
+            'properties' => [
+                'temporary_state_delta' => [
+                    'type' => 'string',
+                    'description' => 'JSON object containing temporary state changes.',
+                ],
+                'declared_events' => [
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'string',
+                        'description' => 'One declared event encoded as a JSON object.',
+                    ],
+                ],
+                'label' => ['type' => 'string'],
+            ],
+        ],
+    ));
+
+    expect(json_decode($response->structuredData['temporary_state_delta'], true, flags: JSON_THROW_ON_ERROR))
+        ->toBe(['刘据' => ['状态' => '安静']])
+        ->and(json_decode($response->structuredData['declared_events'][0], true, flags: JSON_THROW_ON_ERROR))
+        ->toBe(['event_type' => 'character_status_changed', 'subject' => '刘据'])
+        ->and($response->structuredData['label'])->toBe('保留普通字符串');
+});
+
 test('deepseek malformed json still records provider usage and request id', function () {
     Http::fake(['deepseek.example/*' => Http::response([
         'id' => 'deepseek-invalid-json-usage',

@@ -634,11 +634,11 @@ Ending Audit 是确定性审计，会形成带 `input_hash` 的 Generation Run �
 | planner | `chapter-planner-v12+natural-planning-v3` |
 | writer | `scene-writer-v16+natural-writing-v3` |
 | extractor | `event-extractor-v9` |
-| reviewer | `reviewer-v18+natural-reviewing-v3` |
+| reviewer | `reviewer-v20+natural-reviewing-v3` |
 | rewrite | `rewrite-v14+natural-writing-v3` |
 | summary | `summary-v2+natural-summary-v3` |
 
-Reviewer v18 只用于新建或重新 Admission 的 Chapter Plan；已冻结 v16/v17 的历史 Plan 必须继续使用对应基础 Prompt。审计数组的精确数量约束、原响应检查点与独立 `review_repair` 自愈属于 Laravel 确定性逻辑，同时适用于 v16/v17/v18；Prompt 文本不得与 Run 记录的冻结版本错配。
+Reviewer v20 只用于新建或重新 Admission 的 Chapter Plan；Provider 只接收一份 Outline 完成语义要求，完整 Event Candidate、Outline Contract 和 Audit Contract 继续留在 Laravel 的来源追踪与确定性校验中。已冻结 v16–v19 的历史 Plan 必须继续使用对应 Prompt 和输入合同。审计数组的精确数量约束、原响应检查点与独立 `review_repair` 自愈属于 Laravel 确定性逻辑，同时适用于 v16–v20；Prompt 文本和输入合同不得与 Run 记录的冻结版本错配。
 
 补充边界：
 

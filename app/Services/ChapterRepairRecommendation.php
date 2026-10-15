@@ -43,7 +43,8 @@ final class ChapterRepairRecommendation
             ->where('id', '>', $planningBoundary)
             ->whereNotNull('error_code')
             ->latest('id')
-            ->first();
+            ->get()
+            ->first(fn (GenerationRun $run): bool => ! $this->deferredRunWasCompleted($chapter, $run));
 
         if ($failedRun !== null && ($review === null || $failedRun->getKey() > $review->generation_run_id)) {
             $recommendations->push($this->fromRun($failedRun));
@@ -72,6 +73,25 @@ final class ChapterRepairRecommendation
             ]))
             ->values()
             ->all();
+    }
+
+    /** Deferred 只是跨 Job 交接；同 Stage、同 Scene 后续成功后不再生成当前修复建议。 */
+    private function deferredRunWasCompleted(Chapter $chapter, GenerationRun $run): bool
+    {
+        if (! in_array($run->error_code, ['scene_stage_deferred', 'generation_stage_deferred'], true)) {
+            return false;
+        }
+
+        $continuation = $chapter->generationRuns()
+            ->where('id', '>', $run->getKey())
+            ->where('stage', $run->stage)
+            ->where('status', RunStatus::Succeeded);
+
+        $run->scene_id === null
+            ? $continuation->whereNull('scene_id')
+            : $continuation->where('scene_id', $run->scene_id);
+
+        return $continuation->exists();
     }
 
     /** @param array<string, mixed> $finding

@@ -3,10 +3,8 @@
 namespace App\Services;
 
 use App\AI\Contracts\AiProvider;
-use App\AI\Data\AiRequest;
 use App\AI\Exceptions\AiProviderException;
 use App\AI\JsonSchemaValidator;
-use App\AI\NarrativeProsePolicy;
 use App\AI\StructuredOutput;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
@@ -28,14 +26,6 @@ class ChapterReviewer
 {
     /** 未调用 Reviewer Provider 时，确定性预检 Review Run 使用的合同版本。 */
     private const DETERMINISTIC_PREFLIGHT_CONTRACT_VERSION = 'deterministic-review-preflight-v1';
-
-    /** v16 必须供已冻结的历史 Chapter Plan 继续使用，不能用新版文本冒充。 */
-    private const SYSTEM_PROMPT_V16 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换，章节功能、Milestone、Handoff、剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
-
-    private const SYSTEM_PROMPT_V17 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须按输入冻结契约的原顺序逐项返回，但不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换。若只是一处原文或单一 Scene 的表达与 Milestone 验收条件冲突，且不需要改变冻结目标或关键剧情结果，应使用 paragraph 或 scene。章节功能、Milestone/Handoff 目标本身、关键剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
-
-    /** v18 明确紧凑审计数组与冻结输入的逐项映射，数量仍由动态 Schema 强制执行。 */
-    private const SYSTEM_PROMPT_V18 = '你是 XNovel 语义叙事审校器。Laravel 已完成长度、来源链、版本、Coverage、State 与 Locked Fact 等确定性校验；不得重复报告这些结论。只判断七维叙事质量、冻结 Outline/Plan 条件、候选人物与世界实体、伏笔动作的语义是否由正文支持。所有审计数组必须严格按 audit_contract 中声明的 source、count 和输入原顺序逐项返回：milestone_completion 对应 outline_completion_contract.milestone_criteria，beat_exit 对应 beat_exit_criteria，handoff_readiness 对应 handoff_checks，foreshadowing_audits 对应 foreshadowing_contract.actions，arc_beat_audits 对应 chapter_plan.arc_contributions，arc_completion_audits 对应 arc_contributions 中首次出现的去重 Arc，人物和世界实体候选审计分别对应 chapter_plan 的同名 candidates。不得复述数据库 ID、键、条件文本、Scene ID 或汇总状态；Laravel 会按位置恢复身份并计算汇总。fulfilled、introduced 或 contradicted 必须引用当前正文中的连续逐字证据；missing、not_met 与 not_applicable 的 evidence 必须为 null。Findings 只报告有明确正文证据的语义问题，相同根因与修复动作必须合并；不得返回推荐 Decision。scope=paragraph 仅用于可由一处唯一原文替换的问题，scope=scene 仅用于单场景完整替换。若只是一处原文或单一 Scene 的表达与 Milestone 验收条件冲突，且不需要改变冻结目标或关键剧情结果，应使用 paragraph 或 scene。章节功能、Milestone/Handoff 目标本身、关键剧情结果、跨 Scene 结构与整体节奏问题必须使用 scope=chapter，由 Laravel 转入 Plan/Scene 重建。';
 
     private const DIMENSIONS = ['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'];
 
@@ -59,14 +49,11 @@ class ChapterReviewer
         private readonly StateValidator $stateValidator,
         private readonly AutoStopService $autoStop,
         private readonly DraftLengthPolicy $lengthPolicy,
-        private readonly PreviousChapterEnding $previousChapterEnding,
-        private readonly ContextBuilder $contextBuilder,
         private readonly GenerationRunCoordinator $runCoordinator,
         private readonly AutomaticRewriteCounter $rewriteCounter,
         private readonly RewriteScopeResolver $rewriteScopeResolver,
         private readonly ForeshadowingReviewAudit $foreshadowingReviewAudit,
         private readonly PlanningReviewAudit $planningReviewAudit,
-        private readonly OutlineCompletionService $outlineCompletion,
         private readonly GenerationFailurePolicy $failurePolicy,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly GenerationRequestBudget $requestBudget,
@@ -75,6 +62,8 @@ class ChapterReviewer
         private readonly JsonSchemaValidator $schemaValidator,
         private readonly ChapterStageRouteResolver $routeResolver,
         private readonly GenerationSettingsService $generationSettings,
+        private readonly ReviewPromptCapacityEstimator $reviewPromptCapacity,
+        private readonly ReviewPromptContextBuilder $reviewPromptContext,
     ) {}
 
     /** 执行章节审校；技术性 Coverage 失败不得直接进入确定性 REWRITE。 */
@@ -98,8 +87,6 @@ class ChapterReviewer
             );
         }
         $lengthCheck = $this->lengthCheck($draft->content, (int) $chapter->latestPlan?->target_words);
-        $styleContract = $this->contextBuilder->styleContractForChapter($chapter);
-        $foreshadowingContract = $this->contextBuilder->foreshadowingContractForChapter($chapter);
         $eventCandidate = $this->eventCandidateForDraft($chapter, $draft);
         $planFindings = collect(data_get($draft->data, 'plan_findings', []))
             ->filter(fn (mixed $finding): bool => is_array($finding))
@@ -107,73 +94,48 @@ class ChapterReviewer
             ->all();
         $planFindings = $this->coverageJudgment->resolveFindings($chapter, $draft, $planFindings);
         $repairVerification = $this->repairVerification($chapter, $draft);
-        $context = [
-            'chapter_id' => $chapter->getKey(),
-            'bible_version' => $styleContract['bible_version'],
-            'style_contract_checksum' => $styleContract['checksum'],
-            'l4' => $styleContract,
-            'foreshadowing_contract_checksum' => $foreshadowingContract['checksum'],
-            'foreshadowing_contract' => $foreshadowingContract,
-            'event_candidate' => $eventCandidate,
-            'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum, 'content' => $draft->content],
-            'chapter_plan' => $chapter->latestPlan?->only(['id', 'version', 'chapter_function', 'arc_contribution', 'arc_contributions', 'character_candidates', 'world_entity_candidates', 'reader_promise', 'target_words', 'must_reveal', 'may_hint', 'must_not_reveal', 'foreshadowing_actions', 'scene_plans']),
-            'outline_completion_contract' => $this->outlineCompletion->contract($chapter),
-            'arc_completion_contract' => $this->arcCompletionContract($chapter),
-            'existing_world_entities' => $chapter->novel->worldEntities()->where('status', 'active')->get()
-                ->map->only(['id', 'type', 'name', 'description'])->values()->all(),
-            'existing_characters' => $chapter->novel->characters()->get()
-                ->map->only(['id', 'name', 'aliases', 'role', 'status'])->values()->all(),
-            'scenes' => $chapter->scenes->sortBy('sequence')->map->only(['id', 'sequence', 'goal', 'conflict', 'turn', 'outcome'])->values()->all(),
-            'previous_chapter_ending' => $this->previousChapterEnding->for($chapter),
-            'length_check' => $lengthCheck,
-            'state_version' => $chapter->novel->canonicalStateVersion?->version,
-            'state_findings' => array_map(fn ($finding) => $finding->toArray(), $stateValidation->findings),
-            'plan_findings' => $planFindings,
-            'repair_verification' => $repairVerification,
-        ];
-        if ($context['chapter_plan'] === null || $context['state_version'] === null) {
+        $plan = $chapter->latestPlan;
+        $stateVersion = $chapter->novel->canonicalStateVersion?->version;
+        if ($plan === null || $stateVersion === null) {
             throw new AiProviderException('review_context_incomplete', 'Narrative Review 缺少 Chapter Plan 或 Story State。', false);
         }
-        $this->assertDeterministicDraftContract($chapter, $draft, (int) $context['state_version']);
+        $this->assertDeterministicDraftContract($chapter, $draft, (int) $stateVersion);
 
         // 即使确定性检查直接给出结论，也要先验证恢复来源并把合同身份写入 Run，避免旧 Review 混回 v1 路由。
         $resolvedRoute = $this->routeResolver->resolve($chapter, AiStage::Reviewer, $draft);
         $settings = $resolvedRoute['settings'];
         $promptVersion = $resolvedRoute['prompt_version'];
         $reviewerRoute = $resolvedRoute['route'];
-        $context['prompt_version'] = $promptVersion;
-        $contractCounts = CompactReviewPayload::contractCounts(
-            $chapter->latestPlan,
-            $context['outline_completion_contract'],
-            $foreshadowingContract,
-        );
-        if (str_starts_with($promptVersion, 'reviewer-v18+')) {
-            $context['audit_contract'] = [
-                'schema_version' => 1,
-                'arrays' => [
-                    'milestone_completion' => ['source' => 'outline_completion_contract.milestone_criteria', 'count' => $contractCounts['milestone_completion']],
-                    'beat_exit' => ['source' => 'outline_completion_contract.beat_exit_criteria', 'count' => $contractCounts['beat_exit']],
-                    'handoff_readiness' => ['source' => 'outline_completion_contract.handoff_checks', 'count' => $contractCounts['handoff_readiness']],
-                    'foreshadowing_audits' => ['source' => 'foreshadowing_contract.actions', 'count' => $contractCounts['foreshadowing_audits']],
-                    'arc_beat_audits' => ['source' => 'chapter_plan.arc_contributions', 'count' => $contractCounts['arc_beat_audits']],
-                    'arc_completion_audits' => ['source' => 'chapter_plan.arc_contributions 的首次出现去重 Arc', 'count' => $contractCounts['arc_completion_audits']],
-                    'character_candidate_audits' => ['source' => 'chapter_plan.character_candidates', 'count' => $contractCounts['character_candidate_audits']],
-                    'world_entity_candidate_audits' => ['source' => 'chapter_plan.world_entity_candidates', 'count' => $contractCounts['world_entity_candidate_audits']],
-                ],
-            ];
-        }
-        $context['generation_preferences'] = $this->routeResolver->generationPreferences($resolvedRoute);
-        $context['generation_preferences']['repair_request_budgets'] = collect($reviewerRoute['repair_request_budgets'])
+        $generationPreferences = $this->routeResolver->generationPreferences($resolvedRoute);
+        $generationPreferences['repair_request_budgets'] = collect($reviewerRoute['repair_request_budgets'])
             ->only(['review_schema', 'arc_completion'])
             ->all();
-        $context['generation_preferences']['review_token_budget'] = [
+        $generationPreferences['review_token_budget'] = [
             'context_token_budget' => (int) data_get(
-                $chapter->latestPlan?->admission_snapshot,
+                $plan->admission_snapshot,
                 'capacity.review.context_token_budget',
                 $this->generationSettings->reviewContextTokenBudget(),
             ),
         ];
-
+        $context = $this->reviewPromptContext->build(
+            chapter: $chapter,
+            plan: $plan,
+            eventCandidate: $eventCandidate,
+            draft: ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum, 'content' => $draft->content],
+            lengthCheck: $lengthCheck,
+            stateVersion: (int) $stateVersion,
+            stateFindings: array_map(fn ($finding) => $finding->toArray(), $stateValidation->findings),
+            planFindings: $planFindings,
+            repairVerification: $repairVerification,
+            promptVersion: $promptVersion,
+            generationPreferences: $generationPreferences,
+        );
+        $contractCounts = CompactReviewPayload::contractCounts(
+            $plan,
+            $context['outline_completion_contract'],
+            $context['foreshadowing_contract'],
+        );
+        $foreshadowingContract = $context['foreshadowing_contract'];
         $deterministicFindings = [
             ...array_map(fn (array $finding): array => $this->normalizeStateFinding($finding), $context['state_findings']),
             ...($lengthCheck['status'] === 'within_range' ? [] : [$this->lengthFinding($lengthCheck)]),
@@ -217,7 +179,35 @@ class ChapterReviewer
         $schemaRepairs = [];
         try {
             $budget = $this->resolveRequestBudget($run, $baseKey);
-            $this->assertReviewCapacity($context, $budget['max_completion_tokens']);
+            $request = $this->reviewPromptCapacity->request(
+                context: $context,
+                contractCounts: $contractCounts,
+                provider: $settings->provider,
+                model: $settings->model,
+                reasoningEffort: $settings->reasoningEffort,
+                promptVersion: $promptVersion,
+                maxCompletionTokens: $budget['max_completion_tokens'],
+                metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
+            );
+            $capacityEstimate = $this->reviewPromptCapacity->estimate($request);
+            $this->assertReviewCapacity(
+                $context,
+                $capacityEstimate,
+                $budget,
+                $plan->admission_snapshot,
+            );
+            $capacityEstimate = [
+                ...$capacityEstimate,
+                'visible_output_tokens' => $budget['output_tokens'],
+                'reasoning_reserve_tokens' => $budget['reasoning_reserve_tokens'],
+                'max_completion_tokens' => $budget['max_completion_tokens'],
+                'estimated_total_tokens' => $capacityEstimate['estimated_input_tokens']
+                    + $budget['reasoning_reserve_tokens']
+                    + $budget['output_tokens'],
+            ];
+            $runSnapshot = $run->context_snapshot ?? [];
+            data_set($runSnapshot, 'generation_preferences.review_prompt_capacity', $capacityEstimate);
+            $run->update(['context_snapshot' => $runSnapshot]);
 
             $checkpoint = $this->latestReviewContractCheckpoint($chapter, $draft, $inputHash);
             if ($checkpoint !== null) {
@@ -239,18 +229,6 @@ class ChapterReviewer
                     'artifact_id' => $repair['artifact_id'],
                 ]];
             } else {
-                $request = new AiRequest(
-                    model: $settings->model,
-                    provider: $settings->provider,
-                    reasoningEffort: $settings->reasoningEffort,
-                    systemPrompt: $this->systemPrompt($promptVersion),
-                    prompt: '请根据章节计划和确定性状态检查结果审校以下章节草稿，并确保所有面向用户的说明均使用简体中文：'.json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
-                    temperature: .2,
-                    maxTokens: $budget['max_completion_tokens'],
-                    responseSchema: $this->schema($contractCounts),
-                    promptVersion: $promptVersion,
-                    metadata: ['generation_run_id' => $run->getKey(), 'novel_id' => $chapter->novel_id, 'chapter_id' => $chapter->getKey(), 'stage' => AiStage::Reviewer->value],
-                );
                 // 审校请求既受审校上下文策略限制，也必须通过模型真实容量和冻结请求预算门禁。
                 $this->outputCapacity->assertRequestWithinFrozenRoute(
                     $chapter,
@@ -366,24 +344,6 @@ class ChapterReviewer
         }
     }
 
-    /** 按 Chapter Plan 冻结的基础版本选择真实 Prompt，禁止用新文本冒充历史版本。 */
-    private function systemPrompt(string $promptVersion): string
-    {
-        $baseVersion = explode('+', $promptVersion, 2)[0];
-        $prompt = match ($baseVersion) {
-            'reviewer-v16' => self::SYSTEM_PROMPT_V16,
-            'reviewer-v17' => self::SYSTEM_PROMPT_V17,
-            'reviewer-v18' => self::SYSTEM_PROMPT_V18,
-            default => throw new AiProviderException(
-                'review_prompt_version_unsupported',
-                "Narrative Review 无法恢复冻结 Prompt 版本 [{$promptVersion}]。",
-                false,
-            ),
-        };
-
-        return $prompt.NarrativeProsePolicy::reviewing();
-    }
-
     /** @param array<string, mixed> $context @param array<int, array<string, mixed>> $findings */
     private function completeDeterministicReview(Chapter $chapter, GenerationArtifact $draft, array $context, array $findings, bool $blocked): Review
     {
@@ -452,27 +412,6 @@ class ChapterReviewer
         return $artifact;
     }
 
-    /** @return array<int, array{arc_id: int, title: ?string, completion_conditions: array<int, mixed>}> */
-    private function arcCompletionContract(Chapter $chapter): array
-    {
-        $arcIds = collect($chapter->latestPlan?->arc_contributions ?? [])
-            ->pluck('arc_id')
-            ->map(fn ($id): int => (int) $id)
-            ->unique()
-            ->values();
-        $arcs = $chapter->novel->storyArcs()->whereKey($arcIds)->get()->keyBy('id');
-
-        return $arcIds->map(function (int $arcId) use ($arcs): array {
-            $arc = $arcs->get($arcId);
-
-            return [
-                'arc_id' => $arcId,
-                'title' => $arc?->title,
-                'completion_conditions' => $arc?->completion_conditions ?? [],
-            ];
-        })->all();
-    }
-
     /** @return array<string, mixed>|null */
     private function eventCandidateForDraft(Chapter $chapter, GenerationArtifact $draft): ?array
     {
@@ -495,7 +434,7 @@ class ChapterReviewer
         ];
     }
 
-    /** @param array<string, int>|null $contractCounts */
+    /** 保留 Reviewer Schema 的单一反射入口；请求构造与容量估算统一复用同一实现。 */
     private function schema(?array $contractCounts = null): array
     {
         return CompactReviewPayload::schema($contractCounts);
@@ -679,17 +618,32 @@ class ChapterReviewer
         return $budget;
     }
 
-    /** @param array<string, mixed> $context */
-    private function assertReviewCapacity(array $context, int $maxTokens): void
+    /**
+     * @param  array<string, mixed>  $context
+     * @param  array{estimator_version: string, estimated_input_tokens: int, input_checksum: string, input_breakdown: array<string, int>}  $estimate
+     * @param  array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}  $budget
+     * @param  array<string, mixed>|null  $admissionSnapshot
+     */
+    private function assertReviewCapacity(array $context, array $estimate, array $budget, ?array $admissionSnapshot): void
     {
         $contextBudget = (int) data_get($context, 'generation_preferences.review_token_budget.context_token_budget', 0);
-        $serialized = json_encode($context, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
-        // 中文正文通常接近一字一 Token；这里再计入结构化 JSON 的保守余量。
-        $estimatedInputTokens = (int) ceil(mb_strlen($serialized) * 1.15);
-        if ($contextBudget < 1 || $estimatedInputTokens + $maxTokens > $contextBudget) {
+        $estimatedInputTokens = $estimate['estimated_input_tokens'];
+        $visibleOutputTokens = (int) ($budget['output_tokens'] ?? 0);
+        $reasoningReserveTokens = (int) ($budget['reasoning_reserve_tokens'] ?? -1);
+        $maxCompletionTokens = (int) ($budget['max_completion_tokens'] ?? 0);
+        $estimatedTotalTokens = $estimatedInputTokens + $reasoningReserveTokens + $visibleOutputTokens;
+        $schemaVersion = (int) data_get($admissionSnapshot, 'schema_version', 0);
+        $estimatorMismatch = $schemaVersion >= 4
+            && data_get($admissionSnapshot, 'capacity.review.estimator_version') !== $estimate['estimator_version'];
+        $budgetInvalid = $visibleOutputTokens < 1
+            || $reasoningReserveTokens < 0
+            || $maxCompletionTokens !== $visibleOutputTokens + $reasoningReserveTokens;
+        if ($contextBudget < 1 || $estimatedTotalTokens > $contextBudget || $estimatorMismatch || $budgetInvalid) {
             throw new AiProviderException(
                 'review_capacity_mismatch',
-                "Reviewer Route 容量不足：估算输入 {$estimatedInputTokens} Token，加最大输出 {$maxTokens} Token，超过 Context {$contextBudget} Token。",
+                $estimatorMismatch
+                    ? 'Reviewer Prompt 容量估算器与 Plan Admission 冻结版本不一致，请创建新 Plan 并重新 Admission。'
+                    : "Reviewer Route 总预算 {$estimatedTotalTokens} Token（完整输入 {$estimatedInputTokens} + 推理预留 {$reasoningReserveTokens} + 可见输出 {$visibleOutputTokens}）超过 Context {$contextBudget} Token，或冻结预算组成不一致。",
                 false,
             );
         }

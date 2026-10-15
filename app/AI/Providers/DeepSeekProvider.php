@@ -181,7 +181,12 @@ class DeepSeekProvider implements AiProvider
 
                 try {
                     $decodedObject = json_decode($content, false, flags: JSON_THROW_ON_ERROR);
-                    $decoded = json_decode($content, true, flags: JSON_THROW_ON_ERROR);
+                    $decodedObject = $this->normalizeJsonObjectStrings($decodedObject, $schema);
+                    $decoded = json_decode(
+                        json_encode($decodedObject, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                        true,
+                        flags: JSON_THROW_ON_ERROR,
+                    );
                 } catch (JsonException $exception) {
                     throw new AiProviderException(
                         'provider_invalid_json_response',
@@ -245,6 +250,44 @@ class DeepSeekProvider implements AiProvider
             ],
             reasoningTokens: $reasoningTokens,
         );
+    }
+
+    /**
+     * DeepSeek 的 JSON Object 模式偶尔会把“JSON 对象字符串”直接返回为对象。
+     * 这里只按 Schema 的明确字段说明做无损序列化，随后仍执行完整 Schema 校验。
+     *
+     * @param  array<string, mixed>  $schema
+     */
+    private function normalizeJsonObjectStrings(mixed $value, array $schema): mixed
+    {
+        $description = strtolower((string) ($schema['description'] ?? ''));
+        $expectsJsonObjectString = ($schema['type'] ?? null) === 'string'
+            && str_contains($description, 'json object');
+
+        if ($expectsJsonObjectString && ($value instanceof \stdClass || (is_array($value) && ! array_is_list($value)))) {
+            return json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+
+        if ($value instanceof \stdClass) {
+            $properties = (array) ($schema['properties'] ?? []);
+
+            foreach (get_object_vars($value) as $key => $item) {
+                if (is_array($properties[$key] ?? null)) {
+                    $value->{$key} = $this->normalizeJsonObjectStrings($item, $properties[$key]);
+                }
+            }
+
+            return $value;
+        }
+
+        if (is_array($value) && array_is_list($value) && is_array($schema['items'] ?? null)) {
+            return array_map(
+                fn (mixed $item): mixed => $this->normalizeJsonObjectStrings($item, $schema['items']),
+                $value,
+            );
+        }
+
+        return $value;
     }
 
     /** @param array<string, mixed> $payload */

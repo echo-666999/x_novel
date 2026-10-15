@@ -68,7 +68,7 @@ final class StoryEventEvidenceRepairer
                 maxTokens: $budget['max_completion_tokens'],
                 responseSchema: self::responseSchema(count($evidence)),
                 promptVersion: self::PROMPT_VERSION,
-                metadata: [...$metadata, 'event_evidence_repair_attempt' => $attempt, 'event_index' => $eventIndex, 'repair_budget_tier' => $tier],
+                metadata: [...$metadata, 'substage' => 'event_evidence_repair', 'event_evidence_repair_attempt' => $attempt, 'event_index' => $eventIndex, 'repair_budget_tier' => $tier],
             );
             // Evidence 修复不得使用默认 Provider；它必须沿用 Extractor 的冻结 Route 与容量。
             $this->outputCapacity->assertRequestFromMetadata(

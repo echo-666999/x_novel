@@ -43,6 +43,7 @@ class StoryEventExtractor
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly GenerationRequestBudget $requestBudget,
         private readonly ChapterStageRouteResolver $routeResolver,
+        private readonly GenerationSubstagePromptVersions $substagePromptVersions,
     ) {}
 
     public function extract(int $chapterId, bool $regenerate = false, bool $singleProviderCall = false, ?int $recoveryRunId = null): ?GenerationArtifact
@@ -116,6 +117,13 @@ class StoryEventExtractor
                 upstreamChecksums: [$draft->checksum],
                 frozen: ['provider' => $settings->provider, 'model' => $settings->model, 'reasoning_effort' => $settings->reasoningEffort],
                 contractVersion: $promptVersion,
+            );
+            $context['generation_preferences']['substage_prompt_versions'] = $this->substagePromptVersions->inherit(
+                GenerationStage::EventExtraction,
+                $chapter->getKey(),
+                null,
+                $inputHash,
+                $this->substagePromptVersions->eventExtraction($promptVersion),
             );
             $chapterRecoveryId = (int) ($generationPreferences['recovery_contract_run_id'] ?? 0);
             $baseKey = $recoveryRun === null

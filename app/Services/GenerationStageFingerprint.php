@@ -15,6 +15,8 @@ final class GenerationStageFingerprint
         'attempt', 'attempts', 'retry_count', 'queue', 'queue_id', 'job_id',
         'operation_id', 'created_at', 'updated_at', 'started_at', 'finished_at',
         'queued_at', 'dispatched_at', 'heartbeat_at', 'request_started_at',
+        // 检索分数用于解释排序，不是已经选入 Prompt 的 Memory 业务身份；它可能因召回统计更新而轻微漂移。
+        'final_score',
     ];
 
     /**

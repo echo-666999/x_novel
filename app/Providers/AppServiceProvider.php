@@ -20,6 +20,7 @@ use App\Contracts\StoryEventApplier;
 use App\Services\ContentSelfHealingService;
 use App\Services\DeterministicStoryEventApplier;
 use App\Services\EmergencyStopService;
+use App\Services\GenerationSubstagePromptVersions;
 use App\Services\PromptExecutionContract;
 use Illuminate\Support\ServiceProvider;
 
@@ -37,10 +38,12 @@ class AppServiceProvider extends ServiceProvider
                 'openai' => new ReproduciblePromptAiProvider(
                     new TrackingAiProvider(app(OpenAiProvider::class), app(UsageRecorder::class)),
                     app(PromptExecutionContract::class),
+                    app(GenerationSubstagePromptVersions::class),
                 ),
                 'deepseek' => new ReproduciblePromptAiProvider(
                     new TrackingAiProvider(app(DeepSeekProvider::class), app(UsageRecorder::class)),
                     app(PromptExecutionContract::class),
+                    app(GenerationSubstagePromptVersions::class),
                 ),
             ], app(AiSettingsService::class));
 

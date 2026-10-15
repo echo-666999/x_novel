@@ -188,6 +188,27 @@ final class GenerationRequestBudget
     }
 
     /**
+     * 返回冻结档位中总完成预算最高的一档，并保留可见输出与推理预留的组成。
+     *
+     * @param  array<string, mixed>  $budgets
+     * @return array{output_tokens: int, reasoning_reserve_tokens: int, max_completion_tokens: int}
+     */
+    public function maximumBudget(array $budgets, AiStage $stage): array
+    {
+        $validated = $this->validateFrozen($budgets, $stage);
+        $maximum = null;
+
+        foreach ($validated as $budget) {
+            if ($maximum === null || $budget['max_completion_tokens'] > $maximum['max_completion_tokens']) {
+                $maximum = $budget;
+            }
+        }
+
+        // validateFrozen 已保证至少存在一个合法档位。
+        return $maximum;
+    }
+
+    /**
      * 根据同一幂等链中最后一次完成预算故障选择下一档；普通超时等临时错误必须继续使用原档预算。
      *
      * @param  iterable<int, GenerationRun>  $priorRuns

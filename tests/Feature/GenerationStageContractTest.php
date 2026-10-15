@@ -33,6 +33,7 @@ test('stage fingerprints ignore map order and runtime delivery fields', function
     $fingerprint = app(GenerationStageFingerprint::class);
     $first = $fingerprint->make(GenerationStage::SceneGeneration, [
         'scene' => ['goal' => '抵达灯塔', 'sequence' => 2],
+        'l3' => ['memories' => [['id' => 7, 'summary' => '旧线索', 'final_score' => 0.712345]]],
         'attempt' => 1,
         'updated_at' => now()->subDay(),
         'queue_id' => 'queue-a',
@@ -42,6 +43,7 @@ test('stage fingerprints ignore map order and runtime delivery fields', function
         'updated_at' => now(),
         'attempt' => 99,
         'scene' => ['sequence' => 2, 'goal' => '抵达灯塔'],
+        'l3' => ['memories' => [['final_score' => 0.712244, 'summary' => '旧线索', 'id' => 7]]],
     ], ['scene-a'], ['model' => 'model-a'], 'scene-v1');
 
     expect($same)->toBe($first)

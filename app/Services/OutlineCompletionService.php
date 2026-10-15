@@ -6,6 +6,7 @@ use App\Data\StoryEventCandidate;
 use App\Enums\EventType;
 use App\Enums\StoryEventStatus;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -171,9 +172,28 @@ class OutlineCompletionService
             'latestPlan.primaryOutlineMilestone',
         ])->findOrFail($chapter->getKey());
         $plan = $chapter->latestPlan;
+
+        if ($plan === null) {
+            throw ValidationException::withMessages([
+                'outline_completion' => 'Chapter Plan 缺少同一 Outline 下的 Primary Beat/Milestone 完整父链。',
+            ]);
+        }
+
+        return $this->contractForPlan($chapter, $plan);
+    }
+
+    /** @return array<string, mixed> */
+    public function contractForPlan(Chapter $chapter, ChapterPlan $plan): array
+    {
+        $chapter->loadMissing('novel.canonicalStateVersion');
+        $plan->loadMissing([
+            'primaryOutlineBeat.milestones',
+            'primaryOutlineBeat.handoffNextBeat',
+            'primaryOutlineMilestone',
+        ]);
         $beat = $plan?->primaryOutlineBeat;
         $milestone = $plan?->primaryOutlineMilestone;
-        if ($plan === null || $beat === null || $milestone === null
+        if ($beat === null || $milestone === null
             || $chapter->novel->current_outline_id !== $plan->novel_outline_id
             || $plan->novel_outline_id !== $beat->novel_outline_id
             || $plan->novel_outline_id !== $milestone->novel_outline_id
