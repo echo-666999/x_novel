@@ -17,16 +17,16 @@ return [
     |
     */
     'versions' => [
-        'outline_foundation' => 'novel-outline-foundation-v6',
-        'outline_structure' => 'novel-outline-structure-v6',
-        'outline_arc_beats' => 'novel-outline-arc-beats-v8',
+        'outline_foundation'  => 'novel-outline-foundation-v6',
+        'outline_structure'   => 'novel-outline-structure-v6',
+        'outline_arc_beats'   => 'novel-outline-arc-beats-v8',
         'outline_beat_detail' => 'novel-outline-beat-detail-v6',
-        'planner' => 'chapter-planner-v12',
-        'writer' => 'scene-writer-v16',
-        'extractor' => 'event-extractor-v9',
-        'reviewer' => 'reviewer-v17',
-        'rewrite' => 'rewrite-v14',
-        'summary' => 'summary-v2',
+        'planner'             => 'chapter-planner-v12',
+        'writer'              => 'scene-writer-v16',
+        'extractor'           => 'event-extractor-v9',
+        'reviewer'            => 'reviewer-v17',
+        'rewrite'             => 'rewrite-v14',
+        'summary'             => 'summary-v2',
     ],
 
     /*
@@ -39,30 +39,30 @@ return [
     |
     */
     'policies' => [
-        'planning' => 'natural-planning-v3',
-        'writing' => 'natural-writing-v3',
+        'planning'  => 'natural-planning-v3',
+        'writing'   => 'natural-writing-v3',
         'reviewing' => 'natural-reviewing-v3',
-        'summary' => 'natural-summary-v3',
+        'summary'   => 'natural-summary-v3',
     ],
 
     /* 每个 Provider 阶段实际拼接的共享策略；未列出的阶段保持独立版本。 */
     'stage_policies' => [
-        'outline_foundation' => 'planning',
-        'outline_structure' => 'planning',
-        'outline_arc_beats' => 'planning',
+        'outline_foundation'  => 'planning',
+        'outline_structure'   => 'planning',
+        'outline_arc_beats'   => 'planning',
         'outline_beat_detail' => 'planning',
-        'planner' => 'planning',
-        'writer' => 'writing',
-        'reviewer' => 'reviewing',
-        'rewrite' => 'writing',
-        'summary' => 'summary',
+        'planner'             => 'planning',
+        'writer'              => 'writing',
+        'reviewer'            => 'reviewing',
+        'rewrite'             => 'writing',
+        'summary'             => 'summary',
     ],
 
     /* 不属于固定 AiStage、但会直接调用 Provider 的局部任务版本。 */
     'tasks' => [
         'outline_node_regeneration' => [
             'version' => 'novel-outline-node-v6',
-            'policy' => 'planning',
+            'policy'  => 'planning',
         ],
     ],
 ];
