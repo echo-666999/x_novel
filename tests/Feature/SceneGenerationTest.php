@@ -1258,6 +1258,27 @@ test('regenerating a scene preserves the previous artifact and returns the chapt
         ->and($fake->requests())->toHaveCount(1);
 });
 
+test('an explicit scene regeneration batch creates a new run while duplicate delivery reuses that batch', function () {
+    $fixture = sceneGenerationFixture(1);
+    setSceneGenerationTarget($fixture, 14);
+    $sceneId = $fixture['scenes']->first()->getKey();
+    $fake = (new FakeAiProvider)
+        ->enqueue(sceneResponse(str_repeat('甲', 14)))
+        ->enqueue(sceneResponse(str_repeat('乙', 14)));
+    app()->instance(AiProvider::class, $fake);
+    $generator = app(SceneGenerator::class);
+
+    $original = $generator->generate($sceneId);
+    $regenerated = $generator->generate($sceneId, regenerationBatchId: 'manual-batch-1');
+    $duplicate = $generator->generate($sceneId, regenerationBatchId: 'manual-batch-1');
+
+    expect($regenerated?->getKey())->not->toBe($original?->getKey())
+        ->and($duplicate?->getKey())->toBe($regenerated?->getKey())
+        ->and($fixture['scenes']->first()->generationRuns()->where('stage', GenerationStage::SceneGeneration)->count())->toBe(2)
+        ->and(data_get($regenerated?->generationRun?->context_snapshot, 'regeneration_batch_id'))->toBe('manual-batch-1')
+        ->and($fake->requests())->toHaveCount(2);
+});
+
 test('canonical chapter scenes cannot be regenerated directly', function () {
     $fixture = sceneGenerationFixture(1);
     $fixture['chapter']->update(['status' => ChapterStatus::Canonical]);

@@ -340,11 +340,17 @@ test('needs attention review exposes manual edit and override actions instead of
     Review::factory()->for($reviewRun)->create([
         'artifact_id' => $reviewArtifact->getKey(),
         'decision' => ReviewDecision::NeedsAttention,
-        'findings' => [['severity' => 'warning', 'message' => '需要人工判断。']],
+        'findings' => [[
+            'code' => 'PLAN_DEVIATION',
+            'dimension' => 'plan',
+            'scope' => 'chapter',
+            'severity' => 'warning',
+            'message' => '需要人工判断。',
+        ]],
     ]);
 
     $editPlanAction = TestAction::make('editRepairPlan')
-        ->schemaComponent('repair-recommendations', 'content');
+        ->schemaComponent('review-next-step', 'content');
 
     Livewire::test(ViewNovelChapter::class, [
         'record' => $novel->getRouteKey(),
@@ -352,7 +358,7 @@ test('needs attention review exposes manual edit and override actions instead of
     ])
         ->assertOk()
         ->assertSee('人工修复建议')
-        ->assertSee('编辑当前 Chapter Plan')
+        ->assertSee('修订章节计划并重建场景')
         ->assertActionExists($editPlanAction, fn ($action): bool => $action->getUrl() === null && $action->isModalSlideOver())
         ->mountAction($editPlanAction)
         ->assertActionMounted($editPlanAction)
@@ -535,7 +541,7 @@ test('an overlength review exposes the dedicated acceptance action instead of or
         ->assertDontSee('强制重新审校');
 });
 
-test('a paragraph finding exposes the local scene prose editor', function () {
+test('a scene progress paragraph finding exposes the local scene prose editor', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);
     ChapterPlan::factory()->for($chapter)->create();
@@ -569,8 +575,8 @@ test('a paragraph finding exposes the local scene prose editor', function () {
         'artifact_id' => $reviewArtifact->getKey(),
         'decision' => ReviewDecision::NeedsAttention,
         'findings' => [[
-            'code' => 'STYLE_LOCAL_ISSUE',
-            'dimension' => 'style',
+            'code' => 'INSUFFICIENT_PROGRESS',
+            'dimension' => 'progress',
             'severity' => 'warning',
             'scope' => 'paragraph',
             'scene_id' => $scene->getKey(),

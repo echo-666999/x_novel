@@ -1355,6 +1355,25 @@ test('the queue job automatically replans schema or business validation failures
         ->and(collect($fake->requests())->where('metadata.stage', AiStage::Planner->value))->toHaveCount(2);
 });
 
+test('review capacity validation stops without spending another planner request on content repair', function () {
+    Queue::fake();
+    [$chapter] = plannerChapter();
+    $planner = Mockery::mock(ChapterPlanner::class);
+    $planner->shouldReceive('generate')
+        ->once()
+        ->with($chapter->getKey(), false)
+        ->andThrow(ValidationException::withMessages([
+            'plan' => '[REVIEW_CAPACITY_EXCEEDED] Reviewer 总预算超过审校 Context。',
+        ]));
+
+    $job = (new PlanChapterJob($chapter->getKey()))->withFakeQueueInteractions();
+    $job->handle($planner);
+
+    $job->assertFailed();
+    expect($chapter->generationRuns()->where('stage', GenerationStage::ContentRepair)->count())->toBe(0);
+    Queue::assertNotPushed(PlanChapterJob::class);
+});
+
 test('a canonical state change during provider execution blocks stale plan persistence', function () {
     [$chapter, $character] = plannerChapter();
     $payload = plannerPayload($character->getKey());

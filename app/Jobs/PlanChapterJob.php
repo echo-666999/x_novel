@@ -84,6 +84,26 @@ class PlanChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
             $currentRepair = $this->contentRepairRunId === null
                 ? $contentSelfHealing->activeForChapter($chapter)
                 : GenerationRun::query()->find($this->contentRepairRunId);
+            // 审校容量由全局预算和冻结路由决定，重新让 Planner 写计划无法改变这项配置。
+            if (str_contains(collect($exception->errors())->flatten()->implode(' '), '[REVIEW_CAPACITY_EXCEEDED]')) {
+                if ($currentRepair !== null) {
+                    $contentSelfHealing->fail(
+                        $currentRepair,
+                        'review_capacity_exceeded',
+                        $exception->getMessage(),
+                        ['validation_errors' => $exception->errors()],
+                    );
+                }
+                $this->releaseGenerationDispatch();
+                $this->fail(new AiProviderException(
+                    'review_capacity_exceeded',
+                    'Reviewer 容量不足；请提高审校上下文预算后重新生成章节计划。',
+                    false,
+                    previous: $exception,
+                ));
+
+                return;
+            }
             if ($currentRepair !== null && $contentSelfHealing->type($currentRepair) !== ContentRepairType::PlanValidation) {
                 $maxNested = (int) config('generation.content_self_healing.plan_validation.max_attempts', 1);
                 $nestedFailures = $chapter->generationRuns()

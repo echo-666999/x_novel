@@ -59,10 +59,21 @@ final class ChapterRepairRecommendation
         return $recommendations
             ->map(function (array $row) use ($sceneSequences): array {
                 $sequence = $row['scene_id'] === null ? null : $sceneSequences->get($row['scene_id']);
+                $sceneReference = $sequence === null
+                    ? match ($row['problem_layer']) {
+                        'Chapter Plan' => '整章计划',
+                        '章节正文' => '跨场景（需定位）',
+                        default => '整章／未定位',
+                    }
+                : "Scene {$sequence}";
 
                 return [
                     ...$row,
-                    'scene_reference' => $sequence === null ? '—' : "Scene {$sequence}",
+                    'scene_reference' => $sceneReference,
+                    'target_fields' => $sequence === null ? $row['target_fields'] : array_map(
+                        fn (string $field): string => str_replace("Scene {$row['scene_id']}", "Scene {$sequence}", $field),
+                        $row['target_fields'],
+                    ),
                 ];
             })
             ->unique(fn (array $row): string => implode('|', [
@@ -135,7 +146,7 @@ final class ChapterRepairRecommendation
             );
         }
 
-        if ($this->isPlanFinding($code, $scope, $dimension)) {
+        if ($this->isPlanFinding($code, $dimension)) {
             return $this->row(
                 layer: 'Chapter Plan',
                 evidence: $evidence,
@@ -144,7 +155,7 @@ final class ChapterRepairRecommendation
                     ? ['chapter_function', 'reader_promise', 'required_facts', 'scene_plans']
                     : ["scene_plans[Scene {$sceneId}]", 'goal', 'conflict', 'turn', 'outcome'],
                 affected: ['Scene', 'Assembly', 'Event', 'Patch', 'Review'],
-                entry: '当前章节审校页 → 编辑当前 Chapter Plan；保存后同步 Scene 并从受影响 Scene 重建',
+                entry: '当前章节审校页 → 修订章节计划并重建场景；保存后同步 Scene 并从受影响 Scene 重建',
                 recoveryKey: 'edit_plan',
                 code: $code,
                 sceneId: $sceneId,
@@ -180,13 +191,13 @@ final class ChapterRepairRecommendation
         }
 
         return $this->row(
-            layer: 'Chapter Plan',
+            layer: '章节正文',
             evidence: $evidence,
-            action: '先调整计划并从最早受影响 Scene 重建',
-            fields: ['chapter_function', 'scene_plans', 'required_facts', 'forbidden_conflicts'],
-            affected: ['Scene', 'Assembly', 'Event', 'Patch', 'Review'],
-            entry: '当前章节审校页 → 编辑当前 Chapter Plan',
-            recoveryKey: 'edit_plan',
+            action: '定位重复或节奏问题后从最早受影响 Scene 级联重建',
+            fields: ['受影响 Scene', '当前及后续 Scene'],
+            affected: ['当前及后续 Scene', 'Assembly', 'Event', 'Patch', 'Review'],
+            entry: '场景页签 → 从最早受影响 Scene 重新生成；若只需改措辞，先定位后人工修改局部正文',
+            recoveryKey: 'regenerate_scene',
             code: $code,
         );
     }
@@ -204,7 +215,7 @@ final class ChapterRepairRecommendation
                 '提高 Reviewer Context 或输出预算后创建新的 Plan Version',
                 ['admission_snapshot.capacity.review'],
                 ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'],
-                '当前章节审校页 → 编辑当前 Chapter Plan；原样保存即可按当前配置重新 Admission',
+                '当前章节审校页 → 修订章节计划并重建场景；原样保存即可按当前配置重新 Admission',
                 'edit_plan',
                 $run->error_code,
             );
@@ -220,7 +231,7 @@ final class ChapterRepairRecommendation
                 '按当前 Prompt 与请求预算创建新的 Plan Version',
                 ["admission_snapshot.routes.{$route}.request_budgets"],
                 ['Chapter Plan', 'Scene', 'Assembly', 'Event', 'Patch', 'Review'],
-                '当前章节审校页 → 编辑当前 Chapter Plan；原样保存即可重新冻结 Route、Prompt 和预算并级联重建 Scene',
+                '当前章节审校页 → 修订章节计划并重建场景；原样保存即可重新冻结 Route、Prompt 和预算并级联重建 Scene',
                 'edit_plan',
                 $run->error_code,
                 $sceneId,
@@ -304,10 +315,9 @@ final class ChapterRepairRecommendation
             || str_contains($code, 'OUTLINE');
     }
 
-    private function isPlanFinding(string $code, string $scope, string $dimension): bool
+    private function isPlanFinding(string $code, string $dimension): bool
     {
-        return $scope === 'chapter'
-            || in_array($dimension, ['plan', 'progress'], true)
+        return $dimension === 'plan'
             || str_contains($code, 'PLAN')
             || str_contains($code, 'CANDIDATE')
             || str_contains($code, 'UNAPPROVED_')

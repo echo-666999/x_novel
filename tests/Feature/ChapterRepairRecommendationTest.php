@@ -9,6 +9,7 @@ use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\Review;
+use App\Models\Scene;
 use App\Services\ChapterRepairRecommendation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -40,6 +41,21 @@ test('persisted findings map to deterministic repair layers and entries', functi
         'scene_id' => 12,
         'message' => '场景结果冲突。',
     ], 'Scene', 'regenerate_scene'],
+    'progress paragraph in scene' => [[
+        'code' => 'INSUFFICIENT_PROGRESS',
+        'dimension' => 'progress',
+        'severity' => 'warning',
+        'scope' => 'paragraph',
+        'scene_id' => 12,
+        'message' => '场景结尾缺少明确诉求。',
+    ], '局部正文', 'manual_scene_edit'],
+    'chapter repetition' => [[
+        'code' => 'EXCESSIVE_REPETITION',
+        'dimension' => 'repetition',
+        'severity' => 'warning',
+        'scope' => 'chapter',
+        'message' => '三个场景重复解释。',
+    ], '章节正文', 'regenerate_scene'],
     'chapter plan' => [[
         'code' => 'CHARACTER_CANDIDATE_NOT_INTRODUCED',
         'dimension' => 'plan',
@@ -77,6 +93,34 @@ test('finding recommendation shows the problem before its verbatim evidence', fu
         '问题：正文偏离冻结的章节计划。',
         '证据：她先洗手，随后才把水煮沸。',
     ]);
+});
+
+test('repair targets show plan scope and human scene sequence instead of raw scene id', function () {
+    $novel = Novel::factory()->create();
+    $chapter = Chapter::factory()->for($novel)->create();
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 3]);
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create(['type' => ArtifactType::ReviewResult]);
+    Review::factory()->for($reviewRun)->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::NeedsAttention,
+        'findings' => [
+            ['code' => 'PLAN_DEVIATION', 'dimension' => 'plan', 'scope' => 'chapter', 'message' => '验收与时间边界冲突。'],
+            ['code' => 'INSUFFICIENT_PROGRESS', 'dimension' => 'progress', 'scope' => 'paragraph', 'scene_id' => $scene->getKey(), 'message' => '结尾缺少诉求。'],
+            ['code' => 'EXCESSIVE_REPETITION', 'dimension' => 'repetition', 'scope' => 'chapter', 'message' => '跨场景重复。'],
+        ],
+    ]);
+
+    $recommendations = app(ChapterRepairRecommendation::class)->forChapter($chapter);
+
+    expect($recommendations)->toHaveCount(3)
+        ->and($recommendations[0]['scene_reference'])->toBe('整章计划')
+        ->and($recommendations[1]['scene_reference'])->toBe('Scene 3')
+        ->and($recommendations[1]['target_fields'][0])->toContain('Scene 3')
+        ->and($recommendations[2]['scene_reference'])->toBe('跨场景（需定位）');
 });
 
 test('a passed review does not produce repair recommendations from retained findings', function () {

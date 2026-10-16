@@ -148,6 +148,9 @@ class SceneGenerator
             data_get($context, 'l0.foreshadowing_contract', []),
             $scene->sequence,
         );
+        if ($regenerationBatchId !== null) {
+            $context['regeneration_batch_id'] = $regenerationBatchId;
+        }
         $inputHash = app(GenerationStageFingerprint::class)->make(
             GenerationStage::SceneGeneration,
             $context,
@@ -156,6 +159,8 @@ class SceneGenerator
                 'provider' => $settings->provider,
                 'model' => $settings->model,
                 'reasoning_effort' => $settings->reasoningEffort,
+                // 人工级联重生成是新的业务请求；同一批次重投递仍保持同一指纹以复用已完成产物。
+                ...($regenerationBatchId === null ? [] : ['regeneration_batch_id' => $regenerationBatchId]),
                 'extractor_route' => $context['generation_preferences']['substage_routes']['structure_and_coverage'],
                 'rewrite_route' => $context['generation_preferences']['substage_routes']['length_repair'],
             ],
@@ -892,6 +897,11 @@ class SceneGenerator
     private function checkpointContextMatches(?array $frozen, array $current): bool
     {
         if ($frozen === null) {
+            return false;
+        }
+
+        // 人工重生成必须产生新正文；仅同一批次的断点可以跨重试复用。
+        if (data_get($frozen, 'regeneration_batch_id') !== data_get($current, 'regeneration_batch_id')) {
             return false;
         }
 

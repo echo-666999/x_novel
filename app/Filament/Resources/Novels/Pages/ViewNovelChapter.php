@@ -314,6 +314,7 @@ class ViewNovelChapter extends ViewRecord
                 ->description('重写完成后会自动继续事件提取、状态补丁和重新审校，无需再次手动发起审校。')
                 ->icon('heroicon-o-map')
                 ->headerActions([
+                    $this->editRepairPlanAction(),
                     Action::make('recoverReviewPrerequisites')
                         ->label('补建状态补丁并重新审校')
                         ->icon('heroicon-o-arrow-path-rounded-square')
@@ -488,33 +489,6 @@ class ViewNovelChapter extends ViewRecord
                 ->description('建议由已持久化的错误码和 Findings 确定性生成，不调用 AI。按层级入口操作可保留历史产物并失效旧来源链。')
                 ->visible(fn (): bool => $this->repairRecommendations() !== [])
                 ->headerActions([
-                    Action::make('editRepairPlan')
-                        ->label('编辑当前 Chapter Plan')
-                        ->icon('heroicon-o-clipboard-document-list')
-                        ->visible(fn (): bool => collect($this->repairRecommendations())->contains(
-                            fn (array $row): bool => $row['recovery_key'] === 'edit_plan',
-                        ))
-                        ->modalHeading(fn (): string => "第 {$this->chapter()->sequence} 章 · Chapter Plan")
-                        ->modalDescription('保存会创建新的 Plan Version；若下游 Scene 已生成，将从最早受影响 Scene 开始级联重建。')
-                        ->modalWidth('7xl')
-                        ->slideOver()
-                        ->fillForm(fn (): array => app(ChapterPlanEditorSchema::class)->formData($this->chapter()))
-                        ->schema(fn (): array => app(ChapterPlanEditorSchema::class)->schema(
-                            $this->getRecord(),
-                            fn (): Chapter => $this->chapter(),
-                        ))
-                        ->action(function (array $data, SaveManualChapterPlanAction $savePlan): void {
-                            $result = $savePlan->handle($this->chapter(), $data, auth()->id());
-                            $this->cachedChapter = null;
-                            $this->cacheSchema('content', null);
-
-                            Notification::make()
-                                ->title($result['status'] === 'reused'
-                                    ? 'Chapter Plan 输入未变化，已复用当前 Ready Plan'
-                                    : 'Chapter Plan 已保存')
-                                ->success()
-                                ->send();
-                        }),
                     Action::make('repairCanonicalState')
                         ->label('查看正式状态')
                         ->icon('heroicon-o-shield-exclamation')
@@ -718,6 +692,41 @@ class ViewNovelChapter extends ViewRecord
         ];
     }
 
+    /** 计划层 Finding 必须在当前下一步直接给出修订入口，避免误导用户重生单个 Scene。 */
+    private function editRepairPlanAction(): Action
+    {
+        return Action::make('editRepairPlan')
+            ->label('修订章节计划并重建场景')
+            ->icon('heroicon-o-clipboard-document-list')
+            ->color('warning')
+            ->visible(fn (): bool => collect($this->repairRecommendations())->contains(
+                fn (array $row): bool => $row['recovery_key'] === 'edit_plan',
+            ))
+            ->disabled(fn (): bool => $this->generationWorkPending())
+            ->modalHeading(fn (): string => "第 {$this->chapter()->sequence} 章 · Chapter Plan")
+            ->modalDescription('请按计划层审校问题修订章节目标和场景边界。保存有效变更会创建新的 Plan Version，并从最早受影响 Scene 级联重建；原产物保留。')
+            ->modalWidth('7xl')
+            ->slideOver()
+            ->fillForm(fn (): array => app(ChapterPlanEditorSchema::class)->formData($this->chapter()))
+            ->schema(fn (): array => app(ChapterPlanEditorSchema::class)->schema(
+                $this->getRecord(),
+                fn (): Chapter => $this->chapter(),
+            ))
+            ->action(function (array $data, SaveManualChapterPlanAction $savePlan): void {
+                $result = $savePlan->handle($this->chapter(), $data, auth()->id());
+                $this->cachedChapter = null;
+                $this->cachedGenerationWorkPending = null;
+                $this->cacheSchema('content', null);
+
+                Notification::make()
+                    ->title($result['status'] === 'reused'
+                        ? 'Chapter Plan 输入未变化，已复用当前 Ready Plan'
+                        : 'Chapter Plan 已保存')
+                    ->success()
+                    ->send();
+            });
+    }
+
     /** @return array{action: string, color: string, budget: string, after_pass: string, explanation: string, flow: string} */
     private function reviewNextStep(): array
     {
@@ -769,6 +778,15 @@ class ViewNovelChapter extends ViewRecord
             return [
                 'action' => "第 {$nextAttempt} / {$maximum} 次局部修复", 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
                 'explanation' => '点击一次即可。系统先校验 Coverage 和安全范围，再由统一推进器完成局部 Rewrite 与整条复审链路。', 'flow' => $flow,
+            ];
+        }
+
+        if ($review->decision === ReviewDecision::NeedsAttention
+            && collect($this->repairRecommendations())->contains(fn (array $row): bool => $row['recovery_key'] === 'edit_plan')) {
+            return [
+                'action' => '修订章节计划并重建场景', 'color' => 'warning', 'budget' => $budget, 'after_pass' => $afterPass,
+                'explanation' => '当前存在计划层冲突。请先使用上方入口修订 Chapter Plan；仅重新生成 Scene 无法修改冻结的验收目标。',
+                'flow' => '新 Plan Version → 受影响 Scene 级联重建 → 组装 → 事件与状态补丁 → 重新审校。',
             ];
         }
 
@@ -1512,7 +1530,7 @@ class ViewNovelChapter extends ViewRecord
                     ->tooltip(match (true) {
                         $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                         ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
-                        $requiresNewPlan => '当前 Plan 的冻结请求预算已耗尽，请先使用“编辑当前 Chapter Plan”原样保存。',
+                        $requiresNewPlan => '当前 Plan 的冻结请求预算已耗尽，请先使用“修订章节计划并重建场景”原样保存。',
                         default => null,
                     })
                     ->requiresConfirmation()
@@ -1531,12 +1549,12 @@ class ViewNovelChapter extends ViewRecord
                     ->tooltip(match (true) {
                         $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                         ! $this->canGenerateScene($scene) => '请等待前序场景生成成功。',
-                        $requiresNewPlan => '当前 Plan 的冻结请求预算已耗尽，请先使用“编辑当前 Chapter Plan”原样保存。',
+                        $requiresNewPlan => '当前 Plan 的冻结请求预算已耗尽，请先使用“修订章节计划并重建场景”原样保存。',
                         default => null,
                     })
                     ->requiresConfirmation()
                     ->modalHeading('重新生成场景 '.$scene->sequence)
-                    ->modalDescription('将重置当前场景及其后续场景并按顺序重新生成。历史产物会保留；完成后需要重新组装章节并重新审校。')
+                    ->modalDescription('点击“确认重新生成”后才会加入队列。将重置当前场景及其后续场景并按顺序重新生成；历史产物保留，完成后需要重新组装章节并重新审校。')
                     ->modalSubmitActionLabel('确认重新生成')
                     ->action(fn (RegenerateSceneSequenceAction $regenerate) => $this->regenerateSceneSequence($scene, $regenerate)),
                 Action::make('viewSceneArtifact'.$scene->getKey())
@@ -1700,7 +1718,7 @@ class ViewNovelChapter extends ViewRecord
 
         Notification::make()
             ->title('场景级联重新生成已加入队列')
-            ->body("将从场景 {$scene->sequence} 开始，按顺序重新生成 {$count} 个场景。")
+            ->body("将从场景 {$scene->sequence} 开始，按顺序重新生成 {$count} 个场景；任务开始执行后，运行记录会出现新的 Scene Run。")
             ->success()
             ->send();
     }
