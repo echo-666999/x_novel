@@ -221,6 +221,19 @@ final class ChapterRepairRecommendation
             );
         }
 
+        if ($stage === GenerationStage::Review && $run->error_code === 'review_evidence_output_invalid') {
+            return $this->row(
+                '审校证据',
+                $run->error_message ?: $run->error_code,
+                '复用已保存响应并修复逐字证据',
+                ['Review 逐项证据'],
+                ['Review'],
+                '章节审校页 → “交给 AI 尝试修复”',
+                'repair_review_evidence',
+                $run->error_code,
+            );
+        }
+
         if (in_array($stage, [GenerationStage::SceneGeneration, GenerationStage::Rewrite], true)
             && $this->isFrozenBudgetExhausted((string) $run->error_code)) {
             $route = $stage === GenerationStage::SceneGeneration ? 'writer' : 'rewrite';

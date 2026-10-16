@@ -2,6 +2,7 @@
 
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Story\InitializeNovelStateAction;
+use App\AI\Exceptions\AiProviderException;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
 use App\Enums\ContentRepairType;
@@ -145,6 +146,35 @@ function pipelineReview(Novel $novel, Chapter $chapter, GenerationArtifact $draf
     ]);
 }
 
+test('expired content repair is durably failed before pipeline stage transaction starts', function () {
+    config()->set('generation.content_self_healing.plan_validation.max_elapsed_seconds', 60);
+    $chapter = pipelineChapter()['chapter'];
+    $repair = app(ContentSelfHealingService::class)->start($chapter, ContentRepairType::PlanValidation, ['planning_run_id' => null]);
+    $this->travel(61)->seconds();
+
+    expect(fn () => app(AdvanceChapterPipelineAction::class)->handle($chapter->getKey()))
+        ->toThrow(AiProviderException::class, '已超过 60 秒上限');
+
+    expect($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_time_limit_exceeded');
+    Queue::assertNotPushed(PlanChapterJob::class);
+});
+
+test('explicit chapter start retires an expired preflight-only plan repair and queues a fresh plan', function () {
+    config()->set('generation.content_self_healing.plan_validation.max_elapsed_seconds', 60);
+    $chapter = pipelineChapter()['chapter'];
+    $repair = app(ContentSelfHealingService::class)->start($chapter, ContentRepairType::PlanValidation, ['planning_run_id' => null]);
+    $this->travel(61)->seconds();
+
+    expect(app(AdvanceChapterPipelineAction::class)->handle($chapter->getKey(), restartExpiredPlanRepair: true))
+        ->toBe(GenerationStage::ChapterPlanning);
+
+    expect($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_time_limit_exceeded');
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey()
+        && $job->contentRepairRunId === null);
+});
+
 test('one pipeline start advances each persisted stage in order and stops at pass', function () {
     $fixture = pipelineChapter();
     $chapter = $fixture['chapter'];
@@ -204,6 +234,52 @@ test('duplicate advancement dispatches only one job and never calls a provider',
         ->and($advance->handle($fixture['chapter']->getKey()))->toBe(GenerationStage::ChapterPlanning)
         ->and($fixture['chapter']->generationRuns()->count())->toBe(0);
     Queue::assertPushed(PlanChapterJob::class, 1);
+});
+
+test('a blocked chapter continues a saved review evidence repair without regenerating the draft', function () {
+    $fixture = pipelineChapter();
+    $novel = $fixture['novel'];
+    $chapter = $fixture['chapter'];
+    $plan = freezeChapterRouteContractsForTest(ChapterPlan::factory()->for($chapter)->create(['status' => PlanStatus::Ready]));
+    $snapshot = $plan->admission_snapshot;
+    $snapshot['bible_version'] = 1;
+    $plan->update(['admission_snapshot' => $snapshot]);
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $sceneArtifact = pipelineArtifact($novel, $chapter, ArtifactType::SceneDraft, GenerationStage::SceneGeneration, scene: $scene);
+    $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
+    $draft = pipelineArtifact($novel, $chapter, ArtifactType::ChapterDraft, GenerationStage::ChapterAssembly, [
+        'ordered_scene_checksums' => [$sceneArtifact->checksum],
+    ]);
+    $candidate = pipelineArtifact($novel, $chapter, ArtifactType::EventCandidate, GenerationStage::EventExtraction, [
+        'source_artifact_id' => $draft->getKey(), 'events' => [],
+    ]);
+    pipelineArtifact($novel, $chapter, ArtifactType::StatePatch, GenerationStage::EventExtraction, [
+        'source_artifact_id' => $candidate->getKey(),
+        'expected_state_version' => $novel->fresh()->canonicalStateVersion->version,
+    ]);
+    $route = data_get($plan->admission_snapshot, 'routes.reviewer');
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review, 'status' => RunStatus::Failed,
+        'error_code' => 'review_evidence_output_invalid',
+        'state_version' => $novel->fresh()->canonicalStateVersion->version,
+        'provider' => $route['provider'], 'model_policy' => $route['model'],
+        'prompt_version' => $route['prompt_version'],
+        'context_snapshot' => [
+            'chapter_plan' => ['id' => $plan->getKey()],
+            'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum],
+            'operation_id' => 'review-request-2',
+        ],
+    ]);
+    GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::Context, 'content' => null,
+        'data' => ['role' => 'review_evidence_payload', 'source_artifact_id' => $draft->getKey(), 'payload' => ['scores' => []]],
+    ]);
+    $chapter->update(['status' => ChapterStatus::Blocked]);
+
+    expect(app(AdvanceChapterPipelineAction::class)->handle($chapter->getKey()))->toBe(GenerationStage::Review);
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->regenerate
+        && $job->operationId === 'review-request-2');
+    Queue::assertNotPushed(GenerateSceneJob::class);
 });
 
 test('a paused novel persists its checkpoint without dispatching another stage', function () {

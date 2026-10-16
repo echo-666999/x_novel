@@ -11,12 +11,14 @@ use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Jobs\ExtractStoryEventsJob;
 use App\Jobs\GenerateSceneJob;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\Review;
 use App\Services\ChapterRepairRecommendation;
 use App\Services\GenerationArtifactLocator;
 use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationOutputCapacityGuard;
+use App\Services\ReviewEvidenceRepairer;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -29,6 +31,7 @@ final class RequestAiChapterRepairAction
         private readonly GenerationOutputCapacityGuard $capacityGuard,
         private readonly GenerationJobDispatcher $dispatcher,
         private readonly GenerationArtifactLocator $artifacts,
+        private readonly ReviewEvidenceRepairer $reviewEvidenceRepairer,
     ) {}
 
     /** @return array{mode: string, scene_id: int|null, description: string}|null */
@@ -38,6 +41,7 @@ final class RequestAiChapterRepairAction
         if (! in_array($chapter->novel->status, [NovelStatus::Generating, NovelStatus::Completing], true)
             || in_array($chapter->status, [ChapterStatus::Canonical, ChapterStatus::Void], true)
             || $chapter->latestPlan?->status !== PlanStatus::Ready
+            || $this->dispatcher->isPending(new ReviewChapterJob($chapter->getKey()))
             || $chapter->generationRuns()->whereIn('status', [RunStatus::Queued, RunStatus::Running])->exists()) {
             return null;
         }
@@ -74,6 +78,19 @@ final class RequestAiChapterRepairAction
                     'mode' => 'event_extraction',
                     'scene_id' => null,
                     'description' => '重新请求 AI 提取当前章节草稿的故事事件；成功后继续状态补丁和审校。',
+                ];
+            }
+            if ($lastStageRun->stage === GenerationStage::Review
+                && $lastStageRun->error_code === 'review_evidence_output_invalid'
+                && $this->reviewEvidenceRepairer->hasPendingCheckpoint(
+                    $chapter,
+                    $lastStageRun,
+                    $this->artifacts->latestForChapter($chapter->getKey(), [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft]),
+                )) {
+                return [
+                    'mode' => 'review_evidence',
+                    'scene_id' => null,
+                    'description' => '复用已保存的审校响应，只请求 AI 修复未逐字命中的证据，再继续审校；不会重新生成正文。',
                 ];
             }
 
@@ -124,6 +141,23 @@ final class RequestAiChapterRepairAction
             }
 
             return ['mode' => 'event_extraction', 'scene_id' => null, 'affected_scenes' => null];
+        }
+
+        if ($preview['mode'] === 'review_evidence') {
+            $run = $chapter->generationRuns()
+                ->where('stage', '!=', GenerationStage::ContentRepair)
+                ->latest('id')->firstOrFail();
+            $operationId = data_get($run->context_snapshot, 'operation_id');
+            $job = new ReviewChapterJob(
+                $chapter->getKey(),
+                is_string($operationId) && $operationId !== '',
+                is_string($operationId) && $operationId !== '' ? $operationId : null,
+            );
+            if (! $this->dispatcher->dispatch($job)) {
+                throw ValidationException::withMessages(['repair' => '审校证据修复任务已在队列中，请等待当前任务完成。']);
+            }
+
+            return ['mode' => 'review_evidence', 'scene_id' => null, 'affected_scenes' => null];
         }
 
         $scene = $chapter->scenes()->findOrFail($preview['scene_id']);

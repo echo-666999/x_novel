@@ -37,12 +37,13 @@ readonly class CurrentOutlineTarget
         public array $canonicalCompletedMilestoneIds,
         public int $chaptersUsedForCurrentBeat,
         public ?array $inboundHandoff,
+        public bool $beatExitPending = false,
     ) {}
 
     /** @return array<string, mixed> 返回可安全写入 Context Snapshot 的目标快照。 */
     public function toArray(): array
     {
-        return [
+        $target = [
             'novel_outline_id' => $this->outlineId,
             'outline_version' => $this->outlineVersion,
             'outline_checksum' => $this->outlineChecksum,
@@ -64,5 +65,12 @@ readonly class CurrentOutlineTarget
             'chapters_used_for_current_beat' => $this->chaptersUsedForCurrentBeat,
             'inbound_handoff' => $this->inboundHandoff,
         ];
+
+        // 普通目标保持原有冻结输入形状；只有真正待退出时才增加新阶段标记。
+        if ($this->beatExitPending) {
+            $target['beat_exit_pending'] = true;
+        }
+
+        return $target;
     }
 }

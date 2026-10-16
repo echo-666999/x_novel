@@ -50,6 +50,7 @@ class PlanAdmissionService
         private readonly GenerationSettingsService $generationSettings,
         private readonly ReviewPromptCapacityEstimator $reviewPromptCapacity,
         private readonly ReviewPromptContextBuilder $reviewPromptContext,
+        private readonly OutlineBeatBudgetExtension $budgetExtension,
     ) {}
 
     /**
@@ -106,6 +107,7 @@ class PlanAdmissionService
             'novel_outline_id' => $outline->getKey(),
             'outline_version' => $outline->version,
             'outline_checksum' => $outline->checksum,
+            'outline_beat_budget_extension' => $this->budgetExtension->authorizationFor($novel, $target, $chapter),
             'outline_length_contract' => $lengthContract,
             'outline_length_contract_checksum' => $this->outlineChecksum->for($lengthContract),
             'primary_outline_arc_id' => $target->outlineArcId,

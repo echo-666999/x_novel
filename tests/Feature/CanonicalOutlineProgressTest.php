@@ -18,6 +18,7 @@ use App\Models\NovelBible;
 use App\Models\NovelOutlineBeat;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
+use App\Services\OutlineContextBuilder;
 use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
 use App\Services\PlanValidator;
@@ -132,6 +133,7 @@ test('canonical outline progress selects the earliest incomplete milestone', fun
         ->milestone->key->toBe('factory-milestone')
         ->canonicalCompletedBeatKeys->toBe([])
         ->canonicalCompletedMilestoneKeys->toBe([]);
+    expect($target->toArray())->not->toHaveKey('beat_exit_pending');
 });
 
 test('an active canonical milestone completion advances to the next milestone', function () {
@@ -144,6 +146,61 @@ test('an active canonical milestone completion advances to the next milestone', 
         ->beat->key->toBe('factory-beat')
         ->milestone->key->toBe('factory-milestone-2')
         ->canonicalCompletedMilestoneKeys->toBe(['factory-milestone']);
+});
+
+test('a beat with every milestone completed remains plannable until its beat exit is committed', function () {
+    $fixture = ngc003ProgressFixture();
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 0);
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 1);
+
+    $target = app(OutlineProgressResolver::class)->resolve($fixture['novel']->fresh());
+
+    expect($target->beatExitPending)->toBeTrue()
+        ->and($target->beat['key'])->toBe('factory-beat')
+        ->and($target->milestone['key'])->toBe('factory-milestone-2')
+        ->and($target->toArray()['beat_exit_pending'])->toBeTrue();
+
+    $context = app(OutlineContextBuilder::class)->build($fixture['novel']->fresh());
+    expect($context['acceptance_criteria'])->toBe($target->beat['acceptance_criteria'])
+        ->and($context['remaining_conditions']['acceptance_criteria'])->toBe($target->beat['acceptance_criteria']);
+});
+
+test('a beat exit plan accepts a beat criterion without repeating completed milestone content', function () {
+    $fixture = ngc003ProgressFixture();
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 0);
+    ngc003CompletionEvent($fixture, EventType::StoryArcBeatMilestoneCompleted, 0, 1);
+    $target = app(OutlineProgressResolver::class)->resolve($fixture['novel']->fresh());
+    $chapter = Chapter::factory()->for($fixture['novel'])->create([
+        'volume_id' => $target->volumeId,
+        'sequence' => 3,
+    ]);
+    $criterion = $target->beat['acceptance_criteria'][0];
+    $plan = ChapterPlan::factory()->for($chapter)->create([
+        'novel_outline_id' => $target->outlineId,
+        'primary_outline_arc_id' => $target->outlineArcId,
+        'primary_outline_beat_id' => $target->outlineBeatId,
+        'primary_outline_milestone_id' => $target->outlineMilestoneId,
+        'arc_contributions' => [[
+            'role' => 'primary',
+            'arc_id' => $target->arcId,
+            'beat_key' => $target->beat['key'],
+            'beat_index' => $target->beat['sequence'],
+            'milestone_key' => $target->milestone['key'],
+            'milestone_sequence' => $target->milestone['sequence'],
+            'target_scene_sequence' => 1,
+            'acceptance_criteria' => $criterion,
+        ]],
+        'must_reveal' => $target->beat['must_include'],
+        'must_not_reveal' => [...$target->beat['must_not_include'], ...$target->milestone['must_not_include']],
+        'scene_plans' => [[
+            'goal' => '完成节拍出口', 'conflict' => '交接受阻', 'turn' => '确认后续触发',
+            'outcome' => $criterion, 'outcome_allowed' => [$criterion], 'outcome_forbidden' => [],
+            'continuity_requirements' => [], 'transition_from_previous' => '接续上一章。',
+        ]],
+    ]);
+
+    expect(collect(app(PlanValidator::class)->validate($plan)->findings)->pluck('code'))
+        ->not->toContain('OUTLINE_REQUIRED_CONTENT_MISSING', 'OUTLINE_BEAT_OUT_OF_ORDER');
 });
 
 test('active completion uniqueness rejects duplicates and invalidation releases the key', function () {

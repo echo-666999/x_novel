@@ -9,6 +9,7 @@ use App\Actions\Generation\SetAutoGenerationAction;
 use App\Actions\Novels\EnterCompletingModeAction;
 use App\Actions\Novels\StartNovelGenerationAction;
 use App\Actions\Story\InitializeNovelStateAction;
+use App\AI\Exceptions\AiProviderException;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\NovelStatus;
 use App\Exceptions\GenerationPreflightException;
@@ -173,8 +174,8 @@ class ViewNovel extends ViewRecord
                     $setAutoGeneration->handle($this->getRecord(), $autoGenerate, $autoCommit);
                     $this->getRecord()->refresh();
                     try {
-                        $stage = $advanceChapterPipeline->handle($chapter->getKey());
-                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        $stage = $advanceChapterPipeline->handle($chapter->getKey(), restartExpiredPlanRepair: true);
+                    } catch (AiProviderException|GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
                         Notification::make()
                             ->title('运行模式已保存，但章节无法启动')
                             ->body($exception->getMessage())
@@ -232,8 +233,8 @@ class ViewNovel extends ViewRecord
                 ->modalDescription(fn (): string => '检测到的恢复点：'.app(ResumeResolver::class)->detect($this->getRecord())->label)
                 ->action(function (ResumeResolver $resolver): void {
                     try {
-                        $point = $resolver->resume($this->getRecord());
-                    } catch (GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
+                        $point = $resolver->resume($this->getRecord(), restartExpiredPlanRepair: true);
+                    } catch (AiProviderException|GenerationPreflightException|BudgetExceededException|ValidationException $exception) {
                         Notification::make()->title('无法继续生成')->body($exception->getMessage())->danger()->send();
 
                         return;

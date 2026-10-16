@@ -10,6 +10,7 @@ use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
+use App\Enums\SceneStatus;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
@@ -30,7 +31,61 @@ final class ReviewEvidenceRepairer
         private readonly AiProvider $provider,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly GenerationArtifactLocator $artifacts,
     ) {}
+
+    /** 已冻结的原审校响应只可用于同一草稿、计划、状态和模型路由的续审。 */
+    public function hasPendingCheckpoint(Chapter $chapter, ?GenerationRun $run, ?GenerationArtifact $draft): bool
+    {
+        if ($run?->stage !== GenerationStage::Review
+            || $run->status !== RunStatus::Failed
+            || $run->error_code !== 'review_evidence_output_invalid'
+            || $draft === null
+            || strlen((string) $run->input_hash) !== 64) {
+            return false;
+        }
+
+        $chapter->loadMissing(['novel.canonicalStateVersion', 'latestPlan', 'scenes.currentArtifact']);
+        $route = data_get($chapter->latestPlan?->admission_snapshot, 'routes.reviewer');
+        if ((int) $run->state_version !== (int) $chapter->novel->canonicalStateVersion?->version
+            || (int) data_get($run->context_snapshot, 'chapter_plan.id') !== (int) $chapter->latestPlan?->getKey()
+            || (int) data_get($run->context_snapshot, 'draft.artifact_id') !== $draft->getKey()
+            || data_get($run->context_snapshot, 'draft.checksum') !== $draft->checksum
+            || ! is_array($route)
+            || ($route['provider'] ?? null) !== $run->provider
+            || ($route['model'] ?? null) !== $run->model_policy
+            || ($route['prompt_version'] ?? null) !== $run->prompt_version
+            || (int) data_get($chapter->latestPlan?->admission_snapshot, 'bible_version') !== (int) $run->bible_version) {
+            return false;
+        }
+
+        $scenes = $chapter->scenes->sortBy('sequence')->values();
+        if ($scenes->isNotEmpty()
+            && ($scenes->contains(fn ($scene): bool => $scene->current_artifact_id === null
+                || ! in_array($scene->status, [SceneStatus::Draft, SceneStatus::Accepted], true))
+                || data_get($draft->data, 'ordered_scene_checksums') !== $scenes->pluck('currentArtifact.checksum')->all())) {
+            return false;
+        }
+
+        $candidate = $this->artifacts->latestForChapter(
+            $chapter->getKey(), ArtifactType::EventCandidate, $draft->getKey(), $run->state_version,
+        );
+        $patch = $candidate === null ? null : $this->artifacts->latestForChapter(
+            $chapter->getKey(), ArtifactType::StatePatch, $candidate->getKey(), $run->state_version,
+        );
+        if ($patch === null
+            || (int) data_get($patch->data, 'expected_state_version', -1) !== (int) $run->state_version) {
+            return false;
+        }
+
+        return $run->artifacts()
+            ->where('type', ArtifactType::Context)
+            ->where('source_artifact_id', $draft->getKey())
+            ->where('input_hash', $run->input_hash)
+            ->get()
+            ->contains(fn (GenerationArtifact $artifact): bool => data_get($artifact->data, 'role') === 'review_evidence_payload'
+                && is_array(data_get($artifact->data, 'payload')));
+    }
 
     /** @param array<string, mixed> $payload @param array<string, mixed> $context @return array<int, array<string, mixed>> */
     public function invalidAudits(array $payload, GenerationArtifact $draft, array $context, ?Chapter $chapter = null): array

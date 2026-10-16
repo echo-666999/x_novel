@@ -403,6 +403,71 @@ test('chapter repair panel can request AI regeneration for a failed scene', func
         && $job->cascade);
 });
 
+test('chapter repair panel enables saved review evidence repair', function () {
+    Queue::fake();
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Blocked]);
+    $plan = freezeChapterRouteContractsForTest(ChapterPlan::factory()->for($chapter)->create(['status' => PlanStatus::Ready]));
+    $snapshot = $plan->admission_snapshot;
+    $snapshot['bible_version'] = 1;
+    $plan->update(['admission_snapshot' => $snapshot]);
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Draft]);
+    $sceneRun = GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration, 'status' => RunStatus::Succeeded,
+    ]);
+    $sceneArtifact = GenerationArtifact::factory()->for($sceneRun)->create(['type' => ArtifactType::SceneDraft]);
+    $scene->update(['current_artifact_id' => $sceneArtifact->getKey()]);
+    $assemblyRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::ChapterAssembly, 'status' => RunStatus::Succeeded,
+    ]);
+    $draft = GenerationArtifact::factory()->for($assemblyRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'data' => ['ordered_scene_checksums' => [$sceneArtifact->checksum]],
+    ]);
+    $extractRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::EventExtraction, 'status' => RunStatus::Succeeded,
+        'state_version' => $novel->fresh()->canonicalStateVersion->version,
+    ]);
+    $candidate = GenerationArtifact::factory()->for($extractRun)->create([
+        'type' => ArtifactType::EventCandidate, 'data' => ['source_artifact_id' => $draft->getKey()],
+    ]);
+    GenerationArtifact::factory()->for($extractRun)->create([
+        'type' => ArtifactType::StatePatch,
+        'data' => [
+            'source_artifact_id' => $candidate->getKey(),
+            'expected_state_version' => $novel->fresh()->canonicalStateVersion->version,
+        ],
+    ]);
+    $route = data_get($plan->admission_snapshot, 'routes.reviewer');
+    $reviewRun = GenerationRun::factory()->for($novel)->for($chapter)->create([
+        'stage' => GenerationStage::Review, 'status' => RunStatus::Failed,
+        'error_code' => 'review_evidence_output_invalid',
+        'error_message' => '有 1 项证据未逐字命中正文。',
+        'state_version' => $novel->fresh()->canonicalStateVersion->version,
+        'provider' => $route['provider'], 'model_policy' => $route['model'],
+        'prompt_version' => $route['prompt_version'],
+        'context_snapshot' => [
+            'chapter_plan' => ['id' => $plan->getKey()],
+            'draft' => ['artifact_id' => $draft->getKey(), 'checksum' => $draft->checksum],
+        ],
+    ]);
+    GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::Context, 'content' => null,
+        'data' => ['role' => 'review_evidence_payload', 'source_artifact_id' => $draft->getKey(), 'payload' => ['scores' => []]],
+    ]);
+
+    $action = TestAction::make('requestAiRepair')->schemaComponent('repair-recommendations', 'content');
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(), 'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('复用已保存响应并修复逐字证据')
+        ->assertActionEnabled($action)
+        ->callAction($action);
+
+    Queue::assertPushed(ReviewChapterJob::class, fn (ReviewChapterJob $job): bool => $job->chapterId === $chapter->getKey() && ! $job->regenerate);
+});
+
 test('passed review hides retained findings from the repair recommendation panel', function () {
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Review]);

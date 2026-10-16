@@ -204,10 +204,20 @@ test('manual review override creates an audited pass review without changing his
             'severity' => 'warning',
             'message' => '节奏偏慢。',
         ]],
-        ['character_candidate_audits' => [[
-            'candidate_key' => 'character-lin-mo',
-            'status' => 'introduced',
-        ]], 'unapproved_characters' => []],
+        [
+            'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '需要人工处理'],
+            'milestone_completion' => ['status' => 'not_met', 'criteria' => []],
+            'beat_exit' => ['status' => 'not_met', 'criteria' => []],
+            'handoff_readiness' => ['status' => 'not_applicable', 'checks' => []],
+            'outline_completion_identity' => ['novel_outline_id' => 1],
+            'outline_completion_contract_checksum' => 'frozen-checksum',
+            'foreshadowing_audits' => [['foreshadowing_id' => 1, 'status' => 'needs_attention']],
+            'character_candidate_audits' => [[
+                'candidate_key' => 'character-lin-mo',
+                'status' => 'introduced',
+            ]],
+            'unapproved_characters' => [],
+        ],
     );
 
     $review = app(OverrideChapterReviewAction::class)->execute(
@@ -224,6 +234,13 @@ test('manual review override creates an audited pass review without changing his
         ->and(data_get($review->artifact->data, 'overridden_findings.0.message'))->toBe('节奏偏慢。')
         ->and(data_get($review->artifact->data, 'character_candidate_audits.0.candidate_key'))->toBe('character-lin-mo')
         ->and(data_get($review->artifact->data, 'unapproved_characters'))->toBe([])
+        ->and(data_get($review->artifact->data, 'chapter_plan_completion.status'))->toBe('fulfilled')
+        ->and(data_get($review->artifact->data, 'milestone_completion.status'))->toBe('not_met')
+        ->and(data_get($review->artifact->data, 'beat_exit.status'))->toBe('not_met')
+        ->and(data_get($review->artifact->data, 'handoff_readiness.status'))->toBe('not_applicable')
+        ->and(data_get($review->artifact->data, 'outline_completion_identity.novel_outline_id'))->toBe(1)
+        ->and(data_get($review->artifact->data, 'outline_completion_contract_checksum'))->toBe('frozen-checksum')
+        ->and(data_get($review->artifact->data, 'foreshadowing_audits.0.foreshadowing_id'))->toBe(1)
         ->and($review->generationRun->model_policy)->toBe('manual')
         ->and($review->generationRun->prompt_version)->toBe('manual-override-v1')
         ->and($fixture['review']->fresh()->decision)->toBe(ReviewDecision::NeedsAttention)

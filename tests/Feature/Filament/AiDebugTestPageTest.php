@@ -34,7 +34,7 @@ test('ai debug page shows the required fields and resolved defaults', function (
         ->assertOk()
         ->assertSet('data.task_type', 'planner')
         ->assertSet('data.model', 'planner-test-model')
-        ->assertSet('data.prompt_version', 'chapter-planner-v13')
+        ->assertSet('data.prompt_version', 'chapter-planner-v14')
         ->assertSee('Task Type')
         ->assertSee('Model')
         ->assertSee('Prompt Version')
@@ -79,7 +79,7 @@ test('ai debug test calls the tracked provider and displays metrics', function (
 
     expect($fake->requests())->toHaveCount(1)
         ->and($fake->requests()[0]->model)->toBe('planner-test-model')
-        ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v13')
+        ->and($fake->requests()[0]->promptVersion)->toBe('chapter-planner-v14')
         ->and($fake->requests()[0]->metadata)->toBe([
             'purpose' => 'ai_debug_test',
             'task_type' => 'planner',

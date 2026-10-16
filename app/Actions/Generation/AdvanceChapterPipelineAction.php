@@ -2,6 +2,7 @@
 
 namespace App\Actions\Generation;
 
+use App\Actions\Chapters\ReconcileOutlineCompletionAction;
 use App\Actions\Chapters\SyncScenesFromChapterPlanAction;
 use App\AI\BudgetService;
 use App\AI\Exceptions\AiProviderException;
@@ -36,6 +37,7 @@ use App\Services\GenerationStageGate;
 use App\Services\LegacyAdmissionRecoveryContract;
 use App\Services\PlanAdmissionService;
 use App\Services\PlanCoverageJudgmentRepairer;
+use App\Services\ReviewEvidenceRepairer;
 use App\Services\RewriteScopeResolver;
 use App\Services\StatePatchBuilder;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -52,35 +54,39 @@ class AdvanceChapterPipelineAction
         private readonly GenerationRunLease $runLease,
         private readonly SyncScenesFromChapterPlanAction $syncScenes,
         private readonly StatePatchBuilder $statePatchBuilder,
+        private readonly ReconcileOutlineCompletionAction $outlineCompletionReconcile,
         private readonly RewriteScopeResolver $rewriteScopeResolver,
         private readonly BudgetService $budgetService,
         private readonly AutoStopService $autoStop,
         private readonly PlanAdmissionService $planAdmission,
         private readonly PlanCoverageJudgmentRepairer $coverageJudgment,
+        private readonly ReviewEvidenceRepairer $reviewEvidenceRepairer,
         private readonly LegacyAdmissionRecoveryContract $legacyRecovery,
         private readonly ContentSelfHealingService $contentSelfHealing,
         private readonly GenerationArtifactLocator $artifacts,
     ) {}
 
     /** 按持久化来源链选择唯一下一阶段，Coverage 复核必须先于任何内容 Rewrite 决策。 */
-    public function handle(int $chapterId, ?string $regenerationBatchId = null): ?GenerationStage
+    public function handle(int $chapterId, ?string $regenerationBatchId = null, bool $restartExpiredPlanRepair = false): ?GenerationStage
     {
+        $this->checkRepairBeforeTransaction($chapterId, $restartExpiredPlanRepair);
         $nextStage = null;
         $nextJob = null;
 
         $this->stageGate->dispatchForChapter($chapterId, function () use ($chapterId, $regenerationBatchId, &$nextStage, &$nextJob): void {
             $chapter = $this->chapter($chapterId);
 
-            if (! $this->canAdvance($chapter)) {
-                return;
-            }
-            $activeRepair = $this->contentSelfHealing->activeForChapter($chapter);
-            if ($activeRepair !== null) {
-                $this->contentSelfHealing->assertWithinLimits($activeRepair);
-            }
-
             $latestDraft = $this->latestChapterDraft($chapter);
             $draft = $this->currentDraft($chapter, $latestDraft);
+            $latestStageRun = $chapter->generationRuns()
+                ->where('stage', '!=', GenerationStage::ContentRepair)
+                ->latest('id')->first();
+            $pendingEvidenceRun = $this->reviewEvidenceRepairer->hasPendingCheckpoint($chapter, $latestStageRun, $draft)
+                ? $latestStageRun
+                : null;
+            if (! $this->canAdvance($chapter, $pendingEvidenceRun !== null)) {
+                return;
+            }
             if ($draft !== null) {
                 $pendingCoverageSceneId = $this->coverageJudgment->pendingSceneId($chapter, $draft);
                 if ($pendingCoverageSceneId !== null) {
@@ -139,7 +145,14 @@ class AdvanceChapterPipelineAction
             }
 
             $nextStage = GenerationStage::Review;
-            $nextJob = new ReviewChapterJob($chapter->getKey());
+            $operationId = data_get($pendingEvidenceRun?->context_snapshot, 'operation_id');
+            $nextJob = $pendingEvidenceRun === null
+                ? new ReviewChapterJob($chapter->getKey())
+                : new ReviewChapterJob(
+                    $chapter->getKey(),
+                    is_string($operationId) && $operationId !== '',
+                    is_string($operationId) && $operationId !== '' ? $operationId : null,
+                );
         });
 
         if ($nextJob !== null && ! $this->hasFreshRun($chapterId)) {
@@ -147,6 +160,34 @@ class AdvanceChapterPipelineAction
         }
 
         return $nextStage;
+    }
+
+    /** 修复失败必须独立提交；在阶段事务内抛错会把失败状态一起回滚。 */
+    private function checkRepairBeforeTransaction(int $chapterId, bool $restartExpiredPlanRepair): void
+    {
+        $chapter = Chapter::query()->with('latestPlan')->findOrFail($chapterId);
+        $repair = $this->contentSelfHealing->activeForChapter($chapter);
+        if ($repair === null) {
+            return;
+        }
+
+        try {
+            $this->contentSelfHealing->assertWithinLimits($repair);
+        } catch (AiProviderException $exception) {
+            $canRestart = $restartExpiredPlanRepair
+                && $exception->errorCode === 'content_repair_time_limit_exceeded'
+                && $this->contentSelfHealing->type($repair) === ContentRepairType::PlanValidation
+                && $chapter->latestPlan === null
+                && ! $chapter->generationRuns()
+                    ->where('stage', GenerationStage::ChapterPlanning)
+                    ->where('created_at', '>=', $repair->created_at)
+                    ->exists();
+            if (! $canRestart) {
+                throw $exception;
+            }
+
+            // 用户明确重新启动且修复尚未发起 Planner 请求时，保留过期 Run 并从新规划开始。
+        }
     }
 
     /** @return array{GenerationStage, ShouldQueue&ShouldBeUnique} */
@@ -361,6 +402,11 @@ class AdvanceChapterPipelineAction
     /** @return array{?GenerationStage, (ShouldQueue&ShouldBeUnique)|null} */
     private function nextAfterPass(Chapter $chapter, GenerationArtifact $draft, Review $review): array
     {
+        // Independent model judgments must be reconciled before an automatic commit is queued.
+        if ($this->outlineCompletionReconcile->conflicts($chapter) !== []) {
+            return [null, null];
+        }
+
         // Historical auto_commit values predate the restored setting and remain
         // inert until the operator explicitly saves the new control.
         if (data_get($chapter->novel->settings, 'auto_commit_configured') !== true
@@ -472,10 +518,14 @@ class AdvanceChapterPipelineAction
             : null;
     }
 
-    private function canAdvance(Chapter $chapter): bool
+    private function canAdvance(Chapter $chapter, bool $hasPendingEvidenceRepair): bool
     {
         if (! in_array($chapter->novel->status, [NovelStatus::Generating, NovelStatus::Completing], true)
-            || in_array($chapter->status, [ChapterStatus::Blocked, ChapterStatus::Canonical, ChapterStatus::Void], true)) {
+            || in_array($chapter->status, [ChapterStatus::Canonical, ChapterStatus::Void], true)) {
+            return false;
+        }
+
+        if ($chapter->status === ChapterStatus::Blocked && ! $hasPendingEvidenceRepair) {
             return false;
         }
 

@@ -38,6 +38,7 @@ class PlanValidator
         private readonly DraftLengthPolicy $lengthPolicy,
         private readonly NovelOutlineLengthContract $outlineLengthContract,
         private readonly GenerationRequestBudget $requestBudget,
+        private readonly OutlineBeatBudgetExtension $budgetExtension,
     ) {}
 
     /** @param array<string, mixed>|null $admissionSnapshot */
@@ -140,12 +141,16 @@ class PlanValidator
         }
 
         $criteria = (string) ($primaryContribution['acceptance_criteria'] ?? '');
-        if (! in_array($criteria, $target->milestone['acceptance_criteria'] ?? [], true)) {
-            $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', 'Primary Contribution 必须选择当前 Milestone 的明确验收条件。');
+        $availableCriteria = $target->beatExitPending
+            ? ($target->beat['acceptance_criteria'] ?? [])
+            : ($target->milestone['acceptance_criteria'] ?? []);
+        if (! in_array($criteria, $availableCriteria, true)) {
+            $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', $target->beatExitPending
+                ? 'Beat Exit 待完成时，Primary Contribution 必须选择当前 Beat 的退出验收条件。'
+                : 'Primary Contribution 必须选择当前 Milestone 的明确验收条件。');
         }
 
-        $maximum = data_get($target->beat, 'chapter_budget.max');
-        if (is_int($maximum) && $target->chaptersUsedForCurrentBeat >= $maximum) {
+        if ($this->budgetExtension->exhausted($novel, $target, $plan->chapter)) {
             $findings[] = $this->blocked('OUTLINE_BEAT_BUDGET_EXHAUSTED', '当前 Outline Beat 已达到章节预算上限，不能继续自动规划。');
         }
 
@@ -157,9 +162,12 @@ class PlanValidator
             }
         }
 
-        foreach (array_unique($target->milestone['must_include'] ?? []) as $required) {
+        $requiredContent = $target->beatExitPending
+            ? ($target->beat['must_include'] ?? [])
+            : ($target->milestone['must_include'] ?? []);
+        foreach (array_unique($requiredContent) as $required) {
             if (! in_array($required, $plan->must_reveal ?? [], true)) {
-                $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', "当前 Milestone 的必须内容「{$required}」未合并到 must_reveal。");
+                $findings[] = $this->blocked('OUTLINE_REQUIRED_CONTENT_MISSING', "当前目标的必须内容「{$required}」未合并到 must_reveal。");
             }
         }
         $forbiddenConstraints = [...($plan->must_not_reveal ?? []), ...($plan->forbidden_conflicts ?? [])];
@@ -484,6 +492,25 @@ class PlanValidator
         $expectedBibleVersion ??= $this->contextBuilder->bibleVersionForChapter($plan->chapter);
         $expectedStateVersion = $novel->canonicalStateVersion?->version;
         $record = "chapter_plan:{$plan->getKey()}";
+        $currentBudgetExtension = $target === null
+            ? null
+            : $this->budgetExtension->authorizationFor($novel, $target, $plan->chapter);
+        $frozenBudgetExtension = $snapshot['outline_beat_budget_extension'] ?? null;
+        $budgetExtensionMatches = ($frozenBudgetExtension === null && $currentBudgetExtension === null)
+            || (is_array($frozenBudgetExtension) && is_array($currentBudgetExtension)
+                && hash_equals(
+                    $this->outlineChecksum->for($frozenBudgetExtension),
+                    $this->outlineChecksum->for($currentBudgetExtension),
+                ));
+        if (! $budgetExtensionMatches) {
+            $findings[] = $this->blocked(
+                'ADMISSION_BUDGET_EXTENSION_MISMATCH',
+                'Plan Admission 冻结的人工预算延期与当前正式来源不一致。',
+                'admission_snapshot.outline_beat_budget_extension',
+                $record,
+                '重新核对授权与当前 Outline、Story State 和章节。',
+            );
+        }
 
         $required = [
             'schema_version', 'plan_checksum', 'input_hash', 'bible_version', 'state_version',

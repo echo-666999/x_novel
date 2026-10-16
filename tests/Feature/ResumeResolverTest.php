@@ -3,6 +3,7 @@
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
@@ -33,6 +34,7 @@ use App\Models\Scene;
 use App\Models\StoryArc;
 use App\Models\StoryStateVersion;
 use App\Models\Volume;
+use App\Services\ContentSelfHealingService;
 use App\Services\OutlineProgressResolver;
 use App\Services\ResumeResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -204,6 +206,24 @@ test('resume restores the previous status and dispatches exactly one job for eac
     expect($passed->fresh()->status)->toBe(NovelStatus::Generating)
         ->and($passReview->decision)->toBe(ReviewDecision::Pass)
         ->and($passedChapter->fresh()->status)->toBe(ChapterStatus::Review);
+});
+
+test('explicit resume retires an expired preflight-only plan repair before dispatching a new plan', function () {
+    Queue::fake();
+    config()->set('generation.content_self_healing.plan_validation.max_elapsed_seconds', 60);
+    $novel = pausedResumeNovel();
+    $chapter = resumeChapter($novel, ChapterStatus::Planned);
+    $repair = app(ContentSelfHealingService::class)->start($chapter, ContentRepairType::PlanValidation, ['planning_run_id' => null]);
+    $this->travel(61)->seconds();
+
+    $point = app(ResumeResolver::class)->resume($novel, restartExpiredPlanRepair: true);
+
+    expect($point->key)->toBe('plan')
+        ->and($novel->fresh()->status)->toBe(NovelStatus::Generating)
+        ->and($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_time_limit_exceeded');
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey()
+        && $job->contentRepairRunId === null);
 });
 
 test('blocked review stays paused and repeated resume is rejected', function () {

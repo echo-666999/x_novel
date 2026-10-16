@@ -1,5 +1,7 @@
 <?php
 
+use App\Actions\Chapters\ReconcileOutlineCompletionAction;
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
@@ -7,19 +9,27 @@ use App\Enums\ChapterStatus;
 use App\Enums\EventType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\StoryEventStatus;
+use App\Jobs\ReviewChapterJob;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\Review;
 use App\Models\Scene;
 use App\Models\StoryEvent;
+use App\Services\ChapterReviewer;
+use App\Services\CompactReviewPayload;
 use App\Services\OutlineCompletionService;
 use App\Services\OutlineHandoffContract;
+use App\Services\StatePatchBuilder;
+use App\Services\StoryEventEvidenceQuoteResolver;
 use Database\Factories\Support\NormalizedOutlineDefinition;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Arr;
 use Illuminate\Validation\ValidationException;
 
 uses(RefreshDatabase::class);
@@ -167,6 +177,76 @@ test('chapter completion remains independent when the current milestone is incom
         ->and($service->eventCandidates($extraction, $fixture['chapter'], $fixture['draft']))->toBe([]);
 });
 
+test('a pass review that overclaims handoff readiness gets a conservative immutable review', function () {
+    $fixture = outlineCompletionFixture(withNextBeat: true);
+    $service = app(OutlineCompletionService::class);
+    $extraction = $service->validateExtraction(
+        outlineCompletionPayload($fixture, 'not_met', 'fulfilled', 'not_ready'),
+        $fixture['chapter'],
+        $fixture['draft'],
+    );
+    $eventRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::EventExtraction,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $candidateData = [
+        'status' => 'candidate',
+        'source_artifact_id' => $fixture['draft']->getKey(),
+        'outline_completion' => $extraction,
+        'events' => [],
+    ];
+    $candidate = GenerationArtifact::factory()->for($eventRun)->create([
+        'type' => ArtifactType::EventCandidate,
+        'data' => $candidateData,
+        'content' => '[]',
+        'checksum' => hash('sha256', json_encode($candidateData)),
+    ]);
+    $patch = app(StatePatchBuilder::class)->build($fixture['chapter']->getKey());
+    $reviewPayload = $service->validateReview([
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '第一条件已经满足', 'scene_id' => null],
+        ...outlineCompletionPayload($fixture, 'not_met', 'fulfilled', 'ready'),
+    ], $fixture['chapter'], $fixture['draft']);
+    $reviewData = [...$reviewPayload, 'source_artifact_id' => $fixture['draft']->getKey(), 'decision' => 'PASS', 'findings' => []];
+    $reviewRun = GenerationRun::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'stage' => GenerationStage::Review,
+        'status' => RunStatus::Succeeded,
+        'state_version' => 0,
+    ]);
+    $reviewArtifact = GenerationArtifact::factory()->for($reviewRun)->create([
+        'type' => ArtifactType::ReviewResult,
+        'data' => $reviewData,
+        'content' => json_encode($reviewData),
+        'checksum' => hash('sha256', json_encode($reviewData)),
+    ]);
+    $sourceReview = Review::factory()->for($reviewRun, 'generationRun')->create([
+        'artifact_id' => $reviewArtifact->getKey(),
+        'decision' => ReviewDecision::Pass,
+    ]);
+
+    $action = app(ReconcileOutlineCompletionAction::class);
+    expect($action->preview($fixture['chapter']->fresh()))->toBe(['handoff_readiness']);
+    $reviewer = Mockery::mock(ChapterReviewer::class);
+    $reviewer->shouldReceive('review')->once()->andReturn($sourceReview);
+    $advance = Mockery::mock(AdvanceChapterPipelineAction::class);
+    $advance->shouldReceive('handle')->once()->with($fixture['chapter']->getKey());
+    (new ReviewChapterJob($fixture['chapter']->getKey()))->handle($reviewer, $advance);
+    $alignedReview = Review::query()->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $fixture['chapter']->getKey()))
+        ->latest('id')->firstOrFail();
+    [$alignedCandidate, $alignedPatch] = $action->handle($fixture['chapter']);
+
+    expect($alignedCandidate->getKey())->toBe($candidate->getKey())
+        ->and($alignedPatch->getKey())->toBe($patch->getKey())
+        ->and($alignedReview->getKey())->not->toBe($sourceReview->getKey())
+        ->and(data_get($sourceReview->artifact->fresh()->data, 'handoff_readiness.status'))->toBe('ready')
+        ->and(data_get($alignedReview->artifact->data, 'handoff_readiness.status'))->toBe('not_ready')
+        ->and($alignedReview->decision)->toBe(ReviewDecision::Pass)
+        ->and($action->preview($fixture['chapter']->fresh()))->toBe([])
+        ->and($action->handle($fixture['chapter'])[2]->getKey())->toBe($alignedReview->getKey());
+
+    $service->validateCommit($fixture['chapter'], $alignedReview->artifact->data, $alignedCandidate->data, []);
+});
+
 test('compact completion evidence restores paragraph whitespace from the authoritative draft', function () {
     $fixture = outlineCompletionFixture();
     $content = "第一条件已经满足。\n\n第二条件也完成。";
@@ -228,6 +308,51 @@ test('compact completion evidence restores escaped paragraph breaks and omitted 
 
     expect(data_get($validated, 'handoff_readiness.checks.0.evidence'))->toBe($content)
         ->and(data_get($validated, 'handoff_readiness.checks.0.scene_id'))->toBe($fixture['scene']->getKey());
+});
+
+test('compact completion evidence restores a short omitted dialogue attribution from one scene', function () {
+    $fixture = outlineCompletionFixture();
+    $content = "“这一笔，今晨进乳时辰、当班人、柴薪数，都记上了？”卫子夫问。\n\n小黄门在殿角答：“记上了。殿下未吐，腿未蜷，只动了几下。旧乳具、旧桶、旧瓢仍封着，封泥未裂。”";
+    $fixture['draft'] = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 2,
+        'content' => $content,
+        'checksum' => hash('sha256', $content),
+    ]);
+    $fixture['scene']->update(['current_artifact_id' => $fixture['draft']->getKey()]);
+    $service = app(OutlineCompletionService::class);
+    $contract = $service->contract($fixture['chapter']);
+    $missing = fn (array $items): array => collect($items)->map(fn (): array => [
+        'status' => 'not_met', 'evidence' => null,
+    ])->all();
+    $milestone = $missing($contract['milestone_criteria']);
+    $milestone[0] = [
+        'status' => 'fulfilled',
+        'evidence' => '“这一笔，今晨进乳时辰、当班人、柴薪数，都记上了？” 小黄门在殿角答：“记上了。殿下未吐，腿未蜷，只动了几下。旧乳具、旧桶、旧瓢仍封着，封泥未裂。”',
+    ];
+
+    $expanded = $service->expandCompactExtraction([
+        'milestone_completion' => $milestone,
+        'beat_exit' => $missing($contract['beat_exit_criteria']),
+        'handoff_readiness' => [],
+    ], $fixture['chapter'], $fixture['draft']->fresh());
+    $validated = $service->validateExtraction($expanded, $fixture['chapter'], $fixture['draft']->fresh());
+
+    expect(data_get($validated, 'milestone_completion.criteria.0.evidence'))
+        ->toBe(mb_substr($content, 1, mb_strlen($content) - 2))
+        ->and(data_get($validated, 'milestone_completion.criteria.0.scene_id'))->toBe($fixture['scene']->getKey());
+});
+
+test('omitted dialogue attribution is not recovered from distant or ambiguous passages', function () {
+    $resolver = app(StoryEventEvidenceQuoteResolver::class);
+    $first = '“这一笔，今晨进乳时辰、当班人、柴薪数，都记上了？”';
+    $second = '小黄门在殿角答：“记上了。殿下未吐，腿未蜷，只动了几下。”';
+    $quote = $first.' '.$second;
+    $distant = $first.str_repeat('中间还有其他重要情节。', 8).$second;
+    $ambiguous = $first.'卫子夫问。'.$second.'\n\n'.$first.'卫子夫再问。'.$second;
+
+    expect($resolver->resolve($distant, $quote))->not->toBe($distant)
+        ->and($resolver->resolve($ambiguous, $quote))->not->toContain('卫子夫问。');
 });
 
 test('compact completion evidence spanning two scenes remains invalid', function () {
@@ -301,6 +426,130 @@ test('a final milestone cannot complete its beat while the frozen handoff is mis
 
     expect(collect($service->eventCandidates($completion, $fixture['chapter'], $fixture['draft']))->pluck('eventType')->all())
         ->toBe([EventType::StoryArcBeatMilestoneCompleted]);
+});
+
+test('the outgoing beat defers next beat transitions without losing its completion event', function () {
+    $fixture = outlineCompletionFixture(withNextBeat: true);
+    $service = app(OutlineCompletionService::class);
+    $payload = outlineCompletionPayload($fixture, 'fulfilled', 'fulfilled', 'ready');
+    foreach ($payload['handoff_readiness']['checks'] as &$check) {
+        if (str_starts_with($check['key'], 'required_transition:')) {
+            $check['status'] = 'not_applicable';
+            $check['evidence'] = null;
+            $check['scene_id'] = null;
+        }
+    }
+    unset($check);
+
+    $completion = $service->validateExtraction($payload, $fixture['chapter'], $fixture['draft']);
+
+    expect(collect($service->eventCandidates($completion, $fixture['chapter'], $fixture['draft']))
+        ->pluck('eventType')->all())->toBe([
+            EventType::StoryArcBeatMilestoneCompleted,
+            EventType::StoryArcBeatCompleted,
+        ]);
+
+    $compact = [
+        'milestone_completion' => collect($payload['milestone_completion']['criteria'])->map(fn (array $audit): array => Arr::only($audit, ['status', 'evidence']))->all(),
+        'beat_exit' => collect($payload['beat_exit']['criteria'])->map(fn (array $audit): array => Arr::only($audit, ['status', 'evidence']))->all(),
+        'handoff_readiness' => collect($payload['handoff_readiness']['checks'])->map(fn (array $audit): array => Arr::only($audit, ['status', 'evidence']))->all(),
+    ];
+    expect(data_get($service->expandCompactExtraction($compact, $fixture['chapter'], $fixture['draft']), 'handoff_readiness.status'))
+        ->toBe('ready');
+});
+
+test('compact reviewer uses the same outgoing handoff rule as extraction and validation', function () {
+    $fixture = outlineCompletionFixture(withNextBeat: true);
+    $service = app(OutlineCompletionService::class);
+    $contract = $service->contract($fixture['chapter']);
+    $quote = '第一条件已经满足';
+    $audit = fn (string $status): array => [
+        'status' => $status,
+        'evidence' => $status === 'fulfilled' ? $quote : null,
+    ];
+    $compact = [
+        'scores' => array_fill_keys(['continuity', 'plan', 'character', 'progress', 'repetition', 'pacing', 'style'], 90),
+        'chapter_plan_completion' => $audit('fulfilled'),
+        'milestone_completion' => array_map(fn (): array => $audit('not_met'), $contract['milestone_criteria']),
+        'beat_exit' => array_map(fn (): array => $audit('not_met'), $contract['beat_exit_criteria']),
+        'handoff_readiness' => array_map(
+            fn (array $check): array => $audit(str_starts_with($check['key'], 'required_transition:') ? 'not_applicable' : 'fulfilled'),
+            $contract['handoff_checks'],
+        ),
+        'foreshadowing_audits' => [],
+        'arc_beat_audits' => collect($fixture['plan']->arc_contributions ?? [])->map(fn (): array => $audit('not_met'))->all(),
+        'arc_completion_audits' => collect($fixture['plan']->arc_contributions ?? [])->pluck('arc_id')->unique()->map(fn (): array => $audit('not_met'))->all(),
+        'character_candidate_audits' => collect($fixture['plan']->character_candidates ?? [])->map(fn (): array => ['status' => 'missing', 'evidence' => null])->all(),
+        'world_entity_candidate_audits' => collect($fixture['plan']->world_entity_candidates ?? [])->map(fn (): array => ['status' => 'missing', 'evidence' => null])->all(),
+        'unapproved_world_entities' => [],
+        'unapproved_characters' => [],
+        'findings' => [],
+    ];
+    $expanded = CompactReviewPayload::expand($compact, $fixture['chapter'], $fixture['draft'], $contract, []);
+
+    expect(data_get($expanded, 'handoff_readiness.status'))->toBe('ready')
+        ->and(data_get($service->validateReview($expanded, $fixture['chapter'], $fixture['draft']), 'handoff_readiness.status'))
+        ->toBe('ready');
+});
+
+test('a contradicted transition or missing outgoing trigger keeps the handoff closed', function (string $key, string $status) {
+    $fixture = outlineCompletionFixture(withNextBeat: true);
+    $payload = outlineCompletionPayload($fixture, 'fulfilled', 'fulfilled', 'not_ready');
+    foreach ($payload['handoff_readiness']['checks'] as &$check) {
+        $check['status'] = $check['key'] === $key ? $status : 'fulfilled';
+        $check['evidence'] = in_array($check['status'], ['fulfilled', 'contradicted'], true)
+            ? '第一条件已经满足'
+            : null;
+        $check['scene_id'] = $check['evidence'] === null ? null : $fixture['scene']->getKey();
+    }
+    unset($check);
+
+    $completion = app(OutlineCompletionService::class)->validateExtraction($payload, $fixture['chapter'], $fixture['draft']);
+    expect(data_get($completion, 'handoff_readiness.status'))->toBe('not_ready')
+        ->and(collect(app(OutlineCompletionService::class)->eventCandidates($completion, $fixture['chapter'], $fixture['draft']))
+            ->pluck('eventType')->all())->toBe([EventType::StoryArcBeatMilestoneCompleted]);
+})->with([
+    ['required_transition:0', 'contradicted'],
+    ['next_trigger', 'not_met'],
+]);
+
+test('a previously completed final milestone produces only a beat exit event', function () {
+    $fixture = outlineCompletionFixture(withNextBeat: true);
+    $service = app(OutlineCompletionService::class);
+    $plan = $fixture['plan'];
+    $arc = $fixture['novel']->storyArcs()->where('source_outline_arc_id', $plan->primary_outline_arc_id)->firstOrFail();
+    StoryEvent::factory()->for($fixture['novel'])->for($fixture['chapter'])->create([
+        'event_type' => EventType::StoryArcBeatMilestoneCompleted,
+        'subject_type' => 'story_arc',
+        'subject_id' => (string) $arc->getKey(),
+        'status' => StoryEventStatus::Active,
+        'novel_outline_id' => $plan->novel_outline_id,
+        'novel_outline_arc_id' => $plan->primary_outline_arc_id,
+        'novel_outline_beat_id' => $plan->primary_outline_beat_id,
+        'novel_outline_milestone_id' => $plan->primary_outline_milestone_id,
+    ]);
+    $completion = $service->validateExtraction(
+        outlineCompletionPayload($fixture, 'not_met', 'fulfilled', 'ready'),
+        $fixture['chapter'],
+        $fixture['draft'],
+    );
+    $events = $service->eventCandidates($completion, $fixture['chapter'], $fixture['draft']);
+    $review = $service->validateReview([
+        'chapter_plan_completion' => ['status' => 'fulfilled', 'evidence' => '第一条件已经满足', 'scene_id' => null],
+        ...outlineCompletionPayload($fixture, 'not_met', 'fulfilled', 'ready'),
+    ], $fixture['chapter'], $fixture['draft']);
+    $review['source_artifact_id'] = $fixture['draft']->getKey();
+
+    expect(collect($events)->pluck('eventType')->all())->toBe([EventType::StoryArcBeatCompleted])
+        ->and($service->validateCommit($fixture['chapter'], $review, ['outline_completion' => $completion], $events))
+        ->toBeArray();
+
+    $contradicted = $service->validateExtraction(
+        outlineCompletionPayload($fixture, 'contradicted', 'fulfilled', 'ready'),
+        $fixture['chapter'],
+        $fixture['draft'],
+    );
+    expect($service->eventCandidates($contradicted, $fixture['chapter'], $fixture['draft']))->toBe([]);
 });
 
 test('all milestone beat and handoff conditions create authoritative completion candidates', function () {

@@ -55,6 +55,7 @@ class ChapterPlanner
         private readonly GenerationRequestBudget $requestBudget,
         private readonly GenerationOutputCapacityGuard $outputCapacity,
         private readonly ContentSelfHealingService $contentSelfHealing,
+        private readonly OutlineBeatBudgetExtension $budgetExtension,
     ) {}
 
     public function generate(int $chapterId, bool $regenerate = false, ?int $contentRepairRunId = null): ?ChapterPlan
@@ -71,6 +72,10 @@ class ChapterPlanner
             ->where('chapter_id', $chapter->getKey())
             ->where('stage', GenerationStage::ContentRepair)
             ->firstOrFail();
+        if ($repairRun !== null) {
+            // 前置上下文也可能拒绝规划；先收口过期合同，避免异常绕过时限并反复派发。
+            $this->contentSelfHealing->assertWithinLimits($repairRun);
+        }
         $criticalOverdue = $this->foreshadowingPlanningGate->criticalOverdue($chapter);
         if ($criticalOverdue->isNotEmpty() && $repairRun === null) {
             $repairRun = $this->contentSelfHealing->start(
@@ -87,7 +92,6 @@ class ChapterPlanner
 
         $context = $this->context($chapter, $regenerate);
         if ($repairRun !== null) {
-            $this->contentSelfHealing->assertWithinLimits($repairRun);
             $context['content_self_healing'] = $this->contentSelfHealing->planningContext($repairRun);
             if ($this->contentSelfHealing->type($repairRun) === ContentRepairType::CriticalForeshadowing) {
                 $restrictedIds = collect((array) data_get($repairRun->context_snapshot, 'source.foreshadowing_ids'))
@@ -172,6 +176,8 @@ class ChapterPlanner
         $failedCandidate = null;
         try {
             $budget = $this->resolveRequestBudget($run, $baseKey);
+            // 冻结 v13 Run 的请求文字必须保持原样；Beat Exit 待完成只使用新版本。
+            $legacyPrompt = str_starts_with($promptVersion, 'chapter-planner-v13');
             $request = new AiRequest(
                 model: $settings->model,
                 provider: $settings->provider,
@@ -181,8 +187,12 @@ class ChapterPlanner
                     .($repairRun === null ? '' : '这是一次受限内容修复。必须针对 content_self_healing.diagnostics 修正上次问题；不得原样返回失败候选，也不得改变未被诊断涉及的 Outline、State、Locked Fact 或章节目标。')
                     .'引用规则：pov_character_id 只能使用 characters[].id；required_facts 只能使用 active_facts[].id，active_facts 为空时必须返回 []；'
                     .'foreshadowing_actions 只能引用 foreshadowings_requiring_action[].id，并且 action 必须来自对应 allowed_model_actions；没有任务时必须返回 []。'
-                    .'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。'
-                    .'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择；除 target_scene_sequence 外必须逐字段复制，没有 Candidate 时必须返回 []。每个已选 Candidate 的 target_scene_sequence 必须由本章实际 scene_plans 决定，并指向正文首次引入该对象的 Scene。只把当前 Milestone 的 must_include 合并到 must_reveal；不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
+                    .($legacyPrompt
+                        ? 'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 Milestone acceptance_criteria 中的一项；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。'
+                        : 'novel_outline_id 必须逐字复制；arc_contributions 必须恰有一个 role=primary，并分别令 arc_id=primary_arc_id、beat_key=primary_beat_key、beat_index=primary_beat_sequence、milestone_key=primary_milestone_key、milestone_sequence=primary_milestone_sequence，再指定目标 Scene 与当前 acceptance_criteria 中的一项；beat_exit_pending=true 时该项来自 Beat Exit，已完成的 Milestone 不得被当作本章新进度；支线只能从 active_arcs 中 type=subplot 的真实 Beat 逐字复制并标记 role=secondary，milestone_key 与 milestone_sequence 必须为 null，不能替代 Main Primary Beat。')
+                    .($legacyPrompt
+                        ? 'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择；除 target_scene_sequence 外必须逐字段复制，没有 Candidate 时必须返回 []。每个已选 Candidate 的 target_scene_sequence 必须由本章实际 scene_plans 决定，并指向正文首次引入该对象的 Scene。只把当前 Milestone 的 must_include 合并到 must_reveal；不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。'
+                        : 'character_candidates 和 world_entity_candidates 只能从当前 Beat 对应数组中选择；除 target_scene_sequence 外必须逐字段复制，没有 Candidate 时必须返回 []。每个已选 Candidate 的 target_scene_sequence 必须由本章实际 scene_plans 决定，并指向正文首次引入该对象的 Scene。must_reveal 应合并上下文 must_include；普通 Milestone 不得把 Beat 全量 must_include 逐章重复。当前有效的 must_not_include 必须合并到 must_not_reveal 或 forbidden_conflicts。')
                     .'world_entity_candidates 只用于剧情确实需要且 existing_world_entities 中不存在的重大地点、物品、阵营、组织、规则或概念；必须使用稳定 candidate_key、说明去重依据，并在本章计划中指定目标 Scene，不需要新实体时返回 []。'
                     .'chapter_title 必须是有辨识度的简短章名，只写章名正文，不写“第几章”，应对应本章实际转折而非复述全书主题。'
                     .'主线 arc_contributions 的 target_scene_sequence 必须选在实际完成 acceptance_criteria 的场景；对应 scene_plans 的 outcome_allowed 必须明确列出这项验收结果，不能把验收放到另一场景才完成。'
@@ -692,7 +702,8 @@ class ChapterPlanner
         $outlineContext = $this->outlineContextBuilder->build($novel);
         $lengthContract = $this->outlineLengthContract->forNovel($novel);
         $maximum = data_get($outlineContext, 'chapter_budget.max');
-        if (is_int($maximum) && $outlineContext['chapters_used_for_current_beat'] >= $maximum) {
+        $target = app(OutlineProgressResolver::class)->resolve($novel);
+        if ($target !== null && $this->budgetExtension->exhausted($novel, $target, $chapter)) {
             throw new GenerationPreflightException(
                 'outline_beat_budget_exhausted',
                 "当前 Outline Beat「{$outlineContext['beat']['title']}」已使用 {$outlineContext['chapters_used_for_current_beat']} 章，达到预算上限 {$maximum}；自动 Planner 已在调用模型前停止。",
@@ -712,6 +723,9 @@ class ChapterPlanner
             'bible' => $bible->only(['logline', 'themes', 'tone', 'pov', 'tense', 'taboos', 'hard_constraints', 'ending_contract']),
             'state_version' => $novel->canonicalStateVersion->version,
             ...$outlineContext,
+            'outline_beat_budget_extension' => $target === null
+                ? null
+                : $this->budgetExtension->authorizationFor($novel, $target, $chapter),
             'current_outline_target' => $outlineContext,
             'story_state' => $novel->canonicalStateVersion->state,
             'volume' => $chapter->volume->only(['id', 'sequence', 'title', 'goal', 'climax', 'target_words']),

@@ -1,16 +1,22 @@
 <?php
 
+use App\Actions\Generation\GenerateNextChapterAction;
 use App\Actions\Story\InitializeNovelStateAction;
+use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\NovelStatus;
+use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Jobs\PlanChapterJob;
+use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Models\StoryArc;
 use App\Models\User;
 use App\Models\Volume;
+use App\Services\ContentSelfHealingService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -93,4 +99,54 @@ test('automatic generation stays off when the current chapter cannot start', fun
     expect(data_get($novel->fresh()->settings, 'auto_generate'))->toBeFalse()
         ->and(data_get($novel->settings, 'auto_commit'))->toBeNull()
         ->and($novel->chapters()->count())->toBe(0);
+});
+
+test('start button resumes a chapter whose old planning repair expired before any planner run', function () {
+    Queue::fake();
+    config()->set('generation.content_self_healing.plan_validation.max_elapsed_seconds', 60);
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    NovelBible::factory()->for($novel)->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
+    $chapter = app(GenerateNextChapterAction::class)->handle($novel);
+    $repair = app(ContentSelfHealingService::class)->start($chapter, ContentRepairType::PlanValidation, ['planning_run_id' => null]);
+    $this->travel(61)->seconds();
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'review_only'])
+        ->assertNotified('当前章生成到审校已启动');
+
+    expect($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_time_limit_exceeded');
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey()
+        && $job->contentRepairRunId === null);
+});
+
+test('continue button resumes an expired preflight-only plan repair without a server error', function () {
+    Queue::fake();
+    config()->set('generation.content_self_healing.plan_validation.max_elapsed_seconds', 60);
+    $novel = Novel::factory()->create([
+        'status' => NovelStatus::Paused,
+        'settings' => ['pause' => ['previous_status' => 'generating']],
+    ]);
+    NovelBible::factory()->for($novel)->create();
+    app(InitializeNovelStateAction::class)->handle($novel);
+    $volume = Volume::factory()->for($novel)->create(['status' => VolumeStatus::Active]);
+    StoryArc::factory()->forVolume($volume)->create(['status' => 'active']);
+    $chapter = Chapter::factory()->for($novel)->for($volume)->create([
+        'sequence' => 1,
+        'status' => ChapterStatus::Planned,
+    ]);
+    $repair = app(ContentSelfHealingService::class)->start($chapter, ContentRepairType::PlanValidation, ['planning_run_id' => null]);
+    $this->travel(61)->seconds();
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->callAction('resume')
+        ->assertNotified('生成流程已继续');
+
+    expect($repair->fresh()->error_code)->toBe('content_repair_time_limit_exceeded')
+        ->and($novel->fresh()->status)->toBe(NovelStatus::Generating);
+    Queue::assertPushed(PlanChapterJob::class, fn (PlanChapterJob $job): bool => $job->chapterId === $chapter->getKey()
+        && $job->contentRepairRunId === null);
 });

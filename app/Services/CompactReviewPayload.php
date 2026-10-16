@@ -239,7 +239,7 @@ final class CompactReviewPayload
         $payload['handoff_readiness'] = [
             'status' => ($outlineContract['handoff_next_beat_id'] ?? null) === null
                 ? 'not_applicable'
-                : (collect($checks)->every(fn (array $audit): bool => $audit['status'] === 'fulfilled') ? 'ready' : 'not_ready'),
+                : (OutlineCompletionService::handoffReady($checks) ? 'ready' : 'not_ready'),
             'checks' => $checks,
         ];
 

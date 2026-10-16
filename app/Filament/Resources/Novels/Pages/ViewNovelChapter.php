@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
+use App\Actions\Chapters\ReconcileOutlineCompletionAction;
 use App\Actions\Chapters\RecoverLegacyChapterPipelineAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
 use App\Actions\Chapters\RequestAiChapterRepairAction;
@@ -46,6 +47,8 @@ use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationOutputCapacityGuard;
 use App\Services\GenerationSettingsService;
 use App\Services\LatestCanonicalChapterRollback;
+use App\Services\NovelGenerationReadiness;
+use App\Services\OutlineBeatBudgetExtension;
 use App\Services\PlanValidator;
 use App\Services\StatePatchBuilder;
 use App\Services\StateValidator;
@@ -110,6 +113,39 @@ class ViewNovelChapter extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('extendOutlineBeatBudget')
+                ->label('授权本章预算延期')
+                ->icon('heroicon-o-shield-check')
+                ->color('warning')
+                ->visible(fn (): bool => $this->planningBudgetBlocker() !== null)
+                ->disabled(fn (): bool => $this->generationWorkPending())
+                ->requiresConfirmation()
+                ->modalHeading(fn (): string => "授权第 {$this->chapter()->sequence} 章继续当前 Beat")
+                ->modalDescription('仅允许本章在已用满的 Beat 预算下继续规划；不会认定 Beat 完成，也不会绕过审校或正式提交。授权原因和来源版本会记录在小说配置中。')
+                ->schema([
+                    Textarea::make('reason')->label('授权原因')->required()->minLength(10),
+                ])
+                ->action(function (array $data, OutlineBeatBudgetExtension $extension): void {
+                    try {
+                        $extension->grant($this->chapter(), (int) auth()->id(), (string) $data['reason']);
+                    } catch (ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法授权预算延期')
+                            ->body((string) collect($exception->errors())->flatten()->first())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    $this->getRecord()->refresh();
+                    $this->cachedChapter = null;
+                    Notification::make()
+                        ->title('本章预算延期已授权')
+                        ->body('现在可以启动第 '.$this->chapter()->sequence.' 章规划；如未满足 Handoff，下一章仍会被阻断。')
+                        ->success()
+                        ->send();
+                }),
             Action::make('generatePlan')
                 ->label(fn (): string => $this->hasFailedPlanCandidate() ? '重新生成章节计划' : 'AI 生成章节计划')
                 ->icon('heroicon-o-sparkles')
@@ -117,6 +153,16 @@ class ViewNovelChapter extends ViewRecord
                 ->disabled(fn (): bool => $this->generationWorkPending())
                 ->tooltip(fn (): ?string => $this->generationWorkPending() ? '当前生成任务尚未完成，请等待。' : null)
                 ->action(function (): void {
+                    if ($blocker = $this->planningBudgetBlocker()) {
+                        Notification::make()
+                            ->title('章节规划需要人工处理')
+                            ->body($blocker['message'].' '.$blocker['repair_action'])
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
                     $regenerate = $this->hasFailedPlanCandidate();
                     if (! $this->dispatchGenerationJob(new PlanChapterJob($this->chapterId, $regenerate))) {
                         return;
@@ -169,10 +215,15 @@ class ViewNovelChapter extends ViewRecord
                     && $this->chapter()->canonical_artifact_id === null)
                 ->disabled(fn (): bool => $this->generationWorkPending()
                     || $this->canonicalCommitContext() === null
+                    || $this->canonicalReviewContractMessage() !== null
+                    || app(ReconcileOutlineCompletionAction::class)->conflicts($this->chapter()) !== []
                     || $this->canonicalPlanningConflictMessage() !== null)
                 ->tooltip(fn (): ?string => match (true) {
                     $this->generationWorkPending() => '当前生成任务尚未完成，请等待。',
                     $this->canonicalCommitContext() === null => '请先完成事件提取、状态补丁与状态校验。',
+                    $this->canonicalReviewContractMessage() !== null => $this->canonicalReviewContractMessage(),
+                    app(ReconcileOutlineCompletionAction::class)->preview($this->chapter()) !== [] => 'Review 与事件提取的完成结论冲突；请先修复完成结论冲突。',
+                    app(ReconcileOutlineCompletionAction::class)->conflicts($this->chapter()) !== [] => 'Review 与事件提取存在无法保守对齐的完成结论冲突；请检查两份审计和正文证据。',
                     $this->canonicalPlanningConflictMessage() !== null => $this->canonicalPlanningConflictMessage(),
                     default => null,
                 })
@@ -210,6 +261,35 @@ class ViewNovelChapter extends ViewRecord
                     Notification::make()
                         ->title('章节已提交为正式版本')
                         ->body('正式故事状态已更新至 v'.$stateVersion->version.'。')
+                        ->success()
+                        ->send();
+                }),
+            Action::make('reconcileOutlineCompletion')
+                ->label('修复完成结论冲突')
+                ->icon('heroicon-o-arrow-path')
+                ->color('warning')
+                ->visible(fn (): bool => app(ReconcileOutlineCompletionAction::class)->preview($this->chapter()) !== [])
+                ->disabled(fn (): bool => $this->generationWorkPending())
+                ->requiresConfirmation()
+                ->modalHeading('按 PASS Review 修复完成结论')
+                ->modalDescription('Review 与事件提取对完成条件的判断不同。系统采用两者共同支持的保守结论，保留原始产物并创建所需的新审校或候选产物；正式故事状态不会在此操作中改变。修复后仍需单独提交正式章节。')
+                ->action(function (ReconcileOutlineCompletionAction $reconcile): void {
+                    try {
+                        [$candidate, $patch, $review] = $reconcile->handle($this->chapter());
+                    } catch (ValidationException $exception) {
+                        Notification::make()
+                            ->title('无法修复完成结论冲突')
+                            ->body((string) collect($exception->errors())->flatten()->first())
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    $this->cachedChapter = null;
+                    Notification::make()
+                        ->title('完成结论冲突已修复')
+                        ->body("当前事件候选 v{$candidate->version}、状态补丁 v{$patch->version}、审校 v{$review->artifact->version} 已对齐；请重新检查后提交正式章节。")
                         ->success()
                         ->send();
                 }),
@@ -498,7 +578,7 @@ class ViewNovelChapter extends ViewRecord
                             || app(RequestAiChapterRepairAction::class)->preview($this->chapter()) === null)
                         ->tooltip(fn (): string => $this->generationWorkPending()
                             ? '当前生成任务尚未完成，请等待。'
-                            : '仅支持来源明确的场景重建或事件证据重提取；正式事实、计划目标和需要人工裁定的问题必须按建议处理。')
+                            : '支持来源明确的场景重建、事件证据重提取或已保存审校响应的逐字证据修复。')
                         ->requiresConfirmation()
                         ->modalHeading('请求 AI 处理当前问题')
                         ->modalDescription(fn (): string => app(RequestAiChapterRepairAction::class)
@@ -523,9 +603,11 @@ class ViewNovelChapter extends ViewRecord
 
                             Notification::make()
                                 ->title('AI 修复已加入生成队列')
-                                ->body($result['mode'] === 'scene_regeneration'
-                                    ? "将从 Scene #{$result['scene_id']} 起重建 {$result['affected_scenes']} 个场景，并继续复审。"
-                                    : '将重新提取当前草稿的故事事件，并继续状态补丁与审校。')
+                                ->body(match ($result['mode']) {
+                                    'scene_regeneration' => "将从 Scene #{$result['scene_id']} 起重建 {$result['affected_scenes']} 个场景，并继续复审。",
+                                    'review_evidence' => '将复用已保存的审校响应，修复逐字证据后继续审校。',
+                                    default => '将重新提取当前草稿的故事事件，并继续状态补丁与审校。',
+                                })
                                 ->success()
                                 ->send();
                         }),
@@ -1163,6 +1245,27 @@ class ViewNovelChapter extends ViewRecord
         );
     }
 
+    private function canonicalReviewContractMessage(): ?string
+    {
+        $review = $this->currentDraftReview();
+        if ($review?->decision !== ReviewDecision::Pass) {
+            return null;
+        }
+
+        $data = $review->artifact?->data;
+        foreach (['chapter_plan_completion', 'milestone_completion', 'beat_exit', 'handoff_readiness', 'outline_completion_identity'] as $field) {
+            if (! is_array(data_get($data, $field))) {
+                return '当前 PASS Review 缺少完整的完成审计；请先强制重新审校当前正文。';
+            }
+        }
+        if (! is_string(data_get($data, 'outline_completion_contract_checksum'))
+            || blank(data_get($data, 'outline_completion_contract_checksum'))) {
+            return '当前 PASS Review 缺少完整的完成审计；请先强制重新审校当前正文。';
+        }
+
+        return null;
+    }
+
     private function canonicalPlanningConflictMessage(): ?string
     {
         $review = $this->currentDraftReview();
@@ -1430,6 +1533,15 @@ class ViewNovelChapter extends ViewRecord
             ];
         }
 
+        if ($chapter->latestPlan === null && $blocker = $this->planningBudgetBlocker()) {
+            return [
+                'stage' => 'NEEDS_ATTENTION · 章节规划',
+                'reason' => $blocker['message'],
+                'next_action' => $blocker['repair_action'],
+                'color' => 'danger',
+            ];
+        }
+
         if ($this->generationWorkPending()) {
             $current = collect($this->pipelineTimeline())->firstWhere('state', 'current');
 
@@ -1478,7 +1590,9 @@ class ViewNovelChapter extends ViewRecord
     {
         return [
             Section::make('尚未建立章节计划')
-                ->description('返回章节列表建立计划后，这里会显示生成执行基线。')
+                ->description(fn (): string => $this->planningBudgetBlocker() === null
+                    ? '返回章节列表建立计划后，这里会显示生成执行基线。'
+                    : $this->planningBudgetBlocker()['message'].' '.$this->planningBudgetBlocker()['repair_action'])
                 ->icon('heroicon-o-clipboard-document-list')
                 ->visible(fn (): bool => $this->chapter()->latestPlan === null),
             Section::make('章节目标')
@@ -2436,7 +2550,9 @@ class ViewNovelChapter extends ViewRecord
     {
         return [
             Section::make('尚无生成运行记录')
-                ->description('运行章节规划、场景生成或章节组装后，状态和错误会显示在这里。')
+                ->description(fn (): string => $this->planningBudgetBlocker() === null
+                    ? '运行章节规划、场景生成或章节组装后，状态和错误会显示在这里。'
+                    : '章节预算门禁在创建 Planning Run 前停止了任务，因此这里没有运行记录。'.$this->planningBudgetBlocker()['message'].' '.$this->planningBudgetBlocker()['repair_action'])
                 ->icon('heroicon-o-command-line')
                 ->visible(fn (): bool => $this->chapter()->generationRuns()->doesntExist()),
             Section::make('生成运行记录')
@@ -2863,6 +2979,18 @@ class ViewNovelChapter extends ViewRecord
 
         return $latest?->status === RunStatus::Failed
             && $latest->error_code === 'plan_validation_failed';
+    }
+
+    /** @return array{code: string, message: string, repair_action: string}|null */
+    private function planningBudgetBlocker(): ?array
+    {
+        if ($this->chapter()->latestPlan !== null
+            || $this->chapter()->sequence !== (int) ($this->getRecord()->current_chapter_sequence ?? 0) + 1) {
+            return null;
+        }
+
+        return collect(app(NovelGenerationReadiness::class)->nextChapter($this->getRecord())->blockers)
+            ->firstWhere('code', 'outline_beat_budget_exhausted');
     }
 
     private function usesLegacyEventExtractionAdmission(): bool

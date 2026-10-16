@@ -156,7 +156,7 @@ class OutlineCompletionService
             'handoff_readiness' => [
                 'status' => $contract['handoff_next_beat_id'] === null
                     ? 'not_applicable'
-                    : (collect($handoff)->every(fn (array $audit): bool => $audit['status'] === 'fulfilled') ? 'ready' : 'not_ready'),
+                    : (self::handoffReady($handoff) ? 'ready' : 'not_ready'),
                 'checks' => $handoff,
             ],
         ];
@@ -342,7 +342,12 @@ class OutlineCompletionService
 
         $events = [];
         $milestoneCompleted = data_get($completion, 'milestone_completion.status') === 'fulfilled';
-        if ($milestoneCompleted) {
+        $milestoneAlreadyCompleted = in_array(
+            $contract['identity']['novel_outline_milestone_id'],
+            $contract['completed_milestone_ids'],
+            true,
+        );
+        if ($milestoneCompleted && ! $milestoneAlreadyCompleted) {
             $events[] = $this->candidate(
                 EventType::StoryArcBeatMilestoneCompleted,
                 $contract,
@@ -364,7 +369,8 @@ class OutlineCompletionService
         $handoffReady = $contract['handoff_next_beat_id'] === null
             ? data_get($completion, 'handoff_readiness.status') === 'not_applicable'
             : data_get($completion, 'handoff_readiness.status') === 'ready';
-        $beatCompleted = $milestoneCompleted
+        $beatCompleted = ($milestoneCompleted || $milestoneAlreadyCompleted)
+            && data_get($completion, 'milestone_completion.status') !== 'contradicted'
             && $contract['is_final_milestone']
             && $allMilestonesCompleted
             && data_get($completion, 'beat_exit.status') === 'fulfilled'
@@ -451,6 +457,11 @@ class OutlineCompletionService
             throw ValidationException::withMessages(['events' => '同一 Chapter 不能生成重复 Milestone/Beat Completion Candidate。']);
         }
         $reviewMilestoneCompleted = data_get($reviewCompletion, 'milestone_completion.status') === 'fulfilled';
+        $milestoneAlreadyCompleted = in_array(
+            $contract['identity']['novel_outline_milestone_id'],
+            $contract['completed_milestone_ids'],
+            true,
+        );
         $completedAfterReview = collect($contract['completed_milestone_ids'])
             ->when($reviewMilestoneCompleted, fn (Collection $ids): Collection => $ids->push($contract['identity']['novel_outline_milestone_id']))
             ->map(fn ($id): int => (int) $id)
@@ -460,14 +471,15 @@ class OutlineCompletionService
             ->all();
         $allMilestonesCompleted = $completedAfterReview === collect($contract['milestone_ids'])
             ->map(fn ($id): int => (int) $id)->sort()->values()->all();
-        $reviewBeatCompleted = $reviewMilestoneCompleted
+        $reviewBeatCompleted = ($reviewMilestoneCompleted || $milestoneAlreadyCompleted)
+            && data_get($reviewCompletion, 'milestone_completion.status') !== 'contradicted'
             && $allMilestonesCompleted
             && data_get($reviewCompletion, 'beat_exit.status') === 'fulfilled'
             && ($contract['handoff_next_beat_id'] === null
                 ? data_get($reviewCompletion, 'handoff_readiness.status') === 'not_applicable'
                 : data_get($reviewCompletion, 'handoff_readiness.status') === 'ready')
             && $contract['is_final_milestone'];
-        if ($reviewMilestoneCompleted !== $milestoneEvents->isNotEmpty()
+        if (($reviewMilestoneCompleted && ! $milestoneAlreadyCompleted) !== $milestoneEvents->isNotEmpty()
             || $reviewBeatCompleted !== $beatEvents->isNotEmpty()) {
             throw ValidationException::withMessages([
                 'outline_completion' => 'Review 与 Event Candidate 对 Milestone/Beat 完成结论不一致。',
@@ -696,7 +708,7 @@ class OutlineCompletionService
             }
             $this->validateAuditEvidence($audit, $chapter, $draft, 'handoff_readiness');
         }
-        $expectedStatus = collect($handoff['checks'])->every(fn (array $audit): bool => $audit['status'] === 'fulfilled')
+        $expectedStatus = self::handoffReady($handoff['checks'])
             ? 'ready'
             : 'not_ready';
         if ($handoff['status'] !== $expectedStatus) {
@@ -704,6 +716,22 @@ class OutlineCompletionService
         }
 
         return $handoff;
+    }
+
+    /** 下一 Beat 的必需过渡在入口验收；本章只验收退出、触发与未越过禁止边界。 */
+    public static function handoffReady(array $checks): bool
+    {
+        return collect($checks)->every(static function (array $audit): bool {
+            $key = (string) ($audit['key'] ?? '');
+            $status = $audit['status'] ?? null;
+
+            return match (true) {
+                in_array($key, ['exit_result', 'next_trigger'], true) => $status === 'fulfilled',
+                str_starts_with($key, 'required_transition:') => $status !== 'contradicted',
+                str_starts_with($key, 'forbidden_jump:') => in_array($status, ['fulfilled', 'not_applicable'], true),
+                default => false,
+            };
+        });
     }
 
     /** @param array<string, mixed> $audit */

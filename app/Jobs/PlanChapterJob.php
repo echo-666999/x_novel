@@ -104,6 +104,25 @@ class PlanChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 
                 return;
             }
+            if ($this->contentRepairRunId !== null && $currentRepair !== null
+                && ! $chapter->generationRuns()
+                    ->where('stage', GenerationStage::ChapterPlanning)
+                    ->where('created_at', '>=', $currentRepair->created_at)
+                    ->exists()) {
+                // 修复规划尚未创建 Run 就被确定性校验拒绝，重复派发同一输入只会形成无限循环。
+                $contentSelfHealing->fail($currentRepair, 'content_repair_preflight_failed', $exception->getMessage(), [
+                    'validation_errors' => $exception->errors(),
+                ]);
+                $this->releaseGenerationDispatch();
+                $this->fail(new AiProviderException(
+                    'content_repair_preflight_failed',
+                    '内容修复在规划请求前被确定性校验拒绝，请检查修复诊断。',
+                    false,
+                    previous: $exception,
+                ));
+
+                return;
+            }
             if ($currentRepair !== null && $contentSelfHealing->type($currentRepair) !== ContentRepairType::PlanValidation) {
                 $maxNested = (int) config('generation.content_self_healing.plan_validation.max_attempts', 1);
                 $nestedFailures = $chapter->generationRuns()

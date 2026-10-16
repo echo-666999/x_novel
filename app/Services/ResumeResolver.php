@@ -203,7 +203,7 @@ class ResumeResolver
             ->exists();
     }
 
-    public function resume(Novel $novel): ResumePoint
+    public function resume(Novel $novel, bool $restartExpiredPlanRepair = false): ResumePoint
     {
         $point = DB::transaction(function () use ($novel): ResumePoint {
             $lockedNovel = Novel::query()->lockForUpdate()->findOrFail($novel->getKey());
@@ -229,7 +229,7 @@ class ResumeResolver
             return $point;
         });
 
-        $this->advance($novel->fresh(), $point);
+        $this->advance($novel->fresh(), $point, $restartExpiredPlanRepair);
 
         return $point;
     }
@@ -293,7 +293,7 @@ class ResumeResolver
         return (int) data_get($patch?->data, 'expected_state_version', -1) === $stateVersion ? $patch : null;
     }
 
-    private function advance(Novel $novel, ResumePoint $point): void
+    private function advance(Novel $novel, ResumePoint $point, bool $restartExpiredPlanRepair): void
     {
         if ($point->key === 'post_commit') {
             $chapter = Chapter::query()->with('novel')->findOrFail((int) $point->chapterId);
@@ -315,6 +315,6 @@ class ResumeResolver
             $chapterId = $this->generateNextChapter->handle($novel)->getKey();
         }
 
-        $this->advanceChapterPipeline->handle((int) $chapterId);
+        $this->advanceChapterPipeline->handle((int) $chapterId, restartExpiredPlanRepair: $restartExpiredPlanRepair);
     }
 }

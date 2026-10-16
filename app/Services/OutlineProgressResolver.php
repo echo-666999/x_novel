@@ -119,9 +119,15 @@ class OutlineProgressResolver
         $milestone = $beat->milestones->first(
             fn ($candidate): bool => ! in_array($candidate->getKey(), $completedMilestoneIds, true),
         );
+        $beatExitPending = $milestone === null;
+        if ($beatExitPending) {
+            // 最后一个 Milestone 可以先于 Beat Exit 完成；继续锁定同一 Beat，
+            // 让后续章节补足有正文证据的退出条件，而不是制造无法规划的死结。
+            $milestone = $beat->milestones->last();
+        }
         if ($milestone === null) {
             throw ValidationException::withMessages([
-                'outline' => "Main Beat {$beat->beat_key} 的 Milestone 已全部完成，但缺少 Beat Completion Event；请先修复正式进度。",
+                'outline' => "Main Beat {$beat->beat_key} 没有可用于完成 Beat Exit 的 Milestone。",
             ]);
         }
 
@@ -192,6 +198,7 @@ class OutlineProgressResolver
             canonicalCompletedMilestoneIds: $completedMilestoneIds,
             chaptersUsedForCurrentBeat: $this->chaptersUsed($novel, $outline->getKey(), $beat->getKey()),
             inboundHandoff: $this->inboundHandoff($novel, $beats, $beat, $completedBeatEvents),
+            beatExitPending: $beatExitPending,
         );
     }
 

@@ -10,7 +10,7 @@ test('prompt versions follow the documented convention', function () {
         'outline_structure' => 'novel-outline-structure-v7+natural-planning-v3',
         'outline_arc_beats' => 'novel-outline-arc-beats-v9+natural-planning-v3',
         'outline_beat_detail' => 'novel-outline-beat-detail-v6+natural-planning-v3',
-        'planner' => 'chapter-planner-v13+natural-planning-v3',
+        'planner' => 'chapter-planner-v14+natural-planning-v3',
         'writer' => 'scene-writer-v16+natural-writing-v3',
         'extractor' => 'event-extractor-v9',
         'reviewer' => 'reviewer-v20+natural-reviewing-v3',
@@ -22,7 +22,7 @@ test('prompt versions follow the documented convention', function () {
 test('each prompt stage resolves its current version', function (AiStage $stage, string $version) {
     expect(app(PromptVersionResolver::class)->resolve($stage))->toBe($version);
 })->with([
-    'planner' => [AiStage::Planner, 'chapter-planner-v13+natural-planning-v3'],
+    'planner' => [AiStage::Planner, 'chapter-planner-v14+natural-planning-v3'],
     'outline foundation' => [AiStage::OutlineFoundation, 'novel-outline-foundation-v6+natural-planning-v3'],
     'outline structure' => [AiStage::OutlineStructure, 'novel-outline-structure-v7+natural-planning-v3'],
     'outline arc beats' => [AiStage::OutlineArcBeats, 'novel-outline-arc-beats-v9+natural-planning-v3'],
@@ -40,7 +40,7 @@ test('effective prompt versions include only their configured policy while base 
     expect($resolver->resolve(AiStage::Writer))
         ->toBe('scene-writer-v16+natural-writing-v3')
         ->and($resolver->resolveBase(AiStage::Writer))->toBe('scene-writer-v16')
-        ->and($resolver->resolve(AiStage::Planner))->toBe('chapter-planner-v13+natural-planning-v3')
+        ->and($resolver->resolve(AiStage::Planner))->toBe('chapter-planner-v14+natural-planning-v3')
         ->and($resolver->resolve(AiStage::Extractor))->toBe($resolver->resolveBase(AiStage::Extractor));
 });
 
@@ -57,5 +57,5 @@ test('ai requests retain the resolved prompt version for run tracking', function
     $version = app(PromptVersionResolver::class)->resolve(AiStage::Planner);
     $request = new AiRequest(model: 'test-model', promptVersion: $version);
 
-    expect($request->promptVersion)->toBe('chapter-planner-v13+natural-planning-v3');
+    expect($request->promptVersion)->toBe('chapter-planner-v14+natural-planning-v3');
 });

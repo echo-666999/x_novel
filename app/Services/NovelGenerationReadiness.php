@@ -20,6 +20,7 @@ final readonly class NovelGenerationReadiness
         private OutlineProgressResolver $outlineProgress,
         private GenerationRunLease $runLease,
         private NarrativeStyleProfile $narrativeStyleProfile,
+        private OutlineBeatBudgetExtension $budgetExtension,
     ) {}
 
     /**
@@ -146,6 +147,20 @@ final readonly class NovelGenerationReadiness
                     $add('current_outline_target_exhausted', 'Current Outline 没有可继续执行的 Main Milestone。', '完成收束或采用后续 Outline', 'novel_outline', $novel->current_outline_id);
                 } else {
                     $outlineTarget = $target->toArray();
+                    $maximum = $target->beat['chapter_budget']['max'] ?? null;
+                    $nextChapter = $novel->chapters()
+                        ->where('sequence', (int) ($novel->current_chapter_sequence ?? 0) + 1)
+                        ->first();
+                    if (is_int($maximum) && $target->chaptersUsedForCurrentBeat >= $maximum
+                        && ($nextChapter === null || $this->budgetExtension->exhausted($novel, $target, $nextChapter))) {
+                        $add(
+                            'outline_beat_budget_exhausted',
+                            "当前 Outline Beat「{$target->beat['title']}」已使用 {$target->chaptersUsedForCurrentBeat} 章，达到预算上限 {$maximum}；自动 Planner 已在调用模型前停止。",
+                            '核对正式正文与 Handoff 证据后，可在待规划章节工作台填写原因，授权本章唯一一次预算延期；不能重复启动同一规划任务',
+                            'novel_outline',
+                            $target->outlineId,
+                        );
+                    }
                 }
             } catch (ValidationException $exception) {
                 $add('current_outline_target_invalid', $exception->getMessage(), '修复 Current Outline、Milestone 或 Handoff 来源链', 'novel_outline', $novel->current_outline_id);

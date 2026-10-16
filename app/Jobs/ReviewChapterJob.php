@@ -2,12 +2,15 @@
 
 namespace App\Jobs;
 
+use App\Actions\Chapters\ReconcileOutlineCompletionAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\AI\Exceptions\AiProviderException;
 use App\Enums\GenerationStage;
+use App\Enums\ReviewDecision;
 use App\Exceptions\ReviewContractRepairDeferredException;
 use App\Exceptions\ReviewEvidenceRepairDeferredException;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
+use App\Models\Chapter;
 use App\Services\AutoStopService;
 use App\Services\ChapterReviewer;
 use App\Services\GenerationFailurePolicy;
@@ -64,6 +67,13 @@ class ReviewChapterJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
             $review = $reviewer->review($this->chapterId, $this->regenerate, $this->operationId);
 
             if ($review !== null) {
+                if ($review->decision === ReviewDecision::Pass) {
+                    $chapter = Chapter::query()->findOrFail($this->chapterId);
+                    $reconcile = app(ReconcileOutlineCompletionAction::class);
+                    if ($reconcile->preview($chapter) !== []) {
+                        $reconcile->handle($chapter);
+                    }
+                }
                 if (! $this->advanceAfterSuccessfulStage(
                     $advance,
                     GenerationStage::Review,

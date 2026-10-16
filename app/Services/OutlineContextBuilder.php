@@ -31,11 +31,17 @@ class OutlineContextBuilder
             'primary_milestone_key' => $target->milestone['key'],
             'primary_milestone_sequence' => $target->milestone['sequence'],
             'chapter_budget' => $target->beat['chapter_budget'],
-            'acceptance_criteria' => $target->milestone['acceptance_criteria'],
+            'acceptance_criteria' => $target->beatExitPending
+                ? $target->beat['acceptance_criteria']
+                : $target->milestone['acceptance_criteria'],
             'current_milestone' => $target->milestone,
             'remaining_conditions' => [
-                'acceptance_criteria' => $target->milestone['acceptance_criteria'],
-                'must_include' => $target->milestone['must_include'],
+                'acceptance_criteria' => $target->beatExitPending
+                    ? $target->beat['acceptance_criteria']
+                    : $target->milestone['acceptance_criteria'],
+                'must_include' => $target->beatExitPending
+                    ? $target->beat['must_include']
+                    : $target->milestone['must_include'],
             ],
             'handoff' => $handoff,
             'handoff_next_beat_id' => $handoff['next_beat_id'],
@@ -46,7 +52,9 @@ class OutlineContextBuilder
                 : hash('sha256', json_encode($target->inboundHandoff, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)),
             // Milestone Completion 是首版最小正式进度单位。当前 Milestone 未完成时，
             // 仅把它自己的 must_include 交给本章，不能把整个 Beat 的列表逐章重放。
-            'must_include' => array_values(array_unique($target->milestone['must_include'])),
+            'must_include' => array_values(array_unique($target->beatExitPending
+                ? $target->beat['must_include']
+                : $target->milestone['must_include'])),
             'must_not_include' => array_values(array_unique([...$target->beat['must_not_include'], ...$target->milestone['must_not_include']])),
             'character_candidates' => $target->beat['character_candidates'],
             'world_entity_candidates' => $target->beat['world_entity_candidates'],

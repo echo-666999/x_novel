@@ -2,6 +2,9 @@
 
 use App\Actions\Chapters\AcceptOverlengthChapterAction;
 use App\Actions\Chapters\ReconcileChapterReviewAction;
+use App\Actions\Chapters\ReconcileOutlineCompletionAction;
+use App\Actions\Chapters\OverrideChapterReviewAction;
+use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Generation\CheckNextAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\CanonicalCommitData;
@@ -345,6 +348,36 @@ test('canonical commit atomically persists events state and pointers', function 
     ]);
     Queue::assertPushed(UpdateMemoryJob::class);
     Queue::assertPushed(RefreshNovelProjectionJob::class);
+});
+
+test('a manual pass review retains frozen completion audits required by canonical commit', function () {
+    Queue::fake();
+    $fixture = canonicalCommitFixture(decision: ReviewDecision::NeedsAttention);
+    $fixture['review']->update(['findings' => [[
+        'code' => 'EXCESSIVE_REPETITION',
+        'severity' => 'warning',
+        'message' => '重复表述可由人工接受。',
+    ]]]);
+
+    $review = app(OverrideChapterReviewAction::class)->execute(
+        $fixture['chapter'],
+        '接受这处重复表述。',
+    );
+    $data = new CanonicalCommitData(
+        $fixture['chapter']->getKey(),
+        $fixture['draft']->getKey(),
+        $review->getKey(),
+        $fixture['candidate']->getKey(),
+        $fixture['patch']->getKey(),
+        0,
+        $fixture['draft']->checksum,
+    );
+
+    $version = app(CanonicalCommitService::class)->commit($data);
+
+    expect($version->version)->toBe(1)
+        ->and($review->artifact->data['manual_override'])->toBeTrue()
+        ->and($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
 });
 
 test('canonical commit closes accepted arc beats and world entity candidates exactly once and rollback reverses them', function () {
@@ -1005,7 +1038,7 @@ test('a pass review exposes a canonical commit preview and action', function () 
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Canonical);
 });
 
-test('canonical commit validation failure is shown without leaving partial state', function () {
+test('a review overclaim blocks canonical commit before any formal state changes', function () {
     $this->actingAs(User::factory()->create());
     $fixture = canonicalCommitFixture();
     $reviewData = $fixture['review']->artifact->fresh()->data;
@@ -1024,14 +1057,67 @@ test('canonical commit validation failure is shown without leaving partial state
         'record' => $fixture['novel']->getRouteKey(),
         'chapter' => $fixture['chapter']->getRouteKey(),
     ])
-        ->assertActionEnabled('commitCanonical')
-        ->callAction('commitCanonical')
-        ->assertNotified('无法提交正式章节');
+        ->assertActionDisabled('commitCanonical')
+        ->assertActionVisible('reconcileOutlineCompletion');
+
+    Queue::fake();
+    $fixture['novel']->update(['settings' => ['auto_commit' => true, 'auto_commit_configured' => true]]);
+    expect(app(AdvanceChapterPipelineAction::class)->handle($fixture['chapter']->getKey()))->toBeNull();
+    Queue::assertNotPushed(CommitChapterJob::class);
 
     expect($fixture['chapter']->fresh()->status)->toBe(ChapterStatus::Review)
         ->and($fixture['chapter']->fresh()->canonical_artifact_id)->toBeNull()
         ->and(StoryEvent::query()->count())->toBe(0)
         ->and(StoryStateVersion::query()->where('novel_id', $fixture['novel']->getKey())->count())->toBe(1);
+});
+
+test('an extractor overclaim can be reconciled to a pass review without committing a beat event', function () {
+    $this->actingAs(User::factory()->create());
+    $fixture = canonicalCommitFixture();
+    addPlanningClosureToCanonicalFixture($fixture);
+    $reviewData = $fixture['review']->artifact->fresh()->data;
+    $reviewData['beat_exit'] = [
+        'status' => 'not_met',
+        'criteria' => collect($reviewData['beat_exit']['criteria'])->map(fn (array $criterion): array => [
+            ...$criterion, 'status' => 'not_met', 'evidence' => null, 'scene_id' => null,
+        ])->all(),
+    ];
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($reviewData),
+    ]);
+
+    expect(app(ReconcileOutlineCompletionAction::class)->preview($fixture['chapter']->fresh()))->toBe(['beat_exit']);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertActionDisabled('commitCanonical')
+        ->assertActionVisible('reconcileOutlineCompletion')
+        ->callAction('reconcileOutlineCompletion')
+        ->assertNotified('完成结论冲突已修复');
+
+    $newCandidate = GenerationArtifact::query()->where('type', ArtifactType::EventCandidate)
+        ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $fixture['chapter']->getKey()))
+        ->latest('id')->firstOrFail();
+    $newPatch = GenerationArtifact::query()->where('type', ArtifactType::StatePatch)
+        ->where('source_artifact_id', $newCandidate->getKey())->firstOrFail();
+    expect($newCandidate->getKey())->not->toBe($fixture['candidate']->getKey())
+        ->and(data_get($fixture['candidate']->fresh()->data, 'outline_completion.beat_exit.status'))->toBe('fulfilled')
+        ->and(data_get($newCandidate->data, 'outline_completion.beat_exit.status'))->toBe('not_met')
+        ->and(collect($newCandidate->data['events'])->pluck('event_type')->contains(EventType::StoryArcBeatCompleted->value))->toBeFalse()
+        ->and(data_get($newPatch->data, 'source_artifact_id'))->toBe($newCandidate->getKey());
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertActionEnabled('commitCanonical')
+        ->callAction('commitCanonical')
+        ->assertNotified('章节已提交为正式版本');
+
+    expect(StoryEvent::query()->where('chapter_id', $fixture['chapter']->getKey())
+        ->where('event_type', EventType::StoryArcBeatCompleted->value)->exists())->toBeFalse();
 });
 
 test('duplicate planning audit reconciliation creates a new immutable pass review', function () {
@@ -1125,6 +1211,24 @@ test('a legacy pass review with an unaccepted arc completion cannot expose an en
     ])
         ->assertActionVisible('commitCanonical')
         ->assertActionDisabled('commitCanonical');
+});
+
+test('a legacy manual pass missing completion audits explains why canonical commit is disabled', function () {
+    $this->actingAs(User::factory()->create());
+    $fixture = canonicalCommitFixture();
+    $reviewData = $fixture['review']->artifact->fresh()->data;
+    unset($reviewData['chapter_plan_completion'], $reviewData['milestone_completion'], $reviewData['beat_exit'], $reviewData['handoff_readiness']);
+    DB::table('generation_artifacts')->where('id', $fixture['review']->artifact->getKey())->update([
+        'data' => json_encode($reviewData),
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $fixture['novel']->getRouteKey(),
+        'chapter' => $fixture['chapter']->getRouteKey(),
+    ])
+        ->assertActionVisible('commitCanonical')
+        ->assertActionDisabled('commitCanonical')
+        ->assertSee('当前 PASS Review 缺少完整的完成审计');
 });
 
 test('commit chapter job uses the canonical service and duplicate delivery has exactly once effects', function () {

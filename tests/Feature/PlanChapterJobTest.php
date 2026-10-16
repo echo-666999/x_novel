@@ -2,6 +2,7 @@
 
 use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Generation\AdvanceChapterPipelineAction;
+use App\Actions\Generation\GenerateNextChapterAction;
 use App\Actions\Novels\CreateNormalizedNovelOutlineVersionAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\AI\Contracts\AiProvider;
@@ -13,6 +14,7 @@ use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\BibleStatus;
 use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\EventType;
 use App\Enums\ForeshadowingStatus;
 use App\Enums\GenerationStage;
@@ -23,6 +25,8 @@ use App\Enums\PlanStatus;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
 use App\Exceptions\GenerationPreflightException;
+use App\Filament\Resources\Novels\Pages\ViewNovel;
+use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\GenerateSceneJob;
 use App\Jobs\PlanChapterJob;
 use App\Models\AIModelPrice;
@@ -38,19 +42,25 @@ use App\Models\NovelOutline;
 use App\Models\StoryArc;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
+use App\Models\User;
 use App\Models\Volume;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterPlanPayload;
+use App\Services\ContentSelfHealingService;
 use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationStageFingerprint;
+use App\Services\NovelGenerationReadiness;
 use App\Services\NovelOutlineLengthContract;
 use App\Services\NovelOutlinePipeline;
+use App\Services\OutlineBeatBudgetExtension;
 use App\Services\OutlineHandoffContract;
 use App\Services\OutlineProgressResolver;
+use App\Services\PlanValidator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
+use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
@@ -607,6 +617,124 @@ test('an exhausted outline beat budget stops planning before a run or provider c
     }
 });
 
+test('an exhausted beat is explained before either chapter start action dispatches a job', function () {
+    Queue::fake();
+    $this->actingAs(User::factory()->create());
+    [$chapter, , $outline, $volume, $arc] = outlinePlannerChapter(1);
+    $canonical = Chapter::factory()->for($chapter->novel)->for($volume)->create([
+        'sequence' => 0,
+        'status' => ChapterStatus::Canonical,
+        'summary' => '上一章正式摘要',
+    ]);
+    ChapterPlan::factory()->for($canonical)->create([
+        'novel_outline_id' => $outline->getKey(),
+        'primary_outline_beat_id' => $outline->beats()->where('beat_key', 'beat-map')->value('id'),
+        'arc_contributions' => [[
+            'role' => 'primary', 'arc_id' => $arc->getKey(), 'beat_key' => 'beat-map', 'beat_index' => 1,
+            'milestone_key' => 'beat-map-m01', 'milestone_sequence' => 1,
+            'target_scene_sequence' => 1, 'acceptance_criteria' => '主角取得真实地图',
+        ]],
+    ]);
+    $novel = $chapter->novel->fresh();
+    $blocker = collect(app(NovelGenerationReadiness::class)->nextChapter($novel)->blockers)
+        ->firstWhere('code', 'outline_beat_budget_exhausted');
+
+    expect($blocker['message'])->toContain('达到预算上限 1');
+    expect(fn () => app(GenerateNextChapterAction::class)->handle($novel))
+        ->toThrow(GenerationPreflightException::class, '达到预算上限 1');
+
+    Livewire::test(ViewNovel::class, ['record' => $novel->getRouteKey()])
+        ->callAction('startAutoGenerate', data: ['automation_mode' => 'review_only'])
+        ->assertNotified('无法启动章节生成');
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('NEEDS_ATTENTION · 章节规划')
+        ->assertSee('章节预算门禁在创建 Planning Run 前停止了任务')
+        ->callAction('generatePlan')
+        ->assertNotified('章节规划需要人工处理');
+
+    Queue::assertNothingPushed();
+    expect($chapter->generationRuns()->count())->toBe(0);
+});
+
+test('one authorized chapter can plan on an exhausted beat without extending the next chapter', function () {
+    Queue::fake();
+    $user = User::factory()->create();
+    $this->actingAs($user);
+    [$chapter, $character, $outline, $volume, $arc] = outlinePlannerChapter(1);
+    $canonical = Chapter::factory()->for($chapter->novel)->for($volume)->create([
+        'sequence' => 0,
+        'status' => ChapterStatus::Canonical,
+        'summary' => '上一章正式摘要',
+    ]);
+    ChapterPlan::factory()->for($canonical)->create([
+        'novel_outline_id' => $outline->getKey(),
+        'primary_outline_beat_id' => $outline->beats()->where('beat_key', 'beat-map')->value('id'),
+        'arc_contributions' => [[
+            'role' => 'primary', 'arc_id' => $arc->getKey(), 'beat_key' => 'beat-map', 'beat_index' => 1,
+            'milestone_key' => 'beat-map-m01', 'milestone_sequence' => 1,
+            'target_scene_sequence' => 1, 'acceptance_criteria' => '主角取得真实地图',
+        ]],
+    ]);
+
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $chapter->novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])->callAction('extendOutlineBeatBudget', data: ['reason' => '上一正式章未完成交接，允许本章补足证据。'])
+        ->assertNotified('本章预算延期已授权')
+        ->callAction('generatePlan')
+        ->assertNotified('章节计划已加入生成队列');
+    Queue::assertPushed(PlanChapterJob::class, 1);
+
+    $extension = app(OutlineBeatBudgetExtension::class);
+    $novel = $chapter->novel->fresh();
+    $target = app(OutlineProgressResolver::class)->resolve($novel);
+    $authorization = $extension->authorizationFor($novel, $target, $chapter);
+    expect($authorization)->not->toBeNull()
+        ->and($authorization['operator_id'])->toBe($user->getKey())
+        ->and($authorization['chapter_sequence'])->toBe(1)
+        ->and($extension->grant($chapter, $user->getKey(), '重复授权不应增加额度或写入第二条。'))->toEqual($authorization)
+        ->and(data_get($novel->fresh()->settings, 'outline_beat_budget_extensions'))->toHaveCount(1);
+
+    $payload = outlinePlannerPayload($character, $outline, $arc);
+    $payload['scene_plans'][0]['transition_from_previous'] = '承接上一章的正式结尾，继续核对地图来源并推进本章行动。';
+    $fake = (new FakeAiProvider)->enqueue(plannerResponse($payload));
+    app()->instance(AiProvider::class, $fake);
+    $plan = app(ChapterPlanner::class)->generate($chapter->getKey());
+    expect($plan)->not->toBeNull()
+        ->and($chapter->generationRuns()->count())->toBe(1)
+        ->and(data_get($chapter->generationRuns()->first()->context_snapshot, 'outline_beat_budget_extension.chapter_id'))->toBe($chapter->getKey())
+        ->and(data_get($plan->admission_snapshot, 'outline_beat_budget_extension.chapter_id'))->toBe($chapter->getKey());
+    expect($extension->grant($chapter, $user->getKey(), '计划已创建后重复授权仍应复用原记录。'))->toEqual($authorization);
+
+    $staleNovel = $novel->fresh();
+    $staleNovel->canonical_state_version_id = 999999;
+    expect($extension->authorizationFor($staleNovel, $target, $chapter))->toBeNull();
+
+    $settings = $novel->fresh()->settings;
+    $tampered = $settings;
+    $tampered['outline_beat_budget_extensions'][0]['reason'] = '未经授权修改的原因';
+    $novel->update(['settings' => $tampered]);
+    $finding = collect(app(PlanValidator::class)->validate($plan->fresh(), $plan->admission_snapshot)->findings)
+        ->first(fn ($item): bool => $item->code === 'ADMISSION_BUDGET_EXTENSION_MISMATCH');
+    expect($finding)->not->toBeNull();
+    $novel->update(['settings' => $settings]);
+
+    // Simulate a sixth chapter committed without Beat Completion: the authorization is consumed.
+    $chapter->update(['status' => ChapterStatus::Canonical]);
+    $novel->update(['current_chapter_sequence' => 1]);
+    $target = app(OutlineProgressResolver::class)->resolve($novel->fresh());
+    expect($target->chaptersUsedForCurrentBeat)->toBe(2);
+    $next = Chapter::factory()->for($novel)->for($volume)->create(['sequence' => 2]);
+    expect($extension->authorizationFor($novel->fresh(), $target, $next))->toBeNull()
+        ->and(collect(app(NovelGenerationReadiness::class)->nextChapter($novel->fresh())->blockers)
+            ->firstWhere('code', 'outline_beat_budget_exhausted'))->not->toBeNull()
+        ->and(fn () => $extension->grant($next, $user->getKey(), '再次延期到下一章应被明确阻止。'))
+        ->toThrow(ValidationException::class);
+});
+
 test('outline retries and duplicate delivery keep the same frozen outline context', function () {
     setGenerationSettingsForTest([
         'chapter_request_budgets.planner.initial.output_tokens' => 12_000,
@@ -638,6 +766,7 @@ test('outline retries and duplicate delivery keep the same frozen outline contex
 
 test('planner technical retry keeps the failed run route capacity prompt and budget after configuration changes', function () {
     [$chapter, $character] = plannerChapter();
+    config()->set('prompts.versions.planner', 'chapter-planner-v13');
     $provider = 'openai';
     createAiModelRouteForTest(AiStage::Planner, 'planner-frozen-old', $provider, 'high');
     $payload = plannerPayload($character->getKey());
@@ -651,6 +780,7 @@ test('planner technical retry keeps the failed run route capacity prompt and bud
     $first = $chapter->generationRuns()->sole();
 
     createAiModelRouteForTest(AiStage::Planner, 'planner-new-config', $provider, 'low');
+    config()->set('prompts.versions.planner', 'chapter-planner-v14');
 
     $planner->generate($chapter->getKey());
     $runs = $chapter->generationRuns()->oldest('id')->get();
@@ -660,6 +790,8 @@ test('planner technical retry keeps the failed run route capacity prompt and bud
         ->and($fake->requests()[1]->model)->toBe('planner-frozen-old')
         ->and($fake->requests()[0]->reasoningEffort)->toBe('high')
         ->and($fake->requests()[1]->reasoningEffort)->toBe('high')
+        ->and($fake->requests()[1]->prompt)->toBe($fake->requests()[0]->prompt)
+        ->and($fake->requests()[1]->prompt)->toContain('当前 Milestone acceptance_criteria 中的一项')
         ->and($runs)->toHaveCount(2)
         ->and($runs->pluck('provider')->unique()->all())->toBe([$provider])
         ->and($runs->pluck('model_policy')->unique()->all())->toBe(['planner-frozen-old'])
@@ -813,8 +945,8 @@ test('the planner creates a validated plan artifact and succeeds its run', funct
         ->and($chapter->scenes()->sole()->goal)->toBe('取得出港许可')
         ->and($chapter->fresh()->status)->toBe(ChapterStatus::Generating)
         ->and($run->status)->toBe(RunStatus::Succeeded)
-        ->and($run->prompt_version)->toBe('chapter-planner-v13+natural-planning-v3')
-        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v13+natural-planning-v3')
+        ->and($run->prompt_version)->toBe('chapter-planner-v14+natural-planning-v3')
+        ->and(data_get($run->context_snapshot, 'prompt_version'))->toBe('chapter-planner-v14+natural-planning-v3')
         ->and($run->bible_version)->toBe(1)
         ->and(data_get($run->context_snapshot, 'style_contract_checksum'))->toBe(data_get($run->context_snapshot, 'l4.checksum'))
         ->and(data_get($run->context_snapshot, 'l4.primary_style.name'))->toBe('通俗爽快')
@@ -1372,6 +1504,50 @@ test('review capacity validation stops without spending another planner request 
     $job->assertFailed();
     expect($chapter->generationRuns()->where('stage', GenerationStage::ContentRepair)->count())->toBe(0);
     Queue::assertNotPushed(PlanChapterJob::class);
+});
+
+test('preflight validation in an existing repair fails without redispatching the same job', function () {
+    Queue::fake();
+    [$chapter] = plannerChapter();
+    $repair = app(ContentSelfHealingService::class)->start(
+        $chapter,
+        ContentRepairType::PlanValidation,
+        ['planning_run_id' => null],
+    );
+    $planner = Mockery::mock(ChapterPlanner::class);
+    $planner->shouldReceive('generate')
+        ->once()
+        ->with($chapter->getKey(), true, $repair->getKey())
+        ->andThrow(ValidationException::withMessages(['outline' => '大纲目标无效。']));
+
+    $job = (new PlanChapterJob($chapter->getKey(), true, $repair->getKey()))->withFakeQueueInteractions();
+    $job->handle($planner);
+
+    $job->assertFailed();
+    expect($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_preflight_failed')
+        ->and($chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->count())->toBe(0);
+    Queue::assertNotPushed(PlanChapterJob::class);
+});
+
+test('expired plan repair stops before planner context building or provider use', function () {
+    config()->set('generation.content_self_healing.plan_validation.max_elapsed_seconds', 60);
+    [$chapter] = plannerChapter();
+    $repair = app(ContentSelfHealingService::class)->start(
+        $chapter,
+        ContentRepairType::PlanValidation,
+        ['planning_run_id' => null],
+    );
+    $fake = new FakeAiProvider;
+    app()->instance(AiProvider::class, $fake);
+    $this->travel(61)->seconds();
+
+    expect(fn () => app(ChapterPlanner::class)->generate($chapter->getKey(), true, $repair->getKey()))
+        ->toThrow(AiProviderException::class, '已超过 60 秒上限');
+
+    expect($repair->fresh()->error_code)->toBe('content_repair_time_limit_exceeded')
+        ->and($chapter->generationRuns()->where('stage', GenerationStage::ChapterPlanning)->count())->toBe(0)
+        ->and($fake->requests())->toBeEmpty();
 });
 
 test('a canonical state change during provider execution blocks stale plan persistence', function () {

@@ -21,7 +21,7 @@ return [
         'outline_structure' => 'novel-outline-structure-v7',
         'outline_arc_beats' => 'novel-outline-arc-beats-v9',
         'outline_beat_detail' => 'novel-outline-beat-detail-v6',
-        'planner' => 'chapter-planner-v13',
+        'planner' => 'chapter-planner-v14',
         'writer' => 'scene-writer-v16',
         'extractor' => 'event-extractor-v9',
         'reviewer' => 'reviewer-v20',

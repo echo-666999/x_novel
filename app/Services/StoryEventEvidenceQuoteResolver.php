@@ -62,7 +62,52 @@ final class StoryEventEvidenceQuoteResolver
             }
         }
 
+        $withOmittedAttribution = $this->uniqueMatchWithOmittedAttribution($content, $quote);
+        if ($withOmittedAttribution !== null) {
+            return $withOmittedAttribution;
+        }
+
         return $this->highConfidenceOverlap($content, $quote) ?? $quote;
+    }
+
+    private function uniqueMatchWithOmittedAttribution(string $content, string $quote): ?string
+    {
+        // 引文可能省略两句对白之间的短叙述。只从唯一的前后原文锚点恢复连续正文。
+        $fragments = preg_split('/(?<=[”’。！？!?])\s+(?=\S)/u', $quote);
+        if (! is_array($fragments) || count($fragments) !== 2) {
+            return null;
+        }
+
+        [$first, $second] = array_map('trim', $fragments);
+        if (mb_strlen($first) < 12 || mb_strlen($second) < 12) {
+            return null;
+        }
+
+        $start = mb_strpos($content, $first);
+        $secondStart = mb_strpos($content, $second);
+        if ($start === false || $secondStart === false
+            || mb_strpos($content, $first, $start + 1) !== false
+            || mb_strpos($content, $second, $secondStart + 1) !== false) {
+            return null;
+        }
+
+        $firstEnd = $start + mb_strlen($first);
+        if ($secondStart <= $firstEnd) {
+            return null;
+        }
+
+        $gap = mb_substr($content, $firstEnd, $secondStart - $firstEnd);
+        if (mb_strlen((string) preg_replace('/\s+/u', '', $gap)) > 24) {
+            return null;
+        }
+
+        $continuousQuote = mb_substr($content, $start, $secondStart + mb_strlen($second) - $start);
+        $quotedLength = mb_strlen((string) preg_replace('/\s+/u', '', $first.$second));
+        $continuousLength = mb_strlen((string) preg_replace('/\s+/u', '', $continuousQuote));
+
+        return $continuousLength > 0 && $quotedLength / $continuousLength >= .8
+            ? $continuousQuote
+            : null;
     }
 
     private function uniqueMatchIgnoringWhitespace(string $content, string $quote): ?string
