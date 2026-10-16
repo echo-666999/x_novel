@@ -91,7 +91,7 @@ GenerateNextChapterAction
 
 `AdvanceChapterPipelineAction` 是章节生成的唯一阶段推进规则。它在 `GenerationStageGate` 的 Novel 行锁内读取 PostgreSQL 中的 Plan、Scene 当前指针、Artifact 来源链、State Version 和 Review Decision，只派发下一个合法 Job；State Patch 由它在 Event Candidate 成功后同步构建。Plan Admission、Scene、Deterministic Assembly、Coverage Judgment、Event Extraction、Review 和局部 Rewrite 成功后都调用该动作，不再各自维护后续分支。
 
-内容自愈由 `ContentSelfHealingService` 统一建立 `content_repair` Run 和不可变 Context Artifact。Plan 校验失败生成带完整校验错误与失败候选的新规划请求；Review 的 `rebuild_plan_or_scenes` 建议直接创建新 Plan Version，随后由现有下游失效机制从 Scene 重新生成；Rewrite 耗尽只允许升级一次相同重建；Critical 逾期伏笔只允许一次 `pay_off` 规划。四类修复分别按 `config/generation.php` 的 `max_attempts / max_cost / max_elapsed_seconds` 执行硬限制。费用门禁在 Provider 调用前使用已发生费用加本次最大可能费用判断，时间从修复 Run 创建时起算并包含队列等待；任一门禁失败都会持久化失败诊断并停止自动推进。
+内容自愈由 `ContentSelfHealingService` 统一建立 `content_repair` Run 和不可变 Context Artifact。Plan 校验失败生成带完整校验错误与失败候选的新规划请求；Review 的 `rebuild_plan_or_scenes` 建议直接创建新 Plan Version，随后由现有下游失效机制从 Scene 重新生成；Rewrite 耗尽只允许升级一次相同重建；Critical 逾期伏笔只允许一次 `pay_off` 规划。四类修复分别按 `config/generation.php` 的 `max_attempts / max_cost / max_elapsed_seconds` 执行硬限制。费用门禁在 Provider 调用前使用已发生费用加本次最大可能费用判断，时间从修复 Run 创建时起算并包含队列等待；任一门禁失败都会持久化失败诊断并停止自动推进。下游阶段终止或 Review 转入人工处理时，活动的协调 Run 也必须结束并保留原始失败码，避免人工处理期间继续累计修复耗时。
 
 阶段执行结果与流程推进结果分开记录。Provider 或确定性阶段完成并写入有效 Artifact 后，Run 保持 `succeeded`；随后 `AdvanceChapterPipelineAction` 的选择、校验或派发异常写入该 Run 的 `progression_failure` JSONB，不覆盖 `error_code / error_message`，也不把 Scene 或 Chapter 的成功阶段反向改成失败。所有章节生成 Job 通过同一推进边界记录错误并停止自动续写；Generation 页面、章节运行记录、场景运行详情和流水线时间轴显示“阶段成功 · 推进异常”。同一成功 Run 再次推进成功时只写入 `resolved_at`，保留原始故障证据且不重复调用 Provider。
 

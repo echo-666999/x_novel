@@ -198,6 +198,85 @@ test('compact completion evidence restores paragraph whitespace from the authori
         ->and(data_get($validated, 'milestone_completion.criteria.0.scene_id'))->toBe($fixture['scene']->getKey());
 });
 
+test('compact completion evidence restores escaped paragraph breaks and omitted dialogue into one current scene quote', function () {
+    $fixture = outlineCompletionFixture(withNextBeat: true);
+    $content = "卫子夫说明这是查验病因的暂行办法。\n\n随侍问。\n\n卫子夫说年长宫人只是暂代，不正式定下。";
+    $fixture['draft'] = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 2,
+        'content' => $content,
+        'checksum' => hash('sha256', $content),
+    ]);
+    $fixture['scene']->update(['current_artifact_id' => $fixture['draft']->getKey()]);
+    $service = app(OutlineCompletionService::class);
+    $contract = $service->contract($fixture['chapter']);
+    $missing = fn (array $items): array => collect($items)->map(fn (): array => [
+        'status' => 'not_met', 'evidence' => null,
+    ])->all();
+    $handoff = $missing($contract['handoff_checks']);
+    $handoff[0] = [
+        'status' => 'fulfilled',
+        'evidence' => '卫子夫说明这是查验病因的暂行办法。\\n\\n卫子夫说年长宫人只是暂代，不正式定下。',
+    ];
+
+    $expanded = $service->expandCompactExtraction([
+        'milestone_completion' => $missing($contract['milestone_criteria']),
+        'beat_exit' => $missing($contract['beat_exit_criteria']),
+        'handoff_readiness' => $handoff,
+    ], $fixture['chapter'], $fixture['draft']->fresh());
+    $validated = $service->validateExtraction($expanded, $fixture['chapter'], $fixture['draft']->fresh());
+
+    expect(data_get($validated, 'handoff_readiness.checks.0.evidence'))->toBe($content)
+        ->and(data_get($validated, 'handoff_readiness.checks.0.scene_id'))->toBe($fixture['scene']->getKey());
+});
+
+test('compact completion evidence spanning two scenes remains invalid', function () {
+    $fixture = outlineCompletionFixture();
+    $first = '卫子夫下令将用具分开。';
+    $second = '年长宫人继续照料刘据。';
+    $content = $first."\n\n".$second;
+    $firstArtifact = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'content' => $first,
+    ]);
+    $secondArtifact = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::SceneDraft,
+        'version' => 2,
+        'content' => $second,
+    ]);
+    $draft = GenerationArtifact::factory()->for($fixture['draft']->generationRun)->create([
+        'type' => ArtifactType::ChapterDraft,
+        'version' => 2,
+        'content' => $content,
+        'checksum' => hash('sha256', $content),
+    ]);
+    $fixture['scene']->update(['current_artifact_id' => $firstArtifact->getKey()]);
+    Scene::factory()->for($fixture['chapter'])->create([
+        'sequence' => 2,
+        'current_artifact_id' => $secondArtifact->getKey(),
+    ]);
+    $service = app(OutlineCompletionService::class);
+    $contract = $service->contract($fixture['chapter']);
+    $missing = fn (array $items): array => collect($items)->map(fn (): array => [
+        'status' => 'not_met', 'evidence' => null,
+    ])->all();
+    $milestone = $missing($contract['milestone_criteria']);
+    $milestone[0] = [
+        'status' => 'fulfilled',
+        'evidence' => $first.'\\n\\n'.$second,
+    ];
+
+    $expanded = $service->expandCompactExtraction([
+        'milestone_completion' => $milestone,
+        'beat_exit' => $missing($contract['beat_exit_criteria']),
+        'handoff_readiness' => [],
+    ], $fixture['chapter'], $draft);
+
+    expect(data_get($expanded, 'milestone_completion.criteria.0.scene_id'))->toBeNull()
+        ->and(fn () => $service->validateExtraction($expanded, $fixture['chapter'], $draft))
+        ->toThrow(ValidationException::class, '必须绑定当前章节 Scene');
+});
+
 test('a completed milestone does not complete its beat without every beat exit condition', function () {
     $fixture = outlineCompletionFixture();
     $service = app(OutlineCompletionService::class);

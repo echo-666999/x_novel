@@ -4,6 +4,7 @@ use App\Actions\Generation\AdvanceChapterPipelineAction;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\ContentRepairType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
 use App\Enums\PlanStatus;
@@ -30,6 +31,7 @@ use App\Services\ChapterAssembler;
 use App\Services\ChapterPlanner;
 use App\Services\ChapterReviewer;
 use App\Services\ChapterRewriter;
+use App\Services\ContentSelfHealingService;
 use App\Services\OutlineProgressResolver;
 use App\Services\SceneGenerator;
 use App\Services\StoryEventExtractor;
@@ -241,19 +243,24 @@ test('a fresh running stage is not dispatched a second time', function () {
 test('a chapter structural review waits for plan or scene rebuild while legacy auto commit remains disabled', function () {
     $fixture = pipelineChapter();
     $draft = pipelineArtifact($fixture['novel'], $fixture['chapter'], ArtifactType::ChapterDraft, GenerationStage::ChapterAssembly);
-    pipelineReview($fixture['novel'], $fixture['chapter'], $draft, ReviewDecision::Rewrite, [[
+    $review = pipelineReview($fixture['novel'], $fixture['chapter'], $draft, ReviewDecision::Rewrite, [[
         'scope' => 'chapter',
         'scene_id' => null,
         'auto_fixable' => true,
         'requires_human_decision' => false,
     ]]);
     $fixture['chapter']->update(['status' => ChapterStatus::Rewrite]);
+    $repair = app(ContentSelfHealingService::class)->start(
+        $fixture['chapter'],
+        ContentRepairType::ChapterStructure,
+        ['review_id' => $review->getKey()],
+    );
 
     expect(app(AdvanceChapterPipelineAction::class)->handle($fixture['chapter']->getKey()))->toBeNull();
+    expect($repair->fresh()->error_code)->toBe('content_repair_rewrite_scope_unresolved');
     Queue::assertNotPushed(RewriteChapterJob::class);
 
     Cache::flush();
-    $review = Review::query()->latest('id')->firstOrFail();
     $review->forceFill(['decision' => ReviewDecision::Pass])->save();
     $fixture['novel']->update(['settings' => ['auto_commit' => true]]);
     $fixture['chapter']->update(['status' => ChapterStatus::Review]);

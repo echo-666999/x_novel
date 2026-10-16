@@ -7,12 +7,15 @@ use App\Enums\ArtifactType;
 use App\Enums\ContentRepairType;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
+use App\Jobs\ExtractStoryEventsJob;
 use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\Novel;
 use App\Models\NovelBible;
 use App\Services\AutomaticGenerationRecoveryService;
+use App\Services\AutoStopService;
 use App\Services\ContentSelfHealingService;
 use App\Services\GenerationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -107,4 +110,38 @@ test('scheduled recovery closes an abandoned repair after its time limit', funct
     expect($result['content_repair_expired'])->toBe(1)
         ->and($run->fresh()->error_code)->toBe('content_repair_time_limit_exceeded')
         ->and(data_get($chapter->novel->fresh()->settings, 'auto_stop.code'))->toBe('content_repair_limit');
+});
+
+test('terminal downstream failure closes repair before a later manual retry', function () {
+    $chapter = selfHealingChapter();
+    $service = app(ContentSelfHealingService::class);
+    $repair = $service->start($chapter, ContentRepairType::ChapterStructure, ['review_id' => 17]);
+
+    (new ExtractStoryEventsJob($chapter->getKey()))->failed(
+        new AiProviderException('event_validation_failed', '已满足或冲突的条件必须提供当前正文逐字证据。', false),
+    );
+
+    expect($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_stage_failed')
+        ->and(data_get($repair->fresh()->error_metadata, 'source_error_code'))->toBe('event_validation_failed')
+        ->and($service->activeForChapter($chapter))->toBeNull()
+        ->and(data_get($chapter->novel->fresh()->settings, 'auto_stop.code'))->toBe('domain_validation_failed');
+
+    $this->travel(31)->minutes();
+
+    expect(app(AutomaticGenerationRecoveryService::class)->recover()['content_repair_expired'])->toBe(0)
+        ->and($repair->fresh()->error_code)->toBe('content_repair_stage_failed');
+});
+
+test('review attention closes active repair before the blocked chapter stops advancing', function () {
+    $chapter = selfHealingChapter();
+    $service = app(ContentSelfHealingService::class);
+    $repair = $service->start($chapter, ContentRepairType::ChapterStructure, ['review_id' => 17]);
+
+    app(AutoStopService::class)->stopForReview($chapter, ReviewDecision::NeedsAttention);
+
+    expect($repair->fresh()->error_code)->toBe('content_repair_review_not_passed')
+        ->and($repair->fresh()->status)->toBe(RunStatus::Failed)
+        ->and($service->activeForChapter($chapter))->toBeNull()
+        ->and(data_get($chapter->novel->fresh()->settings, 'auto_stop.code'))->toBe('needs_attention');
 });

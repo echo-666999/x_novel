@@ -13,7 +13,10 @@ use Throwable;
 
 class AutoStopService
 {
-    public function __construct(private readonly GenerationFailurePolicy $failurePolicy) {}
+    public function __construct(
+        private readonly GenerationFailurePolicy $failurePolicy,
+        private readonly ContentSelfHealingService $contentSelfHealing,
+    ) {}
 
     /** 所有阻断都写入同一持久化诊断，禁止以空映射静默结束流水线。 */
     public function stop(Novel $novel, string $code, string $reason, string $recommendedAction, bool $disableAutoGeneration = true): Novel
@@ -39,12 +42,28 @@ class AutoStopService
     public function stopForReview(Chapter $chapter, ReviewDecision $decision, bool $hardConflict = false): void
     {
         if ($hardConflict) {
-            $this->stop($chapter->novel, 'hard_conflict', '确定性状态校验发现 Hard Conflict。', '检查 State Validation Findings，修正草稿或事实冲突。');
+            $stop = ['hard_conflict', '确定性状态校验发现 Hard Conflict。', '检查 State Validation Findings，修正草稿或事实冲突。'];
         } elseif ($decision === ReviewDecision::NeedsAttention) {
-            $this->stop($chapter->novel, 'needs_attention', '章节审校需要人工处理。', '打开 Review Inbox 处理 Findings。');
+            $stop = ['needs_attention', '章节审校需要人工处理。', '打开 Review Inbox 处理 Findings。'];
         } elseif ($decision === ReviewDecision::Block) {
-            $this->stop($chapter->novel, 'review_blocked', '章节审校已阻塞。', '检查阻塞原因并修正章节或故事状态。');
+            $stop = ['review_blocked', '章节审校已阻塞。', '检查阻塞原因并修正章节或故事状态。'];
+        } else {
+            return;
         }
+
+        DB::transaction(function () use ($chapter, $decision, $hardConflict, $stop): void {
+            $activeRepair = $this->contentSelfHealing->activeForChapter($chapter);
+            if ($activeRepair !== null) {
+                $this->contentSelfHealing->fail(
+                    $activeRepair,
+                    'content_repair_review_not_passed',
+                    '章节重建后的 Review 未通过，自动修复已结束。',
+                    ['decision' => $decision->value, 'hard_conflict' => $hardConflict],
+                );
+            }
+
+            $this->stop($chapter->novel, ...$stop);
+        });
     }
 
     public function stopForFailure(int $chapterId, ?Throwable $exception): void
@@ -97,7 +116,23 @@ class AutoStopService
             ],
         };
 
-        $this->stop($chapter->novel, $code, $reason, $action);
+        DB::transaction(function () use ($chapter, $errorCode, $failure, $exception, $code, $reason, $action): void {
+            $activeRepair = $this->contentSelfHealing->activeForChapter($chapter);
+            if ($activeRepair !== null) {
+                // 下游阶段已终止时，协调 Run 也必须收口，否则人工修复期间仍会累计耗时并阻断重试。
+                $this->contentSelfHealing->fail(
+                    $activeRepair,
+                    'content_repair_stage_failed',
+                    "内容修复的下游阶段失败（{$errorCode}），自动修复已结束。",
+                    [
+                        'source_error_code' => $errorCode,
+                        'source_error_message' => $failure?->message ?: $exception?->getMessage(),
+                    ],
+                );
+            }
+
+            $this->stop($chapter->novel, $code, $reason, $action);
+        });
     }
 
     public function stopForPreflight(Novel $novel, Throwable $exception): void

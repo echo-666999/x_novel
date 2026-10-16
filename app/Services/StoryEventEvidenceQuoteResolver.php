@@ -12,6 +12,12 @@ final class StoryEventEvidenceQuoteResolver
             return $quote;
         }
 
+        // Provider 有时把跨段引用中的换行写成字面 \n；只从原文恢复连续片段，不拼造证据。
+        $quote = str_replace(['\\r\\n', '\\n', '\\r', '\\t'], ["\n", "\n", "\r", "\t"], $quote);
+        if (str_contains($content, $quote)) {
+            return $quote;
+        }
+
         $whitespacePattern = preg_replace('/\\s+/u', '\\s+', preg_quote($quote, '/'));
 
         if (is_string($whitespacePattern)
@@ -24,7 +30,7 @@ final class StoryEventEvidenceQuoteResolver
             return $ignoringWhitespace;
         }
 
-        $fragments = preg_split('/(?:…+|\.{3,})/u', $quote);
+        $fragments = preg_split('/(?:…+|\.{3,}|\n\s*\n)/u', $quote);
 
         if (is_array($fragments) && count($fragments) > 1) {
             $fragments = array_values(array_filter(array_map('trim', $fragments), fn (string $fragment): bool => mb_strlen($fragment) >= 4));
@@ -44,7 +50,15 @@ final class StoryEventEvidenceQuoteResolver
             }
 
             if ($start !== null) {
-                return mb_substr($content, $start, $end - $start);
+                $continuousQuote = mb_substr($content, $start, $end - $start);
+                $quotedLength = array_sum(array_map(
+                    fn (string $fragment): int => mb_strlen((string) preg_replace('/\s+/u', '', $fragment)),
+                    $fragments,
+                ));
+                $continuousLength = mb_strlen((string) preg_replace('/\s+/u', '', $continuousQuote));
+                if ($continuousLength > 0 && $quotedLength / $continuousLength >= .8) {
+                    return $continuousQuote;
+                }
             }
         }
 

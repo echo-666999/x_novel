@@ -325,6 +325,15 @@ class AdvanceChapterPipelineAction
 
         $scope = $this->rewriteScopeResolver->resolveReview($chapter, $review);
         if (! $scope->isResolved()) {
+            $activeRepair = $this->contentSelfHealing->activeForChapter($chapter);
+            if ($activeRepair !== null) {
+                $this->contentSelfHealing->fail(
+                    $activeRepair,
+                    'content_repair_rewrite_scope_unresolved',
+                    '章节重建后的 Review 无法确定安全的重写范围，自动修复已结束。',
+                    ['review_id' => $review->getKey()],
+                );
+            }
             $this->autoStop->stop(
                 $chapter->novel,
                 'rewrite_scope_unresolved',
