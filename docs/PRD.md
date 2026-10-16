@@ -219,6 +219,8 @@ Chapter
 
 内容自愈由 Laravel 驱动：Plan 确定性校验失败时自动重新规划；章节功能、Milestone、Handoff、剧情结果或跨 Scene 结构问题创建新 Plan Version 并重建 Scene；局部 Rewrite 耗尽后最多升级一次章节重建；Critical 逾期伏笔最多进入一次只能选择 `pay_off` 的受限规划。每种修复必须分别限制次数、系统计价币种下的最大费用和总耗时，并保存 Generation Run、不可变 Context Artifact、来源与终止诊断。达到任一上限后停止，不得继续调用 Provider。
 
+章节进入人工处理后，可由用户显式点击“交给 AI 尝试修复”：仅对已定位、无需人工裁定的 Scene 问题派发场景级联重生成，或在事件逐字证据校验失败且当前草稿与冻结合同仍有效时重新提取事件。按钮必须重新校验当前来源和并发状态，只创建新 Run/Artifact 并继续既有审校链；Locked Fact、Canonical State、Plan/Milestone 目标和需要用户选择的事项不能由此入口自动修改。正式提交仍遵循 Review PASS 与 `auto_commit` 策略。
+
 除等待提交或安全自动提交外，只有在上述受限内容自愈未适用、失败或达到硬上限后，异常才提前进入人工处理：
 
 - 硬事实冲突；

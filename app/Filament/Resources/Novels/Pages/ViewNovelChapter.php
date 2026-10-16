@@ -7,6 +7,7 @@ use App\Actions\Chapters\ManuallyReviseChapterAction;
 use App\Actions\Chapters\OverrideChapterReviewAction;
 use App\Actions\Chapters\RecoverLegacyChapterPipelineAction;
 use App\Actions\Chapters\RegenerateSceneSequenceAction;
+use App\Actions\Chapters\RequestAiChapterRepairAction;
 use App\Actions\Chapters\RestartChapterFromOutlineAction;
 use App\Actions\Chapters\SaveManualChapterPlanAction;
 use App\Actions\Chapters\StartChapterRewriteAction;
@@ -489,6 +490,45 @@ class ViewNovelChapter extends ViewRecord
                 ->description('建议由已持久化的错误码和 Findings 确定性生成，不调用 AI。按层级入口操作可保留历史产物并失效旧来源链。')
                 ->visible(fn (): bool => $this->repairRecommendations() !== [])
                 ->headerActions([
+                    Action::make('requestAiRepair')
+                        ->label('交给 AI 尝试修复')
+                        ->icon('heroicon-o-sparkles')
+                        ->color('primary')
+                        ->disabled(fn (): bool => $this->generationWorkPending()
+                            || app(RequestAiChapterRepairAction::class)->preview($this->chapter()) === null)
+                        ->tooltip(fn (): string => $this->generationWorkPending()
+                            ? '当前生成任务尚未完成，请等待。'
+                            : '仅支持来源明确的场景重建或事件证据重提取；正式事实、计划目标和需要人工裁定的问题必须按建议处理。')
+                        ->requiresConfirmation()
+                        ->modalHeading('请求 AI 处理当前问题')
+                        ->modalDescription(fn (): string => app(RequestAiChapterRepairAction::class)
+                            ->preview($this->chapter())['description'] ?? '当前问题需要先按修复建议人工处理。')
+                        ->action(function (RequestAiChapterRepairAction $repair): void {
+                            try {
+                                $result = $repair->handle($this->chapter());
+                            } catch (AiProviderException|ValidationException $exception) {
+                                Notification::make()
+                                    ->title('无法启动 AI 修复')
+                                    ->body($exception->getMessage())
+                                    ->danger()
+                                    ->send();
+
+                                return;
+                            }
+
+                            $this->cachedChapter = null;
+                            $this->cachedPlanningRunId = null;
+                            $this->cachedGenerationWorkPending = null;
+                            $this->cacheSchema('content', null);
+
+                            Notification::make()
+                                ->title('AI 修复已加入生成队列')
+                                ->body($result['mode'] === 'scene_regeneration'
+                                    ? "将从 Scene #{$result['scene_id']} 起重建 {$result['affected_scenes']} 个场景，并继续复审。"
+                                    : '将重新提取当前草稿的故事事件，并继续状态补丁与审校。')
+                                ->success()
+                                ->send();
+                        }),
                     Action::make('repairCanonicalState')
                         ->label('查看正式状态')
                         ->icon('heroicon-o-shield-exclamation')

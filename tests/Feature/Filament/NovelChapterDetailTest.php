@@ -6,6 +6,7 @@ use App\Enums\ChapterStatus;
 use App\Enums\FactStatus;
 use App\Enums\GenerationStage;
 use App\Enums\NovelStatus;
+use App\Enums\PlanStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
@@ -358,6 +359,7 @@ test('needs attention review exposes manual edit and override actions instead of
     ])
         ->assertOk()
         ->assertSee('人工修复建议')
+        ->assertActionDisabled(TestAction::make('requestAiRepair')->schemaComponent('repair-recommendations', 'content'))
         ->assertSee('修订章节计划并重建场景')
         ->assertActionExists($editPlanAction, fn ($action): bool => $action->getUrl() === null && $action->isModalSlideOver())
         ->mountAction($editPlanAction)
@@ -372,6 +374,33 @@ test('needs attention review exposes manual edit and override actions instead of
         ->assertDontSee('人工修改局部正文')
         ->assertSee('人工通过（Override）')
         ->assertDontSee('强制重新审校');
+});
+
+test('chapter repair panel can request AI regeneration for a failed scene', function () {
+    Queue::fake();
+
+    $novel = Novel::factory()->create(['status' => NovelStatus::Generating]);
+    $chapter = Chapter::factory()->for($novel)->create(['status' => ChapterStatus::Blocked]);
+    ChapterPlan::factory()->for($chapter)->create(['status' => PlanStatus::Ready]);
+    $scene = Scene::factory()->for($chapter)->create(['sequence' => 1, 'status' => SceneStatus::Failed]);
+    GenerationRun::factory()->for($novel)->for($chapter)->for($scene)->create([
+        'stage' => GenerationStage::SceneGeneration,
+        'status' => RunStatus::Failed,
+        'error_code' => 'content_repair_time_limit_exceeded',
+        'error_message' => '内容修复已超过 1800 秒上限。',
+    ]);
+
+    $action = TestAction::make('requestAiRepair')->schemaComponent('repair-recommendations', 'content');
+    Livewire::test(ViewNovelChapter::class, [
+        'record' => $novel->getRouteKey(),
+        'chapter' => $chapter->getRouteKey(),
+    ])
+        ->assertSee('交给 AI 尝试修复')
+        ->assertActionEnabled($action)
+        ->callAction($action);
+
+    Queue::assertPushed(GenerateSceneJob::class, fn (GenerateSceneJob $job): bool => $job->sceneId === $scene->getKey()
+        && $job->cascade);
 });
 
 test('passed review hides retained findings from the repair recommendation panel', function () {
