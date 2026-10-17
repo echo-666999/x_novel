@@ -154,6 +154,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
 
         return new EmbeddingResponse(
             embedding: array_map(static fn (mixed $value): float => (float) $value, $embedding),
+            usageAvailable: is_numeric($response->json('usage.prompt_tokens')),
             inputTokens: (int) $response->json('usage.prompt_tokens', 0),
             latencyMs: $latencyMs,
             providerRequestId: $response->header('x-request-id') ?: $response->json('id'),
@@ -337,6 +338,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                             'sent_parameters' => $this->observableSentParameters($sentPayload),
                         ],
                         reasoningTokens: $reasoningTokens,
+                        usageAvailable: is_numeric($response->json('usage.prompt_tokens')) && is_numeric($response->json('usage.completion_tokens')),
                     );
                     throw new AiProviderException(
                         'provider_schema_validation_failed',
@@ -376,6 +378,7 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
                 'sent_parameters' => $this->observableSentParameters($sentPayload),
             ],
             reasoningTokens: $reasoningTokens,
+            usageAvailable: is_numeric($response->json('usage.prompt_tokens')) && is_numeric($response->json('usage.completion_tokens')),
         );
     }
 

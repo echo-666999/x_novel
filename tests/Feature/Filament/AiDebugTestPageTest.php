@@ -43,7 +43,7 @@ test('ai debug page shows the required fields and resolved defaults', function (
         ->assertSee('Response')
         ->assertSee('Input Tokens')
         ->assertSee('Output Tokens')
-        ->assertSee('Cost')
+        ->assertSee('估计费用')
         ->assertSee('Latency');
 });
 

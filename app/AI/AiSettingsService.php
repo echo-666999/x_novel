@@ -8,7 +8,7 @@ use App\Models\AIProviderConnection;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * 提供应用支持的 Provider 清单，并只从数据库读取实际连接配置。
+ * 提供应用支持的 Provider 清单，从数据库读取连接、从config白名单读取凭据。
  */
 class AiSettingsService
 {
@@ -63,7 +63,9 @@ class AiSettingsService
 
     public function apiKey(string $provider): string
     {
-        $apiKey = $this->providerConnection($provider)?->api_key;
+        $reference = $this->providerConnection($provider)?->credential_ref;
+        $credentials = (array) config('ai.credentials', []);
+        $apiKey = is_string($reference) && array_key_exists($reference, $credentials) ? $credentials[$reference] : null;
 
         return is_string($apiKey) ? $apiKey : '';
     }
@@ -86,7 +88,7 @@ class AiSettingsService
         if ($requireEnabled && ! $connection->is_enabled) {
             throw new AiProviderException('provider_disabled', "AI provider [{$provider}] is disabled.", false);
         }
-        if (! filled($connection->api_key)) {
+        if (! $this->isCredentialConfigured($provider)) {
             throw new AiProviderException('provider_not_configured', "AI provider [{$provider}] has no configured API key.", false);
         }
     }

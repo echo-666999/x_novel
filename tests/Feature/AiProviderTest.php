@@ -9,6 +9,7 @@ use App\AI\Providers\EmergencyStopAiProvider;
 use App\AI\Providers\FakeAiProvider;
 use App\AI\Providers\OpenAiProvider;
 use App\Models\AIProviderConnection;
+use App\Providers\AppServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -17,6 +18,9 @@ use Illuminate\Support\Facades\Log;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // 适配器回归显式恢复装饰链，Http::preventStrayRequests仍禁止任何真实外发。
+    app()->forgetInstance(AiProvider::class);
+    app()->register(AppServiceProvider::class, force: true);
     createAiProviderConnectionForTest(baseUrl: 'https://llm.example/v1', apiKey: 'test-key');
 });
 
@@ -578,7 +582,7 @@ test('openai provider identifies completion spent on reasoning before visible ou
 });
 
 test('openai provider rejects missing credentials before sending a request', function () {
-    AIProviderConnection::query()->where('provider', 'openai')->update(['api_key' => null]);
+    AIProviderConnection::query()->where('provider', 'openai')->update(['credential_ref' => null]);
     Http::fake();
 
     app(OpenAiProvider::class)->generate(new AiRequest(model: 'test-model', prompt: 'Ping'));

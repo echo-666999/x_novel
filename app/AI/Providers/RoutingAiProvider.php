@@ -26,7 +26,7 @@ class RoutingAiProvider implements AiProvider
             throw new AiProviderException('provider_unsupported', "AI provider [{$provider}] is not registered.", false);
         }
 
-        $this->settings->assertProviderAvailable($provider, requireEnabled: ! $frozenOnRun);
+        $this->settings->assertProviderAvailable($provider, requireEnabled: true);
 
         return $adapter->generate($request->withProvider($provider));
     }
@@ -38,7 +38,7 @@ class RoutingAiProvider implements AiProvider
         $runId = $request->metadata['generation_run_id'] ?? null;
 
         if (is_numeric($runId)) {
-            $run = GenerationRun::query()->find((int) $runId, ['id', 'provider', 'model_policy', 'context_snapshot']);
+            $run = GenerationRun::query()->find((int) $runId, ['id', 'provider', 'model_policy', 'model', 'pipeline_version', 'context_snapshot']);
             if ($run === null) {
                 throw new AiProviderException(
                     'provider_run_missing',
@@ -82,7 +82,8 @@ class RoutingAiProvider implements AiProvider
             }
 
             $runProvider = strtolower(trim((string) $run?->provider));
-            $runModel = trim((string) $run?->model_policy);
+            // 冻结模型不豁免连接撤销；新链读取明确的模型列。
+            $runModel = trim((string) ($run->pipeline_version === 'pipeline-v1' ? $run->model : $run->model_policy));
 
             if ($runProvider !== '') {
                 if ($provider !== '' && $provider !== $runProvider) {

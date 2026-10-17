@@ -36,7 +36,7 @@ final class AiDebugService
 
         return new AiDebugResult(
             response: $response,
-            estimatedCost: $this->costCalculator->estimate($response),
+            estimatedCost: $this->costCalculator->estimate($response, $settings->provider),
         );
     }
 }

@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\AI\AiModelRouteService;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
+use App\Services\GenerationCostPolicy;
 use Filament\Resources\Pages\EditRecord;
 
 class EditNovel extends EditRecord
@@ -43,14 +44,8 @@ class EditNovel extends EditRecord
             (array) ($data['ai_model_overrides'] ?? []),
             $this->getRecord(),
         );
-        $budgetLimits = collect($data['budget_limits'] ?? [])
-            ->filter(fn (mixed $limit): bool => filled($limit))
-            ->map(fn (mixed $limit): float => (float) $limit)
-            ->all();
-
-        if ($budgetLimits !== [] || array_key_exists('budget', $settings)) {
-            $settings['budget'] = $budgetLimits;
-        }
+        // 与创建入口一致；关闭上限保留金额含义但不再阻断。
+        $settings = app(GenerationCostPolicy::class)->apply($settings, (array) ($data['budget_limits'] ?? []), auth()->id());
 
         $data['settings'] = $settings;
         unset($data['ai_model_overrides'], $data['budget_limits'], $data['generation_chapter_target_words']);

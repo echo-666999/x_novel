@@ -8,7 +8,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/** 实际请求账本；未知金额保留null，不因Run结束删除。 */
 #[Fillable([
+    'request_key', 'generation_task_id', 'issue_id', 'status', 'cost_status', 'currency', 'price_snapshot',
+    'actual_cost', 'reserved_amount', 'sent_at', 'settled_at', 'reconciled_at', 'cap_snapshot', 'reconciliation_history',
+
     'generation_run_id',
     'novel_id',
     'chapter_id',
@@ -27,6 +31,9 @@ class UsageRecord extends Model
 {
     /** @use HasFactory<UsageRecordFactory> */
     use HasFactory;
+
+    /** PostgreSQL带时区字段必须接收明确偏移。 */
+    protected $dateFormat = 'Y-m-d H:i:sP';
 
     public const UPDATED_AT = null;
 
@@ -60,7 +67,10 @@ class UsageRecord extends Model
             'reasoning_tokens' => 'integer',
             'cached_tokens' => 'integer',
             'latency_ms' => 'integer',
-            'estimated_cost' => 'decimal:6',
+            'estimated_cost' => 'decimal:8',
+            'actual_cost' => 'decimal:8', 'reserved_amount' => 'decimal:8',
+            'price_snapshot' => 'array', 'cap_snapshot' => 'array', 'reconciliation_history' => 'array',
+            'sent_at' => 'datetime', 'settled_at' => 'datetime', 'reconciled_at' => 'datetime',
             'request_metadata' => 'array',
             'created_at' => 'datetime',
         ];

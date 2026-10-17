@@ -4,6 +4,8 @@ namespace App\Providers\Filament;
 
 use App\Filament\Actions\AdministratorAccountAction;
 use App\Filament\Pages\Dashboard;
+use Filament\Enums\ThemeMode;
+use Filament\FontProviders\LocalFontProvider;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -33,11 +35,14 @@ class XPanelProvider extends PanelProvider
                 'profile' => fn () => AdministratorAccountAction::make(),
             ])
             ->brandName((string) config('app.name'))
+            // 沿用 Filament 主题偏好机制，中文字体使用本机回退，不请求远程字体。
+            ->font('"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif', provider: LocalFontProvider::class)
             ->darkMode()
+            ->defaultThemeMode(ThemeMode::Dark)
             ->sidebarCollapsibleOnDesktop()
-            ->sidebarWidth('15.5rem')
+            ->sidebarWidth('15rem')
             ->colors([
-                'primary' => Color::hex('#6D73E6'),
+                'primary' => Color::hex('#4F46E5'),
                 'success' => Color::hex('#35A66F'),
                 'info' => Color::hex('#4E83D1'),
                 'warning' => Color::hex('#C58A2B'),

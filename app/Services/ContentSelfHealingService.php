@@ -154,6 +154,9 @@ final class ContentSelfHealingService
 
         $this->assertWithinLimits($run);
         $limits = $this->limits($this->type($run));
+        if ($limits['max_cost'] === null) {
+            return;
+        }
         $price = AIModelPrice::query()
             ->where('provider', strtolower(trim((string) $request->provider)))
             ->where('model', trim($request->model))
@@ -173,7 +176,7 @@ final class ContentSelfHealingService
             + max(0, $request->maxTokens) * (float) $price->output_price
         ) / max(1, (int) $price->billing_unit);
         $used = $this->costSince($run);
-        if ($used + $projected > $limits['max_cost']) {
+        if ($limits['max_cost'] !== null && $used + $projected > $limits['max_cost']) {
             $this->failAndThrow(
                 $run,
                 'content_repair_cost_limit_exceeded',
@@ -196,7 +199,7 @@ final class ContentSelfHealingService
         }
 
         $used = $this->costSince($run);
-        if ($used >= $limits['max_cost']) {
+        if ($limits['max_cost'] !== null && $used >= $limits['max_cost']) {
             $this->failAndThrow($run, 'content_repair_cost_limit_exceeded', "内容修复已达到 {$limits['max_cost']} {$this->settings->currency()} 费用上限。", ['used_cost' => $used]);
         }
     }
@@ -268,17 +271,18 @@ final class ContentSelfHealingService
         $run->update(['status' => RunStatus::Succeeded, 'context_snapshot' => $snapshot, 'finished_at' => now()]);
     }
 
-    /** @return array{max_attempts: int, max_cost: float, max_elapsed_seconds: int} */
+    /** @return array{max_attempts: int, max_cost: float|null, max_elapsed_seconds: int} */
     private function limits(ContentRepairType $type): array
     {
         $configured = (array) config("generation.content_self_healing.{$type->value}", []);
         $limits = [
             'max_attempts' => (int) ($configured['max_attempts'] ?? 0),
-            'max_cost' => (float) ($configured['max_cost'] ?? 0),
+            // 金额仅由统一账本的用户主动策略限制，旧隐性修复金额上限停用。
+            'max_cost' => null,
             'max_elapsed_seconds' => (int) ($configured['max_elapsed_seconds'] ?? 0),
         ];
-        if ($limits['max_attempts'] < 1 || $limits['max_cost'] <= 0 || $limits['max_elapsed_seconds'] < 1) {
-            throw new AiProviderException('content_repair_limits_invalid', "{$type->getLabel()}缺少有效的次数、费用或时间上限。", false);
+        if ($limits['max_attempts'] < 1 || $limits['max_elapsed_seconds'] < 1) {
+            throw new AiProviderException('content_repair_limits_invalid', "{$type->getLabel()}缺少有效的次数或时间上限。", false);
         }
 
         return $limits;

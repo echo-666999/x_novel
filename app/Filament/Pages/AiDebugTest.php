@@ -141,10 +141,10 @@ class AiDebugTest extends Page
                                         ->placeholder('—')
                                         ->numeric(),
                                     TextEntry::make('debug_cost')
-                                        ->label('Cost')
+                                        ->label('估计费用')
                                         ->state(fn (): ?string => isset($this->result['cost'])
                                             ? app(GenerationSettingsService::class)->currency().' '.number_format((float) $this->result['cost'], 4)
-                                            : null)
+                                            : ($this->result === null ? null : '待确认：缺少价格依据'))
                                         ->placeholder('—'),
                                     TextEntry::make('debug_latency')
                                         ->label('Latency')

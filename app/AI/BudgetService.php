@@ -98,7 +98,7 @@ class BudgetService
         return new BudgetUsage(
             scope: 'daily',
             used: (float) UsageRecord::query()->whereDate('created_at', today())->sum('estimated_cost'),
-            limit: $this->limit(data_get($this->settings->budgetSettings(), 'daily_hard_limit')),
+            limit: data_get($this->settings->budgetSettings(), 'daily_hard_limit_enabled', false) ? $this->limit(data_get($this->settings->budgetSettings(), 'daily_hard_limit')) : null,
         );
     }
 
@@ -196,9 +196,17 @@ class BudgetService
 
     private function novelLimit(Novel $novel, string $key): ?float
     {
-        $override = data_get($novel->settings, "budget.{$key}");
+        // 显式开关是金额门禁的必要条件，旧数值不隐式启动限制。
+        $policy = (array) data_get($novel->settings, 'budget', []);
+        $global = $this->settings->budgetSettings();
+        $limits = [];
+        foreach ([$policy, $global] as $candidate) {
+            if (($candidate[$key.'_enabled'] ?? false) && isset($candidate[$key])) {
+                $limits[] = (float) $candidate[$key];
+            }
+        }
 
-        return $this->limit(filled($override) ? $override : data_get($this->settings->budgetSettings(), $key));
+        return $limits === [] ? null : min($limits);
     }
 
     private function limit(mixed $value): ?float

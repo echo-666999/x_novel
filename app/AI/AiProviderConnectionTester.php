@@ -12,13 +12,14 @@ class AiProviderConnectionTester
     /** @return array{model_count: int} */
     public function test(AIProviderConnection $connection): array
     {
-        if (! $connection->is_enabled || blank($connection->api_key)) {
-            throw new AiProviderException('provider_not_configured', '服务商连接未启用或 API Key 未配置。', false);
-        }
+        // 诊断同样只解析部署凭据引用，禁止读取旧密文字段。
+        $settings = app(AiSettingsService::class);
+        $settings->assertProviderAvailable($connection->provider);
+        $key = $settings->apiKey($connection->provider);
 
         try {
             $response = Http::baseUrl(rtrim($connection->base_url, '/'))
-                ->withToken($connection->api_key)
+                ->withToken($key)
                 ->acceptJson()
                 ->connectTimeout($connection->connect_timeout)
                 ->timeout($connection->timeout)

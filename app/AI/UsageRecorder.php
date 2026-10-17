@@ -6,77 +6,51 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Data\EmbeddingRequest;
 use App\AI\Data\EmbeddingResponse;
-use App\Enums\AiStage;
 use App\Models\UsageRecord;
 use App\Services\PromptExecutionContract;
+use Illuminate\Support\Arr;
 
+/** 所有调用结算到发送前建立的同一请求，不再事后另建费用行。 */
 class UsageRecorder
 {
-    public function __construct(
-        private readonly AiCostCalculator $costCalculator,
-        private readonly PromptExecutionContract $promptContracts,
-    ) {}
+    public function __construct(private readonly RequestUsageLedger $ledger) {}
 
-    public function record(AiRequest $request, AiResponse $response): UsageRecord
+    public function record(AiRequest $request, AiResponse $response, ?UsageRecord $entry = null): UsageRecord
     {
-        $generationRunId = $request->metadata['generation_run_id'] ?? null;
-        $novelId = $request->metadata['novel_id'] ?? null;
-        $chapterId = $request->metadata['chapter_id'] ?? null;
+        $entry ??= $this->ledger->prepare($request);
+        if (! $response->usageAvailable) {
+            // 正文成功不证明账单完整，保留预留并显示待确认用量。
+            return $this->ledger->unknownResponse($entry, $response->providerRequestId, $response->model, $response->latencyMs);
+        }
 
-        return UsageRecord::query()->create([
-            'generation_run_id' => is_numeric($generationRunId) ? (int) $generationRunId : null,
-            'novel_id' => is_numeric($novelId) ? (int) $novelId : null,
-            'chapter_id' => is_numeric($chapterId) ? (int) $chapterId : null,
-            'provider' => $request->provider ?? throw new \LogicException('AI request provider must be resolved before usage is recorded.'),
-            'model' => $response->model,
-            'input_tokens' => $response->inputTokens,
-            'output_tokens' => $response->outputTokens,
-            'reasoning_tokens' => $response->reasoningTokens,
-            'cached_tokens' => $response->cachedTokens,
-            'latency_ms' => $response->latencyMs,
-            'estimated_cost' => $this->costCalculator->estimate($response, $request->provider),
-            'request_id' => $response->providerRequestId,
-            'request_metadata' => array_filter([
-                'stage' => $request->metadata['stage'] ?? null,
-                'substage' => $request->metadata['substage'] ?? null,
-                'route_key' => $request->metadata['route_key'] ?? null,
-                'prompt_version' => $request->promptVersion,
-                'prompt_checksum' => $this->promptContracts->make($request)['checksum'],
-                // OpenAI 与 DeepSeek 适配器都只发送显式冻结的 reasoning_effort；这里记录实际请求意图供运行审计。
-                'reasoning_effort_sent' => $request->reasoningEffort,
-                'max_output_tokens' => $request->maxTokens,
+        return $this->ledger->settle($entry, [
+            // 用量证据白名单保留实际返回模型与截断原因，不复制完整原始响应。
+            'request_metadata' => [...$entry->request_metadata,
+                'actual_model' => $response->model, 'prompt_version' => $request->promptVersion,
+                'prompt_checksum' => app(PromptExecutionContract::class)->make($request)['checksum'],
+                'reasoning_effort_sent' => $request->reasoningEffort, 'max_output_tokens' => $request->maxTokens,
                 'finish_reason' => data_get($response->metadata, 'finish_reason'),
                 'completion_limit_reason' => data_get($response->metadata, 'completion_limit_reason'),
-                'sent_parameters' => data_get($response->metadata, 'sent_parameters'),
-            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+                'sent_parameters' => Arr::only((array) data_get($response->metadata, 'sent_parameters', []), ['model', 'max_tokens', 'max_completion_tokens', 'reasoning_effort', 'temperature']),
+            ],
+            'input_tokens' => $response->inputTokens, 'output_tokens' => $response->outputTokens,
+            'cached_tokens' => $response->cachedTokens, 'reasoning_tokens' => $response->reasoningTokens,
+            'latency_ms' => $response->latencyMs, 'request_id' => $response->providerRequestId,
         ]);
     }
 
-    public function recordEmbedding(EmbeddingRequest $request, EmbeddingResponse $response): UsageRecord
+    public function recordEmbedding(EmbeddingRequest $request, EmbeddingResponse $response, ?UsageRecord $entry = null): UsageRecord
     {
-        $generationRunId = $request->metadata['generation_run_id'] ?? null;
-        $novelId = $request->metadata['novel_id'] ?? null;
-        $chapterId = $request->metadata['chapter_id'] ?? null;
-        $provider = (string) ($request->metadata['provider'] ?? 'openai');
-        $estimatedCost = $this->costCalculator->estimateInputOnly($response->inputTokens, $provider, $response->model);
+        $entry ??= $this->ledger->prepare($request);
+        if (! $response->usageAvailable) {
+            // 正文成功不证明账单完整，保留预留并显示待确认用量。
+            return $this->ledger->unknownResponse($entry, $response->providerRequestId, $response->model, $response->latencyMs);
+        }
 
-        return UsageRecord::query()->create([
-            'generation_run_id' => is_numeric($generationRunId) ? (int) $generationRunId : null,
-            'novel_id' => is_numeric($novelId) ? (int) $novelId : null,
-            'chapter_id' => is_numeric($chapterId) ? (int) $chapterId : null,
-            'provider' => $provider,
-            'model' => $response->model,
-            'input_tokens' => $response->inputTokens,
-            'output_tokens' => 0,
-            'reasoning_tokens' => 0,
-            'cached_tokens' => 0,
-            'latency_ms' => $response->latencyMs,
-            'estimated_cost' => $estimatedCost,
-            'request_id' => $response->providerRequestId,
-            'request_metadata' => [
-                'stage' => AiStage::Embedding->value,
-                'embedding_dimensions' => $request->dimensions,
-            ],
+        return $this->ledger->settle($entry, [
+            'request_metadata' => [...$entry->request_metadata, 'actual_model' => $response->model, 'embedding_dimensions' => $request->dimensions],
+            'input_tokens' => $response->inputTokens, 'output_tokens' => 0, 'cached_tokens' => 0, 'reasoning_tokens' => 0,
+            'latency_ms' => $response->latencyMs, 'request_id' => $response->providerRequestId,
         ]);
     }
 }

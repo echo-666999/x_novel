@@ -115,10 +115,13 @@ function createAiProviderConnectionForTest(
 ): AIProviderConnection {
     $baseUrl ??= $provider === 'deepseek' ? 'https://deepseek.example' : 'https://openai.example/v1';
 
+    // 测试凭据也只放进进程内配置，禁止写入数据库。
+    config(["ai.credentials.{$provider}" => $apiKey ?? "{$provider}-test-key"]);
+
     return AIProviderConnection::query()->updateOrCreate(['provider' => $provider], [
         'name' => ucfirst($provider),
         'base_url' => $baseUrl,
-        'api_key' => $apiKey ?? "{$provider}-test-key",
+        'credential_ref' => $provider,
         'connect_timeout' => 10,
         'timeout' => 150,
         'is_enabled' => $enabled,

@@ -11,6 +11,7 @@ use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
@@ -23,6 +24,7 @@ use Filament\Schemas\Components\Text;
 use Filament\Schemas\Schema;
 use Illuminate\Validation\ValidationException;
 
+/** 系统设置明确区分费用统计与用户主动启用的停止条件。 */
 class Settings extends Page
 {
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-cog-6-tooth';
@@ -87,8 +89,11 @@ class Settings extends Page
                                             ->minLength(3)
                                             ->maxLength(3)
                                             ->helperText('使用三个字母的货币代码，例如美元代码或人民币代码。'),
+                                        Toggle::make('budget.daily_hard_limit_enabled')->label('主动启用每日金额硬上限')->default(false),
                                         $this->costLimitInput('budget.daily_hard_limit', '每日费用上限'),
+                                        Toggle::make('budget.novel_total_limit_enabled')->label('主动启用整书金额硬上限')->default(false),
                                         $this->costLimitInput('budget.novel_total_limit', '单本小说总费用上限'),
+                                        Toggle::make('budget.chapter_max_cost_enabled')->label('主动启用单章金额硬上限')->default(false),
                                         $this->costLimitInput('budget.chapter_max_cost', '单章费用上限'),
                                     ]),
                                 Section::make('审校与向量')
@@ -285,8 +290,8 @@ class Settings extends Page
 
     private function budgetSection(): Section
     {
-        return Section::make('预算')
-            ->description('Hard Limit 达到后，新的 Provider Request 会在发送前被阻止。')
+        return Section::make('费用统计与可选上限')
+            ->description('默认以完成小说为目标；预警不中断。只有主动启用的金额硬上限才会阻止后续请求。')
             ->icon('heroicon-o-banknotes')
             ->afterHeader([
                 Text::make('只读')->badge()->color('gray'),
@@ -300,11 +305,11 @@ class Settings extends Page
                     ->color(fn (): string => app(BudgetService::class)->dailyUsage()->reached() ? 'danger' : 'gray'),
                 TextEntry::make('novel_budget_default')
                     ->label('Novel Total Default')
-                    ->state(fn (): string => $this->formatLimit(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'novel_total_limit'))),
+                    ->state(fn (): string => data_get(app(GenerationSettingsService::class)->budgetSettings(), 'novel_total_limit_enabled', false) ? $this->formatLimit(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'novel_total_limit')) : '未启用金额硬上限'),
                 TextEntry::make('chapter_budget_default')
                     ->label('Chapter Max Default')
-                    ->state(fn (): string => $this->formatLimit(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'chapter_max_cost'))),
-                Text::make('来源：设置 → 生成参数与 Novel settings。空值表示无限制。')
+                    ->state(fn (): string => data_get(app(GenerationSettingsService::class)->budgetSettings(), 'chapter_max_cost_enabled', false) ? $this->formatLimit(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'chapter_max_cost')) : '未启用金额硬上限'),
+                Text::make('来源：全局生成参数与小说设置。金额值不会自动启用上限，历史费用不会因关闭上限而清空。')
                     ->icon('heroicon-o-information-circle')
                     ->color('gray')
                     ->columnSpanFull(),

@@ -7,6 +7,7 @@ use App\Models\GenerationRun;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
+/** 旧入口的租约工具；新版任务必须由 Coordinator 在任务锁下认领。 */
 class GenerationRunLease
 {
     public function isFresh(?GenerationRun $run): bool
@@ -32,6 +33,9 @@ class GenerationRunLease
 
     public function queue(GenerationRun $run): GenerationRun
     {
+        if ($run->pipeline_version === 'pipeline-v1') {
+            throw new \LogicException('新版 Run 必须通过 GenerationRunCoordinator 管理执行权。');
+        }
         $now = now();
         $run->update([
             'status' => RunStatus::Queued,
@@ -46,6 +50,9 @@ class GenerationRunLease
 
     public function claim(GenerationRun $run): GenerationRun
     {
+        if ($run->pipeline_version === 'pipeline-v1') {
+            throw new \LogicException('新版 Run 必须通过 GenerationRunCoordinator 管理执行权。');
+        }
         $now = now();
         $run->update([
             'status' => RunStatus::Running,
@@ -59,6 +66,9 @@ class GenerationRunLease
 
     public function heartbeat(GenerationRun $run): void
     {
+        if ($run->pipeline_version === 'pipeline-v1') {
+            throw new \LogicException('新版 Run 必须通过 GenerationRunCoordinator 管理执行权。');
+        }
         $now = now();
         $run->update([
             'heartbeat_at' => $now,
@@ -68,10 +78,13 @@ class GenerationRunLease
 
     public function release(GenerationRun $run): void
     {
+        if ($run->pipeline_version === 'pipeline-v1') {
+            throw new \LogicException('新版 Run 必须通过 Coordinator 核实执行权后释放。');
+        }
         $run->update([
             'lease_expires_at' => null,
             'lease_token' => null,
-            'reserved_cost' => 0,
+            // 释放 Worker 租约不代表供应商未收费，不再清空金额占用。
         ]);
     }
 

@@ -9,6 +9,7 @@ use App\Models\AIModelPrice;
 use App\Models\Novel;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Arr;
 use Illuminate\Validation\ValidationException;
 use Livewire\Livewire;
 
@@ -121,7 +122,7 @@ test('creating a novel persists provider and model overrides for every outline t
 
     $novel = Novel::query()->sole();
 
-    expect(data_get($novel->settings, 'ai.stages'))->toBe([
+    expect(data_get($novel->settings, 'ai.stages'))->toEqual([
         'outline_foundation' => ['provider' => 'openai', 'model' => 'foundation-model'],
         'outline_structure' => ['provider' => 'deepseek', 'model' => 'structure-model'],
         'outline_arc_beats' => ['provider' => 'openai', 'model' => 'arc-beats-model'],
@@ -168,7 +169,8 @@ test('saving novel model overrides preserves unrelated settings and removes blan
         ->call('save')
         ->assertHasNoFormErrors();
 
-    expect($novel->refresh()->settings)->toBe([
+    // PostgreSQL JSONB不保留键顺序，模型设置断言只比较其语义并保留费用审计。
+    expect(Arr::except($novel->refresh()->settings, ['budget', 'budget_history']))->toEqual([
         'temperature' => 0.4,
         'ai' => [
             'custom_option' => true,
@@ -192,7 +194,7 @@ test('an unregistered legacy override remains selectable and survives an unrelat
         ->assertHasNoFormErrors();
 
     expect(data_get($novel->refresh()->settings, 'ai.models.writer'))->toBeNull()
-        ->and(data_get($novel->settings, 'ai.stages.writer'))->toBe([
+        ->and(data_get($novel->settings, 'ai.stages.writer'))->toEqual([
             'provider' => 'openai',
             'model' => 'legacy-private-model',
         ]);
@@ -225,7 +227,7 @@ test('legacy outline model-only override remains visible without inferring a pro
         ->assertHasNoFormErrors();
 
     expect(data_get($novel->refresh()->settings, 'ai.models.outline_foundation'))->toBeNull()
-        ->and(data_get($novel->settings, 'ai.stages.outline_foundation'))->toBe([
+        ->and(data_get($novel->settings, 'ai.stages.outline_foundation'))->toEqual([
             'provider' => 'openai',
             'model' => 'legacy-outline-model',
         ]);
@@ -256,7 +258,7 @@ test('existing outline reasoning survives an unrelated save and resets only when
         ->call('save')
         ->assertHasNoFormErrors();
 
-    expect(data_get($novel->refresh()->settings, 'ai.stages.outline_foundation'))->toBe([
+    expect(data_get($novel->refresh()->settings, 'ai.stages.outline_foundation'))->toEqual([
         'provider' => 'openai',
         'model' => 'replacement-outline-model',
     ]);

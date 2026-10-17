@@ -1,8 +1,8 @@
 # 新版小说生成执行合同
 
-版本：1.0 · R00 / XNR-002 · 2026-10-17。
+版本：1.2 · R00 合同 / R01 实施 · 2026-10-17。
 
-依据：[PRD](../PRD.md)、[数据合同](data-model.md)、[DESIGN](../../DESIGN.md)、[基线及模块清单](../development/reports/XNR-001-baseline.md)。本文是后续 R01–R05 的实施输入，不代表代码、队列或真实模型已经按此运行。凭据存储仍以数据合同 §10 的待确认决策为边界，其余合同按下文实施。
+依据：[PRD](../PRD.md)、[数据合同](data-model.md)、[DESIGN](../../DESIGN.md)、[基线及模块清单](../development/reports/XNR-001-baseline.md)。本文是 R01–R05 的目标合同。R01 数据/执行/费用基础已在隔离环境验证；完整生成阶段和真实模型尚未接通验收，见 [R01 报告](../development/reports/R01-implementation.md)。凭据按用户已确认的方案 A 实施，见数据合同 §10。
 
 ## 1 职责与实施边界
 
@@ -287,4 +287,14 @@ AI proposal 白名单：retry_transient、repair_schema、repair_evidence、reex
 
 以上为交接关注点，不替代任务总表的逐项验收映射。历史夹具见 [R00 样本说明](../../tests/Fixtures/refactor_r00_README.md)：6 个观察投影、11 个构造合同场景。它们提供风险输入，不等于新功能测试已通过。
 
-R00 审查应核对：阶段输入输出闭合、每次收费有身份、暂停/晚到/重复/崩溃均有结果、没有 Draft 写正式状态、没有金额默认停点、没有强制旧规划树、无第二套路由/引擎。当前凭据选项未批准时相关合同保持待定并记录任务断点，不允许把 R01 自动标为已开始。
+R00 审查应核对：阶段输入输出闭合、每次收费有身份、暂停/晚到/重复/崩溃均有结果、没有 Draft 写正式状态、没有金额默认停点、没有强制旧规划树、无第二套路由/引擎。凭据方案 A 已获明确确认；R01 按任务依赖实施并记录实际验证。
+
+## R01 执行基础落地说明
+
+新链使用 GenerationRunCoordinator / GenerationJobDispatcher / ExecuteGenerationRunJob，持久 queued Run 和 Task.pending_transition 取代仅依赖 Redis 的推进。正常成功保持 succeeded，只有真实检查点交接才可 deferred；R01 不为普通成功制造 deferred。旧扫描器排除新版任务，旧入口在 R07 清理。
+
+新 Job 当前仅接入执行身份 Preflight，明确标注 execution_foundation；并非完整的模型/配置预检已完成，更不表示从概述到全书正文已闭环。配置冻结和容量检验入口已交付，后续阶段必须复用；Canonical Commit 不在本批改写。
+
+本机核实 Job 330s ≤ Horizon 360s < Run lease 390s < Redis retry_after 420s。代码保留运行时关系检查，不修改部署.env。技术尝试计数按相同逻辑键累计；暂停复用有效结果，重启需新输入身份并保留历史。问题修复累计和人工处理动作由 R02 接入。
+
+所有收费调用通过发送前 Usage 账本，硬上限默认关闭；冻结生成配置不豁免实时急停、凭据撤销、任务控制或最新用户金额授权。未知响应、缺用量和缺价格均不记免费。详细事务和对账说明见 XNR-005/006 报告。

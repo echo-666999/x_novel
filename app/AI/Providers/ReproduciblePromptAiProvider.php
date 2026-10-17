@@ -7,6 +7,7 @@ use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
 use App\AI\Exceptions\AiProviderException;
 use App\Models\GenerationRun;
+use App\Services\GenerationRequestContract;
 use App\Services\GenerationSubstagePromptVersions;
 use App\Services\PromptExecutionContract;
 use Illuminate\Support\Facades\DB;
@@ -39,6 +40,12 @@ final class ReproduciblePromptAiProvider implements AiProvider
     {
         DB::transaction(function () use ($runId, $request): void {
             $run = GenerationRun::query()->lockForUpdate()->findOrFail($runId);
+            if ($run->pipeline_version === 'pipeline-v1') {
+                // 新链在建 Run 前冻结，不在发送时悄悄替换历史合同。
+                app(GenerationRequestContract::class)->assertMatches($run, $request);
+
+                return;
+            }
             $expectedPromptVersion = $this->substagePromptVersions->expectedFor($run, $request);
             if (blank($request->promptVersion)
                 || blank($expectedPromptVersion)

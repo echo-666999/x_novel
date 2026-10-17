@@ -10,6 +10,7 @@ use App\Models\UsageRecord;
 use App\Models\User;
 use App\Services\GenerationSettingsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
@@ -20,6 +21,9 @@ beforeEach(function () {
     $settings = $service->settings();
     $settings['currency'] = 'USD';
     $settings['budget'] = [
+        'daily_hard_limit_enabled' => true,
+        'novel_total_limit_enabled' => true,
+        'chapter_max_cost_enabled' => true,
         'daily_hard_limit' => 5,
         'novel_total_limit' => 20,
         'chapter_max_cost' => 4,
@@ -54,7 +58,7 @@ test('generation request budgets and embedding dimensions can be saved from sett
 
     expect(data_get(SystemSetting::query()->findOrFail(SystemSetting::GENERATION)->value, 'review_context_token_budget'))->toBe(52_000)
         ->and(app(GenerationSettingsService::class)->currency())->toBe('CNY')
-        ->and(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'daily_hard_limit'))->toBe(12.5)
+        ->and(data_get(app(GenerationSettingsService::class)->budgetSettings(), 'daily_hard_limit'))->toBe('12.5')
         ->and(data_get(app(GenerationSettingsService::class)->settings(), 'chapter_request_budgets.writer.initial.output_tokens'))->toBe(13_000);
 });
 
@@ -67,12 +71,14 @@ test('sqlite settings can save an embedding dimension when no pgvector column is
         ->assertHasNoActionErrors();
 
     expect(data_get(SystemSetting::query()->findOrFail(SystemSetting::GENERATION)->value, 'embedding_dimensions'))->toBe(3_072);
-});
+})->skip(fn () => DB::getDriverName() !== 'sqlite', '此例专门验证无pgvector的SQLite；PostgreSQL必须校验真实列维度。');
 
 test('novel overview shows novel and current chapter used versus limit', function () {
     $novel = Novel::factory()->create([
         'current_chapter_sequence' => 3,
         'settings' => ['budget' => [
+            'novel_total_limit_enabled' => true,
+            'chapter_max_cost_enabled' => true,
             'novel_total_limit' => 8,
             'chapter_max_cost' => 2,
         ]],
@@ -110,11 +116,11 @@ test('novel budget overrides can be saved without replacing other settings', fun
         ->call('save')
         ->assertHasNoFormErrors();
 
-    expect($novel->refresh()->settings)->toBe([
-        'temperature' => 0.5,
-        'budget' => [
-            'novel_total_limit' => 12.5,
-            'chapter_max_cost' => 1.25,
-        ],
-    ]);
+    // 金额独立于主动启用状态，保存新策略同时保留无关配置与审计。
+    $saved = $novel->refresh()->settings;
+    expect($saved['temperature'])->toBe(0.5);
+    expect($saved['budget']['novel_total_limit'])->toBe('12.5');
+    expect($saved['budget']['chapter_max_cost'])->toBe('1.25');
+    expect($saved['budget']['novel_total_limit_enabled'])->toBeFalse();
+    expect($saved['budget_history'])->toHaveCount(1);
 });

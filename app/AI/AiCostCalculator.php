@@ -11,10 +11,14 @@ class AiCostCalculator
 {
     public function __construct(private readonly GenerationSettingsService $settings) {}
 
-    public function estimate(AiResponse $response, ?string $provider = null): float
+    public function estimate(AiResponse $response, ?string $provider = null): ?float
     {
+        // 可用量缺失或价格未填写均为未知，不能按0参与展示与估算。
+        if (! $response->usageAvailable) {
+            return null;
+        }
         $price = $this->modelPrice($provider, $response->model);
-        if ($price !== null) {
+        if ($price !== null && $price->input_price !== null && $price->output_price !== null) {
             $uncachedInputTokens = max(0, $response->inputTokens - $response->cachedTokens);
             $billingUnit = max(1, $price->billing_unit);
 
@@ -25,17 +29,19 @@ class AiCostCalculator
             ) / $billingUnit, 6);
         }
 
-        return 0.0;
+        // 缺价格是未知，不代表免费。
+        return null;
     }
 
-    public function estimateInputOnly(int $inputTokens, ?string $provider = null, ?string $model = null): float
+    public function estimateInputOnly(int $inputTokens, ?string $provider = null, ?string $model = null): ?float
     {
         $price = $this->modelPrice($provider, $model);
-        if ($price !== null) {
+        if ($price !== null && $price->input_price !== null) {
             return round($inputTokens * (float) ($price->input_price ?? 0) / max(1, $price->billing_unit), 6);
         }
 
-        return 0.0;
+        // 缺价格是未知，不代表免费。
+        return null;
     }
 
     private function modelPrice(?string $provider, ?string $model): ?AIModelPrice

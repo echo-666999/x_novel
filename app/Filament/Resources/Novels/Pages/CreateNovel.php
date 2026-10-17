@@ -5,6 +5,7 @@ namespace App\Filament\Resources\Novels\Pages;
 use App\AI\AiModelRouteService;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
+use App\Services\GenerationCostPolicy;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateNovel extends CreateRecord
@@ -29,6 +30,8 @@ class CreateNovel extends CreateRecord
             'auto_commit' => false,
             'auto_commit_configured' => true,
         ];
+        // 创建和编辑共用费用策略解析，保留用户明确启用而非丢弃表单值。
+        $settings = app(GenerationCostPolicy::class)->apply($settings, (array) ($data['budget_limits'] ?? []), auth()->id());
         // Select 提交的是价格记录 ID，必须在创建 Novel 前转换并持久化完整的 Provider + Model 路由。
         $data['settings'] = app(AiModelRouteService::class)->applyNovelOverrides(
             $settings,

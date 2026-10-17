@@ -19,5 +19,7 @@ final readonly class AiResponse
         public string $model,
         public array $metadata = [],
         public int $reasoningTokens = 0,
+        // 供应商未返回用量时不能把DTO的数值兼容默认值记作免费。
+        public bool $usageAvailable = true,
     ) {}
 }

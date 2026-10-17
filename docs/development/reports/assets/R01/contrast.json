@@ -1,0 +1,110 @@
+[
+  {
+    "rows": [
+      {
+        "background": "rgb(255, 255, 255)",
+        "contrast": 17.57,
+        "controlBorderContrast": null,
+        "foreground": "rgb(23, 25, 31)",
+        "selector": ".xn-panel"
+      },
+      {
+        "background": "rgb(255, 255, 255)",
+        "contrast": 7.49,
+        "controlBorderContrast": null,
+        "foreground": "rgb(79, 85, 97)",
+        "selector": ".xn-panel .xn-muted"
+      },
+      {
+        "background": "rgb(79, 70, 229)",
+        "contrast": 6.29,
+        "controlBorderContrast": null,
+        "foreground": "rgb(255, 255, 255)",
+        "selector": ".xn-primary"
+      },
+      {
+        "background": "rgb(239, 246, 255)",
+        "contrast": 8.01,
+        "controlBorderContrast": null,
+        "foreground": "rgb(30, 64, 175)",
+        "selector": ".xn-status"
+      },
+      {
+        "background": "rgb(255, 251, 235)",
+        "contrast": 6.84,
+        "controlBorderContrast": null,
+        "foreground": "rgb(146, 64, 14)",
+        "selector": ".xn-notice"
+      },
+      {
+        "background": "rgb(255, 255, 255)",
+        "contrast": 17.57,
+        "controlBorderContrast": 4.26,
+        "foreground": "rgb(23, 25, 31)",
+        "selector": ".xn-control"
+      },
+      {
+        "background": "rgb(238, 240, 244)",
+        "contrast": 6.56,
+        "controlBorderContrast": 3.73,
+        "foreground": "rgb(79, 85, 97)",
+        "selector": ".fi-btn[disabled]"
+      }
+    ],
+    "theme": "light"
+  },
+  {
+    "rows": [
+      {
+        "background": "rgb(17, 19, 24)",
+        "contrast": 16.74,
+        "controlBorderContrast": null,
+        "foreground": "rgb(242, 243, 245)",
+        "selector": ".xn-panel"
+      },
+      {
+        "background": "rgb(17, 19, 24)",
+        "contrast": 9.67,
+        "controlBorderContrast": null,
+        "foreground": "rgb(183, 187, 197)",
+        "selector": ".xn-panel .xn-muted"
+      },
+      {
+        "background": "rgb(165, 180, 252)",
+        "contrast": 8.92,
+        "controlBorderContrast": null,
+        "foreground": "rgb(20, 24, 32)",
+        "selector": ".xn-primary"
+      },
+      {
+        "background": "rgb(21, 38, 61)",
+        "contrast": 8.46,
+        "controlBorderContrast": null,
+        "foreground": "rgb(147, 197, 253)",
+        "selector": ".xn-status"
+      },
+      {
+        "background": "rgb(50, 39, 20)",
+        "contrast": 10.14,
+        "controlBorderContrast": null,
+        "foreground": "rgb(252, 211, 77)",
+        "selector": ".xn-notice"
+      },
+      {
+        "background": "rgb(17, 19, 24)",
+        "contrast": 16.74,
+        "controlBorderContrast": 5.37,
+        "foreground": "rgb(242, 243, 245)",
+        "selector": ".xn-control"
+      },
+      {
+        "background": "rgb(29, 32, 40)",
+        "contrast": 8.47,
+        "controlBorderContrast": 4.71,
+        "foreground": "rgb(183, 187, 197)",
+        "selector": ".fi-btn[disabled]"
+      }
+    ],
+    "theme": "dark"
+  }
+]

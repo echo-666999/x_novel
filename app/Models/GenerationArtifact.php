@@ -11,7 +11,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use LogicException;
 
+/** R01 增加整书归属、冻结来源和执行字段；写入仍由领域入口校验。 */
 #[Fillable([
+    'novel_id',
+    'schema_version',
+    'source_manifest',
+
     'generation_run_id',
     'type',
     'version',
@@ -33,6 +38,8 @@ class GenerationArtifact extends Model
     {
         static::creating(function (GenerationArtifact $artifact): void {
             $run = $artifact->generationRun()->firstOrFail();
+            // 来源归属由真实 Run 决定，数据库复合外键再次验证。
+            $artifact->novel_id ??= $run->novel_id;
             if (filled($artifact->input_hash) && ! hash_equals((string) $run->input_hash, (string) $artifact->input_hash)) {
                 throw new LogicException('Artifact input hash must match its Generation Run.');
             }
@@ -70,6 +77,9 @@ class GenerationArtifact extends Model
     protected function casts(): array
     {
         return [
+            'novel_id' => 'integer',
+            'source_manifest' => 'array',
+
             'type' => ArtifactType::class,
             'version' => 'integer',
             'data' => 'array',

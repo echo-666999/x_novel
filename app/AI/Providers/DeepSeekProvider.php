@@ -163,6 +163,7 @@ class DeepSeekProvider implements AiProvider
                 'sent_parameters' => $this->observableSentParameters($sentPayload),
             ],
             reasoningTokens: $reasoningTokens,
+            usageAvailable: is_numeric($response->json('usage.prompt_tokens')) && is_numeric($response->json('usage.completion_tokens')),
         );
 
         $structuredData = null;
@@ -211,6 +212,7 @@ class DeepSeekProvider implements AiProvider
                         model: $usageResponse->model,
                         metadata: $usageResponse->metadata,
                         reasoningTokens: $usageResponse->reasoningTokens,
+                        usageAvailable: $usageResponse->usageAvailable,
                     );
                     throw new AiProviderException(
                         'provider_schema_validation_failed',
@@ -249,6 +251,7 @@ class DeepSeekProvider implements AiProvider
                 'sent_parameters' => $this->observableSentParameters($sentPayload),
             ],
             reasoningTokens: $reasoningTokens,
+            usageAvailable: is_numeric($response->json('usage.prompt_tokens')) && is_numeric($response->json('usage.completion_tokens')),
         );
     }
 

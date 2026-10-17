@@ -26,6 +26,8 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     $this->actingAs(User::factory()->create());
+    // 凭据只存在测试进程配置，不写入连接表。
+    config(['ai.credentials.openai' => 'database-key', 'ai.credentials.deepseek' => 'database-key']);
 });
 
 test('ai and costs navigation exposes only provider connections and model prices', function () {
@@ -40,13 +42,13 @@ test('ai and costs navigation exposes only provider connections and model prices
         ->assertSee('暂无模型价格');
 });
 
-test('provider connection encrypts api key and blank edit preserves it', function () {
+test('provider connection stores only a credential reference and unrelated edits preserve it', function () {
     Livewire::test(CreateAIProviderConnection::class)
         ->fillForm([
             'provider' => 'openai',
             'name' => 'OpenAI 主连接',
             'base_url' => 'https://api.openai.com/v1',
-            'api_key' => 'provider-secret-key',
+            'credential_ref' => 'openai',
             'connect_timeout' => 10,
             'timeout' => 60,
             'is_enabled' => true,
@@ -56,20 +58,19 @@ test('provider connection encrypts api key and blank edit preserves it', functio
         ->assertRedirect();
 
     $connection = AIProviderConnection::query()->sole();
-    $ciphertext = $connection->getRawOriginal('api_key');
 
-    expect($connection->api_key)->toBe('provider-secret-key')
-        ->and($ciphertext)->not->toContain('provider-secret-key')
+    expect($connection->credential_ref)->toBe('openai')
+        ->and($connection->getRawOriginal('api_key'))->toBeNull()
         ->and($connection->toArray())->not->toHaveKey('api_key');
 
     Livewire::test(EditAIProviderConnection::class, ['record' => $connection->id])
-        ->fillForm(['name' => 'OpenAI 备用连接', 'api_key' => ''])
+        ->fillForm(['name' => 'OpenAI 备用连接'])
         ->call('save')
         ->assertHasNoFormErrors();
 
     expect($connection->fresh()->name)->toBe('OpenAI 备用连接')
-        ->and($connection->fresh()->api_key)->toBe('provider-secret-key')
-        ->and($connection->fresh()->getRawOriginal('api_key'))->toBe($ciphertext);
+        ->and($connection->fresh()->credential_ref)->toBe('openai')
+        ->and($connection->fresh()->getRawOriginal('api_key'))->toBeNull();
 });
 
 test('provider connection form defaults to the long generation request timeout', function () {
@@ -85,7 +86,7 @@ test('provider connection is the runtime source and can be verified', function (
         'provider' => 'openai',
         'name' => 'Database connection',
         'base_url' => 'https://database.example/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 12,
         'timeout' => 70,
         'is_enabled' => true,
@@ -110,7 +111,7 @@ test('a disabled database connection cannot be selected for runtime use', functi
         'provider' => 'openai',
         'name' => 'Disabled connection',
         'base_url' => 'https://database.example/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 10,
         'timeout' => 60,
         'is_enabled' => false,
@@ -170,7 +171,7 @@ test('model routes are maintained from the model price page and drive runtime re
         'provider' => 'openai',
         'name' => 'OpenAI',
         'base_url' => 'https://api.openai.com/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 10,
         'timeout' => 60,
         'is_enabled' => true,
@@ -254,7 +255,7 @@ test('saving the four outline fields creates four independent database route rec
         'provider' => 'openai',
         'name' => 'OpenAI',
         'base_url' => 'https://api.openai.com/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 10,
         'timeout' => 60,
         'is_enabled' => true,
@@ -329,7 +330,7 @@ test('route modal keeps invalid outline routes open and shows actionable validat
         'provider' => 'openai',
         'name' => 'OpenAI',
         'base_url' => 'https://api.openai.com/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 10,
         'timeout' => 60,
         'is_enabled' => true,
@@ -400,7 +401,7 @@ test('model route rejects an unsupported reasoning effort', function () {
         'provider' => 'openai',
         'name' => 'OpenAI',
         'base_url' => 'https://api.openai.com/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 10,
         'timeout' => 60,
         'is_enabled' => true,
@@ -439,7 +440,7 @@ test('all text routes reject models without verified capacity or required capabi
         'provider' => 'openai',
         'name' => 'OpenAI',
         'base_url' => 'https://api.openai.com/v1',
-        'api_key' => 'database-key',
+        'credential_ref' => 'openai',
         'connect_timeout' => 10,
         'timeout' => 60,
         'is_enabled' => true,

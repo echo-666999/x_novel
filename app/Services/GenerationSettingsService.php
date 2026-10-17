@@ -97,7 +97,14 @@ final class GenerationSettingsService
                 return ['settings' => $normalized, 'changed' => false];
             }
 
-            $record->update(['value' => $normalized]);
+            // 金额授权单独留痕；日志不是唯一审计来源。
+            $history = $record->policy_history ?? [];
+            if (app(GenerationInputIdentity::class)->hash(app(GenerationCostPolicy::class)->normalize((array) data_get($before, 'budget', []))) !== app(GenerationInputIdentity::class)->hash($normalized['budget']) || data_get($before, 'currency') !== $normalized['currency']) {
+                $history[] = ['actor_id' => $actorId, 'at' => now()->toIso8601String(),
+                    'before' => ['budget' => data_get($before, 'budget'), 'currency' => data_get($before, 'currency')],
+                    'after' => ['budget' => $normalized['budget'], 'currency' => $normalized['currency']]];
+            }
+            $record->update(['value' => $normalized, 'policy_history' => $history]);
 
             Log::info('Generation settings changed.', [
                 'actor_id' => $actorId,
@@ -200,15 +207,8 @@ final class GenerationSettingsService
         }
 
         $budgetInput = $this->object($settings, 'budget', $errors);
-        $budget = [];
-        foreach (['daily_hard_limit', 'novel_total_limit', 'chapter_max_cost'] as $key) {
-            $value = $budgetInput[$key] ?? null;
-            if (filled($value) && (! is_numeric($value) || (float) $value < 0)) {
-                $errors["budget.{$key}"][] = '费用上限必须留空或填写大于等于 0 的数字。';
-            }
-            $budget[$key] = filled($value) && is_numeric($value) ? (float) $value : null;
-        }
-        $this->rejectUnknownKeys($budgetInput, array_keys($budget), 'budget', $errors);
+        // 金额与主动启用独立验证，默认没有费用停点。
+        $budget = app(GenerationCostPolicy::class)->normalize($budgetInput);
 
         $reviewContext = filter_var($settings['review_context_token_budget'] ?? null, FILTER_VALIDATE_INT);
         if ($reviewContext === false || $reviewContext < 1) {

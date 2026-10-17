@@ -208,7 +208,8 @@ return [
             'maxJobs' => 0,
             'memory' => 128,
             'tries' => 1,
-            'timeout' => (int) env('HORIZON_WORKER_TIMEOUT', 210),
+            // Worker 上限高于单次生成 Job 的330秒，低于队列retry_after。
+            'timeout' => (int) env('HORIZON_WORKER_TIMEOUT', 350),
             'nice' => 0,
         ],
     ],

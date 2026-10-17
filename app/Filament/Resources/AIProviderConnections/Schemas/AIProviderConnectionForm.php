@@ -33,15 +33,12 @@ class AIProviderConnectionForm
                         ->required()
                         ->maxLength(AiSettingsService::URL_MAX_LENGTH)
                         ->helperText('填写服务商提供的 HTTP 或 HTTPS API Base URL。'),
-                    TextInput::make('api_key')
-                        ->label('API 密钥')
-                        ->password()
-                        ->revealable(false)
-                        ->autocomplete(false)
-                        ->formatStateUsing(fn (): null => null)
-                        ->required(fn (string $operation): bool => $operation === 'create')
-                        ->dehydrated(fn (?string $state): bool => filled($state))
-                        ->helperText('密钥使用 Laravel 加密保存；编辑时留空保留现有密钥。'),
+                    // 表单只传递引用，绝不接收或回显部署密钥。
+                    Select::make('credential_ref')
+                        ->label('环境凭据引用')
+                        ->options(['openai' => 'OpenAI 环境密钥', 'deepseek' => 'DeepSeek 环境密钥'])
+                        ->required()
+                        ->helperText('密钥在 .env 中配置；此处只保存引用，部署重载后生效。'),
                     TextInput::make('connect_timeout')
                         ->label('连接超时（秒）')
                         ->integer()

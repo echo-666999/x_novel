@@ -1,6 +1,6 @@
 # XNovel 小说自动生成系统改造 PRD
 
-版本：1.4 提案稿
+版本：1.5 提案稿
 
 日期：2026-10-17
 
@@ -114,7 +114,7 @@
 | --- | --- | --- | --- |
 | AGENTS 第 4 与第 112 节 | 前文禁止 Workspace architecture，后文要求 Novel Workspace，当前也存在小说工作区 | 明确禁止的是多租户工作空间，保留单本小说工作台 | 消除概念歧义，无需拆 UI |
 | AGENTS 第 42/152 节 | 早期约 18 核心表基线仍在，但当前已增加关系化大纲、模型路由与配置等模型 | 改成当前数据清单与新增表论证要求 | 不按过时数量目标删表 |
-| AGENTS 第 70 节与 `AIProviderConnection` | 文档不允许完整 API Key 入库，代码使用数据库加密保存且隐藏字段 | 本 PRD建议保留现有加密凭据管理，要求独立保护应用加密密钥；实施前同步修订安全约束 | 这是明确的待确认架构决策，不能静默迁移凭据 |
+| AGENTS 第 70 节与 `AIProviderConnection` | 文档不允许完整 API Key 入库，代码使用数据库加密保存且隐藏字段 | 用户已选择 A：密钥仅存 .env，经 config 白名单解析；数据库只存 credential_ref 和连接元数据 | 2026-10-17 已确认；不自动迁移或解密现存凭据，新版初始化不写密钥 |
 | AGENTS 第 170 节与低干预目标 | Needs Attention/Hard Conflict 要停止自动链；新目标要求 AI 处理异常 | 保留停止提交门禁；另开受限修复操作，只修 Draft，复验通过才恢复原链 | 自动修复不等于带冲突继续提交 |
 | 现有大纲全量验收与滚动细化 | 当前 Finalize 要求所有 Main Beat Detail | 以统一新合同和局部准备度替换旧版规则，不保留旧小说恢复要求 | 必须同步修改 Validator、采用边界、快照和恢复逻辑，不能仅删校验 |
 | AGENTS 第 52/54 节的规划层级与默认逐场景生成 | 旧规范要求 Novel/Volume/Arc/Chapter/Scene 层级及逐场景写作 | 按本次用户接受的建议，改为三层规划、容量允许时整章生成、必要时顺序拆分 | 实施前同步更新开发约束、Writer 和阶段合同；场景不再是每章必须独立执行的阶段，正式门禁不变 |
@@ -589,7 +589,7 @@ Worker 开始和收尾时检查租约 token 与来源版本。过期 Worker 的�
 | 配置类别 | 目标存放位置 | 生效规则 |
 | --- | --- | --- |
 | 数据库、Redis、Worker、部署日志策略 | `.env` 与对应 `config/*.php` | 部署与进程重载后生效，界面展示实际观测值 |
-| Provider 连接和凭据 | 复用 `AIProviderConnection`，凭据安全约束按第 2.5 节决策 | 凭据不进入 Prompt、Artifact 或诊断导出 |
+| Provider 连接和凭据 | 复用 `AIProviderConnection` 保存连接与 credential_ref；密钥只由 .env/config 白名单提供，禁止回退数据库密文 | 凭据不进入 Prompt、Artifact 或诊断导出 |
 | 全局阶段模型路由和能力 | `ai_model_routes`、`ai_model_prices` 等现有配置 | 新 Run 创建时解析，保存来源与能力快照 |
 | 全局容量和费用参数 | `system_settings` 的 generation 配置 | 用 `GenerationSettingsService` 读取，不另开平行配置表 |
 | 小说创作/运行策略 | `novels.settings` | 用户显式覆盖优先，完整策略冻结到整书任务；执行粒度和实际参数再冻结到各 Run |

@@ -1,8 +1,8 @@
 # 新版小说生成数据合同
 
-版本：1.0 · R00 / XNR-002 · 2026-10-17。
+版本：1.2 · R00 合同 / R01 实施 · 2026-10-17。
 
-依据：[PRD](../PRD.md)、[视觉规范](../../DESIGN.md)、[当前基线](../development/reports/XNR-001-baseline.md)。与 [执行流程合同](generation-workflow.md) 配套。本文定义后续实现合同，表/字段标“新增”均尚未迁移；不得据此认为当前库已有这些能力。
+依据：[PRD](../PRD.md)、[视觉规范](../../DESIGN.md)、[当前基线](../development/reports/XNR-001-baseline.md)。与 [执行流程合同](generation-workflow.md) 配套。本文定义目标合同。R01 已提交到工作树的迁移在隔离 xnovel_refactor_test 验证；运行库未迁移。实际字段/约束见 `2026_10_17_210532_add_refactor_generation_foundation.php` 及 [R01 报告](../development/reports/R01-implementation.md)，不能据此认为后续业务阶段已经完成。
 
 ## 1 决策与数据边界
 
@@ -11,7 +11,7 @@
 3. 三层规划：全书蓝图与近期目标版本复用 `novel_outlines` 的轻量索引；正文/规划内容来源为不可变 Artifact；当前章节计划复用 `chapter_plans`。
 4. `volumes` 保留为可选目录组织。旧 `novel_outline_volumes/arcs/beats/milestones`、`story_arcs`、`scenes` 列为最终删除候选，其仍有价值的目标/承诺/事件语义迁入新合同后才能删除；新生产链不依赖这些表。
 5. 当前 36 张逻辑表中，按本设计口径 23 张为小说核心表，13 张为账号/运行配置/框架设施。核心表新增 2、最终移除上述 6 后预计 19 张，含可选 volumes；这是目标清单，不是本批删表结果，也不把约 18 张误当必须凑齐的数量。
-6. 凭据存储是唯一待用户选择项，见 §10；除此之外本文给出确定的实现合同，不预留平行架构。
+6. 用户已确认凭据方案 A，见 §10；本合同不保留平行凭据实现。
 
 目标核心清单（19）：novels、novel_bibles、volumes、novel_outlines、chapter_plans、chapters、characters、world_entities、foreshadowings、facts、story_events、story_state_versions、generation_runs、generation_artifacts、reviews、memories、usage_records，以及新增的 novel_generation_tasks、generation_issues。
 
@@ -189,12 +189,18 @@ R01 在隔离 PostgreSQL 建空库验证中文备注、所有 CHECK/FK/部分唯
 
 R07 最终删除候选涉及外键时先迁移新来源合同和所有调用；检查空库安装、约束名称、动态注册、备份/恢复文档。SQLite 不能证明 PostgreSQL 的实际约束和 JSONB/向量行为。
 
-## 10 凭据存储决策（待用户选择）
+## 10 凭据存储决策（已确认 A）
 
-已确认现有 `AIProviderConnection` 使用 encrypted cast 和 hidden，AiSettingsService 从数据库取得完整密钥。PRD §2.5 明确此处“待确认”，而会话 AGENTS 第 70 节禁止完整密钥入库；不能因 R00 执行而静默消解冲突。
+2026-10-17 用户明确选择 A：数据库保存 provider、连接地址、超时、启用状态与 credential_ref；密钥只存 .env，并经 config/ai.php 白名单解析。引用默认为 openai/deepseek，对应拟实现的 XNOVEL_OPENAI_API_KEY / XNOVEL_DEEPSEEK_API_KEY。未知引用拒绝，不能动态读取任意环境变量。
 
-推荐 A：数据库保存 provider、连接地址、超时、启用状态、credential_ref；`config/ai.php` 用白名单 ref 映射 `.env` 密钥。拟用 `XNOVEL_OPENAI_API_KEY`、`XNOVEL_DEEPSEEK_API_KEY` 等命名，均是待实现配置，不是现有环境变量。后台只显示是否配置和引用，不提供写环境文件的表单；切换密钥按部署重载，撤销后禁止新请求。路由仍用现有数据库表，不新建路由器。
+后台只显示引用及是否配置，禁止写密钥或编辑环境文件；环境配置缓存/进程重载由部署负责。连接禁用立即影响后续请求，密钥不得进入 Prompt、Artifact、日志或测试夹具。现有数据库 api_key 不作为新版回退来源；不自动解密或迁移现存凭据。隔离新库落实引用字段，旧字段在已核实切换和 R07 清理时移除。
 
-备选 B：明确批准保留数据库加密存储并修订安全约束；继续保护 APP_KEY、限制备份/日志/序列化，密钥永不入 Prompt/Artifact。两方案均不把凭据快照冻结进 Run，连接撤销/禁用立即影响后续请求。
+R01 实现本合同；当前运行库及 .env 本批不修改。运行环境中尚无对应密钥时如实显示未配置，不偷偷读取旧密文继续收费。
 
-本次仅提出可审查设计，不解密、迁移或删除现有凭据。用户决定前，凭据相关 Schema/后台/初始化不可进入实施；其他合同调查已完成，最终任务状态不得假称此决策已批准。
+## 11 R01 已实现的基础映射
+
+新增两张业务表及同小说复合引用；实际迁移保留旧层级到 R07。Run 增加 execution_contract、source_manifest、logical_step_key、retry_of_run_id、result_artifact_id、next_attempt_at、dispatch_expires_at、checkpoint；Task.pending_transition 为持久派发意图。Lease 只属于 Run。价格快照/能力/Prompt 由 GenerationRequestContract 冻结，JSONB 对象比较使用规范化哈希。
+
+Usage 新增 request_key、status、cost_status、price_snapshot、reserved_amount、actual_cost、cap_snapshot、reconciliation_history 与生命周期时间。缺价格/缺用量保持 null；原始请求和核销历史不覆盖。system_settings.policy_history 保存全局金额授权修订，小说 settings.budget_history 保存小说级修改；没有新增审计表。新字段含实际中文备注。
+
+新 timestamptz 写入明确时区偏移，数据库保存绝对时刻；旧 timestamp 字段未以迁移方式重解释历史。运行库仍保持原 Schema，不能在部署前直接消费新版任务。

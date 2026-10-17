@@ -1,6 +1,9 @@
 <?php
 
 return [
+    // 新链一次请求一个 Run；队列等待不累计为模型执行时间。
+    'execution' => ['max_attempts' => 3,
+        'protocol_margin_tokens' => 256, 'lease_seconds' => 390, 'dispatch_seconds' => 120, 'backoff' => [10, 30]],
     /*
     |--------------------------------------------------------------------------
     | 生成阶段失败与重试策略
@@ -61,16 +64,16 @@ return [
     | 内容自愈硬上限
     |--------------------------------------------------------------------------
     |
-    | max_attempts 按章节和修复类型独立累计；max_cost 使用系统当前计价币种；
+    | max_attempts 按章节和修复类型独立累计；max_cost 已停用，金额限制统一由用户主动策略决定；
     | max_elapsed_seconds 从修复审计 Run 创建时开始计算，并覆盖队列等待时间。
     | Provider 请求会按“已发生费用 + 本次最大可能费用”预检，不能透支修复额度。
     |
     */
     'content_self_healing' => [
-        'plan_validation' => ['max_attempts' => 2, 'max_cost' => 2.0, 'max_elapsed_seconds' => 900],
-        'chapter_structure' => ['max_attempts' => 1, 'max_cost' => 8.0, 'max_elapsed_seconds' => 1_800],
-        'rewrite_exhaustion' => ['max_attempts' => 1, 'max_cost' => 8.0, 'max_elapsed_seconds' => 1_800],
-        'critical_foreshadowing' => ['max_attempts' => 1, 'max_cost' => 2.0, 'max_elapsed_seconds' => 900],
+        'plan_validation' => ['max_attempts' => 2, 'max_cost' => null, 'max_elapsed_seconds' => 900],
+        'chapter_structure' => ['max_attempts' => 1, 'max_cost' => null, 'max_elapsed_seconds' => 1_800],
+        'rewrite_exhaustion' => ['max_attempts' => 1, 'max_cost' => null, 'max_elapsed_seconds' => 1_800],
+        'critical_foreshadowing' => ['max_attempts' => 1, 'max_cost' => null, 'max_elapsed_seconds' => 900],
     ],
 
     // 单个场景构建 Prompt 上下文时可使用的 Token 预算。

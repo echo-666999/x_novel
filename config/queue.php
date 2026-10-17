@@ -68,7 +68,8 @@ return [
             'driver' => 'redis',
             'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
             'queue' => env('REDIS_QUEUE', 'default'),
-            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 240),
+            // 必须大于新链 Job timeout 和执行租约，避免同一请求尚在执行时重投。
+            'retry_after' => (int) env('REDIS_QUEUE_RETRY_AFTER', 480),
             'block_for' => null,
             'after_commit' => false,
         ],

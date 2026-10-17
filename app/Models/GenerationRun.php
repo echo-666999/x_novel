@@ -12,7 +12,25 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
+/** R01 增加整书归属、冻结来源和执行字段；写入仍由领域入口校验。 */
 #[Fillable([
+    'generation_task_id',
+    'issue_id',
+    'retry_of_run_id',
+    'logical_step_key',
+    'pipeline_version',
+    'schema_version',
+    'model',
+    'connection_id',
+    'scope_key',
+    'source_manifest',
+    'execution_contract',
+    'result_artifact_id',
+    'next_attempt_at',
+    'dispatch_expires_at',
+    'checkpoint',
+    'outcome_code',
+
     'novel_id',
     'chapter_id',
     'scene_id',
@@ -46,6 +64,9 @@ class GenerationRun extends Model
 {
     /** @use HasFactory<GenerationRunFactory> */
     use HasFactory;
+
+    /** 带偏移写入 timestamptz，避免上海应用时区被 PostgreSQL UTC 会话误解八小时。 */
+    protected $dateFormat = 'Y-m-d H:i:sP';
 
     /** @return BelongsTo<Novel, $this> */
     public function novel(): BelongsTo
@@ -102,6 +123,17 @@ class GenerationRun extends Model
     protected function casts(): array
     {
         return [
+            'generation_task_id' => 'integer',
+            'issue_id' => 'integer',
+            'retry_of_run_id' => 'integer',
+            'connection_id' => 'integer',
+            'source_manifest' => 'array',
+            'execution_contract' => 'array',
+            'result_artifact_id' => 'integer',
+            'next_attempt_at' => 'datetime',
+            'dispatch_expires_at' => 'datetime',
+            'checkpoint' => 'array',
+
             'chapter_id' => 'integer',
             'scene_id' => 'integer',
             'scope_id' => 'integer',

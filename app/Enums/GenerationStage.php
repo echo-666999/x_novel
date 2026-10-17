@@ -5,6 +5,13 @@ namespace App\Enums;
 /** 章节生成的持久化阶段；每个需要 Provider 的阶段都必须有独立 Run。 */
 enum GenerationStage: string
 {
+    case Intake = 'intake';
+    case Preflight = 'preflight';
+    case FoundationBlueprint = 'foundation_blueprint';
+    case GoalWindow = 'goal_window';
+    case ChapterWrite = 'chapter_write';
+    case FragmentWrite = 'fragment_write';
+    case Export = 'export';
     case ChapterPlanning = 'chapter_planning';
     case ChapterRecovery = 'chapter_recovery';
     case ContentRepair = 'content_repair';
@@ -24,6 +31,13 @@ enum GenerationStage: string
     public function getLabel(): string
     {
         return match ($this) {
+            self::Intake => '接收创作概述',
+            self::Preflight => '运行预检',
+            self::FoundationBlueprint => '全书方向与设定',
+            self::GoalWindow => '近期章节目标',
+            self::ChapterWrite => '章节写作',
+            self::FragmentWrite => '分段写作',
+            self::Export => '全文导出',
             self::ChapterPlanning => '章节规划',
             self::ChapterRecovery => '旧 Admission 章节恢复',
             self::ContentRepair => '内容自愈',

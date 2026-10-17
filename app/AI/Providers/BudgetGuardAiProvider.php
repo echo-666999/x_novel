@@ -18,14 +18,9 @@ class BudgetGuardAiProvider implements AiProvider
 
     public function generate(AiRequest $request): AiResponse
     {
-        $reservation = $this->budgetService->reserve($request);
+        // 请求费用统一由 Tracking 内的持久 Usage 账本管理，不能 finally 清零。
+        $this->contentSelfHealing?->assertCanRequest($request);
 
-        try {
-            $this->contentSelfHealing?->assertCanRequest($request);
-
-            return $this->provider->generate($request);
-        } finally {
-            $this->budgetService->release($reservation);
-        }
+        return $this->provider->generate($request);
     }
 }

@@ -11,7 +11,12 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
+/** R01 增加整书归属、冻结来源和执行字段；写入仍由领域入口校验。 */
 #[Fillable([
+    'current_generation_task_id',
+    'current_blueprint_id',
+    'current_goal_window_id',
+
     'title',
     'genre',
     'premise',
@@ -129,6 +134,10 @@ class Novel extends Model
     protected function casts(): array
     {
         return [
+            'current_generation_task_id' => 'integer',
+            'current_blueprint_id' => 'integer',
+            'current_goal_window_id' => 'integer',
+
             'target_words' => 'integer',
             'status' => NovelStatus::class,
             'current_outline_id' => 'integer',

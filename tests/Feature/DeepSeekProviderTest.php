@@ -14,6 +14,7 @@ use App\Models\AIProviderConnection;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\UsageRecord;
+use App\Providers\AppServiceProvider;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -22,6 +23,9 @@ use Illuminate\Support\Facades\Log;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
+    // 适配器回归显式恢复装饰链，Http::preventStrayRequests仍禁止任何真实外发。
+    app()->forgetInstance(AiProvider::class);
+    app()->register(AppServiceProvider::class, force: true);
     createAiProviderConnectionForTest('deepseek', 'https://deepseek.example', 'deepseek-test-key');
     createAiProviderConnectionForTest('openai', 'https://openai.example/v1', 'openai-test-key');
 });
@@ -484,7 +488,7 @@ test('deepseek logs the request payload when prompt logging is enabled', functio
 test('router rejects disabled missing and unknown providers before http', function (string $provider, ?string $key, string $code) {
     if ($provider === 'deepseek') {
         AIProviderConnection::query()->where('provider', 'deepseek')->update([
-            'api_key' => $key,
+            'credential_ref' => $key === null ? null : 'deepseek',
             'is_enabled' => $code !== 'provider_disabled',
         ]);
     }

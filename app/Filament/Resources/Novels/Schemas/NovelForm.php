@@ -12,12 +12,14 @@ use App\Services\GenerationSettingsService;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use InvalidArgumentException;
 
+/** 创作参数与费用显示共用同一策略；填写金额本身不启用硬上限。 */
 class NovelForm
 {
     public const CUSTOM_GENRE_OPTION = '__custom__';
@@ -90,12 +92,14 @@ class NovelForm
                     ->icon('heroicon-o-banknotes')
                     ->columns(['default' => 1, 'md' => 2])
                     ->schema([
+                        Toggle::make('budget_limits.novel_total_limit_enabled')->label('主动启用整书金额硬上限')->default(false),
                         TextInput::make('budget_limits.novel_total_limit')
                             ->label('Novel Total Limit')
                             ->numeric()
                             ->minValue(0)
                             ->step(0.000001)
                             ->placeholder(fn (): string => self::globalBudgetPlaceholder('novel_total_limit')),
+                        Toggle::make('budget_limits.chapter_max_cost_enabled')->label('主动启用单章金额硬上限')->default(false),
                         TextInput::make('budget_limits.chapter_max_cost')
                             ->label('Chapter Max Cost')
                             ->numeric()
