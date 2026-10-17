@@ -10,6 +10,9 @@ final class GenerationPresentation
         return match ($status) {
             'queued' => ['label' => '等待执行', 'tone' => 'neutral', 'icon' => 'heroicon-o-clock'],
             'running' => ['label' => '生成中', 'tone' => 'info', 'icon' => 'heroicon-o-arrow-path'],
+            'open' => ['label' => '待恢复或提醒', 'tone' => 'warning', 'icon' => 'heroicon-o-information-circle'],
+            'awaiting_user' => ['label' => '待你处理', 'tone' => 'warning', 'icon' => 'heroicon-o-exclamation-triangle'],
+            'diagnosing' => ['label' => 'AI 分析中', 'tone' => 'info', 'icon' => 'heroicon-o-sparkles'],
             'repairing' => ['label' => '自动处理中', 'tone' => 'info', 'icon' => 'heroicon-o-wrench-screwdriver'],
             'paused' => ['label' => '已暂停', 'tone' => 'neutral', 'icon' => 'heroicon-o-pause'],
             'needs_attention' => ['label' => '需要你选择', 'tone' => 'warning', 'icon' => 'heroicon-o-exclamation-triangle'],

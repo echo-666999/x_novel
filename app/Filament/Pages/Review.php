@@ -8,6 +8,7 @@ use App\Models\Review as ReviewModel;
 use App\Services\ChapterRepairRecommendation;
 use App\Services\DraftRewriteDiff;
 use BackedEnum;
+use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
@@ -33,6 +34,8 @@ class Review extends Page implements HasTable
 
     protected static ?int $navigationSort = 3;
 
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static ?string $navigationLabel = '审校';
 
     protected static ?string $title = '审校收件箱';
@@ -50,6 +53,12 @@ class Review extends Page implements HasTable
     public static function getNavigationBadgeColor(): string|array|null
     {
         return 'danger';
+    }
+
+    /** 两个旧入口都引用同一问题记录，逐章审校暂保留原入口。 */
+    protected function getHeaderActions(): array
+    {
+        return [Action::make('issues')->label('异常中心')->url(GenerationIssues::getUrl())];
     }
 
     public function content(Schema $schema): Schema

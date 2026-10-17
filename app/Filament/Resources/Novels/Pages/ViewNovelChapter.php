@@ -21,6 +21,7 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\SceneStatus;
+use App\Filament\Pages\GenerationIssues;
 use App\Filament\Pages\Memory as MemoryPage;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Support\ChapterPlanEditorSchema;
@@ -113,6 +114,8 @@ class ViewNovelChapter extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            // 异常入口只传筛选范围，处理权限由统一应用动作复验。
+            Action::make('generationIssues')->label('查看异常')->url(fn () => GenerationIssues::getUrl(['novel' => $this->getRecord()->id, 'chapter' => $this->chapterId])),
             Action::make('extendOutlineBeatBudget')
                 ->label('授权本章预算延期')
                 ->icon('heroicon-o-shield-check')

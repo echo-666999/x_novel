@@ -154,4 +154,10 @@ class GenerationRun extends Model
             'finished_at' => 'datetime',
         ];
     }
+
+    /** 问题记录独立于单次执行，历史失败不会覆盖恢复结论。 */
+    public function issue(): BelongsTo
+    {
+        return $this->belongsTo(GenerationIssue::class);
+    }
 }

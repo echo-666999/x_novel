@@ -203,3 +203,23 @@
 .fi-body .fi-btn.fi-color-primary:not(.fi-outlined):not(label):not([aria-pressed]):not([disabled]):hover { background-color: var(--xn-primary-hover); }
 .fi-body .fi-btn.fi-color-primary:not(.fi-outlined):not(label):not([aria-pressed]):not([disabled]):active { background-color: var(--xn-primary-active); }
 .xn-foundation .fi-btn.fi-color[disabled]:not(.fi-outlined):not(label):not([aria-pressed]) { color: var(--xn-text-muted); background-color: var(--xn-surface-3); opacity: 1; }
+
+/* 异常中心沿用 R01 颜色与焦点合同，小屏按问题列表、证据、动作顺序重排。 */
+.xn-issue-layout { display: grid; grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.6fr); gap: 24px; align-items: start; }
+.xn-issue-layout > * { min-width: 0; }
+.xn-issue-item { display: grid; width: 100%; gap: 12px; text-align: start; cursor: pointer; }
+.xn-issue-item[aria-current="true"] { border-color: var(--xn-primary); box-shadow: inset 3px 0 var(--xn-primary); }
+.xn-issue-item:hover { background: var(--xn-surface-2); }
+.xn-issue-metrics { display: flex; flex-wrap: wrap; gap: 24px; }
+.xn-issue-metrics dt { color: var(--xn-text-muted); font-size: 0.8125rem; }
+.xn-issue-metrics dd { margin-block-start: 4px; font-weight: 600; }
+.xn-issue-option { padding-block: 12px; border-block-end: 1px solid var(--xn-border); }
+.xn-issue-center .xn-control { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--xn-text); background: var(--xn-surface-1); border: 1px solid var(--xn-border-strong); border-radius: 6px; }
+.xn-issue-center .xn-field { display: block; font-weight: 500; }
+.xn-issue-center pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.8125rem; }
+.xn-issue-center p, .xn-issue-center span { overflow-wrap: anywhere; }
+@media (max-width: 900px) { .xn-issue-layout { grid-template-columns: minmax(0, 1fr); } }
+/* 禁用动作保持可读，同时通过 disabled 语义与具体原因表达不可执行。 */
+.xn-issue-center .fi-btn[disabled] { opacity: 1; color: var(--xn-text-muted); background: var(--xn-surface-3); border: 1px solid var(--xn-border-strong); }
+.xn-issue-center h2 { font-size: 18px; font-weight: 600; }
+.xn-issue-center h3 { font-size: 16px; font-weight: 600; }

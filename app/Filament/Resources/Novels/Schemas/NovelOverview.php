@@ -15,6 +15,7 @@ use App\Services\NovelOperationsOverview;
 use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 
 class NovelOverview
@@ -22,6 +23,8 @@ class NovelOverview
     public static function configure(Schema $schema): Schema
     {
         return $schema->columns(1)->components([
+            // 顶部问题卡使用统一异常中心，历史失败不生成额外工作流。
+            View::make('filament.components.novel-issues'),
             Section::make('小说概览')
                 ->description('当前小说的核心定位与正式状态。')
                 ->columns([

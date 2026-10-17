@@ -19,6 +19,10 @@ use Illuminate\Database\Eloquent\Relations\HasOneThrough;
     'title',
     'status',
     'canonical_artifact_id',
+    // 新链来源指针参与修复 CAS；不能被批量赋值静默丢弃。
+    'current_plan_id',
+    'current_draft_artifact_id',
+    'summary_artifact_id',
     'word_count',
     'summary',
     'canonical_metadata',

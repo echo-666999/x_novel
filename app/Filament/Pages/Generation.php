@@ -94,6 +94,8 @@ class Generation extends Page implements HasTable
     protected function getHeaderActions(): array
     {
         return [
+            // 统一问题中心保留跨 Run 来源与处理历史。
+            Action::make('issues')->label('异常中心')->url(GenerationIssues::getUrl()),
             Action::make('resumeNext')
                 ->label('继续执行')
                 ->icon('heroicon-o-play')

@@ -1,6 +1,8 @@
 <?php
 
 return [
+    // 问题级限制跨 Run 累计；金额门禁只读取用户主动启用的费用策略。
+    'issues' => ['max_attempts' => 2, 'max_elapsed_ms' => 1_800_000, 'diagnostic_max_tokens' => 1800],
     // 新链一次请求一个 Run；队列等待不累计为模型执行时间。
     'execution' => ['max_attempts' => 3,
         'protocol_margin_tokens' => 256, 'lease_seconds' => 390, 'dispatch_seconds' => 120, 'backoff' => [10, 30]],

@@ -1,0 +1,42 @@
+[
+  {
+    "scroll": 1440,
+    "theme": "fi",
+    "width": 1440
+  },
+  {
+    "scroll": 768,
+    "theme": "fi",
+    "width": 768
+  },
+  {
+    "scroll": 390,
+    "theme": "fi",
+    "width": 390
+  },
+  {
+    "scroll": 320,
+    "theme": "fi",
+    "width": 320
+  },
+  {
+    "scroll": 1440,
+    "theme": "fi dark",
+    "width": 1440
+  },
+  {
+    "scroll": 768,
+    "theme": "fi dark",
+    "width": 768
+  },
+  {
+    "scroll": 390,
+    "theme": "fi dark",
+    "width": 390
+  },
+  {
+    "scroll": 320,
+    "theme": "fi dark",
+    "width": 320
+  }
+]

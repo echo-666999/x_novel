@@ -2,16 +2,19 @@
 
 namespace App\Services;
 
+use App\Data\GenerationFailure;
 use App\Enums\ArtifactType;
 use App\Enums\ArtifactValidationStatus;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationIssue;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelGenerationTask;
 use App\Models\UsageRecord;
+use App\Support\GenerationDiagnosticRedactor;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -91,7 +94,7 @@ final class GenerationRunCoordinator
                 'stage' => $stage, 'scope_type' => 'novel', 'scope_id' => $task->novel_id, 'scope_key' => $scope,
                 'pipeline_version' => 'pipeline-v1', 'logical_step_key' => $key, 'attempt' => $attempt,
                 'idempotency_key' => hash('sha256', $key.':'.$attempt), 'input_hash' => $hash,
-                'execution_contract' => $contract, 'source_manifest' => $sources, 'retry_of_run_id' => $previous,
+                'execution_contract' => $contract, 'source_manifest' => $sources, 'retry_of_run_id' => $previous, 'issue_id' => $previous ? GenerationRun::find($previous)?->issue_id : null,
                 'status' => RunStatus::Queued, 'queued_at' => now(), 'next_attempt_at' => now(),
                 'provider' => $contract['provider'] ?? null, 'model' => $contract['model'] ?? null,
                 'prompt_version' => $contract['prompt_version'] ?? null, 'connection_id' => $contract['connection_id'] ?? null]);
@@ -122,6 +125,8 @@ final class GenerationRunCoordinator
                 $run->update(['status' => RunStatus::Failed, 'error_code' => 'source_changed', 'error_message' => $exception->getMessage(), 'error_retryable' => false, 'finished_at' => now()]);
                 $task->update(['status' => 'needs_attention', 'stop_reason' => 'source_changed', 'stop_detail' => ['message' => $exception->getMessage(), 'run_id' => $run->id]]);
 
+                DB::afterCommit(fn () => app(GenerationIssueService::class)->observe($run->fresh()));
+
                 return null;
             }
             $token = (string) Str::uuid();
@@ -148,6 +153,9 @@ final class GenerationRunCoordinator
             $sourceChanged = false;
             try {
                 $this->assertSources($task, $run->source_manifest, $run->execution_contract);
+                if (data_get($run->execution_contract, 'issue_action') === 'diagnose') {
+                    app(GenerationIssueService::class)->assertCurrent(GenerationIssue::findOrFail($run->issue_id));
+                }
             } catch (\LogicException) {
                 $sourceChanged = true;
                 $valid = false;
@@ -167,6 +175,8 @@ final class GenerationRunCoordinator
             if ($sourceChanged && $run->status === RunStatus::Running && hash_equals((string) $run->lease_token, $token)) {
                 $this->failExecution($run->id, $token, 'source_changed', '结果已隔离：正式状态或来源版本发生变化。', false);
             }
+
+            DB::afterCommit(fn () => app(GenerationIssueService::class)->observe($run->fresh()));
 
             return $artifact;
         });
@@ -207,26 +217,33 @@ final class GenerationRunCoordinator
     }
 
     /** 失败不清除费用预留；只记录执行结论和可复核的恢复位置。 */
-    public function failExecution(int $runId, string $token, string $code, string $message, bool $retryable): void
+    public function failExecution(int $runId, string $token, string $code, string $message, bool $retryable, array $metadata = []): void
     {
         $run = GenerationRun::findOrFail($runId);
-        DB::transaction(function () use ($run, $token, $code, $message, $retryable): void {
+        DB::transaction(function () use ($run, $token, $code, $message, $retryable, $metadata): void {
             Novel::whereKey($run->novel_id)->lockForUpdate()->firstOrFail();
             $task = NovelGenerationTask::whereKey($run->generation_task_id)->lockForUpdate()->firstOrFail();
             $run = GenerationRun::whereKey($run->id)->lockForUpdate()->firstOrFail();
             if ($run->status !== RunStatus::Running || ! hash_equals((string) $run->lease_token, $token)) {
                 return;
             }
-            $run->update(['status' => RunStatus::Failed, 'error_code' => $code, 'error_message' => $message,
+            // 新链保存结构化分类依据并脱敏；Schema/业务失败不能因供应商 retryable 标记而盲重试。
+            $redactor = app(GenerationDiagnosticRedactor::class);
+            $message = $redactor->clean($message);
+            $metadata = $redactor->clean($metadata);
+            $classification = app(GenerationIssueCatalog::class)->classify(new GenerationFailure($code, $message, $retryable, $metadata, ''), $run->stage);
+            $retryable = $classification['retryable'];
+            $run->update(['status' => RunStatus::Failed, 'error_code' => $code, 'error_message' => $message, 'error_metadata' => $metadata,
                 'error_retryable' => $retryable, 'finished_at' => now(), 'lease_token' => null, 'lease_expires_at' => null]);
             // Worker消失不等于未收费；发送标记之后统一保留未知结果与占用。
             if ($code === 'worker_lost') {
                 UsageRecord::where('generation_run_id', $run->id)->where('status', 'in_flight')->update(['status' => 'unknown']);
                 UsageRecord::where('generation_run_id', $run->id)->where('status', 'prepared')->update(['status' => 'not_sent', 'reserved_amount' => null]);
             }
-            if ($task->status === 'running' && (! $retryable || $run->attempt >= (int) config('generation.execution.max_attempts', 3))) {
+            if ($classification['blocking'] && $task->status === 'running' && (! $retryable || $run->attempt >= (int) config('generation.execution.max_attempts', 3))) {
                 $task->update(['status' => 'needs_attention', 'stop_reason' => $code, 'stop_detail' => ['message' => $message, 'run_id' => $run->id]]);
             }
+            DB::afterCommit(fn () => app(GenerationIssueService::class)->observe($run->fresh()));
         });
     }
 
@@ -238,7 +255,7 @@ final class GenerationRunCoordinator
     }
 
     /** JSON 来源也必须核实真实数据库归属和checksum，不能信任调用方。 */
-    private function assertSources(NovelGenerationTask $task, array $sources, array $contract = []): void
+    public function assertSources(NovelGenerationTask $task, array $sources, array $contract = []): void
     {
         $novel = Novel::findOrFail($task->novel_id);
         if (array_key_exists('state_version_id', $contract) && $novel->canonical_state_version_id !== $contract['state_version_id']) {
@@ -264,6 +281,7 @@ final class GenerationRunCoordinator
     /** 从数据库补派孤立执行；暂停只失效旧租约，不创建新的收费尝试。 */
     public function recoverTasks(): array
     {
+        app(GenerationIssueService::class)->reconcile();
         $counts = ['expired' => 0, 'dispatched' => 0, 'retried' => 0, 'blocked' => 0];
         foreach (GenerationRun::where('pipeline_version', 'pipeline-v1')->where('status', 'running')->where('lease_expires_at', '<=', now())->get() as $run) {
             $this->failExecution($run->id, (string) $run->lease_token, 'worker_lost', 'Worker 执行租约已过期，响应及费用可能未知。', true);
@@ -288,7 +306,13 @@ final class GenerationRunCoordinator
                     continue;
                 }
                 if ($run->status === RunStatus::Failed && $run->error_retryable && $run->attempt < (int) config('generation.execution.max_attempts', 3)) {
-                    $run = $this->enqueue($task->id, $run->stage, $run->scope_key, $run->execution_contract, $run->source_manifest);
+                    if (! $run->issue_id) {
+                        app(GenerationIssueService::class)->observe($run);
+                        $run->refresh();
+                    }
+                    $issue = GenerationIssue::findOrFail($run->issue_id);
+                    $run = app(GenerationIssueActions::class)->execute($issue->id, 'retry_transient', $issue->fingerprint,
+                        $task->fresh()->control_version, (string) Str::uuid(), dispatch: false);
                     $delays = config('generation.execution.backoff', [10, 30]);
                     $run->update(['next_attempt_at' => now()->addSeconds($delays[min(count($delays) - 1, max(0, $run->attempt - 2))])]);
                     $counts['retried']++;

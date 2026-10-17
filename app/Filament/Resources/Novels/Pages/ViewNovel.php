@@ -13,6 +13,7 @@ use App\AI\Exceptions\AiProviderException;
 use App\AI\Exceptions\BudgetExceededException;
 use App\Enums\NovelStatus;
 use App\Exceptions\GenerationPreflightException;
+use App\Filament\Pages\GenerationIssues;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use App\Services\NovelGenerationReadiness;
@@ -60,6 +61,8 @@ class ViewNovel extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            // 异常入口只传筛选范围，处理权限由统一应用动作复验。
+            Action::make('generationIssues')->label('查看异常')->url(fn () => GenerationIssues::getUrl(['novel' => $this->getRecord()->id])),
             Action::make('startNovelGeneration')
                 ->label('开始正文生成')
                 ->icon('heroicon-o-rocket-launch')

@@ -1,6 +1,6 @@
 # 新版小说生成执行合同
 
-版本：1.2 · R00 合同 / R01 实施 · 2026-10-17。
+版本：1.3 · R00 合同 / R01–R02 实施 · 2026-10-17。
 
 依据：[PRD](../PRD.md)、[数据合同](data-model.md)、[DESIGN](../../DESIGN.md)、[基线及模块清单](../development/reports/XNR-001-baseline.md)。本文是 R01–R05 的目标合同。R01 数据/执行/费用基础已在隔离环境验证；完整生成阶段和真实模型尚未接通验收，见 [R01 报告](../development/reports/R01-implementation.md)。凭据按用户已确认的方案 A 实施，见数据合同 §10。
 
@@ -298,3 +298,12 @@ R00 审查应核对：阶段输入输出闭合、每次收费有身份、暂停/
 本机核实 Job 330s ≤ Horizon 360s < Run lease 390s < Redis retry_after 420s。代码保留运行时关系检查，不修改部署.env。技术尝试计数按相同逻辑键累计；暂停复用有效结果，重启需新输入身份并保留历史。问题修复累计和人工处理动作由 R02 接入。
 
 所有收费调用通过发送前 Usage 账本，硬上限默认关闭；冻结生成配置不豁免实时急停、凭据撤销、任务控制或最新用户金额授权。未知响应、缺用量和缺价格均不记免费。详细事务和对账说明见 XNR-005/006 报告。
+
+
+## 12 R02 实施边界
+
+统一错误目录、Issue 生命周期、同源复验与失败对账已通过 `GenerationIssueCatalog/GenerationIssueService` 接入 pipeline-v1。UI、恢复扫描统一调用 `GenerationIssueActions::preview/execute`；不导入旧历史。`GenerationIssueDiagnostic` 复用 reviewer 路由与任务模型授权、冻结请求、费用账本，产物只读，不能以建议代替复验。
+
+当前执行动作是 Preflight 临时故障重试、只读 AI 诊断、人工说明及任务暂停。关闭 Issue 的领域复验器当前只支持 Preflight 身份/来源检查；其余领域必须在接入时增加明确成功条件，不能用 Review Run 成功替代内容 PASS。目标白名单中的正文/证据/计划/派生修复仍等待相应领域批次接入，未实现动作不提供执行按钮。空模型授权不会自动扩权。问题累计次数/时限跨 Run 保存，问题/章节费用仍受用户显式上限约束；来源变化时隔离晚到候选。
+
+异常中心及小说/章节/Generation/Review 入口引用同一 Issue。XNR-009 由于 XNR-034 的缩放/减少动态效果验收未结束，仍保留 IN_PROGRESS，不能以页面实现替代全部依赖通过。详见 [R02 实施记录](../development/reports/R02-implementation.md)。
