@@ -1,0 +1,827 @@
+{
+  "schema_version": 1,
+  "description_zh": "R00 脱敏故障夹具。历史观测投影与人工构造合同用例明确分开；不是旧小说备份，不代表新版测试已通过。",
+  "baseline_commit": "66d5c1b33ecb006e1a86ba11d6d8c8f64701166a",
+  "observed_at": "2026-10-17T20:48:37+08:00",
+  "provenance": {
+    "database": "当前小说、章节、Run、Artifact、Review、Usage 均为零；无法重新完成全部数据库来源链关联。",
+    "log_parser": "按时间戳边界读取完整日志记录；容忍字符串内换行；只保留元数据、形状、哈希及逐字匹配结果。",
+    "limitations": [
+      "历史日志可能混有测试请求，不能用日志总量推算生产故障率或实际账单。",
+      "日志 HTTP 200 不代表业务验收通过。",
+      "来源 ID 只用于核查历史，不是运行这些夹具的数据库外键。"
+    ]
+  },
+  "observations": {
+    "failed_jobs": [
+      {
+        "id": 29,
+        "queue": "generation",
+        "failed_at": "2026-10-15 02:15:36",
+        "job_class": "App\\Jobs\\AssembleNovelOutlineSkeletonJob",
+        "exception_summary": "Illuminate\\Validation\\ValidationException: Volume vol-01 按字数折算需约 144 章，但 Main Beat 预算合计为 67 至 94 章。"
+      },
+      {
+        "id": 30,
+        "queue": "generation",
+        "failed_at": "2026-10-15 18:58:47",
+        "job_class": "App\\Jobs\\ReviewChapterJob",
+        "exception_summary": "Illuminate\\Validation\\ValidationException: arc_beat_audits 必须按冻结契约逐项完整返回。"
+      },
+      {
+        "id": 31,
+        "queue": "generation",
+        "failed_at": "2026-10-15 19:32:55",
+        "job_class": "App\\Jobs\\ReviewChapterJob",
+        "exception_summary": "Illuminate\\Validation\\ValidationException: arc_beat_audits 必须按冻结契约逐项完整返回。"
+      },
+      {
+        "id": 32,
+        "queue": "generation",
+        "failed_at": "2026-10-15 19:40:04",
+        "job_class": "App\\Jobs\\RewriteChapterJob",
+        "exception_summary": "App\\AI\\Exceptions\\AiProviderException: Provider 请求的 Prompt Version 与冻结 Generation Run 不一致。"
+      },
+      {
+        "id": 33,
+        "queue": "generation",
+        "failed_at": "2026-10-15 19:46:05",
+        "job_class": "App\\Jobs\\GenerateSceneJob",
+        "exception_summary": "App\\AI\\Exceptions\\AiProviderException: Provider 请求的 Prompt Version 与冻结 Generation Run 不一致。"
+      },
+      {
+        "id": 36,
+        "queue": "generation",
+        "failed_at": "2026-10-15 20:20:28",
+        "job_class": "App\\Jobs\\ReviewChapterJob",
+        "exception_summary": "App\\AI\\Exceptions\\AiProviderException: Reviewer Route 容量不足：估算输入 31115 Token，加最大输出 20000 Token，超过 Context 48000 Token。"
+      },
+      {
+        "id": 39,
+        "queue": "generation",
+        "failed_at": "2026-10-16 00:48:12",
+        "job_class": "App\\Jobs\\PlanChapterJob",
+        "exception_summary": "App\\AI\\Exceptions\\AiProviderException: Plan 校验失败重规划已达到 2 次上限。"
+      },
+      {
+        "id": 41,
+        "queue": "generation",
+        "failed_at": "2026-10-16 13:21:54",
+        "job_class": "App\\Jobs\\GenerateSceneJob",
+        "exception_summary": "App\\AI\\Exceptions\\AiProviderException: 内容修复已超过 1800 秒上限。"
+      },
+      {
+        "id": 42,
+        "queue": "generation",
+        "failed_at": "2026-10-16 13:29:52",
+        "job_class": "App\\Jobs\\GenerateSceneJob",
+        "exception_summary": "App\\AI\\Exceptions\\AiProviderException: 内容修复已超过 1800 秒上限。"
+      },
+      {
+        "id": 44,
+        "queue": "generation",
+        "failed_at": "2026-10-16 19:05:37",
+        "job_class": "App\\Jobs\\ReviewChapterJob",
+        "exception_summary": "Illuminate\\Validation\\ValidationException: Handoff 汇总状态与逐项检查不一致。"
+      },
+      {
+        "id": 47,
+        "queue": "generation",
+        "failed_at": "2026-10-16 22:41:11",
+        "job_class": "App\\Jobs\\ExtractStoryEventsJob",
+        "exception_summary": "Illuminate\\Validation\\ValidationException: 已满足或冲突的条件必须提供当前正文逐字证据。"
+      },
+      {
+        "id": 48,
+        "queue": "generation",
+        "failed_at": "2026-10-17 00:57:39",
+        "job_class": "App\\Jobs\\ExtractStoryEventsJob",
+        "exception_summary": "Illuminate\\Validation\\ValidationException: 已满足或冲突的条件必须提供当前正文逐字证据。"
+      }
+    ],
+    "paired_log_records": [
+      {
+        "ai_request_log_id": "57a6af2e-3789-482f-bbe8-a18b83f9ebfc",
+        "stage": "reviewer",
+        "status": null,
+        "max_output_tokens": 20000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-15.log",
+        "line": 8476,
+        "event": "AI Provider 请求。",
+        "run_id": 457,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage"
+        ]
+      },
+      {
+        "ai_request_log_id": "57a6af2e-3789-482f-bbe8-a18b83f9ebfc",
+        "stage": "reviewer",
+        "status": 200,
+        "max_output_tokens": 20000,
+        "input_tokens": 14527,
+        "output_tokens": 4435,
+        "file": "laravel-2026-10-15.log",
+        "line": 8481,
+        "event": "AI Provider 完整响应。",
+        "run_id": 457,
+        "metadata_keys": [],
+        "body_sha256": "363f1250e5daa6edc0e1a288c6354bee1cfe038066592b27567e0a00a83c9977",
+        "structured_shape": {
+          "scores": "dict",
+          "chapter_plan_completion": "dict",
+          "milestone_completion": 3,
+          "beat_exit": 3,
+          "handoff_readiness": 8,
+          "foreshadowing_audits": 0,
+          "arc_beat_audits": 0,
+          "arc_completion_audits": 1,
+          "character_candidate_audits": 0,
+          "world_entity_candidate_audits": 0,
+          "unapproved_world_entities": 0,
+          "unapproved_characters": 0,
+          "findings": 1
+        }
+      },
+      {
+        "ai_request_log_id": "cc310943-7488-428a-b44a-7c6b47904dd4",
+        "stage": "reviewer",
+        "status": null,
+        "max_output_tokens": 20000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-15.log",
+        "line": 9076,
+        "event": "AI Provider 请求。",
+        "run_id": 458,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage"
+        ]
+      },
+      {
+        "ai_request_log_id": "cc310943-7488-428a-b44a-7c6b47904dd4",
+        "stage": "reviewer",
+        "status": 200,
+        "max_output_tokens": 20000,
+        "input_tokens": 14527,
+        "output_tokens": 4012,
+        "file": "laravel-2026-10-15.log",
+        "line": 9081,
+        "event": "AI Provider 完整响应。",
+        "run_id": 458,
+        "metadata_keys": [],
+        "body_sha256": "b102a76863b8bf7b386ab0c6c1d9b2dc675603b2e0453eafe2d9a6b9b0f05910",
+        "structured_shape": {
+          "scores": "dict",
+          "chapter_plan_completion": "dict",
+          "milestone_completion": 3,
+          "beat_exit": 3,
+          "handoff_readiness": 8,
+          "foreshadowing_audits": 0,
+          "arc_beat_audits": 0,
+          "arc_completion_audits": 1,
+          "character_candidate_audits": 0,
+          "world_entity_candidate_audits": 0,
+          "unapproved_world_entities": 0,
+          "unapproved_characters": 0,
+          "findings": 0
+        }
+      },
+      {
+        "ai_request_log_id": "3891c2f0-6317-4634-8101-7b39ab6f1240",
+        "stage": "planner",
+        "status": null,
+        "max_output_tokens": 32000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-16.log",
+        "line": 7,
+        "event": "AI Provider 请求。",
+        "run_id": 512,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage",
+          "content_repair_run_id"
+        ]
+      },
+      {
+        "ai_request_log_id": "3891c2f0-6317-4634-8101-7b39ab6f1240",
+        "stage": "planner",
+        "status": 200,
+        "max_output_tokens": 32000,
+        "input_tokens": 23934,
+        "output_tokens": 4373,
+        "file": "laravel-2026-10-16.log",
+        "line": 14,
+        "event": "AI Provider 完整响应。",
+        "run_id": 512,
+        "metadata_keys": [],
+        "body_sha256": "c3079b324f71835c98009b6123bdc506b3528c91d94a74f4c449d01692d1724d"
+      },
+      {
+        "ai_request_log_id": "c91dd4de-f14a-4211-84ac-92492afc559e",
+        "stage": "planner",
+        "status": null,
+        "max_output_tokens": 32000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-16.log",
+        "line": 15,
+        "event": "AI Provider 请求。",
+        "run_id": 514,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage",
+          "content_repair_run_id"
+        ]
+      },
+      {
+        "ai_request_log_id": "c91dd4de-f14a-4211-84ac-92492afc559e",
+        "stage": "planner",
+        "status": 200,
+        "max_output_tokens": 32000,
+        "input_tokens": 27010,
+        "output_tokens": 3393,
+        "file": "laravel-2026-10-16.log",
+        "line": 22,
+        "event": "AI Provider 完整响应。",
+        "run_id": 514,
+        "metadata_keys": [],
+        "body_sha256": "9429e68bbeae8e44aa80d73c4313db6cca6f425321b6bbaf2d322a5b47d369df"
+      },
+      {
+        "ai_request_log_id": "017e5875-17bb-4186-84bd-61db74e54711",
+        "stage": "planner",
+        "status": null,
+        "max_output_tokens": 32000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-16.log",
+        "line": 23,
+        "event": "AI Provider 请求。",
+        "run_id": 516,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage",
+          "content_repair_run_id"
+        ]
+      },
+      {
+        "ai_request_log_id": "017e5875-17bb-4186-84bd-61db74e54711",
+        "stage": "planner",
+        "status": 200,
+        "max_output_tokens": 32000,
+        "input_tokens": 26613,
+        "output_tokens": 2068,
+        "file": "laravel-2026-10-16.log",
+        "line": 30,
+        "event": "AI Provider 完整响应。",
+        "run_id": 516,
+        "metadata_keys": [],
+        "body_sha256": "204a11481907975c5f3b8408c1525ca85bf72098a498631f3b11327602d5fbfc"
+      },
+      {
+        "ai_request_log_id": "2aabcbc8-2a71-444f-ab5b-c775d48138f5",
+        "stage": "reviewer",
+        "status": null,
+        "max_output_tokens": 40000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-16.log",
+        "line": 909,
+        "event": "AI Provider 请求。",
+        "run_id": 579,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage"
+        ]
+      },
+      {
+        "ai_request_log_id": "2aabcbc8-2a71-444f-ab5b-c775d48138f5",
+        "stage": "reviewer",
+        "status": 200,
+        "max_output_tokens": 40000,
+        "input_tokens": 11561,
+        "output_tokens": 4333,
+        "file": "laravel-2026-10-16.log",
+        "line": 914,
+        "event": "AI Provider 完整响应。",
+        "run_id": 579,
+        "metadata_keys": [],
+        "body_sha256": "0f165eee84a9bd68c420e8d4c3a6b52427a086aa4ce6046034fc92a124992047",
+        "structured_shape": {
+          "scores": "dict",
+          "chapter_plan_completion": "dict",
+          "milestone_completion": 4,
+          "beat_exit": 3,
+          "handoff_readiness": 8,
+          "foreshadowing_audits": 0,
+          "arc_beat_audits": 1,
+          "arc_completion_audits": 1,
+          "character_candidate_audits": 0,
+          "world_entity_candidate_audits": 0,
+          "unapproved_world_entities": 0,
+          "unapproved_characters": 0,
+          "findings": 0
+        }
+      },
+      {
+        "ai_request_log_id": "7e701ffc-8ab3-4cf1-920e-aa4a8e1ebdee",
+        "stage": "extractor",
+        "status": null,
+        "max_output_tokens": 72000,
+        "input_tokens": null,
+        "output_tokens": null,
+        "file": "laravel-2026-10-16.log",
+        "line": 2014,
+        "event": "AI Provider 请求。",
+        "run_id": 616,
+        "metadata_keys": [
+          "generation_run_id",
+          "novel_id",
+          "chapter_id",
+          "stage"
+        ]
+      },
+      {
+        "ai_request_log_id": "7e701ffc-8ab3-4cf1-920e-aa4a8e1ebdee",
+        "stage": "extractor",
+        "status": 200,
+        "max_output_tokens": 72000,
+        "input_tokens": 7216,
+        "output_tokens": 18102,
+        "file": "laravel-2026-10-16.log",
+        "line": 2015,
+        "event": "AI Provider 完整响应。",
+        "run_id": 616,
+        "metadata_keys": [],
+        "body_sha256": "0e08b3cb2ff966c7bd2f8dcef29d61457fc068ab5cf7077d50df89093c555fc7",
+        "structured_shape": {
+          "events": 5,
+          "outline_completion": "dict"
+        }
+      }
+    ],
+    "extractor_evidence_checks": [
+      {
+        "path": ".outline_completion.milestone_completion[0].evidence",
+        "quote_length": 86,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.milestone_completion[1].evidence",
+        "quote_length": 45,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.milestone_completion[2].evidence",
+        "quote_length": 74,
+        "exact_match": false
+      },
+      {
+        "path": ".outline_completion.beat_exit[0].evidence",
+        "quote_length": 39,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.beat_exit[1].evidence",
+        "quote_length": 65,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.beat_exit[2].evidence",
+        "quote_length": 45,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.handoff_readiness[0].evidence",
+        "quote_length": 45,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.handoff_readiness[1].evidence",
+        "quote_length": 133,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.handoff_readiness[2].evidence",
+        "quote_length": 64,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.handoff_readiness[5].evidence",
+        "quote_length": 45,
+        "exact_match": true
+      },
+      {
+        "path": ".outline_completion.handoff_readiness[6].evidence",
+        "quote_length": 62,
+        "exact_match": false
+      },
+      {
+        "path": ".outline_completion.handoff_readiness[7].evidence",
+        "quote_length": 81,
+        "exact_match": true
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "R00-001",
+      "kind": "observed_failed_job",
+      "problem_ids": [
+        "P04"
+      ],
+      "source": {
+        "failed_job_ids": [
+          29
+        ]
+      },
+      "description_zh": "旧篇幅分配不覆盖目标；仅保留数值，不宣称现行 v6 仍有同一故障。",
+      "input": {
+        "required_chapters": 144,
+        "allocated_min": 67,
+        "allocated_max": 94
+      },
+      "expected_target": {
+        "valid": false,
+        "reason": "allocation_does_not_cover_target"
+      }
+    },
+    {
+      "id": "R00-002",
+      "kind": "observed_failed_job",
+      "problem_ids": [
+        "P05"
+      ],
+      "source": {
+        "failed_job_ids": [
+          36
+        ]
+      },
+      "description_zh": "完整输入与输出预算合计超限，不能靠无变化重写修复。",
+      "input": {
+        "estimated_input_tokens": 31115,
+        "max_completion_tokens": 20000,
+        "context_window_tokens": 48000
+      },
+      "expected_target": {
+        "capacity_valid": false,
+        "required_tokens": 51115,
+        "next_action": "rebuild_capacity_contract_before_writer"
+      }
+    },
+    {
+      "id": "R00-003",
+      "kind": "observed_log_projection",
+      "problem_ids": [
+        "P06"
+      ],
+      "source": {
+        "run_ids": [
+          457,
+          458
+        ],
+        "failed_job_ids": [
+          30,
+          31
+        ],
+        "correlation_note": "日志由 ai_request_log_id 配对；失败队列与 Run 关联未重新恢复。"
+      },
+      "description_zh": "两次完整响应均缺少输入要求的审计项；HTTP 200 不等于审校合格。",
+      "input": {
+        "expected_arc_audit_count": 1,
+        "returned_arc_audit_count": 0
+      },
+      "expected_target": {
+        "structurally_valid": false,
+        "canonical_commit": false
+      }
+    },
+    {
+      "id": "R00-004",
+      "kind": "observed_log_projection",
+      "problem_ids": [
+        "P06"
+      ],
+      "source": {
+        "run_ids": [
+          616
+        ],
+        "request_id": "7e701ffc-8ab3-4cf1-920e-aa4a8e1ebdee"
+      },
+      "description_zh": "只验证 outline_completion 的字符串逐字证据，不宣称已验证全部事件语义。",
+      "input": {
+        "checked_string_evidence_count": 12,
+        "non_matching_paths": [
+          ".outline_completion.milestone_completion[2].evidence",
+          ".outline_completion.handoff_readiness[6].evidence"
+        ]
+      },
+      "expected_target": {
+        "evidence_valid": false,
+        "canonical_commit": false
+      }
+    },
+    {
+      "id": "R00-005",
+      "kind": "observed_failed_job",
+      "problem_ids": [
+        "P07"
+      ],
+      "source": {
+        "failed_job_ids": [
+          41,
+          42
+        ]
+      },
+      "description_zh": "队列记录确认超时；无法仅由异常证明模型执行占满 1800 秒。",
+      "input": {
+        "error": "content_repair_time_limit_exceeded",
+        "elapsed_limit_seconds": 1800
+      },
+      "expected_target": {
+        "preserve_artifact": true,
+        "next_action": "show_queue_execution_and_deadline_separately"
+      }
+    },
+    {
+      "id": "R00-006",
+      "kind": "observed_failed_job",
+      "problem_ids": [
+        "P12"
+      ],
+      "source": {
+        "failed_job_ids": [
+          32,
+          33
+        ]
+      },
+      "description_zh": "确认冻结版本不一致的异常，不猜测具体是哪次部署引起。",
+      "input": {
+        "failure": "request_prompt_version_differs_from_frozen_run"
+      },
+      "expected_target": {
+        "reuse_current_response": false,
+        "next_action": "explicit_new_attempt_or_restore_matching_contract"
+      }
+    },
+    {
+      "id": "R00-007",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P06"
+      ],
+      "source": {
+        "failed_job_ids": [
+          44
+        ],
+        "note": "汇总字段及检查项为构造，不是历史响应复刻。"
+      },
+      "description_zh": "汇总结论由代码派生，不信任模型重复汇总。",
+      "input": {
+        "model_summary": "fulfilled",
+        "checks": [
+          {
+            "key": "goal-1",
+            "status": "missing"
+          }
+        ]
+      },
+      "expected_target": {
+        "derived_summary": "missing",
+        "canonical_commit": false
+      }
+    },
+    {
+      "id": "R00-008",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P08"
+      ],
+      "source": {
+        "code": "app/Services/GenerationFailurePolicy.php"
+      },
+      "description_zh": "保留历史失败但成功续跑不再显示为当前阻塞；不把合成数据伪装历史 Run。",
+      "input": {
+        "prior_run": {
+          "status": "failed",
+          "error_code": "scene_stage_deferred"
+        },
+        "later_same_source_run": {
+          "status": "succeeded"
+        }
+      },
+      "expected_target": {
+        "active_issue_count": 0,
+        "retain_failed_history": true
+      }
+    },
+    {
+      "id": "R00-009",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P02"
+      ],
+      "source": {
+        "code": "app/Filament/Resources/Novels/Pages/CreateNovel.php"
+      },
+      "description_zh": "新版创建和编辑保存同一费用策略；旧代码丢弃预算的风险来源已静态确认。",
+      "input": {
+        "cost_policy": {
+          "task_hard_limit": {
+            "enabled": true,
+            "amount": "12.00",
+            "currency": "USD"
+          }
+        }
+      },
+      "expected_target": {
+        "create_edit_same_policy": true,
+        "effective_enabled": true,
+        "effective_amount": "12.00"
+      }
+    },
+    {
+      "id": "R00-010",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P13"
+      ],
+      "source": {
+        "code": "app/Services/NovelOutlinePipeline.php:prepareBatch"
+      },
+      "description_zh": "修改输入后重建不得仅凭相同卷数复用；继续旧任务则保留旧输入。",
+      "input": {
+        "old_premise_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "new_premise_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "same_volume_count": true,
+        "operation": "rebuild"
+      },
+      "expected_target": {
+        "reuse_old_batch": false,
+        "input_hash_changes": true
+      }
+    },
+    {
+      "id": "R00-011",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P11"
+      ],
+      "source": {
+        "prd_acceptance": "A26"
+      },
+      "description_zh": "整书身份与短时租约分离，暂停任务仍占主任务身份。",
+      "input": {
+        "task_status": "paused",
+        "run_lease_expired": true
+      },
+      "expected_target": {
+        "create_second_active_task": false,
+        "auto_resume_task": false
+      }
+    },
+    {
+      "id": "R00-012",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P15"
+      ],
+      "source": {
+        "prd_acceptance": "A12"
+      },
+      "description_zh": "未来隔离 PostgreSQL 故障注入用例，本批没有执行数据库事务故障测试。",
+      "input": {
+        "failure_after": "events_written_before_state_version"
+      },
+      "expected_target": {
+        "chapter_canonical": false,
+        "events_persisted": false,
+        "state_pointer_advanced": false
+      }
+    },
+    {
+      "id": "R00-013",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P09",
+        "P10"
+      ],
+      "source": {
+        "prd_acceptance": "A09"
+      },
+      "description_zh": "跨 Run 的同一问题计数不能重置，停止无进展循环并给出人工选择。",
+      "input": {
+        "same_issue_repair_attempts": 2,
+        "new_run_requested": true,
+        "semantic_progress": false
+      },
+      "expected_target": {
+        "reset_attempt_count": false,
+        "next_action": "needs_attention",
+        "manual_options_required": true
+      }
+    },
+    {
+      "id": "R00-014",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P02"
+      ],
+      "source": {
+        "prd_acceptance": "A31"
+      },
+      "description_zh": "默认完成目标优先，预警不阻断。",
+      "input": {
+        "hard_limits_enabled": false,
+        "warning_amount": "1.00",
+        "known_cost": "2.00",
+        "target_completed": false
+      },
+      "expected_target": {
+        "next_chapter_allowed_by_cost": true,
+        "required_extra_budget_confirmation": false
+      }
+    },
+    {
+      "id": "R00-015",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P02"
+      ],
+      "source": {
+        "prd_acceptance": "A33"
+      },
+      "description_zh": "缺价格不伪造零费用；数据库记录失败是另一种技术故障。",
+      "input": {
+        "price_known": false,
+        "hard_limits_enabled": false,
+        "tokens_known": true
+      },
+      "expected_target": {
+        "cost": null,
+        "cost_status": "unknown",
+        "next_request_allowed_by_cost": true
+      }
+    },
+    {
+      "id": "R00-016",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P02"
+      ],
+      "source": {
+        "prd_acceptance": "A32"
+      },
+      "description_zh": "已启用上限时原子比较已知费用与占用；未知响应不能 finally 清零。",
+      "input": {
+        "hard_limit": "10.00",
+        "known_cost": "8.00",
+        "unsettled_reservation": "1.50",
+        "next_estimate": "1.00",
+        "enabled": true
+      },
+      "expected_target": {
+        "new_request_allowed": false,
+        "unknown_reservation_released": false
+      }
+    },
+    {
+      "id": "R00-017",
+      "kind": "synthetic_contract",
+      "problem_ids": [
+        "P06"
+      ],
+      "source": {
+        "prd_acceptance": "A15"
+      },
+      "description_zh": "晚到响应不能覆盖新人工稿，需按当前来源复验。",
+      "input": {
+        "review_source": "draft-v1",
+        "manual_edit_source": "draft-v2",
+        "late_ai_source": "draft-v1"
+      },
+      "expected_target": {
+        "reuse_old_review": false,
+        "overwrite_new_draft": false,
+        "preserve_late_response": true
+      }
+    }
+  ]
+}
