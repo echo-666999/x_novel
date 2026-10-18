@@ -20,15 +20,15 @@ final class GenerationIssueActions
     /** 动作白名单包含设定、产物修复与局部改写；预览和执行共用服务器校验。 */
     public function preview(GenerationIssue $issue, string $action, string $instructions = ''): array
     {
-        if (! in_array($action, ['retry_transient', 'repair_foundation', 'repair_book', 'rebuild_book_context', 'diagnose', 'save_note', 'pause'], true)) {
+        if (! in_array($action, ['retry_export', 'retry_transient', 'repair_foundation', 'repair_book', 'rebuild_book_context', 'diagnose', 'save_note', 'pause'], true)) {
             throw new \InvalidArgumentException('动作尚未实现或不在服务器白名单中。');
         }
         $run = app(GenerationIssueService::class)->assertCurrent($issue);
         $task = NovelGenerationTask::findOrFail($issue->generation_task_id);
-        $reason = null;
+        $reason = $action === 'retry_export' && ($issue->category !== 'export' || ! data_get($run->execution_contract, 'book_export') || $run->status !== RunStatus::Failed) ? '只有失败的正式导出支持重新导出。' : null;
         $requestContract = null;
-        if (in_array($action, ['retry_transient', 'repair_foundation', 'repair_book', 'rebuild_book_context', 'diagnose'], true)) {
-            $reason = $this->blockedReason($issue, $task, $action);
+        if (in_array($action, ['retry_export', 'retry_transient', 'repair_foundation', 'repair_book', 'rebuild_book_context', 'diagnose'], true)) {
+            $reason ??= $this->blockedReason($issue, $task, $action);
             if (! $reason && in_array($action, ['diagnose', 'repair_foundation', 'repair_book'], true)) {
                 $signature = app(GenerationInputIdentity::class)->hash([$issue->fingerprint, $action, $instructions, $task->policy_revision]);
                 if (collect($issue->evidence['attempts'] ?? [])->contains('signature', $signature)) {
@@ -44,7 +44,7 @@ final class GenerationIssueActions
             }
         }
 
-        if ($action === 'rebuild_book_context' && ($issue->category !== 'capacity' || ! data_get($run->execution_contract, 'transition.completed_run_id'))) {
+        if ($action === 'rebuild_book_context' && (! in_array($issue->category, ['capacity', 'configuration', 'summary'], true) || (! data_get($run->execution_contract, 'transition.completed_run_id') && ! data_get($run->execution_contract, 'transition.canonical_chapter_id')))) {
             $reason = '只有保留成功来源的容量交接失败支持重建；请先修复模型容量设置。';
         }
 
@@ -52,6 +52,7 @@ final class GenerationIssueActions
             'control_version' => $task->control_version, 'source_run_id' => $run->id,
             'available' => $reason === null, 'reason' => $reason, 'request_contract' => $requestContract,
             'impact' => match ($action) {
+                'retry_export' => '仅重建冻结的正式正文导出，不调用模型，不修改正式内容。',
                 'retry_transient' => '复用原输入与冻结合同新建一次执行；成功复验后才关闭问题。',
                 'rebuild_book_context' => '使用当前已授权路由重建容量准入，保留正文；不重跑规划或写作。',
                 'repair_book' => '只修失败产物或有证据的局部段落；正文改变后重新提取并独立审校，保留累计次数与费用。',
@@ -75,7 +76,7 @@ final class GenerationIssueActions
             return '已有执行正在排队或运行，不能重复启动。';
         }
         // 容量重建不消耗 AI 修复次数，但仍必须服从暂停与同书串行边界。
-        if ($action === 'rebuild_book_context') {
+        if (in_array($action, ['rebuild_book_context', 'retry_export'], true)) {
             return null;
         }
         if ($issue->attempt_count >= (int) data_get($issue->repair_limit_snapshot, 'max_attempts', 2)

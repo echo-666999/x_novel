@@ -1,8 +1,8 @@
 # 新版小说生成执行合同
 
-版本：1.4 · R00 合同 / R01–R03 实施 · 2026-10-18。
+版本：1.5 · R00 合同 / R01–R05 实施 · 2026-10-18。
 
-依据：[PRD](../PRD.md)、[数据合同](data-model.md)、[DESIGN](../../DESIGN.md)、[基线及模块清单](../development/reports/XNR-001-baseline.md)。本文是 R01–R05 的目标合同。R01 数据/执行/费用基础已在隔离环境验证；完整生成阶段和真实模型尚未接通验收，见 [R01 报告](../development/reports/R01-implementation.md)。凭据按用户已确认的方案 A 实施，见数据合同 §10。
+依据：[PRD](../PRD.md)、[数据合同](data-model.md)、[DESIGN](../../DESIGN.md)、[基线及模块清单](../development/reports/XNR-001-baseline.md)。本文是 R01–R05 的目标合同。R01 数据/执行/费用基础已在隔离环境验证；R05 固定响应完整主链已接通，但完整视觉验收和真实模型尚未完成，见 [R01 报告](../development/reports/R01-implementation.md)。凭据按用户已确认的方案 A 实施，见数据合同 §10。
 
 ## 1 职责与实施边界
 
@@ -352,3 +352,44 @@ Foundation → Blueprint → Goal Window → 原子初始化
 - 人工“保存新稿并复验”锁 Novel→Task→Chapter，检查当前稿 ID/hash/control_version，保存独立全章 Artifact；与 AI 竞争时晚到旧响应隔离为历史。保存与后续复验登记分离，容量失败也不丢已保存文字。页面延迟读取显示版本，保存后即时取消旧 PASS 展示。
 
 自动任务与人工模式目前均在独立 Review PASS 后暂停：分别显示 `commit_not_ready` / `awaiting_manual_commit`。不能将 R04 测试理解为一本小说已经完成，也不能使用旧 Commit Job 绕过 R05。
+
+## R05 已实现的正式闭环（2026-10-18）
+
+本节替代 R04 的 `commit_not_ready` 临时停点。实现与未完成的验收项分别见 [R05 报告](../development/reports/R05-implementation.md)、[集成记录](../development/reports/XNR-026-integration.md) 和 [视觉记录](../development/reports/XNR-035-ui-acceptance.md)。真实模型小说验收仍属 R06。
+
+```text
+独立 PASS → BookLifecycle
+  自动模式 → CanonicalCommitService
+  人工模式 → 暂停等待明确提交 → 同一 CanonicalCommitService
+→ 正式章节 + Story Events / Facts + 新 State Version + 持久摘要待办
+→ Summary 路由生成带原文证据的必需摘要
+→ 章节边界（开篇暂停 / 下一章 / 完结审计）
+→ 完结 PASS + 无关键债务 → Novel completed
+→ 冻结正式章节清单 → 分块 TXT + 文件校验 → Task completed
+```
+
+### 正式事务与恢复
+
+- 锁序 Novel→Task→Chapter。检查 current task、control_version、期望正式状态、当前计划/正文/Review/Event/Patch 来源和校验和；服务端重跑 Review 输出规则及 StateValidator。无 Scene 或 Arc/Beat 不构成新链缺项。
+- 正式正文引用、事件/事实、状态版本、章节/小说指针、提交凭证与 `pending_transition.canonical_chapter_id` 同事务；重复提交只有一次正式效果。模型请求不在锁内。
+- 正式提交事务先结束，再进行摘要准入。摘要配置/容量错误不能撤销已正式内容；对账从持久待办补派。摘要条目引用正式正文精确位置，缺摘要不规划下一章。成功摘要采用及章边界待办同事务，派生记忆 afterCommit；派发缺口可扫描补偿。
+- 最新章撤回必须暂停并填写原因，追加完整恢复状态版本，失效对应事件、事实/记忆与后续计划/草稿指针，清除失效完结/导出依据。保留原 Artifact/State 和操作凭证；恢复按新状态重新规划同一章，不走旧 PASS。
+
+### 记忆、费用与降级
+
+- `BookMemoryService` 复用 MemoryUpdater，正式章摘要与有效正式 StoryEvent 才可建立记忆。召回先同小说/有效正式来源，结合目标实体、相似度、显著性和去重，限定条数后仍经上下文容量门禁。
+- 当前向量检索使用近期正式记忆的已有向量作为锚点，避免在规划事务中隐式发送查询 Embedding；这是可解释的初始实现，并未声称真实长篇召回质量已达标。缺向量/向量查询失败时，只在当前状态和必需摘要完整的条件下用 SQL 回退，并记录原因与入选 ID。
+- 独立向量使用 `book-derived-v1` Run，冻结实际连接、模型、维度、内容 hash、费用合同和控制身份；每次请求继续经过 RequestUsageLedger。来源变化/租约失效不能采用，过期在途费用标未知，相同输入最多三次实际尝试。派生失败为非阻断 Issue，主链不被回退。
+- 已完成正文允许补齐派生向量；暂停/取消不发新请求。没有增加默认金额限制。
+
+### 收束与导出
+
+- 80% 目标字数进入 completing 的写作约束；达到目标后调用独立 Reviewer 进行完结证据审计，同时计算确定性 Closure Debt。主线、结局、读者承诺、人物发展和伏笔逐项覆盖，不能仅按字数完成。
+- 审计只读取正式状态及近期 20 章、开篇 3 章和重要记忆来源的正式摘要证据，避免把长篇全部正文/摘要塞入一次请求。无证据必须保持未兑现，不能推断已经兑现；大输入继续经容量门禁。
+- 未完成时默认最多三次单章收束窗口。耗尽后保留债务 Issue；用户可填写方向，明确授权额外 1–3 章，记录操作者/原因/状态/额度并逐章复验。累计次数不清零，不取消硬事实/审校门禁，不改变费用上限。
+- `BookExportService` 保存正式连续章序、标题、Artifact/checksum、正式状态和完结标记；逐章读不可变正文、流式写私有文件。来源 hash 与文件 hash 都验证后才 Task completed。文件失败或采用前丢失生成可恢复导出 Issue，重试不调用模型。
+- 阅读页可随时下载正式快照；未完结标明“未完结”，不改变当前生成待办。鉴权下载仅提供对应小说可见的正式清单，缺失文件从冻结正文重建。
+
+### 运维与入口
+
+主链继续由 ExecuteGenerationRunJob 执行（含确定性最终导出）；default 队列承担记忆/向量派生。默认导航按整书任务与章节阅读，旧 Run 细节放高级入口。健康读取真实探测/心跳及最近请求，未观测不假报在线；Worker 标识来自已加载的 Job 实现，不在旧进程内读取新文件假称重载。恢复与切换细节见 [运维手册](../development/OPERATIONS.md)。R07 尚未执行，旧实现仍待受控清理。

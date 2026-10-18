@@ -1,0 +1,24 @@
+
+> build
+> vite build
+
+vite v8.2.2 building client environment for production...
+[plugin laravel:fonts] Optimized font fallbacks require the optional "fontaine" package. Install it, or set "optimizedFallbacks: false" on your fonts to disable the feature.
+transforming...
+✓ 4 modules transformed.
+rendering chunks...
+computing gzip size...
+public/build/manifest.json                                       1.69 kB │ gzip:  0.37 kB
+public/build/fonts-manifest.json                                 5.74 kB │ gzip:  0.71 kB
+public/build/assets/instrument-sans-400-normal-DRC__1Mx.woff2   16.86 kB
+public/build/assets/instrument-sans-500-normal-Dk9ku72i.woff2   17.23 kB
+public/build/assets/instrument-sans-600-normal-B7fBEWYG.woff2   17.40 kB
+public/build/assets/instrument-sans-400-normal-D1W7dsQl.woff    21.24 kB
+public/build/assets/instrument-sans-500-normal-Z6ESRlEs.woff    21.65 kB
+public/build/assets/instrument-sans-600-normal-B9e8oLYv.woff    21.67 kB
+public/build/assets/fonts-C9MNnjVw.css                           2.35 kB │ gzip:  0.38 kB
+public/build/assets/app-DSuEa7hb.css                            65.65 kB │ gzip: 13.23 kB
+public/build/assets/theme-eZk0xDSC.css                         724.34 kB │ gzip: 76.00 kB
+public/build/assets/app-BvRk9kiK.js                              0.00 kB │ gzip:  0.02 kB
+
+✓ built in 789ms

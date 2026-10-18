@@ -10,8 +10,10 @@ use App\Enums\RunStatus;
 use App\Jobs\GenerateEmbeddingJob;
 use App\Models\Memory as MemoryModel;
 use App\Models\Novel;
+use App\Services\BookMemoryService;
 use App\Services\MemoryRetrievalEvaluator;
 use App\Services\MemoryRetriever;
+use App\Support\GenerationDiagnosticRedactor;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
@@ -240,6 +242,15 @@ class Memory extends Page implements HasTable
         $data = $this->retrievalForm->getState();
 
         try {
+            $novel = Novel::findOrFail($data['novel_id']);
+            if ($novel->current_generation_task_id) {
+                // 检查器与正文构建复用同一免费召回入口，不另发未授权查询向量请求。
+                $recall = app(BookMemoryService::class)->retrieve($novel, ['query' => $data['query']]);
+                $this->retrievalResults = array_map(fn ($m) => [...$m, 'type' => '正式记忆', 'source' => $m['source_type'].' #'.$m['source_id'], 'source_chapter' => MemoryModel::find($m['id'])?->valid_from_chapter, 'decision' => '已选择', 'final_score' => $m['similarity'] ?? $m['salience']], $recall['memories']);
+                Notification::make()->title('已按正式来源检索')->body($recall['selection']['reason'])->success()->send();
+
+                return;
+            }
             $this->retrievalResults = $retriever->retrieve(new MemoryQuery(
                 novelId: (int) $data['novel_id'],
                 queryText: (string) $data['query'],
@@ -304,8 +315,18 @@ class Memory extends Page implements HasTable
                 Action::make('retryEmbedding')
                     ->label('重试向量化')
                     ->icon('heroicon-o-arrow-path')
-                    ->visible(fn (MemoryModel $record): bool => $record->embeddingRun?->status === RunStatus::Failed)
+                    ->visible(fn (MemoryModel $record): bool => ! $record->hasEmbedding() && $record->status === MemoryStatus::Active)
                     ->action(function (MemoryModel $record): void {
+                        if ($record->novel->current_generation_task_id) {
+                            try {
+                                app(BookMemoryService::class)->retry($record->id);
+                                Notification::make()->title('已登记向量补派，结果以执行记录为准')->success()->send();
+                            } catch (\Throwable $e) {
+                                Notification::make()->title('向量补派未生效')->body(app(GenerationDiagnosticRedactor::class)->clean($e->getMessage()))->warning()->send();
+                            }
+
+                            return;
+                        }
                         GenerateEmbeddingJob::dispatch($record->getKey());
                         Notification::make()->title('向量化任务已重新排队')->success()->send();
                     }),

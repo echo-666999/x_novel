@@ -33,7 +33,7 @@ class MemoryUpdater
     ) {}
 
     /** @return Collection<int, Memory> */
-    public function update(int $chapterId): Collection
+    public function update(int $chapterId, bool $dispatchEmbeddings = true): Collection
     {
         [$chapter, $stateVersion, $events] = $this->canonicalSources($chapterId);
         $artifact = $chapter->canonicalArtifact;
@@ -48,7 +48,9 @@ class MemoryUpdater
 
         if ($run->status === RunStatus::Succeeded) {
             $memories = $this->memoriesFor($chapter, $events);
-            $this->dispatchPendingEmbeddings($memories);
+            if ($dispatchEmbeddings) {
+                $this->dispatchPendingEmbeddings($memories);
+            }
 
             return $memories;
         }
@@ -88,7 +90,9 @@ class MemoryUpdater
 
                 return $memories;
             });
-            $this->dispatchPendingEmbeddings($memories);
+            if ($dispatchEmbeddings) {
+                $this->dispatchPendingEmbeddings($memories);
+            }
 
             return $memories;
         } catch (Throwable $exception) {
@@ -176,6 +180,8 @@ class MemoryUpdater
             }
 
             return GenerationRun::query()->create([
+                // 新书派生记录归属整书任务，禁止被旧恢复器误认作正文摘要请求。
+                ...($chapter->novel->current_generation_task_id ? ['generation_task_id' => $chapter->novel->current_generation_task_id, 'pipeline_version' => 'book-derived-v1', 'scope_key' => 'memory-update:'.$chapter->id] : []),
                 'novel_id' => $chapter->novel_id,
                 'chapter_id' => $chapter->getKey(),
                 'scene_id' => null,

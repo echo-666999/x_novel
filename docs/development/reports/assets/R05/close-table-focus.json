@@ -1,0 +1,362 @@
+[
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(255, 255, 255)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "题材",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 40,
+      "w": 129.5,
+      "x": 130.0546875,
+      "y": 402
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "BUTTON",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(255, 255, 255)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "状态",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 40,
+      "w": 104,
+      "x": 307.5546875,
+      "y": 402
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "BUTTON",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(255, 255, 255)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "目标字数",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 40,
+      "w": 160,
+      "x": 115.0625,
+      "y": 402
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "BUTTON",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(255, 255, 255)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "更新时间",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 40,
+      "w": 235.484375,
+      "x": 77.0625,
+      "y": 402
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "BUTTON",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "R05 收尾：AI 修复失败与不可用",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 453.5546875,
+      "x": -32,
+      "y": 471
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "待解析",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 177.5,
+      "x": 106.0546875,
+      "y": 471
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "草稿",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 107.765625,
+      "w": 152,
+      "x": 283.5546875,
+      "y": 473.1171875
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "生成中",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 107.765625,
+      "w": 191.0078125,
+      "x": 99.5546875,
+      "y": 473.1171875
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "5,000",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 208,
+      "x": 290.5625,
+      "y": 471
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "尚无正式章",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 188,
+      "x": 101.0625,
+      "y": 471
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "2026-10-18 21:42",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 283.484375,
+      "x": 289.0625,
+      "y": 471
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "oklch(0.905471 0 264.418)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "进入工作台",
+    "outline": "rgb(224, 224, 224) solid 3px",
+    "rect": {
+      "h": 40,
+      "w": 180,
+      "x": 105.046875,
+      "y": 507
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "oklch(0.950353 0.0327273 276.966)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "编辑",
+    "outline": "rgb(232, 237, 255) solid 3px",
+    "rect": {
+      "h": 40,
+      "w": 96,
+      "x": 309.046875,
+      "y": 507
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "oklch(0.950353 0.0327273 17.752)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "删除小说",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 40,
+      "w": 152,
+      "x": 174.046875,
+      "y": 507
+    },
+    "shadow": "none",
+    "tag": "BUTTON",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "R05 收尾：导出故障与完成",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 112,
+      "w": 453.5546875,
+      "x": -32,
+      "y": 584
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "设定genre",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 177.5,
+      "x": 106.0546875,
+      "y": 584
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "已完成",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 107.765625,
+      "w": 152,
+      "x": 283.5546875,
+      "y": 586.1171875
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "整书已完成",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 107.765625,
+      "w": 191.0078125,
+      "x": 99.5546875,
+      "y": 586.1171875
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "5,000",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 208,
+      "x": 290.5625,
+      "y": 584
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "",
+    "name": "第 1 章",
+    "outline": "rgb(242, 243, 245) solid 3px",
+    "rect": {
+      "h": 112,
+      "w": 188,
+      "x": 101.0625,
+      "y": 584
+    },
+    "shadow": "none",
+    "tag": "A",
+    "visible": true
+  }
+]

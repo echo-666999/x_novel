@@ -37,7 +37,7 @@ class StalledRunRecoveryService
 
     public function markStalledRuns(): int
     {
-        return GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')
+        return GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])
             ->whereIn('status', [RunStatus::Queued, RunStatus::Running])
             // 主批次是协调记录而非正在占用 Worker 的 Provider Run，不能按 Worker 心跳判停滞。
             ->where('scope_type', '!=', NovelOutlinePipeline::BATCH_SCOPE)
@@ -95,13 +95,13 @@ class StalledRunRecoveryService
     private function claimWorkerLost(GenerationRun $run): GenerationRun
     {
         return DB::transaction(function () use ($run): GenerationRun {
-            $lockedRun = GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')->lockForUpdate()->findOrFail($run->getKey());
+            $lockedRun = GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])->lockForUpdate()->findOrFail($run->getKey());
 
             if (data_get($lockedRun->context_snapshot, 'recovery.claimed_at') !== null) {
                 throw ValidationException::withMessages(['run' => '该 Worker 丢失任务已经恢复或正在恢复。']);
             }
 
-            if (GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')
+            if (GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])
                 ->where('stage', $lockedRun->stage)
                 ->where('scope_type', $lockedRun->scope_type)
                 ->where('scope_id', $lockedRun->scope_id)

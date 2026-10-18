@@ -36,6 +36,10 @@ class ViewNovelPlanning extends ViewRecord
     #[Locked]
     public int $taskVersion = 0;
 
+    // 两个编辑器各自冻结控制版本，打开另一个不能替旧输入解除冲突。
+    #[Locked]
+    public int $directionTaskVersion = 0;
+
     #[Locked]
     public int $blueprintVersion = 0;
 
@@ -56,6 +60,11 @@ class ViewNovelPlanning extends ViewRecord
     {
         $this->authorizeAccess();
         abort_unless(NovelResource::canEdit($this->getRecord()), 403);
+        if ($this->goalKey !== '') {
+            $this->feedback = '已保留正在编辑的目标。请先保存或放弃该输入；遇到版本冲突时可保留输入并读取最新目标。';
+
+            return;
+        }
         $novel = $this->getRecord()->fresh();
         $window = NovelOutline::findOrFail($novel->current_goal_window_id);
         $goal = collect($window->sourceArtifact->data['goals'])->firstWhere('key', $key);
@@ -72,12 +81,54 @@ class ViewNovelPlanning extends ViewRecord
     {
         $this->authorizeAccess();
         abort_unless(NovelResource::canEdit($this->getRecord()), 403);
+        if ($this->editingDirection) {
+            $this->feedback = '已保留方向输入；遇到版本冲突时可保留输入并读取最新方向。';
+
+            return;
+        }
         $novel = $this->getRecord()->fresh();
         $blueprint = NovelOutline::findOrFail($novel->current_blueprint_id);
         $this->blueprintVersion = $blueprint->id;
-        $this->taskVersion = NovelGenerationTask::findOrFail($novel->current_generation_task_id)->control_version;
+        $this->directionTaskVersion = NovelGenerationTask::findOrFail($novel->current_generation_task_id)->control_version;
         $this->futureDirection = $blueprint->sourceArtifact->data['mainline'];
         $this->editingDirection = true;
+    }
+
+    /** 只有明确刷新才重绑来源；读取失败或目标移出窗口均保留输入和旧版本。 */
+    public function refreshGoalSource(): void
+    {
+        $this->authorizeAccess();
+        abort_unless(NovelResource::canEdit($this->getRecord()), 403);
+        try {
+            $novel = $this->getRecord()->fresh();
+            $window = NovelOutline::where('novel_id', $novel->id)->findOrFail($novel->current_goal_window_id);
+            if (! collect($window->sourceArtifact->data['goals'])->contains('key', $this->goalKey)) {
+                throw new \LogicException('此目标已不在当前窗口，输入已保留。请复制文字后放弃本次编辑，再选择当前目标，不能直接套用到其他章节。');
+            }
+            $task = NovelGenerationTask::where('novel_id', $novel->id)->findOrFail($novel->current_generation_task_id);
+            $this->windowVersion = $window->id;
+            $this->taskVersion = $task->control_version;
+            $this->feedback = '输入已保留并读取最新目标来源。请对照上方当前目标确认，再保存修订；本次读取未修改计划或正文。';
+        } catch (\Throwable $e) {
+            $this->feedback = app(GenerationDiagnosticRedactor::class)->clean($e->getMessage());
+        }
+    }
+
+    /** 方向刷新不改变目标编辑器版本，也不自动提交修订。 */
+    public function refreshDirectionSource(): void
+    {
+        $this->authorizeAccess();
+        abort_unless(NovelResource::canEdit($this->getRecord()), 403);
+        try {
+            $novel = $this->getRecord()->fresh();
+            $blueprint = NovelOutline::where('novel_id', $novel->id)->findOrFail($novel->current_blueprint_id);
+            $task = NovelGenerationTask::where('novel_id', $novel->id)->findOrFail($novel->current_generation_task_id);
+            $this->blueprintVersion = $blueprint->id;
+            $this->directionTaskVersion = $task->control_version;
+            $this->feedback = '输入已保留并读取最新方向来源。请对照上方当前方向确认，再保存修订；本次读取未修改蓝图或正文。';
+        } catch (\Throwable $e) {
+            $this->feedback = app(GenerationDiagnosticRedactor::class)->clean($e->getMessage());
+        }
     }
 
     public function saveDirection(): void
@@ -85,7 +136,7 @@ class ViewNovelPlanning extends ViewRecord
         $this->authorizeAccess();
         abort_unless(NovelResource::canEdit($this->getRecord()), 403);
         try {
-            app(NovelPlanningService::class)->reviseBlueprint($this->getRecord()->current_generation_task_id, $this->taskVersion, $this->blueprintVersion, $this->futureDirection);
+            app(NovelPlanningService::class)->reviseBlueprint($this->getRecord()->current_generation_task_id, $this->directionTaskVersion, $this->blueprintVersion, $this->futureDirection);
             $this->feedback = '未来方向候选已保存。当前章按原计划完成，章节边界重新规划未来目标。';
             $this->editingDirection = false;
         } catch (\Throwable $e) {

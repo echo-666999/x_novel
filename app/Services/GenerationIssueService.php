@@ -15,6 +15,7 @@ use App\Models\NovelGenerationTask;
 use App\Models\UsageRecord;
 use App\Support\GenerationDiagnosticRedactor;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 /** 问题身份与复验共享小说锁，保证去重、来源检查和任务恢复为同一事务。 */
@@ -36,7 +37,7 @@ final class GenerationIssueService
             Novel::whereKey($original->novel_id)->lockForUpdate()->firstOrFail();
             $task = NovelGenerationTask::whereKey($original->generation_task_id)->lockForUpdate()->firstOrFail();
             $run = GenerationRun::whereKey($original->id)->lockForUpdate()->firstOrFail();
-            if ($run->pipeline_version !== 'pipeline-v1') {
+            if (! in_array($run->pipeline_version, ['pipeline-v1', 'book-derived-v1'], true)) {
                 throw new \LogicException('旧历史不导入新版问题中心。');
             }
             // 修复器出错仍更新原问题，绝不递归创建“修复修复器”。
@@ -47,6 +48,10 @@ final class GenerationIssueService
                 return $issue->refresh();
             }
             $policy = app(GenerationIssueCatalog::class)->classify($failure, $run->stage);
+            // 派生失败展示积压，不阻断有充分结构化证据的正文主链。
+            if ($run->pipeline_version === 'book-derived-v1') {
+                $policy = [...$policy, 'category' => 'derived', 'severity' => 'warning', 'blocking' => false];
+            }
             $source = $this->identity($run);
             $fingerprint = app(GenerationInputIdentity::class)->hash(['novel' => $run->novel_id, 'source' => $source, 'category' => $policy['category'], 'rule' => $policy['rule_id']]);
             $issue = GenerationIssue::where('novel_id', $run->novel_id)->where('fingerprint', $fingerprint)->where('status', '!=', 'resolved')->first();
@@ -143,6 +148,9 @@ final class GenerationIssueService
                 'verification' => ['run_id' => $run->id, 'artifact_id' => $artifact->id, 'checksum' => $artifact->checksum, 'source_identity' => $issue->source_identity]]);
             if ($task->status === 'needs_attention' && ! $this->hasOtherBlockers($issue)) {
                 $task->update(['status' => 'running', 'stop_reason' => null, 'pending_transition' => data_get($run->checkpoint, 'next')]);
+            } elseif ($task->status === 'running' && $task->stop_reason === $issue->error_code && ! $this->hasOtherBlockers($issue)) {
+                // 人工启动修复时任务已处于运行中；复验成功后清除该故障的旧停止提示，不覆盖暂停意图或后继。
+                $task->update(['stop_reason' => null, 'stop_detail' => null]);
             }
 
             return true;
@@ -152,6 +160,9 @@ final class GenerationIssueService
     /** 每个创作阶段有独立成功标准，不能用 HTTP 成功替代业务通过。 */
     private function verifiedStageResult(GenerationRun $run, GenerationArtifact $artifact): bool
     {
+        if (data_get($run->execution_contract, 'book_export')) {
+            return $artifact->type === ArtifactType::ExportManifest && Storage::disk('local')->exists($artifact->data['path']);
+        }
         if (data_get($run->execution_contract, 'book_stage')) {
             // 结构修复已通过封闭 Schema 与领域校验；正文改写要等后续独立审校，不能在此关闭。
             return data_get($run->execution_contract, 'book_stage') !== 'rewrite';
@@ -226,7 +237,7 @@ final class GenerationIssueService
     /** 原异常已经持久化后再补问题；记录失败不回滚原失败事实。 */
     public function observe(GenerationRun $run): void
     {
-        if ($run->pipeline_version !== 'pipeline-v1' || ! $run->generation_task_id
+        if (! in_array($run->pipeline_version, ['pipeline-v1', 'book-derived-v1'], true) || ! $run->generation_task_id
             || in_array(data_get($run->execution_contract, 'issue_action'), ['save_note', 'pause'], true)) {
             return;
         }

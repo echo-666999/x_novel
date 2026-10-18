@@ -12,6 +12,7 @@ use App\Models\StoryStateVersion;
 use App\Services\MemoryInvalidator;
 use App\Services\MemoryQueryBuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
@@ -55,12 +56,13 @@ test('memory invalidation is novel scoped and idempotent', function () {
 });
 
 test('invalidated rollback memory cannot enter vector retrieval', function () {
-    configureEmbeddingForTest();
+    $dimensions = DB::getDriverName() === 'pgsql' ? 1536 : 3;
+    configureEmbeddingForTest(dimensions: $dimensions);
     $novel = Novel::factory()->create();
     $chapter = Chapter::factory()->for($novel)->create();
     $event = StoryEvent::factory()->for($novel)->for($chapter)->create();
     rollbackMemory($novel, 'story_event', $event->getKey(), [
-        'embedding' => '[1,0,0]',
+        'embedding' => '['.implode(',', [1, ...array_fill(0, $dimensions - 1, 0)]).']',
         'embedding_model' => 'embedding-fixed-v1',
     ]);
     app(MemoryInvalidator::class)->invalidateForChapter($chapter->getKey());

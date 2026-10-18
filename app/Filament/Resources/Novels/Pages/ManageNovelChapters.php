@@ -96,6 +96,16 @@ class ManageNovelChapters extends ManageRelatedRecords
 
     public function table(Table $table): Table
     {
+        if ($this->getRecord()->current_generation_task_id) {
+            // 章序由整书工作流管理，避免旧手工建章或场景按钮产生平行生产链。
+            return $table->columns([
+                TextColumn::make('sequence')->label('章节')->sortable(),
+                TextColumn::make('title')->label('标题')->searchable()->wrap(),
+                TextColumn::make('status')->label('状态')->badge(),
+                TextColumn::make('word_count')->label('字数')->numeric(),
+            ])->defaultSort('sequence')->recordUrl(fn (Chapter $record) => NovelResource::getUrl('book-chapter', ['record' => $record->novel_id, 'chapter' => $record->id]))->emptyStateHeading('首章尚未开始')->emptyStateDescription('基础设定和近期目标通过后自动创建当前章。');
+        }
+
         return $table
             ->modifyQueryUsing(fn (Builder $query): Builder => $query
                 ->with([
@@ -332,6 +342,10 @@ class ManageNovelChapters extends ManageRelatedRecords
 
     protected function getHeaderActions(): array
     {
+        if ($this->getRecord()->current_generation_task_id) {
+            return [Action::make('workbench')->label('返回工作台')->url(NovelResource::getUrl('view', ['record' => $this->getRecord()]))];
+        }
+
         return [
             CreateAction::make()
                 ->label('创建计划章节')

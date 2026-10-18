@@ -1,0 +1,72 @@
+vigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-review.test/x
+        - generic: 创作总览
+      - link "小说":
+        - /url: http://xnovel-r05-review.test/x/novels
+        - generic: 小说
+      - link "生成任务":
+        - /url: http://xnovel-r05-review.test/x/generation
+        - generic: 生成任务
+      - link "异常与审校":
+        - /url: http://xnovel-r05-review.test/x/generation-issues
+        - generic: 异常与审校
+      - link "记忆":
+        - /url: http://xnovel-r05-review.test/x/memory
+        - generic: 记忆
+      - link "设置":
+        - /url: http://xnovel-r05-review.test/x/settings
+        - generic: 设置
+    - generic: AI 与成本
+    - button "AI 与成本" [expanded]:
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-review.test/x/a-i-provider-connections
+        - generic: 服务商连接
+      - link "模型价格":
+        - /url: http://xnovel-r05-review.test/x/a-i-model-prices
+        - generic: 模型价格
+- main:
+  - heading "异常中心" [level=1]
+  - paragraph: 先看影响，再选择处理方式。已有正文与失败证据始终保留。
+  - link "章节审校记录":
+    - /url: http://xnovel-r05-review.test/x/review
+  - text: 查看范围
+  - combobox "查看范围":
+    - option "待你处理"
+    - option "自动处理中与提醒"
+    - option "全部未解决"
+    - option "已解决历史" [selected]
+  - paragraph: "已限定小说 #8"
+  - button "刷新状态"
+  - region "问题列表":
+    - 'button "【隔离验收】AI 修复基础设定 已解决 模型返回的数据结构不符合合同。 问题 #4 · 全书方向与设定 · 10-18 17:58" [active]':
+      - strong: 【隔离验收】AI 修复基础设定
+      - text: 已解决
+      - generic: 模型返回的数据结构不符合合同。
+      - generic: "问题 #4 · 全书方向与设定 · 10-18 17:58"
+  - region "问题详情":
+    - 'heading "问题 #4" [level=2]'
+    - text: 已解决
+    - heading "模型返回的数据结构不符合合同。" [level=3]
+    - paragraph: 此为已解决历史，原失败不再作为当前告警。
+    - paragraph: 已保存内容：已有正式章节、草稿及失败 Run 均保留。处理不直接改写正式历史。
+    - term: 累计处理尝试
+    - definition: 1 / 2
+    - term: 累计实际执行
+    - definition: 0 / 1800 秒
+    - term: 总截止时间
+    - definition: 未设置
+    - heading "已发生费用" [level=3]
+    - paragraph: USD 0.0000（已知实际/估算合计） · 0 笔待确认 · 在途占用 USD 0.0000
+    - paragraph: 费用用于统计。只有用户主动启用的硬上限会阻止新请求；范围剩余额度以设置及发送前账本复核为准。
+    - heading "失败证据与处理进展" [level=3]
+    - paragraph:
+      - strong: "Run #86"
+      - text: · 基础设定结构不完整，请查看保留的候选字段后修复。
+    - paragraph: "处理 Run #87 · AI 设定修复 · 执行结束，查看复验结论"
+    - generic: "同来源执行及产物复验通过。 · 解决执行 #87 · 历史失败仍可查询。"
+    - generic "证据、尝试历史与技术详情 · foundation_schema_invalid"
+- status

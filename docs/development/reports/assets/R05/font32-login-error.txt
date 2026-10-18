@@ -1,0 +1,21 @@
+- main:
+  - generic: AI 长篇网络小说自动生成平台
+  - heading "登录" [level=1]
+  - text: 邮箱地址
+  - superscript: "*"
+  - textbox "邮箱地址*": <redacted>
+  - paragraph: 登录信息有误。
+  - text: 密码
+  - superscript: "*"
+  - textbox "密码*": <redacted>
+  - button "显示密码":
+  - checkbox "保持登录状态"
+  - generic: 保持登录状态
+  - button "登录":
+    - generic: 登录
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

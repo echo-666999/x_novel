@@ -1,0 +1,50 @@
+Window: "高级", App: Safari浏览器.
+0 标准窗口 高级, Secondary Actions: Raise
+	1 container SafariAdvancedPreferencesView
+		2 按钮 帮助
+		3 文本 智能搜索栏：
+		4 复选框 显示完整网站地址, Value: 0
+		5 文本 无障碍：
+		6 复选框 字体大小不得小于, Value: 0
+		7 组合框 (disabled) Value: 9, Secondary Actions: Confirm
+		8 复选框 按下Tab键以高亮标记网页上的每一项, Value: 0, ID: TabToHighlightEachItem
+		9 text 按下Option-Tab键高亮标记每一项。 隐私：
+		10 复选框 使用高级追踪和指纹记录保护, Value: 1
+		11 弹出式按钮 在无痕浏览中
+		12 复选框 允许网站检查Apple Pay和Apple Card, Value: 1
+		13 文本 Safari浏览器允许你在这台Mac上通过触控ID使用Apple Pay和Apple Card完成网上购物。
+		14 复选框 允许保护隐私的广告效果监测, Value: 1
+		15 复选框 阻止所有Cookie, Value: 0
+		16 文本 阅读列表：
+		17 复选框 自动保存文章以便离线阅读, Value: 0
+		18 文本 样式表：
+		19 弹出式按钮 未选择
+		20 文本 默认编码：
+		21 弹出式按钮 中文(GB 18030)
+		22 文本 代理：
+		23 按钮 更改设置…, Help: 打开“系统设置”的“网络”面板以更改你的代理设置
+		24 复选框 显示网页开发者功能, Value: 0, ID: ShowDevelopMenuCheckBox
+	25 工具栏
+		26 按钮 通用, Secondary Actions: 移到下一项, 从工具栏移除
+		27 按钮 标签页, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		28 按钮 自动填充, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		29 按钮 密码, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		30 按钮 搜索, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		31 按钮 安全性, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		32 按钮 隐私, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		33 按钮 网站, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		34 按钮 用户场景, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		35 按钮 扩展, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		36 按钮 高级, Secondary Actions: 移到上一项, 从工具栏移除
+	37 关闭按钮
+	38 缩放按钮 (disabled)
+	39 文本 高级
+40 menu bar
+	41 Safari浏览器
+	42 文件
+	43 编辑
+	44 显示, ID: SafariViewMenu
+	45 历史记录
+	46 书签, ID: SafariBookmarksMenu
+	47 窗口, ID: SafariWindowMenu
+	48 帮助, ID: SafariHelpMenu

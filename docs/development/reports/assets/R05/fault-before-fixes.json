@@ -1,0 +1,23 @@
+{
+  "tool": "pest",
+  "result": "failed",
+  "tests": 25,
+  "passed": 23,
+  "assertions": 333,
+  "duration_ms": 73872,
+  "failed": 2,
+  "failures": [
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\BookCompletionTest::__pest_evaluable_event_and_fact_insertion_faults_leave_no_partial_formal_state with data set \"('App\\Models\\Fact')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/BookCompletionTest.php",
+      "line": 374,
+      "message": "Exception [RuntimeException] not thrown."
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\BookCompletionTest::__pest_evaluable_lost_export_after_successful_execution_exposes_usable_recovery_without_model_calls",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/BookCompletionTest.php",
+      "line": 406,
+      "message": "{\"run_id\":288,\"message\":\"后续阶段交接失败。已有成功产物及正式章节保留；请查看字段、容量或来源错误，修正后重新核验。\"}\nFailed asserting that two strings are identical.\n--- Expected\n+++ Actual\n@@ @@\n-'completed'\n+'needs_attention'"
+    }
+  ]
+}

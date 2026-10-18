@@ -12,7 +12,6 @@ use App\Enums\WorldEntityStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationRun;
-use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -37,9 +36,8 @@ class ContextBuilder
         $recent = $novel->chapters()->where('status', 'canonical')->latest('sequence')->limit(10)->get(['id', 'sequence', 'summary', 'summary_artifact_id']);
         $entities = $novel->characters()->get(['id', 'name', 'profile', 'current_state'])->toArray();
         $world = $novel->worldEntities()->get(['id', 'name', 'type', 'description', 'current_state'])->toArray();
-        $memories = Memory::where('novel_id', $novel->id)->where('status', 'active')->where('source_type', 'chapter')
-            ->whereIn('source_id', $novel->chapters()->where('status', 'canonical')->select('id'))
-            ->orderByDesc('salience')->limit(10)->get(['id', 'summary', 'source_id', 'entities'])->unique('summary')->values()->toArray();
+        $recall = app(BookMemoryService::class)->retrieve($novel, $goal);
+        $memories = $recall['memories'];
 
         return ['source_hash' => $this->bookSourceHash($novel), 'bible_id' => $bible->id, 'bible_version' => $bible->version, 'hard_constraints' => $bible->hard_constraints,
             'ending_contract' => $bible->ending_contract, 'style_profile' => $bible->style_profile, 'goal' => $goal,
@@ -47,7 +45,7 @@ class ContextBuilder
             'characters' => $entities, 'world_entities' => $world,
             'locked_facts' => $novel->facts()->where('status', 'active')->where('locked', true)->get()->toArray(),
             'recent_chapters' => $recent->toArray(), 'optional_memories' => $memories,
-            'memory_selection' => ['strategy' => 'canonical_sql_salience_fallback', 'reason' => 'R04 不触发额外 Embedding；同小说正式来源、去重后按显著性，容量不足先裁剪。']];
+            'memory_selection' => $recall['selection'], 'closing' => ['active' => $novel->status->value === 'completing', 'restriction' => '收束中不得新增核心人物、主线、世界硬规则或高重要度伏笔，优先兑现既有承诺。']];
     }
 
     /** 锁定事实变化不一定创建故事状态版本，因此单独冻结硬上下文身份。 */

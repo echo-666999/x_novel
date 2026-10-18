@@ -1,0 +1,130 @@
+[
+  {
+    "outline": "solid",
+    "right": 272,
+    "role": null,
+    "text": "0",
+    "width": 320,
+    "x": 200
+  },
+  {
+    "outline": "solid",
+    "right": 540,
+    "role": null,
+    "text": "标题",
+    "width": 320,
+    "x": 56
+  },
+  {
+    "outline": "solid",
+    "right": 224.5,
+    "role": null,
+    "text": "题材",
+    "width": 320,
+    "x": 95
+  },
+  {
+    "outline": "solid",
+    "right": 376.5,
+    "role": null,
+    "text": "状态",
+    "width": 320,
+    "x": 272.5
+  },
+  {
+    "outline": "solid",
+    "right": 240,
+    "role": null,
+    "text": "目标字数",
+    "width": 320,
+    "x": 80
+  },
+  {
+    "outline": "solid",
+    "right": 280.5546875,
+    "role": null,
+    "text": "更新时间",
+    "width": 320,
+    "x": 39.5
+  },
+  {
+    "outline": "solid",
+    "right": 422,
+    "role": null,
+    "text": "未命名小说",
+    "width": 320,
+    "x": -102
+  },
+  {
+    "outline": "solid",
+    "right": 248.5,
+    "role": null,
+    "text": "待解析",
+    "width": 320,
+    "x": 71
+  },
+  {
+    "outline": "solid",
+    "right": 400.5,
+    "role": null,
+    "text": "草稿",
+    "width": 320,
+    "x": 248.5
+  },
+  {
+    "outline": "solid",
+    "right": 240,
+    "role": null,
+    "text": "已暂停",
+    "width": 320,
+    "x": 80
+  },
+  {
+    "outline": "solid",
+    "right": 448,
+    "role": null,
+    "text": "100,000",
+    "width": 320,
+    "x": 240
+  },
+  {
+    "outline": "solid",
+    "right": 254,
+    "role": null,
+    "text": "尚无正式章",
+    "width": 320,
+    "x": 66
+  },
+  {
+    "outline": "solid",
+    "right": 543.0546875,
+    "role": null,
+    "text": "2026-10-18 21:18",
+    "width": 320,
+    "x": 254
+  },
+  {
+    "outline": "solid",
+    "right": 250.0546875,
+    "role": null,
+    "text": "进入工作台",
+    "width": 320,
+    "x": 70.0546875
+  },
+  {
+    "outline": "solid",
+    "right": 370.0546875,
+    "role": null,
+    "text": "编辑",
+    "width": 320,
+    "x": 274.0546875
+  },
+  {
+    "outline": "solid",
+    "right": 256.0546875,
+    "role": null,
+    "text": "删除小说",
+    "width": 320,
+    "x": 104.0546875
+  }
+]

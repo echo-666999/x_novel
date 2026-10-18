@@ -1,0 +1,100 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-font.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-font.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-font.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-font.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-font.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-font.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-font.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-font.test/x/a-i-model-prices
+- main:
+  - heading "从一个想法，开始一本小说" [level=1]
+  - region "把故事的起点写在这里":
+    - heading "把故事的起点写在这里" [level=2]
+    - paragraph: 背景、人物、类型或剧情方向都可以。普通缺项由 AI 补全。
+    - text: 故事概述
+    - superscript: "*"
+    - textbox "故事概述*":
+      - /placeholder: 雨季中的旧港口，一位失忆的邮差收到寄自未来的信……
+      - text: 验收输入：请求失败后，这段邮差沿岸寻找来信者的概述必须保留。
+    - generic: 30 / 10000 字符；推荐至少 50 个字符，少于 50 也可以继续。
+    - term: 本次创作目标
+    - definition:
+      - generic: 100,000 字 · 自动完成整本 · 系统默认
+    - term: 费用策略
+    - definition:
+      - generic: 默认统计用量与费用，预警不阻断生成。全局金额硬上限未开启。
+  - region "创作选项":
+    - heading "创作选项" [level=2]
+    - button "收起此区域" [expanded]:
+    - generic: 书名（可选）
+    - textbox "书名（可选）"
+    - generic: 题材（可选）
+    - textbox "题材（可选）"
+    - generic: 目标总正文字数（可选）
+    - spinbutton "目标总正文字数（可选）"
+    - generic: 优先读取概述中的明确篇幅；留空且未说明时使用默认值。
+    - generic: 单章目标正文字数（可选）
+    - spinbutton "单章目标正文字数（可选）"
+  - region "运行方式":
+    - heading "运行方式" [level=2]
+    - button "收起此区域" [expanded]:
+    - text: 生成模式
+    - superscript: "*"
+    - radiogroup "生成模式*":
+      - radio "自动完成整本 合格内容自动提交，持续推进到结局。" [checked]
+      - paragraph: 自动完成整本
+      - paragraph: 合格内容自动提交，持续推进到结局。
+      - radio "先生成开篇 默认完成 3 个正式章节及摘要后暂停。"
+      - paragraph: 先生成开篇
+      - paragraph: 默认完成 3 个正式章节及摘要后暂停。
+      - radio "逐章审核 写到审校通过后，等待你逐章提交。"
+      - paragraph: 逐章审核
+      - paragraph: 写到审校通过后，等待你逐章提交。
+  - region "费用预警与可选硬上限":
+    - heading "费用预警与可选硬上限" [level=2]
+    - paragraph: 币种：USD。金额留空即可开始；小说设置不能取消全局已启用的限制。
+    - button "收起此区域" [expanded]:
+    - generic: 费用预警金额
+    - spinbutton "费用预警金额"
+    - generic: 达到预警仍继续生成，不影响完结目标。
+    - switch "主动启用每日金额硬上限"
+    - generic: 主动启用每日金额硬上限
+    - switch "主动启用整书金额硬上限"
+    - generic: 主动启用整书金额硬上限
+    - switch "主动启用单章金额硬上限"
+    - generic: 主动启用单章金额硬上限
+    - switch "主动启用单个问题金额硬上限"
+    - generic: 主动启用单个问题金额硬上限
+  - button "开始生成":
+    - generic: 开始生成
+  - button "保存草稿" [active]
+  - button "取消"
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

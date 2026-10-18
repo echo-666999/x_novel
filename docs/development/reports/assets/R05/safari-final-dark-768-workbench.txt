@@ -1,0 +1,145 @@
+Window: "未命名 — 验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台", App: Safari浏览器.
+0 标准窗口 未命名 — 验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台, ID: SafariWindow?IsSecure=false&UUID=176ABBAF-5F54-4B44-9B17-F8E5516FF6D5, Secondary Actions: Raise
+	1 分离组
+		2 分离器 (disabled, settable, float) -1
+		3 标签页组
+			4 弹出式按钮 Description: 视口大小, Value: 自定义大小, ID: ViewportPresetButton
+			5 开关按钮 Description: 向左旋转, Help: 旋转视口, Value: off
+			6 文本栏 (settable) Description: 宽度, Value: 768
+			7 文本 ×
+			8 文本栏 (settable) Description: 高度, Value: 1024
+			9 文本 Description: 缩放比例, Value: ( 71% )
+			10 弹出式按钮 Description: 像素比, Value: 2倍
+			11 菜单按钮 通过模拟器打开, ID: OpenWithSimulatorButton
+			12 滚动区
+				13 HTML内容 Description: 验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x/novels/26
+					14 link 跳转到内容, Value: xnovel-r05-font.test/x/novels/26#fi-main-content
+					15 container 顶部栏
+						16 按钮 (collapsed) 展开侧边栏, Secondary Actions: Expand
+						17 文本 全局搜索
+						18 搜索文本栏 (settable) 全局搜索, Placeholder: 搜索
+							19 文本 搜索
+						20 文本 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+						21 按钮 (collapsed) 用户菜单, Secondary Actions: Expand
+					22 container 侧边导航
+						23 内容列表
+							24 内容列表
+								25 link 创作总览, Value: xnovel-r05-font.test/x
+								26 link 小说, Value: xnovel-r05-font.test/x/novels
+								27 link 生成任务, Value: xnovel-r05-font.test/x/generation
+								28 link 异常与审校, Value: xnovel-r05-font.test/x/generation-issues
+								29 link 记忆, Value: xnovel-r05-font.test/x/memory
+								30 link 设置, Value: xnovel-r05-font.test/x/settings
+							31 内容列表
+								32 link 服务商连接, Value: xnovel-r05-font.test/x/a-i-provider-connections
+								33 link 模型价格, Value: xnovel-r05-font.test/x/a-i-model-prices
+					34 container
+						35 container 面包屑导航
+							36 内容列表
+								37 link 小说, Value: xnovel-r05-font.test/x/novels
+								38 link 验收示例：雨港来信与不会游泳的邮差, Value: xnovel-r05-font.test/x/novels/26
+								39 文本 详情
+						40 标题 验收示例：雨港来信与不会游泳的邮差, Value: 1
+							41 文本 验收示例：雨港来信与不会游泳的邮差
+						42 文本 设定genre · 生成中
+						43 link 查看异常, Value: xnovel-r05-font.test/x/generation-issues?novel=26
+						44 link 调整概述与设置, Value: xnovel-r05-font.test/x/novels/26/edit
+						45 按钮 导出正式正文
+						46 按钮 暂停
+						47 container
+							48 link 工作台, Value: xnovel-r05-font.test/x/novels/26
+							49 link 正文, Value: xnovel-r05-font.test/x/novels/26/chapters
+							50 link 设定与计划, Value: xnovel-r05-font.test/x/novels/26/planning
+							51 link 异常, Value: xnovel-r05-font.test/x/generation-issues?novel=26
+							52 link 更多, Value: xnovel-r05-font.test/x/novels/26/tools
+						53 标题 这本书正在进行到哪里, Value: 2
+							54 文本 这本书正在进行到哪里
+						55 文本 逐章审核 · 目标 5,000 正文字数
+						56 文本 等待下一阶段
+						57 文本 任务已保存。执行进度来自持久记录；没有执行记录时不会显示模型正在生成。
+						58 link 阅读当前章与审校证据, Value: xnovel-r05-font.test/x/novels/26/book-chapters/26
+						59 文本 正式章节：1 · 模式和费用策略在设置中可调整。
+						60 标题 进度与费用, Value: 2
+							61 文本 进度与费用
+						62 文本 当前阶段：记忆摘要 · 最后进展：2026-10-18 12:41:48
+						63 文本 正式正文 55 字。费用用于统计优化；仅主动启用的硬上限会阻止请求。
+						64 文本 USD 已知估计 0.0000 · 未确认费用 0 笔
+						65 摘要 最近执行活动, Value: off
+							66 文本 最近执行活动
+						67 标题 原始创作概述, Value: 2
+							68 文本 原始创作概述
+						69 文本 雨季邮差林舟寻找未来来信，主角不会游泳。
+						70 标题 已采用的基础设定, Value: 2
+							71 文本 已采用的基础设定
+						72 文本 用户要求与 AI 补充分别标注；修改未来方向请进入规划。
+						73 描述列表
+							74 文本 书名 · AI 补充
+							75 文本 设定title
+							76 文本 题材 · AI 补充
+							77 文本 设定genre
+							78 文本 时代 · AI 补充
+							79 文本 设定era
+							80 文本 主角 · AI 补充
+							81 文本 设定protagonist
+							82 文本 世界 · AI 补充
+							83 文本 设定world
+							84 文本 核心矛盾 · AI 补充
+							85 文本 设定conflict
+							86 文本 主线方向 · AI 补充
+							87 文本 设定plot
+							88 文本 文风 · AI 补充
+							89 文本 设定style
+							90 文本 结局方向 · AI 补充
+							91 文本 设定ending
+					92 按钮 Edit this page with Herd, Help: Edit this page with Herd (⇧⌘H) · New chat (⇧⌘E) · Terminal (⇧⌘U)
+					93 按钮 (collapsed) Show dev stack processes, Help: Dev stack, Secondary Actions: Expand
+					94 按钮 Hide badge for this session, Help: Hide for this session
+				95 滚动条 (settable, float) 0
+	96 标签页组 Description: 标签页栏，6个标签页, ID: TabBar?isSeparate=false
+		97 标签 前言 | Go语言圣经, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			98 图像 FaviconImageView
+			99 文本 Value: 前言 | Go语言圣经, ID: UnifiedTabBarButton._titleTextField
+		100 标签 Go Web 编程 · 看云, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			101 图像 FaviconImageView
+			102 文本 Value: Go Web 编程 · 看云, ID: UnifiedTabBarButton._titleTextField
+		103 标签 邮件 - 王 明 - Outlook, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			104 图像 FaviconImageView
+			105 文本 Value: 邮件 - 王 明 - Outlook, ID: UnifiedTabBarButton._titleTextField
+		106 标签 人性博弈：社会化进阶攻略 - 飞书云文档, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			107 图像 FaviconImageView
+			108 文本 Value: 人性博弈：社会化进阶攻略 - 飞书云文档, ID: UnifiedTabBarButton._titleTextField
+		109 标签 章节阅读与复验 - AI 长篇网络小说自动生成平台, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			110 图像 FaviconImageView
+			111 文本 Value: 章节阅读与复验 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+		112 标签 验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台, Help: 若要与此按钮中的项目交互，请按下Control-Option-Shift-下箭头键。, Value: on, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=true
+			113 图像 FaviconImageView
+			114 文本 Value: 验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+	115 工具栏
+		116 按钮 Description: 开关边栏, ID: SidebarButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		117 菜单按钮 ID: TabGroupPickerButton?TabGroup=%E6%9C%AA%E5%91%BD%E5%90%8D, Secondary Actions: 移到下一项, 从工具栏移除
+		118 container BackForwardSegmentedControl
+			119 按钮 Description: 返回, Help: 显示上一页, ID: BackButton
+			120 按钮 (disabled) Description: 前进, Help: 显示下一页, ID: ForwardButton
+		121 container Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+			122 按钮 页面菜单, ID: AssistantButton
+			123 按钮 将页面添加到阅读列表, ID: OneStepBookmarkingButton
+			124 文本栏 (settable) Description: 智能搜索栏, Value: xnovel-r05-font.test/x/novels/26, ID: WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD
+			125 按钮 重新加载此页面, ID: ReloadButton
+		126 按钮 Description: 共享, ID: ShareButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		127 按钮 Description: 新建标签页, ID: NewTabButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		128 按钮 Description: 标签页概览, ID: TabOverviewButton, Secondary Actions: 移到上一项, 从工具栏移除
+	129 关闭按钮
+	130 全屏幕按钮 Help: 此按钮也可以执行缩放窗口的操作, Secondary Actions: 缩放窗口
+	131 最小化按钮
+132 menu bar
+	133 Safari浏览器
+	134 文件
+	135 编辑
+	136 显示, ID: SafariViewMenu
+	137 历史记录
+	138 书签, ID: SafariBookmarksMenu
+	139 开发
+	140 窗口, ID: SafariWindowMenu
+	141 帮助, ID: SafariHelpMenu
+
+The focused UI element is 13 HTML内容 Description: 验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x/novels/26

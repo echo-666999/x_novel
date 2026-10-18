@@ -20,6 +20,7 @@ use App\Services\MemoryUpdater;
 use App\Services\StoryStateService;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Validation\ValidationException;
 
@@ -27,7 +28,7 @@ uses(RefreshDatabase::class);
 
 beforeEach(function () {
     Queue::fake();
-    configureEmbeddingForTest();
+    configureEmbeddingForTest(dimensions: DB::getDriverName() === 'pgsql' ? 1536 : 3);
 });
 
 /** @return array<string, mixed> */

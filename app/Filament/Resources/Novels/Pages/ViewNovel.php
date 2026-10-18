@@ -17,14 +17,20 @@ use App\Filament\Pages\GenerationIssues;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
 use App\Models\NovelGenerationTask;
+use App\Models\UsageRecord;
+use App\Services\BookExportService;
+use App\Services\BookLifecycle;
+use App\Services\GenerationSettingsService;
 use App\Services\NovelBookWorkflow;
 use App\Services\NovelGenerationReadiness;
 use App\Services\ResumeResolver;
+use App\Support\GenerationDiagnosticRedactor;
 use Filament\Actions\Action;
 use Filament\Actions\EditAction;
 use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Locked;
 
@@ -51,10 +57,39 @@ class ViewNovel extends ViewRecord
         return $this->getRecord()->title;
     }
 
+    /** @return array{rows: Collection, threshold: mixed, currency: string, source: string, reached: bool} */
+    public function bookCostSummary(): array
+    {
+        $novel = $this->getRecord();
+        $settings = app(GenerationSettingsService::class);
+        $local = data_get($novel->settings, 'budget.warning_amount');
+        $threshold = $local ?? data_get($settings->budgetSettings(), 'warning_amount');
+        $history = collect(data_get($novel->settings, 'budget_history', []))->last();
+        $currency = $local !== null ? ($history['currency'] ?? $settings->currency()) : $settings->currency();
+        $rows = UsageRecord::where('generation_task_id', $novel->current_generation_task_id)
+            ->whereIn('status', ['in_flight', 'unknown', 'settled'])
+            ->selectRaw('currency, SUM(COALESCE(actual_cost, estimated_cost)) AS total, SUM(CASE WHEN actual_cost IS NULL AND estimated_cost IS NULL THEN 1 ELSE 0 END) AS unknown_count')
+            ->groupBy('currency')->orderBy('currency')->get();
+        $total = $rows->firstWhere('currency', $currency)?->total;
+
+        return [
+            'rows' => $rows, 'threshold' => $threshold, 'currency' => $currency,
+            'source' => $local !== null ? '小说设置' : '全局默认',
+            'reached' => $threshold !== null && $total !== null && (float) $total >= (float) $threshold,
+        ];
+    }
+
     public function getSubheading(): ?string
     {
         /** @var Novel $novel */
         $novel = $this->getRecord();
+
+        if ($novel->current_generation_task_id) {
+            $task = $novel->currentGenerationTask;
+            $label = ['queued' => '等待开始', 'running' => '生成中', 'paused' => '已暂停', 'needs_attention' => '需要处理', 'completed' => '整书已完成', 'cancelled' => '已取消', 'failed' => '失败'][$task->status] ?? $task->status;
+
+            return $novel->genre.' · '.$label;
+        }
 
         return $novel->status === NovelStatus::Completing
             ? "{$novel->genre} · COMPLETING · {$novel->status->getLabel()}"
@@ -76,16 +111,36 @@ class ViewNovel extends ViewRecord
         $task = NovelGenerationTask::findOrFail($this->getRecord()->current_generation_task_id);
         $version = $this->bookControlVersion ?? $task->control_version;
         $actions = [Action::make('generationIssues')->label('查看异常')->url(fn () => GenerationIssues::getUrl(['novel' => $this->getRecord()->id])), EditAction::make()->label('调整概述与设置')];
+        // 人工提交绑定页面打开时的控制版本和 Review，不能用通用继续绕过审核。
+        $actions[] = Action::make('submitBookChapter')->label('提交已审校章节')->visible(fn (): bool => $task->stop_reason === 'awaiting_manual_commit')
+            ->requiresConfirmation()->modalDescription('只提交当前通过独立审校的完整稿。提交后更新正式故事状态并生成摘要；后续章节仍须通过审校并由你提交。')
+            ->action(function () use ($task, $version): void {
+                try {
+                    app(BookLifecycle::class)->submit($task->id, $version, (int) data_get($task->pending_transition, 'review_ready_id'));
+                    $this->bookControlVersion = $task->refresh()->control_version;
+                    $this->getRecord()->refresh();
+                    Notification::make()->title('正式提交已完成')->success()->send();
+                } catch (\Throwable $e) {
+                    Notification::make()->title('请核对提交结果')->body(app(GenerationDiagnosticRedactor::class)->clean($e->getMessage()))->danger()->send();
+                }
+            });
+        $actions[] = Action::make('exportBook')->label('导出正式正文')->color('gray')->visible(fn (): bool => $task->novel->chapters()->where('status', 'canonical')->exists())
+            ->action(function () use ($task) {
+                $artifact = app(BookExportService::class)->snapshot($task);
+
+                return redirect()->route('book-exports.download', $artifact->id);
+            });
         foreach (['pause' => '暂停', 'resume' => $task->stop_reason === 'opening_complete' ? '继续整本' : '继续生成', 'recheck' => '重新检查配置'] as $key => $label) {
             $actions[] = Action::make('book_'.$key)->label($label)->color($key === 'pause' ? 'gray' : 'primary')
-                ->visible(match ($key) {
+                // Filament 会缓存动作对象；延迟读取刷新后的任务，保证同次响应切换暂停/继续入口。
+                ->visible(fn (): bool => match ($key) {
                     'pause' => in_array($task->status, ['queued', 'running'], true), 'resume' => $task->status === 'paused' && ! in_array($task->stop_reason, ['future_revision_not_ready', 'awaiting_manual_commit'], true), default => $task->status === 'needs_attention' && $task->current_phase === 'preflight'
                 })
                 ->action(function () use ($task, $version, $key): void {
                     try {
                         app(NovelBookWorkflow::class)->control($task->id, $version, $key);
                         $this->getRecord()->refresh();
-                        $this->bookControlVersion = $task->fresh()->control_version;
+                        $this->bookControlVersion = $task->refresh()->control_version;
                     } catch (\LogicException $exception) {
                         Notification::make()->title('操作未生效')->body($exception->getMessage())->danger()->send();
                     }

@@ -1,0 +1,61 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-font.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-font.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-font.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-font.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-font.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-font.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-font.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-font.test/x/a-i-model-prices
+- main:
+  - heading "创作总览" [level=1]
+  - link "创建小说":
+    - /url: http://xnovel-r05-font.test/x/novels/create
+    - text: 创建小说
+  - link "打开恢复中心":
+    - /url: http://xnovel-r05-font.test/x/generation
+    - text: 打开恢复中心
+  - button "紧急停止":
+    - text: 紧急停止
+  - heading "把一个想法写成一本书" [level=2]
+  - paragraph: 输入概述后自动规划、写作、审校和收束。只有真实进度会显示在这里。
+  - term: 正在生成
+  - definition: "0"
+  - term: 等待处理
+  - definition: "0"
+  - term: 已暂停
+  - definition: "0"
+  - term: 整书已完成
+  - definition: "0"
+  - heading "最近创作" [level=2]
+  - paragraph: 还没有新小说。点击“创建小说”，写下背景、人物或剧情概述即可开始。
+  - heading "需要你的判断" [level=2]
+  - paragraph: 当前没有阻塞问题。正常生成不需要逐步批准。
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

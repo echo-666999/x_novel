@@ -105,6 +105,12 @@ class Chapter extends Model
     }
 
     /** @return array<string, string> */
+    /** 正式摘要绑定不可变产物，恢复与结局审计不得读取草稿摘要。 */
+    public function summaryArtifact(): BelongsTo
+    {
+        return $this->belongsTo(GenerationArtifact::class, 'summary_artifact_id');
+    }
+
     protected function casts(): array
     {
         return [

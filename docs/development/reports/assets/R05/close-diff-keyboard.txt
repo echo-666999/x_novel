@@ -1,0 +1,73 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-final.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-final.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-final.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-final.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-final.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-final.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-final.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-final.test/x/a-i-model-prices
+- main:
+  - button "正文":
+    - text: 正文
+  - heading "章节阅读与复验" [level=1]
+  - text: 字号
+  - slider "正文字号": "19"
+  - text: 行距
+  - slider "正文行距": "2"
+  - text: 栏宽
+  - slider "正文栏宽": "42"
+  - button "专注阅读"
+  - generic "章节目录 · 每页 25 章"
+  - heading "第 1 章 · 雨中的未来来信" [level=2]
+  - paragraph: 草稿预览 · 尚未正式采用
+  - paragraph: 版本 675 · 59 字 · 等待当前稿独立审校
+  - link "查看本章异常与 AI 处理方案":
+    - /url: http://xnovel-r05-final.test/x/generation-issues?novel=169&chapter=106&filter=unresolved
+    - generic: 查看本章异常与 AI 处理方案
+  - article "章节正文":
+    - paragraph: 林舟站在港口，雨打湿了信封。他决定沿岸寻找来信者。他不会游泳，选择留在岸边。
+    - paragraph: 钟声响起，他把信收进衣袋，沿堤岸前往邮局。
+  - generic "版本与审校证据" [active]
+  - paragraph: 当前版本没有独立审校结论。
+  - heading "修改前" [level=3]
+  - paragraph: 林舟站在港口，雨打湿了信封。他决定沿岸寻找来信者。 钟声响起，远处有人叫他的名字。他把信收进衣袋，转身走向邮局。
+  - heading "当前新稿" [level=3]
+  - paragraph: 林舟站在港口，雨打湿了信封。他决定沿岸寻找来信者。他不会游泳，选择留在岸边。 钟声响起，他把信收进衣袋，沿堤岸前往邮局。
+  - generic "人工编辑当前草稿"
+  - heading "人工处理" [level=2]
+  - paragraph: 修改当前完整草稿，保存后重新提取、校验和审校。不会直接覆盖正式故事。
+  - text: 新稿正文
+  - textbox "新稿正文": 林舟站在港口，雨打湿了信封。他决定沿岸寻找来信者。他不会游泳，选择留在岸边。 钟声响起，他把信收进衣袋，沿堤岸前往邮局。
+  - status: 新稿已保存，重新提取与审校已登记。请查看任务状态；尚未正式采用。
+  - button "保存新稿并复验"
+  - button "保留输入并读取最新稿"
+  - navigation "相邻章节"
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

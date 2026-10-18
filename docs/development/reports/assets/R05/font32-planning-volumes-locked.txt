@@ -1,0 +1,113 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-font.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-font.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-font.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-font.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-font.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-font.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-font.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-font.test/x/a-i-model-prices
+- main:
+  - button "设定与计划":
+    - text: 设定与计划
+  - heading "规划总览" [level=1]
+  - paragraph: 验收示例：分卷与锁定要求
+  - navigation "设定与计划层级":
+    - link "故事设定":
+      - /url: "#book-settings"
+    - link "全书蓝图":
+      - /url: "#book-blueprint"
+    - link "近期目标":
+      - /url: "#book-window"
+    - link "当前章计划":
+      - /url: "#book-plan"
+  - paragraph: 全书方向 → 近期目标 → 当前章计划。远期章节保持未细化，系统随正式进度滚动规划。
+  - status
+  - heading "全书蓝图" [level=2]
+  - paragraph: 版本 1
+  - paragraph: 追查来信
+  - button "调整未来方向"
+  - paragraph: 结局方向：改变洪水结局
+  - list:
+    - listitem: 收到信 · 约 1,667 字
+    - listitem: 揭开身份 · 约 1,667 字
+    - listitem: 救下港城 · 约 1,666 字
+  - generic "承诺、人物发展与伏笔" [active]
+  - paragraph: 找到来信者
+  - paragraph: 人物发展：从逃避到承担
+  - paragraph: 伏笔目标：字迹秘密
+  - paragraph: 可选分卷：第一卷：雨港来信；第二卷：沿岸追寻
+  - heading "近期章节目标" [level=2]
+  - paragraph: 已采用版本 1
+  - heading "第 1 章 · 500 字目标" [level=3]
+  - paragraph: 追查线索
+  - paragraph: 预期变化：找到线索
+  - button "修订此目标"
+  - heading "第 2 章 · 500 字目标" [level=3]
+  - paragraph: 追查线索
+  - paragraph: 预期变化：找到线索
+  - button "修订此目标"
+  - heading "第 3 章 · 500 字目标" [level=3]
+  - paragraph: 追查线索
+  - paragraph: 预期变化：找到线索
+  - button "修订此目标"
+  - heading "第 4 章 · 500 字目标" [level=3]
+  - paragraph: 追查线索
+  - paragraph: 预期变化：找到线索
+  - button "修订此目标"
+  - heading "第 5 章 · 500 字目标" [level=3]
+  - paragraph: 追查线索
+  - paragraph: 预期变化：找到线索
+  - button "修订此目标"
+  - paragraph: 窗口以外：尚未细化，生成至章节边界时自动补齐。
+  - heading "当前章计划" [level=2]
+  - heading "雨中的未来来信" [level=3]
+  - paragraph: 引入线索
+  - paragraph: 人物变化：决定追查
+  - paragraph: 视角：第三人称林舟
+  - paragraph: 时间：雨季首日
+  - paragraph: 章末落点：发现字迹
+  - paragraph: 必须揭示：未来来信
+  - paragraph: 禁止揭示：寄信人
+  - paragraph: 必需事实：不会游泳
+  - paragraph: 禁止冲突：不能下水
+  - generic "来源与容量策略"
+  - heading "创作要求与设定来源" [level=2]
+  - paragraph: 系统补充 · 设定era
+  - paragraph: 系统补充 · 设定plot
+  - paragraph: 系统补充 · 设定genre
+  - paragraph: 系统补充 · 设定style
+  - paragraph: 系统补充 · 设定title
+  - paragraph: 系统补充 · 设定world
+  - paragraph: 系统补充 · 设定ending
+  - paragraph: 系统补充 · 设定conflict
+  - paragraph: 系统补充 · 设定protagonist
+  - paragraph: "人工锁定 · 林舟 · can_swim · {\"value\":false}"
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

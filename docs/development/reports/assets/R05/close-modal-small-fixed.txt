@@ -1,0 +1,279 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-final.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-final.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-final.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-final.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-final.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-final.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-final.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-final.test/x/a-i-model-prices
+- main:
+  - heading "设置" [level=1]
+  - button "生成参数":
+    - text: 生成参数
+  - button "紧急停止":
+    - text: 紧急停止
+  - region "生成":
+    - heading "生成" [level=2]
+    - paragraph: Outline、章节阶段和修复子阶段的请求预算。
+    - generic: 数据库配置
+    - term: 配置来源
+    - definition:
+      - generic: PostgreSQL · system_settings
+    - generic: 服务商连接在“AI 与成本 → 服务商连接”维护；模型、容量、价格和各阶段路由在“模型价格”维护。
+  - region "审校":
+    - heading "审校" [level=2]
+    - paragraph: 新 Plan Admission 冻结的审校上下文预算。
+    - generic: 数据库配置
+    - term: 上下文 Token 预算
+    - definition:
+      - generic: 48,000
+  - region "记忆":
+    - heading "记忆" [level=2]
+    - paragraph: Embedding 模型由模型路由维护，向量维度由生成参数维护。
+    - generic: 数据库配置
+    - term: 向量维度
+    - definition:
+      - generic: 1,536
+    - generic: 修改模型前必须确认其输出维度与 PostgreSQL memories.embedding 一致。
+  - region "费用统计与可选上限":
+    - heading "费用统计与可选上限" [level=2]
+    - paragraph: 默认以完成小说为目标；预警不中断。只有主动启用的金额硬上限才会阻止后续请求。
+    - generic: 只读
+    - term: Daily Used / Limit
+    - definition:
+      - generic: USD 0.0000 / 无限制
+    - term: Novel Total Default
+    - definition:
+      - generic: 未启用金额硬上限
+    - term: Chapter Max Default
+    - definition:
+      - generic: 未启用金额硬上限
+    - generic: 来源：全局生成参数与小说设置。金额值不会自动启用上限，历史费用不会因关闭上限而清空。
+  - region "系统健康":
+    - heading "系统健康" [level=2]
+    - paragraph: System Health · MVP 发布、恢复与长期单人运行检查
+    - button "重新检查":
+      - text: 重新检查
+    - term: System health checks
+    - definition:
+      - list:
+        - term: 检查项
+        - definition:
+          - generic: 数据库连接
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: pgsql 连接正常。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.493135Z
+        - term: 检查项
+        - definition:
+          - generic: Redis
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: Redis 连接正常。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.494822Z
+        - term: 检查项
+        - definition:
+          - generic: Queue
+        - term: 状态
+        - definition:
+          - generic: 未验证运行状态
+        - term: 说明
+        - definition:
+          - generic: 队列配置使用 Redis，实际消费情况以 Worker 心跳为准。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.494957Z
+        - term: 检查项
+        - definition:
+          - generic: Horizon
+        - term: 状态
+        - definition:
+          - generic: 需要处理
+        - term: 说明
+        - definition:
+          - generic: 已监听 generation / default。 未检测到 Horizon Master。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.496567Z
+        - term: 检查项
+        - definition:
+          - generic: Scheduler
+        - term: 状态
+        - definition:
+          - generic: 未验证运行状态
+        - term: 说明
+        - definition:
+          - generic: 尚无实际执行心跳，不能确认正在运行。
+        - term: 观测时间
+        - definition:
+          - generic: 未观测
+        - term: 检查项
+        - definition:
+          - generic: 生成 Worker
+        - term: 状态
+        - definition:
+          - generic: 观测已过期
+        - term: 说明
+        - definition:
+          - generic: 最近观测 2026-10-18T13:46:32.638561Z；执行实现标识 book-workflow-r05-v1。空闲无新心跳不等于服务离线。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:46:32.638561Z
+        - term: 检查项
+        - definition:
+          - generic: Provider 最近请求
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: openai / pipeline-fixture：settled。仅代表最近这条请求，其他连接未据此验证。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:46:15.000000Z
+        - term: 检查项
+        - definition:
+          - generic: 持久待办
+        - term: 状态
+        - definition:
+          - generic: 未验证运行状态
+        - term: 说明
+        - definition:
+          - generic: 待执行 3；缺正式摘要 1；过期租约 0。使用 generation:recover-automatic 对账，不清空队列。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.512800Z
+        - term: 检查项
+        - definition:
+          - generic: 日志
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: storage/logs 可写。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.513001Z
+        - term: 检查项
+        - definition:
+          - generic: 关键配置
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: 应用密钥、中文语言、服务商连接与整书必需路由已配置；不代表供应商当前可用。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.518657Z
+        - term: 检查项
+        - definition:
+          - generic: 费用策略
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: 费用始终统计；预警不暂停。只有用户主动启用的金额硬上限参与请求门禁，未填写金额不影响生成。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.518774Z
+        - term: 检查项
+        - definition:
+          - generic: 紧急停止
+        - term: 状态
+        - definition:
+          - generic: 正常
+        - term: 说明
+        - definition:
+          - generic: 紧急停止开关已持久化。
+        - term: 观测时间
+        - definition:
+          - generic: 2026-10-18T13:56:18.520610Z
+    - generic: 备份、隔离恢复演练和项目专属队列重启须在目标部署环境执行；步骤见 docs/development/OPERATIONS.md。
+  - dialog "配置生成参数":
+    - button "关闭":
+    - heading "配置生成参数" [level=2]
+    - paragraph: 保存后只影响新建或重新开始的任务；继续执行的任务与已冻结的生成记录仍使用原值。
+    - tablist "生成参数":
+      - tab "通用" [active] [selected]:
+        - generic: 通用
+      - tab "全书大纲":
+        - generic: 全书大纲
+      - tab "章节阶段":
+        - generic: 章节阶段
+      - tab "修复子阶段":
+        - generic: 修复子阶段
+    - tabpanel "通用":
+      - region "费用控制":
+        - heading "费用控制" [level=3]
+        - paragraph: 币种用于模型价格匹配和费用展示；费用上限留空表示无限制。
+        - text: 计价币种
+        - superscript: "*"
+        - textbox "计价币种*": USD
+        - generic: 使用三个字母的货币代码，例如美元代码或人民币代码。
+        - switch "主动启用每日金额硬上限"
+        - generic: 主动启用每日金额硬上限
+        - generic: 每日费用上限
+        - spinbutton "每日费用上限"
+        - switch "主动启用整书金额硬上限"
+        - generic: 主动启用整书金额硬上限
+        - generic: 单本小说总费用上限
+        - spinbutton "单本小说总费用上限"
+        - switch "主动启用单章金额硬上限"
+        - generic: 主动启用单章金额硬上限
+        - generic: 单章费用上限
+        - spinbutton "单章费用上限"
+      - region "审校与向量":
+        - heading "审校与向量" [level=3]
+        - paragraph: 向量维度必须与数据库字段一致；更换维度需要先执行数据库迁移和全量重建向量。
+        - text: 审校上下文 Token 预算
+        - superscript: "*"
+        - spinbutton "审校上下文 Token 预算*": "48000"
+        - text: 嵌入向量维度
+        - superscript: "*"
+        - spinbutton "嵌入向量维度*": "1536"
+        - generic: 当前数据库记忆向量字段维度：1536
+    - button "提交":
+      - generic: 提交
+    - button "取消"
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

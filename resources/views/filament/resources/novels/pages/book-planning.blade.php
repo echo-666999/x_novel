@@ -10,15 +10,18 @@
 <div class="xn-stack">
     <nav aria-label="设定与计划层级" class="flex flex-wrap gap-4"><a href="#book-settings">故事设定</a><a href="#book-blueprint">全书蓝图</a><a href="#book-window">近期目标</a><a href="#book-plan">当前章计划</a></nav>
     <p>全书方向 → 近期目标 → 当前章计划。远期章节保持未细化，系统随正式进度滚动规划。</p>
+    <p role="status">{{ $this->feedback }}</p>
     <x-filament::section id="book-blueprint" heading="全书蓝图" :description="$blueprint ? '版本 '.$blueprint->version : '尚未生成'">
         @if($blueprint)
             <p>{{ $blueprint->sourceArtifact->data['mainline'] }}</p>
             <x-filament::button color="gray" wire:click="editDirection">调整未来方向</x-filament::button>
             @if($this->editingDirection)
-                <p>修改前：{{ $blueprint->sourceArtifact->data['mainline'] }}</p>
+                <p>当前已采用方向：{{ $blueprint->sourceArtifact->data['mainline'] }}</p>
                 <label for="future-direction">修改后的未来主线方向</label><textarea id="future-direction" wire:model.live.debounce.500ms="futureDirection" rows="5" class="xn-book-editor"></textarea>
                 <p>修改后：{{ $this->futureDirection }}</p><p>影响：当前章继续，章节边界重建未执行目标。原始硬要求、正式历史与人物事实不变。</p>
                 <x-filament::button wire:click="saveDirection" wire:loading.attr="disabled">保存未来方向修订</x-filament::button>
+                <x-filament::button color="gray" wire:click="refreshDirectionSource" wire:loading.attr="disabled">保留输入并读取最新方向</x-filament::button>
+                <x-filament::button color="gray" wire:click="$set('editingDirection', false)" wire:confirm="确定放弃尚未保存的方向输入？">放弃方向输入</x-filament::button>
             @endif
             @if(data_get($task->progress_snapshot,'pending_blueprint_id'))<p role="status">未来方向候选已保存，等待章节边界采用。</p>@endif
             <p>结局方向：{{ $blueprint->sourceArtifact->data['ending'] }}</p>
@@ -43,8 +46,9 @@
             <label for="goal-editor">目标内容</label><textarea id="goal-editor" wire:model="goalText" rows="5" class="xn-book-editor"></textarea>
             <label><input type="checkbox" wire:model="replanCurrent"> 若影响当前章，重建当前计划并保留旧稿历史</label>
             <x-filament::button wire:click="saveGoal" wire:loading.attr="disabled">保存目标修订</x-filament::button>
+            <x-filament::button color="gray" wire:click="refreshGoalSource" wire:loading.attr="disabled">保留输入并读取最新目标</x-filament::button>
+            <x-filament::button color="gray" wire:click="$set('goalKey', '')" wire:confirm="确定放弃尚未保存的目标输入？">放弃目标输入</x-filament::button>
         @endif
-        <p role="status">{{ $this->feedback }}</p>
     </x-filament::section>
     <x-filament::section id="book-plan" heading="当前章计划">
         @if($plan)

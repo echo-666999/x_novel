@@ -1,0 +1,30 @@
+{
+  "tool": "pest",
+  "result": "failed",
+  "tests": 22,
+  "passed": 20,
+  "assertions": 293,
+  "duration_ms": 66537,
+  "failed": 1,
+  "failures": [
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\BookCompletionTest::__pest_evaluable_unresolved_ending_requires_finite_explicit_extension_and_preserves_canonical_state",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/BookCompletionTest.php",
+      "line": 338,
+      "message": "Failed asserting that two strings are identical.\n--- Expected\n+++ Actual\n@@ @@\n-'chapter_plan'\n+'chapter_planning'"
+    }
+  ],
+  "errors": 1,
+  "error_details": [
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\BookCompletionTest::__pest_evaluable_corrupted_export_cannot_complete_task_and_frozen_content_can_rebuild_it",
+      "file": "/Users/webb/Herd/XNovel/app/Models/GenerationArtifact.php",
+      "line": 57,
+      "message": "Generation artifacts are immutable; create a new version instead.",
+      "trace": [
+        "/Users/webb/Herd/XNovel/app/Models/GenerationArtifact.php:57",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/BookCompletionTest.php:350"
+      ]
+    }
+  ]
+}

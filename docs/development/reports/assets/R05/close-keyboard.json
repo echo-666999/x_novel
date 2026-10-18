@@ -1,0 +1,2109 @@
+[
+  {
+    "area": "通用",
+    "focus": {
+      "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "fi-sc-tab-dc2e6924f25b789b321b273561feb1f2",
+      "name": "通用",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 105,
+        "y": 386
+      },
+      "shadow": "none",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲",
+    "focus": {
+      "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "fi-sc-tab-762b8c5de3502d64283392f1727eb1bb",
+      "name": "全书大纲",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 160,
+        "x": 149,
+        "y": 386
+      },
+      "shadow": "none",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段",
+    "focus": {
+      "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "fi-sc-tab-1229a87c79dce73aa0ba34aa04712902",
+      "name": "章节阶段",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 160,
+        "x": 149,
+        "y": 386
+      },
+      "shadow": "none",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段",
+    "focus": {
+      "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "fi-sc-tab-8bf370bfbdf634660e67d3926f56edba",
+      "name": "修复子阶段",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 188,
+        "x": 121,
+        "y": 386
+      },
+      "shadow": "none",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 0,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.tong-yong::mountedActions.0.data::tab",
+      "name": "费用控制\n\n币种用于模型价格匹配和费用展示；费用上限留空表示无限制。\n\n计价币种*\n使用三个字母的货币代码，例如美元代码或人民币代码。\n主动",
+      "outline": "rgb(153, 200, 255) none 1px",
+      "rect": {
+        "h": 5010,
+        "w": 228,
+        "x": 81,
+        "y": 0
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "DIV",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 1,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.currency",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 761
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 2,
+    "focus": {
+      "bg": "oklch(0.514941 0 264.418)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.budget.daily_hard_limit_enabled",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 48,
+        "w": 88,
+        "x": 145,
+        "y": 526
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.394588 0 264.418) 0px 0px 0px 1px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 3px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 3,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.budget.daily_hard_limit",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 4,
+    "focus": {
+      "bg": "oklch(0.514941 0 264.418)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.budget.novel_total_limit_enabled",
+      "name": "",
+      "outline": "rgb(242, 243, 245) solid 2px",
+      "rect": {
+        "h": 48,
+        "w": 88,
+        "x": 145,
+        "y": 630
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.394588 0 264.418) 0px 0px 0px 1px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 3px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 5,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.budget.novel_total_limit",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 6,
+    "focus": {
+      "bg": "oklch(0.514941 0 264.418)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.budget.chapter_max_cost_enabled",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 48,
+        "w": 88,
+        "x": 145,
+        "y": 630
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.394588 0 264.418) 0px 0px 0px 1px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 3px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 7,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.budget.chapter_max_cost",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 8,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.review_context_token_budget",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 9,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.embedding_dimensions",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 730
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 10,
+    "focus": {
+      "bg": "rgb(165, 180, 252)",
+      "color": "rgb(20, 24, 32)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "",
+      "name": "提交",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 81,
+        "y": 595
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.753529 0.0182251 -0.149163 / 0.5) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 11,
+    "focus": {
+      "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "",
+      "name": "取消",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 81,
+        "y": 691
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.999994 0.0000455678 0.0000200868 / 0.2) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-tab-chain",
+    "step": 12,
+    "focus": {
+      "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "fi-sc-tab-dc2e6924f25b789b321b273561feb1f2",
+      "name": "通用",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 81,
+        "y": 386
+      },
+      "shadow": "none",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "settings-escape-return",
+    "focus": {
+      "bg": "rgb(165, 180, 252)",
+      "color": "rgb(20, 24, 32)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "",
+      "name": "生成参数",
+      "outline": "rgb(20, 24, 32) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 212,
+        "x": 32,
+        "y": 288
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0 0 0 / 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 0,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.quan-shu-da-gang::mountedActions.0.data::tab",
+      "name": "基础设定\n可见输出 Token*\n推理预留 Token*\n整体结构\n可见输出 Token*\n推理预留 Token*\n故事线节点\n可见输出 T",
+      "outline": "rgb(153, 200, 255) none 1px",
+      "rect": {
+        "h": 3124,
+        "w": 228,
+        "x": 81,
+        "y": 0
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "DIV",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 1,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_foundation.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 393
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 2,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_foundation.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 649
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 3,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_structure.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 4,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_structure.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 5,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_arc_beats.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 6,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_arc_beats.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 7,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_beat_detail.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 8,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.outline_request_budgets.outline_beat_detail.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 100,
+        "x": 145,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "全书大纲-fields",
+    "step": 9,
+    "focus": {
+      "bg": "rgb(165, 180, 252)",
+      "color": "rgb(20, 24, 32)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "",
+      "name": "提交",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 81,
+        "y": 595
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.753529 0.0182251 -0.149163 / 0.5) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 0,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.zhang-jie-jie-duan::mountedActions.0.data::tab",
+      "name": "章节规划\n首次\n可见输出 Token*\n推理预留 Token*\n重试\n可见输出 Token*\n推理预留 Token*\n最终重试\n可见输出 T",
+      "outline": "rgb(153, 200, 255) none 1px",
+      "rect": {
+        "h": 12470,
+        "w": 228,
+        "x": 81,
+        "y": 0
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "DIV",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 1,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.planner.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 2,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.planner.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 3,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.planner.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 4,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.planner.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 5,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.planner.final.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 6,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.planner.final.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 7,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.writer.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 8,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.writer.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 9,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.writer.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 10,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.writer.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 11,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.writer.final.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 12,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.writer.final.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 13,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.extractor.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 14,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.extractor.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 15,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.extractor.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 16,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.extractor.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 17,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.extractor.final.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 18,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.extractor.final.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 19,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.reviewer.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 20,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.reviewer.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 21,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.rewrite.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 22,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.rewrite.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 23,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.rewrite.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 24,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.rewrite.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 25,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.rewrite.final.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 26,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.rewrite.final.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 27,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.summary.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 28,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.summary.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 29,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.summary.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 30,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.summary.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 31,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.summary.final.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 32,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_request_budgets.summary.final.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "章节阶段-fields",
+    "step": 33,
+    "focus": {
+      "bg": "rgb(165, 180, 252)",
+      "color": "rgb(20, 24, 32)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "",
+      "name": "提交",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 81,
+        "y": 595
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.753529 0.0182251 -0.149163 / 0.5) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 0,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(242, 243, 245)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.xiu-fu-zi-jie-duan::mountedActions.0.data::tab",
+      "name": "事件提取 · 场景结构修复\n首次\n可见输出 Token*\n推理预留 Token*\n重试\n可见输出 Token*\n推理预留 Token*\n事件",
+      "outline": "rgb(153, 200, 255) none 1px",
+      "rect": {
+        "h": 13769,
+        "w": 228,
+        "x": 81,
+        "y": 0
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "DIV",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 1,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.scene_structure.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 610
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 2,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.scene_structure.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 3,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.scene_structure.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 4,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.scene_structure.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 5,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.coverage_evidence.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 6,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.coverage_evidence.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 7,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.coverage_evidence.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 8,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.coverage_evidence.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 9,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.foreshadowing_coverage.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 10,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.foreshadowing_coverage.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 11,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.foreshadowing_coverage.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 12,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.foreshadowing_coverage.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 13,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.event_evidence.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 14,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.event_evidence.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 15,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.event_evidence.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 16,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.extractor.event_evidence.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 17,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.coverage_judgment.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 18,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.coverage_judgment.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 19,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.coverage_judgment.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 20,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.coverage_judgment.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 21,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.review_schema.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 22,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.review_schema.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 23,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.arc_completion.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 24,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.reviewer.arc_completion.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 25,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.coverage_evidence.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 26,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.coverage_evidence.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 27,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.coverage_evidence.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 28,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.coverage_evidence.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 29,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.length_repair.initial.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 30,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.length_repair.initial.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 31,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.length_repair.retry.output_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 514
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 32,
+    "focus": {
+      "bg": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "mountedActionSchema0.chapter_repair_request_budgets.rewrite.length_repair.retry.reasoning_reserve_tokens",
+      "name": "",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 68,
+        "x": 161,
+        "y": 770
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "INPUT",
+      "visible": true
+    }
+  },
+  {
+    "area": "修复子阶段-fields",
+    "step": 33,
+    "focus": {
+      "bg": "rgb(165, 180, 252)",
+      "color": "rgb(20, 24, 32)",
+      "focusVisible": true,
+      "hover": false,
+      "id": "",
+      "name": "提交",
+      "outline": "rgb(165, 180, 252) solid 2px",
+      "rect": {
+        "h": 72,
+        "w": 104,
+        "x": 81,
+        "y": 595
+      },
+      "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklab(0.753529 0.0182251 -0.149163 / 0.5) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+      "tag": "BUTTON",
+      "visible": true
+    }
+  }
+]

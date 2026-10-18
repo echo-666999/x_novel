@@ -1,0 +1,92 @@
+[
+  {
+    "name": "reader",
+    "animationDurations": [
+      "1e-05s"
+    ],
+    "height": 883,
+    "reduced": true,
+    "rootFont": "16px",
+    "scrollWidth": 1709,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "transitionDurations": [
+      "1e-05s"
+    ],
+    "width": 1709
+  },
+  {
+    "name": "planning",
+    "animationDurations": [
+      "1e-05s"
+    ],
+    "height": 883,
+    "reduced": true,
+    "rootFont": "16px",
+    "scrollWidth": 1709,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "transitionDurations": [
+      "1e-05s"
+    ],
+    "width": 1709
+  },
+  {
+    "name": "workbench",
+    "animationDurations": [
+      "1e-05s"
+    ],
+    "height": 883,
+    "reduced": true,
+    "rootFont": "16px",
+    "scrollWidth": 1709,
+    "title": "验收示例：雨港来信与不会游泳的邮差 - AI 长篇网络小说自动生成平台",
+    "transitionDurations": [
+      "1e-05s"
+    ],
+    "width": 1709
+  },
+  {
+    "name": "create",
+    "animationDurations": [
+      "1e-05s"
+    ],
+    "height": 883,
+    "reduced": true,
+    "rootFont": "16px",
+    "scrollWidth": 1709,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "transitionDurations": [
+      "1e-05s"
+    ],
+    "width": 1709
+  },
+  {
+    "name": "issues",
+    "animationDurations": [
+      "1e-05s"
+    ],
+    "height": 883,
+    "reduced": true,
+    "rootFont": "16px",
+    "scrollWidth": 1709,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "transitionDurations": [
+      "1e-05s"
+    ],
+    "width": 1709
+  },
+  {
+    "name": "settings",
+    "animationDurations": [
+      "1e-05s"
+    ],
+    "height": 883,
+    "reduced": true,
+    "rootFont": "16px",
+    "scrollWidth": 1709,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "transitionDurations": [
+      "1e-05s"
+    ],
+    "width": 1709
+  }
+]

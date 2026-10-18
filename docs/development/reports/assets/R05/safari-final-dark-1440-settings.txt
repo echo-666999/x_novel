@@ -1,0 +1,236 @@
+Window: "未命名 — 设置 - AI 长篇网络小说自动生成平台", App: Safari浏览器.
+0 标准窗口 未命名 — 设置 - AI 长篇网络小说自动生成平台, ID: SafariWindow?IsSecure=false&UUID=176ABBAF-5F54-4B44-9B17-F8E5516FF6D5, Secondary Actions: Raise
+	1 分离组
+		2 分离器 (disabled, settable, float) -1
+		3 标签页组
+			4 弹出式按钮 Description: 视口大小, Value: 自定义大小, ID: ViewportPresetButton
+			5 开关按钮 Description: 向左旋转, Help: 旋转视口, Value: off
+			6 文本栏 (settable) Description: 宽度, Value: 1440
+			7 文本 ×
+			8 文本栏 (settable) Description: 高度, Value: 900
+			9 文本 Description: 缩放比例, Value: ( 81% )
+			10 弹出式按钮 Description: 像素比, Value: 2倍
+			11 菜单按钮 通过模拟器打开, ID: OpenWithSimulatorButton
+			12 滚动区
+				13 HTML内容 Description: 设置 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x/settings
+					14 link 跳转到内容, Value: xnovel-r05-font.test/x/settings#fi-main-content
+					15 container 顶部栏
+						16 按钮 (expanded) 折叠侧边栏, Secondary Actions: Collapse
+						17 link AI 长篇网络小说自动生成平台, Value: xnovel-r05-font.test/x
+						18 文本 全局搜索
+						19 搜索文本栏 (settable) 全局搜索, Placeholder: 搜索
+							20 文本 搜索
+						21 文本 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+						22 按钮 (collapsed) 用户菜单, Secondary Actions: Expand
+					23 container 侧边导航
+						24 内容列表
+							25 内容列表
+								26 link 创作总览, Value: xnovel-r05-font.test/x
+								27 link 小说, Value: xnovel-r05-font.test/x/novels
+								28 link 生成任务, Value: xnovel-r05-font.test/x/generation
+								29 link 异常与审校, Value: xnovel-r05-font.test/x/generation-issues
+								30 link 记忆, Value: xnovel-r05-font.test/x/memory
+								31 link 设置, Value: xnovel-r05-font.test/x/settings
+							32 container
+								33 文本 AI 与成本
+								34 按钮 (expanded) AI 与成本, Secondary Actions: Collapse
+								35 内容列表
+									36 link 服务商连接, Value: xnovel-r05-font.test/x/a-i-provider-connections
+									37 link 模型价格, Value: xnovel-r05-font.test/x/a-i-model-prices
+					38 container
+						39 标题 设置, Value: 1
+							40 文本 设置
+						41 按钮 生成参数
+						42 按钮 紧急停止
+						43 container 生成
+							44 container
+								45 标题 生成, Value: 2
+									46 文本 生成
+								47 text Outline、章节阶段和修复子阶段的请求预算。 数据库配置
+							48 文本 配置来源
+							49 文本 PostgreSQL · system_settings
+							50 文本 服务商连接在“AI 与成本 → 服务商连接”维护；模型、容量、价格和各阶段路由在“模型价格”维护。
+						51 container 审校
+							52 container
+								53 标题 审校, Value: 2
+									54 文本 审校
+								55 text 新 Plan Admission 冻结的审校上下文预算。 数据库配置
+							56 文本 上下文 Token 预算
+							57 文本 48,000
+						58 container 记忆
+							59 container
+								60 标题 记忆, Value: 2
+									61 文本 记忆
+								62 text Embedding 模型由模型路由维护，向量维度由生成参数维护。 数据库配置
+							63 文本 向量维度
+							64 文本 1,536
+							65 文本 修改模型前必须确认其输出维度与 PostgreSQL memories.embedding 一致。
+						66 container 费用统计与可选上限
+							67 container
+								68 标题 费用统计与可选上限, Value: 2
+									69 文本 费用统计与可选上限
+								70 text 默认以完成小说为目标；预警不中断。只有主动启用的金额硬上限才会阻止后续请求。 只读
+							71 文本 Daily Used / Limit
+							72 文本 USD 0.0000 / 无限制
+							73 文本 Novel Total Default
+							74 文本 未启用金额硬上限
+							75 文本 Chapter Max Default
+							76 文本 未启用金额硬上限
+							77 文本 来源：全局生成参数与小说设置。金额值不会自动启用上限，历史费用不会因关闭上限而清空。
+						78 container 系统健康
+							79 container
+								80 标题 系统健康, Value: 2
+									81 文本 系统健康
+								82 文本 System Health · MVP 发布、恢复与长期单人运行检查
+								83 按钮 重新检查
+							84 文本 System health checks
+							85 container
+								86 文本 检查项
+								87 文本 数据库连接
+								88 文本 状态
+								89 文本 正常
+								90 文本 说明
+								91 文本 pgsql 连接正常。
+								92 文本 观测时间
+								93 文本 2026-10-18T13:15:14.308518Z
+								94 文本 检查项
+								95 文本 Redis
+								96 文本 状态
+								97 文本 正常
+								98 文本 说明
+								99 文本 Redis 连接正常。
+								100 文本 观测时间
+								101 文本 2026-10-18T13:15:14.309918Z
+								102 文本 检查项
+								103 文本 Queue
+								104 文本 状态
+								105 文本 未验证运行状态
+								106 文本 说明
+								107 文本 队列配置使用 Redis，实际消费情况以 Worker 心跳为准。
+								108 文本 观测时间
+								109 文本 2026-10-18T13:15:14.310005Z
+								110 文本 检查项
+								111 文本 Horizon
+								112 文本 状态
+								113 文本 需要处理
+								114 文本 说明
+								115 文本 已监听 generation / default。 未检测到 Horizon Master。
+								116 文本 观测时间
+								117 文本 2026-10-18T13:15:14.311979Z
+								118 文本 检查项
+								119 文本 Scheduler
+								120 文本 状态
+								121 文本 未验证运行状态
+								122 文本 说明
+								123 文本 尚无实际执行心跳，不能确认正在运行。
+								124 文本 观测时间
+								125 文本 未观测
+								126 文本 检查项
+								127 文本 生成 Worker
+								128 文本 状态
+								129 文本 观测已过期
+								130 文本 说明
+								131 文本 最近观测 2026-10-18T12:34:55.555858Z；执行实现标识 book-workflow-r05-v1。空闲无新心跳不等于服务离线。
+								132 文本 观测时间
+								133 文本 2026-10-18T12:34:55.555858Z
+								134 文本 检查项
+								135 文本 Provider 最近请求
+								136 文本 状态
+								137 文本 观测已过期
+								138 文本 说明
+								139 文本 openai / pipeline-fixture：settled。仅代表最近这条请求，其他连接未据此验证。
+								140 文本 观测时间
+								141 文本 2026-10-18T12:34:55.000000Z
+								142 文本 检查项
+								143 文本 持久待办
+								144 文本 状态
+								145 文本 未验证运行状态
+								146 文本 说明
+								147 文本 待执行 2；缺正式摘要 1；过期租约 0。使用 generation:recover-automatic 对账，不清空队列。
+								148 文本 观测时间
+								149 文本 2026-10-18T13:15:14.327279Z
+								150 文本 检查项
+								151 文本 日志
+								152 文本 状态
+								153 文本 正常
+								154 文本 说明
+								155 文本 storage/logs 可写。
+								156 文本 观测时间
+								157 文本 2026-10-18T13:15:14.327497Z
+								158 文本 检查项
+								159 文本 关键配置
+								160 文本 状态
+								161 文本 正常
+								162 文本 说明
+								163 文本 应用密钥、中文语言、服务商连接与整书必需路由已配置；不代表供应商当前可用。
+								164 文本 观测时间
+								165 文本 2026-10-18T13:15:14.332981Z
+								166 文本 检查项
+								167 文本 费用策略
+								168 文本 状态
+								169 文本 正常
+								170 文本 说明
+								171 文本 费用始终统计；预警不暂停。只有用户主动启用的金额硬上限参与请求门禁，未填写金额不影响生成。
+								172 文本 观测时间
+								173 文本 2026-10-18T13:15:14.333088Z
+								174 文本 检查项
+								175 文本 紧急停止
+								176 文本 状态
+								177 文本 正常
+								178 文本 说明
+								179 文本 紧急停止开关已持久化。
+								180 文本 观测时间
+								181 文本 2026-10-18T13:15:14.335119Z
+							182 文本 备份、隔离恢复演练和项目专属队列重启须在目标部署环境执行；步骤见 docs/development/OPERATIONS.md。
+					183 按钮 Edit this page with Herd, Help: Edit this page with Herd (⇧⌘H) · New chat (⇧⌘E) · Terminal (⇧⌘U)
+					184 按钮 (collapsed) Show dev stack processes, Help: Dev stack, Secondary Actions: Expand
+					185 按钮 Hide badge for this session, Help: Hide for this session
+				186 滚动条 (settable, float) 0
+	187 标签页组 Description: 标签页栏，6个标签页, ID: TabBar?isSeparate=false
+		188 标签 前言 | Go语言圣经, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			189 图像 FaviconImageView
+			190 文本 Value: 前言 | Go语言圣经, ID: UnifiedTabBarButton._titleTextField
+		191 标签 Go Web 编程 · 看云, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			192 图像 FaviconImageView
+			193 文本 Value: Go Web 编程 · 看云, ID: UnifiedTabBarButton._titleTextField
+		194 标签 邮件 - 王 明 - Outlook, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			195 图像 FaviconImageView
+			196 文本 Value: 邮件 - 王 明 - Outlook, ID: UnifiedTabBarButton._titleTextField
+		197 标签 人性博弈：社会化进阶攻略 - 飞书云文档, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			198 图像 FaviconImageView
+			199 文本 Value: 人性博弈：社会化进阶攻略 - 飞书云文档, ID: UnifiedTabBarButton._titleTextField
+		200 标签 章节阅读与复验 - AI 长篇网络小说自动生成平台, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			201 图像 FaviconImageView
+			202 文本 Value: 章节阅读与复验 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+		203 标签 设置 - AI 长篇网络小说自动生成平台, Help: 若要与此按钮中的项目交互，请按下Control-Option-Shift-下箭头键。, Value: on, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=true
+			204 图像 FaviconImageView
+			205 文本 Value: 设置 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+	206 工具栏
+		207 按钮 Description: 开关边栏, ID: SidebarButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		208 菜单按钮 ID: TabGroupPickerButton?TabGroup=%E6%9C%AA%E5%91%BD%E5%90%8D, Secondary Actions: 移到下一项, 从工具栏移除
+		209 container BackForwardSegmentedControl
+			210 按钮 Description: 返回, Help: 显示上一页, ID: BackButton
+			211 按钮 (disabled) Description: 前进, Help: 显示下一页, ID: ForwardButton
+		212 container Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+			213 按钮 页面菜单, ID: AssistantButton
+			214 按钮 将页面添加到阅读列表, ID: OneStepBookmarkingButton
+			215 文本栏 (settable) Description: 智能搜索栏, Value: xnovel-r05-font.test/x/settings, ID: WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD
+			216 按钮 停止加载此页面, ID: ReloadButton
+		217 按钮 Description: 共享, ID: ShareButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		218 按钮 Description: 新建标签页, ID: NewTabButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		219 按钮 Description: 标签页概览, ID: TabOverviewButton, Secondary Actions: 移到上一项, 从工具栏移除
+	220 关闭按钮
+	221 全屏幕按钮 Help: 此按钮也可以执行缩放窗口的操作, Secondary Actions: 缩放窗口
+	222 最小化按钮
+223 menu bar
+	224 Safari浏览器
+	225 文件
+	226 编辑
+	227 显示, ID: SafariViewMenu
+	228 历史记录
+	229 书签, ID: SafariBookmarksMenu
+	230 开发
+	231 窗口, ID: SafariWindowMenu
+	232 帮助, ID: SafariHelpMenu
+
+The focused UI element is 13 HTML内容 Description: 设置 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x/settings

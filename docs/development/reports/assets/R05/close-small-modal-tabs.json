@@ -1,0 +1,74 @@
+[
+  {
+    "bg": "oklab(0.999994 0.0000455678 0.0000200868 / 0.05)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "fi-sc-tab-b1e974e36638f75335b29977069b3c09",
+    "name": "通用",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 72,
+      "w": 104,
+      "x": 105,
+      "y": 461
+    },
+    "shadow": "none",
+    "tag": "BUTTON",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "mountedActionSchema0.tong-yong::mountedActions.0.data::tab",
+    "name": "费用控制\n\n币种用于模型价格匹配和费用展示；费用上限留空表示无限制。\n\n计价币种*\n使用三个字母的货币代码，例如美元代码或人民币代码。\n主动",
+    "outline": "rgb(153, 200, 255) none 1px",
+    "rect": {
+      "h": 5010,
+      "w": 228,
+      "x": 81,
+      "y": 0
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 2px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "DIV",
+    "visible": true
+  },
+  {
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(255, 255, 255)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "mountedActionSchema0.currency",
+    "name": "",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 72,
+      "w": 100,
+      "x": 145,
+      "y": 761
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgb(255, 255, 255) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "INPUT",
+    "visible": true
+  },
+  {
+    "bg": "oklch(0.514941 0 264.418)",
+    "color": "rgb(242, 243, 245)",
+    "focusVisible": true,
+    "hover": false,
+    "id": "mountedActionSchema0.budget.daily_hard_limit_enabled",
+    "name": "",
+    "outline": "rgb(165, 180, 252) solid 2px",
+    "rect": {
+      "h": 48,
+      "w": 88,
+      "x": 145,
+      "y": 554
+    },
+    "shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0.394588 0 264.418) 0px 0px 0px 1px, oklch(0.682706 0.170091 276.966) 0px 0px 0px 3px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+    "tag": "BUTTON",
+    "visible": true
+  }
+]

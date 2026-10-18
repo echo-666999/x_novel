@@ -18,6 +18,10 @@ final class CanonicalPostCommitDispatcher
 {
     public function dispatch(Chapter $chapter, StoryStateVersion $stateVersion, ?int $restartSourceRunId = null): void
     {
+        // 新链已有同事务待办；后续由统一整书入口与对账器推进。
+        if ($chapter->novel->current_generation_task_id) {
+            return;
+        }
         // 先派发独立副作用。若进程随后在必需链入队前退出，缺少摘要仍是可确定识别的恢复点。
         $this->dispatchSideEffects($chapter, $stateVersion);
         $this->dispatchRequired($chapter, $stateVersion, $restartSourceRunId);

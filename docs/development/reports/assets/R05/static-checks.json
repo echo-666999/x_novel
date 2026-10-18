@@ -1,0 +1,23 @@
+{
+  "php_lint": {
+    "php_files": 59,
+    "failures": []
+  },
+  "pint": {
+    "tool": "pint",
+    "result": "passed after formatting"
+  },
+  "vite_build": {
+    "command": "npm run build",
+    "exit_code": 0,
+    "result": "built",
+    "log": "vite-build.txt"
+  },
+  "diff_check": {
+    "command": "git diff --check",
+    "exit_code": 0
+  },
+  "database_migrations": "R05 无新增迁移，未迁移运行库",
+  "providers": "自动测试 Fake Provider，禁止意外 HTTP；无真实请求",
+  "document_fingerprints": "PRD 与 DESIGN 指纹一致"
+}

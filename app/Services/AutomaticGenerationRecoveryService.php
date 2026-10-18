@@ -41,6 +41,7 @@ final class AutomaticGenerationRecoveryService
     {
         // 新任务按独立身份恢复，不交给旧章节/大纲扫描器重新收费。
         $taskRecovery = app(GenerationRunCoordinator::class)->recoverTasks();
+        app(BookMemoryService::class)->reconcile();
         $expiredRepairs = $this->contentSelfHealing->expireExceeded();
         $result = [
             'tasks' => $taskRecovery,
@@ -146,7 +147,7 @@ final class AutomaticGenerationRecoveryService
     private function recoverExpiredQueuedOutlineRuns(): int
     {
         $recovered = 0;
-        $runs = GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')
+        $runs = GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])
             ->where('status', RunStatus::Queued)
             ->where('scope_type', NovelOutlinePipeline::BATCH_SCOPE)
             ->where('lease_expires_at', '<=', now())
@@ -155,7 +156,7 @@ final class AutomaticGenerationRecoveryService
 
         foreach ($runs as $run) {
             $claimed = DB::transaction(function () use ($run): ?GenerationRun {
-                $locked = GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')->lockForUpdate()->find($run->getKey());
+                $locked = GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])->lockForUpdate()->find($run->getKey());
                 if ($locked === null || $locked->status !== RunStatus::Queued || ! $this->runLease->isExpired($locked)) {
                     return null;
                 }
@@ -218,7 +219,7 @@ final class AutomaticGenerationRecoveryService
     /** @return Collection<int, GenerationRun> */
     private function workerLostRuns()
     {
-        return GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')
+        return GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])
             ->where('status', RunStatus::Failed)
             ->where('error_code', StalledRunRecoveryService::ERROR_CODE)
             ->whereNull('context_snapshot->recovery->claimed_at')
@@ -239,7 +240,7 @@ final class AutomaticGenerationRecoveryService
     private function claimRunRecovery(GenerationRun $run): bool
     {
         return DB::transaction(function () use ($run): bool {
-            $locked = GenerationRun::query()->where('pipeline_version', '<>', 'pipeline-v1')->lockForUpdate()->findOrFail($run->getKey());
+            $locked = GenerationRun::query()->whereNotIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])->lockForUpdate()->findOrFail($run->getKey());
             $snapshot = $locked->context_snapshot ?? [];
             $attempts = (int) data_get($snapshot, 'automatic_recovery.attempts', 0);
             if ($attempts >= $this->maxAttempts()) {

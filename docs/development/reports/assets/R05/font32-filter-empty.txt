@@ -1,0 +1,76 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-font.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-font.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-font.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-font.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-font.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-font.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-font.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-font.test/x/a-i-model-prices
+- main:
+  - heading "小说" [level=1]
+  - link "创建小说":
+    - /url: http://xnovel-r05-font.test/x/novels/create
+  - generic: 搜索
+  - searchbox "搜索": 不存在的验收作品
+  - button "筛选" [active]:
+    - generic: "0"
+  - generic: 已启用筛选
+  - list:
+    - generic: "搜索: 不存在的验收作品"
+    - button "移除筛选":
+      - generic: 移除筛选
+  - button "清除所有筛选":
+  - status: 暂无结果
+  - status: 加载中...
+  - table "小说":
+    - rowgroup:
+      - row "标题 题材 状态 生成任务 目标字数 当前章节 更新时间":
+        - columnheader "标题":
+          - button "标题":
+            - text: 标题
+        - columnheader "题材":
+          - button "题材":
+            - text: 题材
+        - columnheader "状态":
+          - button "状态":
+            - text: 状态
+        - columnheader "生成任务"
+        - columnheader "目标字数":
+          - button "目标字数":
+            - text: 目标字数
+        - columnheader "当前章节"
+        - columnheader "更新时间":
+          - button "更新时间":
+            - text: 更新时间
+  - status:
+    - heading "暂无小说" [level=2]
+    - paragraph: 创建第一部小说，开始建立长篇故事工作台。
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

@@ -1,7 +1,6 @@
 <?php
 
 use App\Actions\Chapters\ReviseBookChapterDraftAction;
-use App\Actions\Novels\CreateNovelGenerationTaskAction;
 use App\AI\Contracts\AiProvider;
 use App\AI\Data\AiRequest;
 use App\AI\Data\AiResponse;
@@ -32,7 +31,6 @@ use App\Services\GenerationIssueActions;
 use App\Services\GenerationRunCoordinator;
 use App\Services\GenerationStageGraph;
 use App\Services\NovelBookWorkflow;
-use App\Services\NovelFoundationContract;
 use App\Services\NovelPlanningService;
 use App\Services\NovelStageContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -43,56 +41,7 @@ use Livewire\Livewire;
 
 uses(RefreshDatabase::class);
 
-/** 完整固定响应使用真实执行器与请求账本，绝不发送收费请求。 */
-function pipelineTask(array $options = []): NovelGenerationTask
-{
-    createAiProviderConnectionForTest();
-    foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite] as $route) {
-        createAiModelRouteForTest($route, 'pipeline-fixture');
-    }
-    config(['horizon.defaults.supervisor-1.timeout' => 350, 'generation.execution.lease_seconds' => 390, 'queue.connections.redis.retry_after' => 480]);
-    Queue::fake([ExecuteGenerationRunJob::class]);
-    $task = app(CreateNovelGenerationTaskAction::class)->handle((string) Str::uuid(), '雨季邮差林舟寻找未来来信，主角不会游泳。', ['target_words' => 5000, 'generation_chapter_target_words' => 500, ...$options]);
-    $run = app(NovelBookWorkflow::class)->advance($task->id, false);
-    (new ExecuteGenerationRunJob($run->id))->handle(app(GenerationRunCoordinator::class));
-
-    return $task->fresh();
-}
-
-/** 每次只执行当前待办，前一步输出采用后才能知道下一步真实来源。 */
-function pipelineStep(NovelGenerationTask $task, ?array $override = null, array $metadata = []): GenerationRun
-{
-    $task->refresh();
-    $run = GenerationRun::findOrFail($task->pending_transition['run_id']);
-    $phase = $run->execution_contract['book_stage'] ?? 'foundation';
-    $input = $run->execution_contract['input'] ?? [];
-    $data = $override ?? match ($phase) {
-        'foundation' => (function () use ($task) {
-            $intent = GenerationArtifact::findOrFail($task->intent_artifact_id)->data;
-            $fields = [];
-            foreach (NovelFoundationContract::FIELDS as $field) {
-                $fields[$field] = ['value' => '设定'.$field, 'source' => 'system', 'evidence' => []];
-            }
-
-            return ['fields' => $fields, 'length' => ['target_words' => 5000, 'source' => 'user', 'evidence' => []], 'requirements' => array_map(fn ($r) => [...$r, 'treatment' => 'retained'], $intent['requirements']),
-                'promises' => ['找到来信者'], 'characters' => [['name' => '林舟', 'role' => '主角', 'description' => '邮差']], 'world_entities' => [['name' => '旧港', 'description' => '雨季港城']], 'conflicts' => []];
-        })(),
-        'blueprint' => ['mainline' => '追查来信', 'ending' => '改变洪水结局', 'turning_points' => ['收到信', '揭开身份', '救下港城'], 'reader_promises' => ['找到来信者'], 'character_arcs' => ['从逃避到承担'], 'foreshadowing_goals' => ['字迹秘密'], 'optional_volume_groups' => []],
-        'window' => ['goals' => array_fill(0, $input['count'], ['objective' => '追查线索', 'expected_change' => '找到线索', 'promise_refs' => ['promise-1'], 'required_facts' => ['不能游泳'], 'forbidden_conflicts' => ['不能下水救人']])],
-        'plan' => ['chapter_title' => '雨中的未来来信', 'chapter_function' => '引入线索', 'character_change' => '决定追查', 'pov' => '第三人称林舟', 'time_anchor' => '雨季首日', 'tone' => '悬疑', 'ending_point' => '发现字迹', 'must_reveal' => ['未来来信'], 'must_not_reveal' => ['寄信人'], 'required_facts' => ['不会游泳'], 'forbidden_conflicts' => ['不能下水'], 'segments' => []],
-        'write', 'fragment' => ['body' => "林舟站在港口，雨打湿了信封。他决定沿岸寻找来信者。\n\n钟声响起，远处有人叫他的名字。他把信收进衣袋，转身走向邮局。", 'complete' => true, 'temporary_state' => ['已收到信']],
-        'extract' => ['events' => []],
-        'review' => ['findings' => [], 'goal_checks' => [['goal_key' => $run->execution_contract['goal_refs'][0]['key'], 'fulfilled' => true, 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]]],
-        default => throw new RuntimeException('未提供夹具 '.$phase),
-    };
-    $data = $override ?? $data;
-    $fake = (new FakeAiProvider)->enqueue(new AiResponse(json_encode($data, JSON_UNESCAPED_UNICODE), $data, 100, 200, 0, 10, 'pipeline-'.$run->id, 'pipeline-fixture', $metadata));
-    app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
-    (new ExecuteGenerationRunJob($run->id))->handle(app(GenerationRunCoordinator::class));
-    expect($fake->requests())->toHaveCount(1);
-
-    return $run->fresh();
-}
+require_once __DIR__.'/NovelPipelineFixtures.php';
 
 test('one premise reaches independent review without scenes or canonical writes', function () {
     $task = pipelineTask();
@@ -111,23 +60,9 @@ test('one premise reaches independent review without scenes or canonical writes'
     expect($task->novel->storyEvents()->count())->toBe(0);
     expect(Review::sole()->decision->value)->toBe('PASS');
     expect(Review::sole()->score)->toBeNull();
-    expect($task->fresh()->stop_reason)->toBe('commit_not_ready');
+    expect($task->fresh()->stop_reason)->toBe('awaiting_manual_commit');
     Queue::assertPushed(ExecuteGenerationRunJob::class);
 });
-
-/** 到指定请求前停住，测试失败分支仍经过真实入口和租约。 */
-function pipelineUntil(NovelGenerationTask $task, string $phase): GenerationRun
-{
-    for ($i = 0; $i < 12; $i++) {
-        $task->refresh();
-        $run = GenerationRun::findOrFail($task->pending_transition['run_id']);
-        if (($run->execution_contract['book_stage'] ?? '') === $phase) {
-            return $run;
-        }
-        pipelineStep($task);
-    }
-    throw new RuntimeException('未到达请求阶段 '.$phase);
-}
 
 test('duplicate delivery neither calls provider nor replaces draft', function () {
     $task = pipelineTask();
@@ -324,10 +259,97 @@ test('planning and draft pages expose real sources and preserve failed manual in
     Livewire::test(ViewNovelPlanning::class, ['record' => $task->novel_id])->assertOk()->assertSee('全书蓝图')->assertSee('近期章节目标')->assertSee('雨中的未来来信');
     $page = Livewire::test(ViewBookChapter::class, ['record' => $task->novel_id, 'chapter' => Chapter::sole()->id]);
     $page->assertOk()->assertSee('尚未正式采用')->assertSee('保存新稿并复验');
+    $page->set('body', '')->call('saveDraft')->assertSee('请填写新稿正文，原稿仍然保留。')
+        ->assertDispatched('book-edit-feedback', target: 'book-save-draft');
     $page->set('body', '需要保留的人工输入');
     $task->refresh()->increment('control_version');
-    $page->call('saveDraft')->assertSet('body', '需要保留的人工输入')->assertSee('当前稿或任务状态已变化');
+    $page->call('saveDraft')->assertSet('body', '需要保留的人工输入')->assertSee('当前稿或任务状态已变化')
+        ->assertDispatched('book-edit-feedback', target: 'book-save-draft');
+    // 冲突不能自动重绑；用户明确读取最新来源后，输入仍在且可以建立独立新稿。
+    $oldDraftId = Chapter::sole()->current_draft_artifact_id;
+    $page->call('refreshEditingSource')->assertSet('body', '需要保留的人工输入')
+        ->assertSet('controlVersion', $task->fresh()->control_version)->assertSee('请对照上方正文确认')
+        ->assertDispatched('book-edit-feedback', target: 'book-refresh-source');
+    expect(Chapter::sole()->current_draft_artifact_id)->toBe($oldDraftId);
+    $page->call('saveDraft')->assertSee('新稿已保存')->assertDispatched('book-edit-feedback', target: 'book-save-draft');
+    expect(Chapter::sole()->current_draft_artifact_id)->not->toBe($oldDraftId);
+    expect(Chapter::sole()->canonical_artifact_id)->toBeNull();
+});
 
+test('planning editors keep independent versions and explicitly refresh without losing input', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    pipelineStep($task);
+    $this->actingAs(User::factory()->create());
+    $chapter = Chapter::sole();
+    $blueprintId = $task->novel->fresh()->current_blueprint_id;
+    $windowId = $task->novel->fresh()->current_goal_window_id;
+    $version = $task->fresh()->control_version;
+    $outlineCount = NovelOutline::count();
+    $page = Livewire::test(ViewNovelPlanning::class, ['record' => $task->novel_id]);
+    $page->call('editDirection')->set('futureDirection', '调查港口失踪案');
+    $task->refresh()->increment('control_version');
+    // 打开目标编辑器不能替方向编辑器接受新的控制版本。
+    $page->call('editGoal', 'chapter-2')->set('goalText', '追查邮局暗号')
+        ->assertSet('directionTaskVersion', $version)->assertSet('taskVersion', $version + 1)
+        ->call('saveDirection')->assertSee('蓝图来源已改变')->assertSet('futureDirection', '调查港口失踪案');
+    expect(NovelOutline::count())->toBe($outlineCount);
+    $page->call('editDirection')->assertSet('futureDirection', '调查港口失踪案')
+        ->call('editGoal', 'chapter-3')->assertSet('goalKey', 'chapter-2')->assertSet('goalText', '追查邮局暗号');
+    $page->call('refreshDirectionSource')->assertSet('futureDirection', '调查港口失踪案')
+        ->assertSet('directionTaskVersion', $version + 1)->assertSee('本次读取未修改蓝图或正文');
+    expect(NovelOutline::count())->toBe($outlineCount);
+    $page->call('saveDirection')->assertSet('editingDirection', false)->assertSee('未来方向候选已保存');
+    expect(NovelOutline::count())->toBe($outlineCount + 1);
+
+    // 方向保存产生新控制版本后，目标仍须显式刷新，不能共享方向的版本。
+    $page->call('saveGoal')->assertSee('来源版本已改变')->assertSet('goalText', '追查邮局暗号');
+    expect(NovelOutline::count())->toBe($outlineCount + 1);
+    $page->call('refreshGoalSource')->assertSet('goalText', '追查邮局暗号')
+        ->assertSet('taskVersion', $task->fresh()->control_version)->assertSee('本次读取未修改计划或正文');
+    expect(NovelOutline::count())->toBe($outlineCount + 1);
+    $page->call('saveGoal')->assertSet('goalKey', '')->assertSee('修订候选已保存');
+    expect(NovelOutline::count())->toBe($outlineCount + 2);
+    expect($task->novel->fresh()->current_blueprint_id)->toBe($blueprintId);
+    expect($task->novel->fresh()->current_goal_window_id)->toBe($windowId);
+    expect($chapter->fresh()->current_draft_artifact_id)->toBe($chapter->current_draft_artifact_id);
+    expect($chapter->fresh()->canonical_artifact_id)->toBeNull();
+    expect($task->novel->storyEvents()->count())->toBe(0);
+});
+
+test('planning refresh preserves input and old identity when goal is no longer in current window', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    $this->actingAs(User::factory()->create());
+    $page = Livewire::test(ViewNovelPlanning::class, ['record' => $task->novel_id]);
+    $page->call('editGoal', 'chapter-2')->set('goalText', '需要保留的手工修订');
+    $version = $task->fresh()->control_version;
+    $window = NovelOutline::findOrFail($task->novel->fresh()->current_goal_window_id);
+    // 用新不可变窗口模拟进度推进，不篡改用户开始编辑时的旧产物。
+    $data = $window->sourceArtifact->data;
+    $data['goals'] = array_values(array_filter($data['goals'], fn ($goal) => $goal['key'] !== 'chapter-2'));
+    $artifact = $window->sourceArtifact->replicate();
+    $artifact->version++;
+    $artifact->source_artifact_id = $window->source_artifact_id;
+    $artifact->data = $data;
+    $artifact->content = json_encode($data, JSON_UNESCAPED_UNICODE);
+    $artifact->checksum = hash('sha256', $artifact->content);
+    $artifact->save();
+    $next = $window->replicate();
+    $next->source_artifact_id = $artifact->id;
+    $next->checksum = $artifact->checksum;
+    $next->version++;
+    $window->update(['status' => 'superseded']);
+    $next->save();
+    $task->novel->update(['current_goal_window_id' => $next->id]);
+    $task->refresh()->increment('control_version');
+    $count = NovelOutline::count();
+    $page->call('refreshGoalSource')->assertSee('此目标已不在当前窗口')
+        ->assertSet('goalText', '需要保留的手工修订')->assertSet('goalKey', 'chapter-2')
+        ->assertSet('windowVersion', $window->id)->assertSet('taskVersion', $version);
+    expect(NovelOutline::count())->toBe($count);
+    expect($window->fresh()->sourceArtifact->data['goals'])->toHaveCount(count($data['goals']) + 1);
+    expect(Chapter::sole()->canonical_artifact_id)->toBeNull();
 });
 
 test('chapter reader rejects cross novel chapter identity', function () {

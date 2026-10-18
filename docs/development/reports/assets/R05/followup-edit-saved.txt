@@ -1,0 +1,51 @@
+/url: http://xnovel-r05-review.test/x/novels
+      - link "【隔离验收】千章目录与长中文阅读雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事雨夜来信与港口的故事":
+        - /url: http://xnovel-r05-review.test/x/novels/6
+      - generic: 详情
+  - heading "章节阅读与复验" [level=1]
+  - list:
+    - list:
+      - link "工作台":
+        - /url: http://xnovel-r05-review.test/x/novels/6
+        - generic: 工作台
+      - link "正文":
+        - /url: http://xnovel-r05-review.test/x/novels/6/chapters
+        - generic: 正文
+      - link "设定与计划":
+        - /url: http://xnovel-r05-review.test/x/novels/6/planning
+        - generic: 设定与计划
+      - link "异常":
+        - /url: http://xnovel-r05-review.test/x/generation-issues?novel=6
+        - generic: 异常
+      - link "更多":
+        - /url: http://xnovel-r05-review.test/x/novels/6/tools
+        - generic: 更多
+  - text: 字号
+  - slider "正文字号": "19"
+  - text: 行距
+  - slider "正文行距": "2"
+  - text: 栏宽
+  - slider "正文栏宽": "42"
+  - button "专注阅读"
+  - generic "章节目录 · 每页 25 章"
+  - heading "第 1 章 · 雨中的未来来信" [level=2]
+  - paragraph: 草稿预览 · 尚未正式采用
+  - paragraph: 版本 134 · 45 字 · 等待当前稿独立审校
+  - link "查看本章异常与 AI 处理方案":
+    - /url: http://xnovel-r05-review.test/x/generation-issues?novel=6&chapter=6&filter=unresolved
+    - generic: 查看本章异常与 AI 处理方案
+  - article "章节正文":
+    - paragraph: 林舟没有下水。他沿岸走到旧灯塔，把未来来信交给守塔人。钟声响起时，守塔人指向写信人的旧屋。
+  - generic "版本与审校证据"
+  - generic "人工编辑当前草稿"
+  - heading "人工处理" [level=2]
+  - paragraph: 修改当前完整草稿，保存后重新提取、校验和审校。不会直接覆盖正式故事。
+  - text: 新稿正文
+  - textbox "新稿正文": 林舟没有下水。他沿岸走到旧灯塔，把未来来信交给守塔人。钟声响起时，守塔人指向写信人的旧屋。
+  - status: 新稿已保存，重新提取与审校已登记。请查看任务状态；尚未正式采用。
+  - button "保存新稿并复验"
+  - button "保留输入并读取最新稿"
+  - navigation "相邻章节":
+    - link "下一章 · 雨夜第2封来信":
+      - /url: http://xnovel-r05-review.test/x/novels/6/book-chapters/7
+- status

@@ -12,7 +12,9 @@ use App\Models\Chapter;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelGenerationTask;
 use App\Models\StoryStateVersion;
 use App\Models\WorldEntity;
 use Illuminate\Support\Facades\DB;
@@ -33,8 +35,12 @@ class LatestCanonicalChapterRollback
             throw ValidationException::withMessages(['reason' => '必须填写回滚原因。']);
         }
 
-        $result = DB::transaction(function () use ($chapter): array {
+        $result = DB::transaction(function () use ($chapter, $reason): array {
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
+            $task = $novel->current_generation_task_id ? NovelGenerationTask::whereKey($novel->current_generation_task_id)->lockForUpdate()->firstOrFail() : null;
+            if ($task && $task->status !== 'paused') {
+                throw new \LogicException('请先暂停整书任务，再回滚最近正式章。');
+            }
             $target = Chapter::query()->lockForUpdate()->findOrFail($chapter->getKey());
 
             if ($target->status !== ChapterStatus::Canonical
@@ -48,7 +54,7 @@ class LatestCanonicalChapterRollback
                 throw ValidationException::withMessages(['state' => '当前故事状态与最新正式章节不一致。']);
             }
 
-            $previousState = StoryStateVersion::query()
+            $previousState = $task ? StoryStateVersion::where('novel_id', $novel->id)->findOrFail(data_get($target->canonical_metadata, 'book_sources.previous_state_id')) : StoryStateVersion::query()
                 ->where('novel_id', $novel->getKey())
                 ->where('version', '<', $currentState->version)
                 ->where(fn ($query) => $query->whereNull('chapter_id')->orWhere('chapter_id', '!=', $target->getKey()))
@@ -100,10 +106,25 @@ class LatestCanonicalChapterRollback
                 ->where('sequence', '<', $target->sequence)
                 ->max('sequence');
 
+            if ($task) {
+                // 回滚追加完整恢复基线，旧状态与提交凭证保留，后续稿件重新规划。
+                $oldArtifact = $target->canonical_artifact_id;
+                $previousState = $novel->storyStateVersions()->create(['version' => ((int) $novel->storyStateVersions()->max('version')) + 1, 'chapter_id' => null, 'state' => $previousState->state, 'checksum' => $previousState->checksum]);
+                GenerationRun::where('generation_task_id', $task->id)->where('status', 'queued')->update(['status' => 'cancelled', 'finished_at' => now()]);
+                $novel->chapters()->where('sequence', '>=', $target->sequence)->update(['status' => 'void', 'current_plan_id' => null, 'current_draft_artifact_id' => null, 'summary' => null, 'summary_artifact_id' => null]);
+                $audit = GenerationRun::create(['novel_id' => $novel->id, 'generation_task_id' => $task->id, 'chapter_id' => $target->id, 'stage' => 'chapter_recovery', 'pipeline_version' => 'pipeline-v1', 'scope_type' => 'chapter', 'scope_id' => $target->id, 'scope_key' => 'rollback:'.$target->id, 'logical_step_key' => 'book-rollback:'.$currentState->id, 'idempotency_key' => 'book-rollback:'.$currentState->id, 'input_hash' => $currentState->checksum, 'status' => 'succeeded', 'attempt' => 1, 'started_at' => now(), 'finished_at' => now()]);
+                $payload = ['reason' => trim($reason), 'actor_id' => auth()->id(), 'previous_canonical_artifact_id' => $oldArtifact, 'from_state_id' => $currentState->id, 'restored_state_id' => $previousState->id];
+                $proof = $audit->artifacts()->create(['type' => ArtifactType::OperationRecord, 'data' => $payload, 'checksum' => app(GenerationInputIdentity::class)->hash($payload), 'validation_status' => 'validated']);
+                $audit->update(['result_artifact_id' => $proof->id]);
+                $progress = $task->progress_snapshot;
+                // 撤回使当前收束证据失效，有限补章授权也不能自动沿用到新正式状态。
+                unset($progress['ending_audit_id'], $progress['closing_extensions'], $progress['closing_debts'], $progress['closing_extension_limit'], $progress['closing_recovery_issue_id'], $progress['closing_instructions']);
+                $task->update(['current_chapter_id' => null, 'export_manifest_id' => null, 'finished_at' => null, 'control_version' => $task->control_version + 1, 'progress_snapshot' => $progress, 'pending_transition' => ['stage' => 'book_control', 'chapter_boundary' => true], 'stop_reason' => 'latest_chapter_rolled_back', 'stop_detail' => ['message' => '最近正式章已回滚，相关记忆已失效。继续后重新规划该章。']]);
+            }
             $target->update(['status' => ChapterStatus::Void, 'canonical_artifact_id' => null, 'canonical_metadata' => null]);
             $novelData = [
                 'canonical_state_version_id' => $previousState->getKey(),
-                'current_chapter_sequence' => $previousSequence,
+                'current_chapter_sequence' => $previousSequence ?? 0,
             ];
 
             if ($novel->status === NovelStatus::Completed) {
@@ -111,7 +132,9 @@ class LatestCanonicalChapterRollback
             }
 
             $novel->update($novelData);
-            $this->storyArcProgressProjector->refreshNovel($novel);
+            if (! $task) {
+                $this->storyArcProgressProjector->refreshNovel($novel);
+            }
 
             return [
                 'chapter_id' => $target->getKey(),
@@ -154,7 +177,7 @@ class LatestCanonicalChapterRollback
 
     private function restoreSupersededFacts(Chapter $chapter, Novel $novel): int
     {
-        $patch = GenerationArtifact::query()
+        $patch = data_get($chapter->canonical_metadata, 'book_sources.patch_artifact_id') ? GenerationArtifact::findOrFail($chapter->canonical_metadata['book_sources']['patch_artifact_id']) : GenerationArtifact::query()
             ->where('type', ArtifactType::StatePatch)
             ->whereHas('generationRun', fn ($query) => $query->where('chapter_id', $chapter->getKey()))
             ->latest('version')->latest('id')->first();

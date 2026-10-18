@@ -16,9 +16,11 @@ use App\Filament\Forms\Components\WorldEntityPicker;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Fact;
 use App\Models\Novel;
+use App\Services\LatestCanonicalChapterRollback;
 use App\Services\ProjectionRebuilder;
 use App\Services\StoryStateRebuilder;
 use App\Services\StoryStateService;
+use App\Support\GenerationDiagnosticRedactor;
 use Filament\Actions\Action;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
@@ -55,18 +57,18 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
 
     /** @var array<string, string> */
     private const DOMAINS = [
-        'characters'      => '人物',
-        'relationships'   => '关系',
-        'locations'       => '地点',
-        'items'           => '物品',
-        'world'           => '世界',
-        'timeline'        => '时间线',
-        'open_threads'    => '开放线索',
-        'foreshadowings'  => '伏笔',
+        'characters' => '人物',
+        'relationships' => '关系',
+        'locations' => '地点',
+        'items' => '物品',
+        'world' => '世界',
+        'timeline' => '时间线',
+        'open_threads' => '开放线索',
+        'foreshadowings' => '伏笔',
         'reader_promises' => '读者承诺',
-        'facts'           => '事实',
-        'story_events'    => '故事事件',
-        'state_diff'      => '版本差异',
+        'facts' => '事实',
+        'story_events' => '故事事件',
+        'state_diff' => '版本差异',
     ];
 
     #[Url(as: 'version')]
@@ -121,6 +123,20 @@ class ViewNovelStoryState extends ViewRecord implements HasTable
         $current = app(StoryStateService::class)->current($this->getRecord());
 
         return [
+            Action::make('rollbackLatestBookChapter')->label('回滚最近正式章')->color('danger')
+                ->visible((bool) $this->getRecord()->current_generation_task_id)
+                ->requiresConfirmation()->modalDescription('必须先暂停任务。仅撤回最近正式章，追加恢复状态版本，失效该章事件与记忆，并清除依赖的草稿指针。历史产物和操作记录保留。')
+                ->schema([Textarea::make('reason')->label('回滚原因')->required()->maxLength(2000)])
+                ->action(function (array $data): void {
+                    try {
+                        $chapter = $this->getRecord()->chapters()->where('status', 'canonical')->latest('sequence')->firstOrFail();
+                        app(LatestCanonicalChapterRollback::class)->rollback($chapter, $data['reason']);
+                        $this->getRecord()->refresh();
+                        Notification::make()->title('最近章已回滚，任务保持暂停')->success()->send();
+                    } catch (Throwable $e) {
+                        Notification::make()->title('回滚未完成')->body(app(GenerationDiagnosticRedactor::class)->clean($e->getMessage()))->danger()->send();
+                    }
+                }),
             Action::make('verifyRebuild')
                 ->label('校验重建结果')
                 ->icon('heroicon-o-arrow-path')

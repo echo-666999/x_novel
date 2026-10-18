@@ -85,6 +85,19 @@
     box-shadow: var(--xn-floating-shadow);
 }
 
+/* 放大字体时，避免弹窗、标签页、分组的多层留白挤压表单。 */
+@media (max-width: 640px) {
+    .fi-body .fi-modal-window :is(.fi-modal-header, .fi-modal-content, .fi-modal-footer,
+        .fi-sc-tabs-tab, .fi-section-header, .fi-section-content) {
+        padding-inline: 12px;
+    }
+    .fi-body .fi-modal-window .fi-fo-field-label:has(> .fi-toggle) {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+}
+
 .fi-sc-empty-state .fi-empty-state {
     background-color: var(--xn-surface-1);
 }
@@ -240,3 +253,53 @@
 .xn-book-comparison { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1.5rem; margin-top: 1rem; overflow-wrap: anywhere; }
 .xn-book-editor { display: block; width: 100%; background: var(--xn-surface-1); color: var(--xn-text); border: 1px solid var(--xn-border); border-radius: .5rem; padding: 1rem; line-height: 1.8; }
 @media (max-width: 768px) { .xn-book-comparison { grid-template-columns: minmax(0,1fr); } }
+
+/* 阅读偏好只影响正文，工具栏保持可用触控尺寸；专注模式使用同一语义页面。 */
+.xn-reader-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; }
+.xn-reader-toolbar label { display: flex; align-items: center; gap: .5rem; min-height: 44px; }
+/* 原生搜索框有固有宽度，目录展开后也必须限制在阅读容器内。 */
+.xn-reader-control { display: inline-block; max-width: 100%; min-width: 0; min-height: 44px; padding: .6rem .8rem; border: 1px solid var(--xn-border); border-radius: .4rem; color: var(--xn-text); background: var(--xn-surface-1); overflow-wrap: anywhere; }
+.xn-reader-control:focus-visible { outline: 2px solid var(--xn-primary); outline-offset: 3px; }
+.xn-reader-focus { position: fixed; inset: 0; z-index: 60; overflow-y: auto; padding: clamp(1rem,4vw,3rem); background: var(--xn-surface-1); color: var(--xn-text); }
+.xn-reader-focus > .xn-reader-toolbar { position: sticky; top: 0; background: var(--xn-surface-1); padding-block: .5rem; z-index: 1; }
+.xn-reader-focus > details, .xn-reader-focus > .fi-section { display: none; }
+/* 实际 Filament 页面也使用设计表面，避免深色卡片退回框架灰阶。 */
+.fi-body .fi-section, .fi-body .fi-ta-ctn { background: var(--xn-surface-1); color: var(--xn-text); }
+.fi-body .fi-topbar { background: var(--xn-surface-2); }
+.fi-body:has(.xn-reader-focus) .fi-sidebar, .fi-body:has(.xn-reader-focus) .fi-topbar, .fi-body:has(.xn-reader-focus) .fi-header, .fi-body:has(.xn-reader-focus) .fi-page-sub-navigation-sidebar { visibility: hidden; }
+.fi-body .fi-section-header-description, .fi-body .fi-ta-empty-state-description, .fi-body .fi-header-subheading, .fi-body .fi-fo-field-wrp-helper-text, .fi-body .fi-modal-description { color: var(--xn-text-muted); }
+
+/* 实测框架默认灰阶在浅色表面不足 4.5:1；辅助文字仍需清晰表达状态，不能靠淡化区分。 */
+.fi-body :is(.fi-sidebar-group-label, .fi-breadcrumbs-item-label, .fi-input-wrp-label,
+    .fi-ta-placeholder, .fi-ta-text-description, .fi-ta-header-description,
+    .fi-select-input-placeholder, .fi-tabs-item-label, .text-gray-400, .text-gray-500, .text-gray-600),
+.fi-body .fi-sc-text:not(.fi-color),
+.fi-body .fi-in-text.fi-color-gray,
+.fi-body .fi-badge:not(.fi-color),
+.fi-body .fi-badge.fi-color-gray { color: var(--xn-text-muted); }
+.fi-body .fi-fo-field-label-required-mark { color: var(--xn-danger-text); }
+.fi-body :is(input, textarea)::placeholder { color: var(--xn-text-muted); opacity: 1; }
+
+/* 可编辑区域与阅读按钮的边界属于操作提示，使用强边界，装饰分隔线仍维持原层级。 */
+.xn-book-editor, .xn-reader-control { border-color: var(--xn-border-strong); }
+
+/* 深色下危险/警告实心按钮的白字对比度不足，沿用可读的语义前景与深色按钮文字。 */
+.dark .fi-btn.fi-color-danger:not(.fi-outlined):not([disabled]) { background: var(--xn-danger-text); color: var(--xn-on-primary); }
+.dark .fi-btn.fi-color-warning:not(.fi-outlined):not([disabled]) { background: var(--xn-warning-text); color: var(--xn-on-primary); }
+.dark .fi-btn:is(.fi-color-danger, .fi-color-warning):not(.fi-outlined):not([disabled]):hover { filter: brightness(1.08); }
+
+/* 纯字体放大时仍给标题正文保留阅读宽度，附加状态与操作可换到下一行。 */
+.fi-body .fi-section-header { flex-wrap: wrap; }
+.fi-body .fi-section-header-text-ctn { flex-basis: 12rem; min-width: 0; }
+.fi-body .fi-section-header-after-ctn { max-width: 100%; }
+@media (max-width: 40rem) {
+    .fi-body .fi-section > .fi-section-header,
+    .fi-body .fi-section > .fi-section-content-ctn > .fi-section-content { padding-inline: 16px; }
+    /* 搜索和账号共享剩余空间，不能把账号按钮挤出可见视口。 */
+    .fi-body .fi-topbar { padding-inline: 16px; }
+    .fi-body .fi-topbar-end { flex: 1; min-width: 0; gap: 8px; }
+    .fi-body .fi-topbar .fi-global-search-ctn { flex: 1; min-width: 0; }
+    .fi-body .fi-topbar .fi-global-search { min-width: 0; }
+    .fi-body .fi-topbar-open-sidebar-btn,
+    .fi-body .fi-topbar-close-sidebar-btn { margin-inline-end: 8px !important; }
+}

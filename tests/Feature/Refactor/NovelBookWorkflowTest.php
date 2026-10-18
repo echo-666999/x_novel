@@ -58,7 +58,7 @@ function bookFoundation(array $intent): array
 function bookRoutes(): void
 {
     createAiProviderConnectionForTest();
-    foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite] as $stage) {
+    foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite, AiStage::Summary] as $stage) {
         createAiModelRouteForTest($stage, 'book-fixture');
     }
     config(['horizon.defaults.supervisor-1.timeout' => 350, 'generation.execution.lease_seconds' => 390, 'queue.connections.redis.retry_after' => 480]);
@@ -349,6 +349,8 @@ test('foundation field repair keeps rejected evidence and verifies a new metered
     expect($repair->fresh()->status->value)->toBe('succeeded')->and($issue->fresh()->status)->toBe('resolved')
         ->and($fake->requests())->toHaveCount(1)->and($rejected->fresh()->validation_status->value)->toBe('rejected')
         ->and($issue->fresh()->attempt_count)->toBe(1)->and($task->fresh()->status)->toBe('running');
+    // 问题真实结案后不能继续显示旧的停止原因。
+    expect($task->fresh()->stop_reason)->toBeNull();
     $this->assertDatabaseHas('usage_records', ['generation_run_id' => $repair->id, 'issue_id' => $issue->id, 'status' => 'settled']);
     expect($fake->requests()[0]->prompt)->toContain('candidate')->toContain('补齐 world');
 });

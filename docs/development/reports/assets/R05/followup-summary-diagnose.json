@@ -1,0 +1,98 @@
+{
+    "task": {
+        "id": 3,
+        "status": "needs_attention",
+        "current_phase": "content_repair",
+        "stop_reason": "model_route_not_configured",
+        "control_version": 2,
+        "pending_transition": {
+            "stage": "book_control",
+            "canonical_chapter_id": 3
+        },
+        "progress_snapshot": {
+            "initialization": {
+                "at": "2026-10-18T09:38:29.240855Z",
+                "mode": "full_book",
+                "intent": 45,
+                "window": 6,
+                "sources": [
+                    {
+                        "checksum": "ff3c2091e3fceaa268ac5f50494745c790f207085938a0a410259c8cfd950ad9",
+                        "artifact_id": 45
+                    },
+                    {
+                        "checksum": "bf67cf17db066d1bf3bc09f6a3a6b77956c381653fed233372a40907965b3974",
+                        "artifact_id": 47
+                    },
+                    {
+                        "checksum": "d49ce4f8ba1cbd59fc136ce72ef41e6be15a58c5a33e614b100a671c76d20295",
+                        "artifact_id": 49
+                    },
+                    {
+                        "checksum": "d49a6c9e4efb1ff19af7627c4f1d39d0b00bd1963bffa78b3e8d7931b277d41b",
+                        "artifact_id": 51
+                    }
+                ],
+                "blueprint": 5,
+                "foundation": 47,
+                "state_version_id": 4
+            },
+            "resolved_length": {
+                "source": "user",
+                "evidence": [],
+                "target_words": 5000
+            },
+            "initialization_hash": "26774a13f84ce53a86a697f13a892e6835d48d62b3ba3b1a93b797461f8c9352",
+            "foundation_artifact_id": 47
+        }
+    },
+    "chapters": [
+        {
+            "id": 3,
+            "sequence": 1,
+            "status": "canonical",
+            "canonical_artifact_id": 58,
+            "summary_artifact_id": null
+        }
+    ],
+    "issues": [
+        {
+            "id": 1,
+            "status": "awaiting_user",
+            "attempt_count": 1,
+            "resolved_by_run_id": null,
+            "resolution_reason": null
+        }
+    ],
+    "runs": [
+        {
+            "id": 75,
+            "stage": "content_repair",
+            "status": "succeeded",
+            "error_code": null,
+            "error_message": null
+        },
+        {
+            "id": 74,
+            "stage": "chapter_recovery",
+            "status": "succeeded",
+            "error_code": null,
+            "error_message": null
+        },
+        {
+            "id": 36,
+            "stage": "goal_window",
+            "status": "failed",
+            "error_code": "model_route_not_configured",
+            "error_message": "AI 任务 summary 尚未在管理后台配置模型路由。"
+        },
+        {
+            "id": 35,
+            "stage": "commit",
+            "status": "succeeded",
+            "error_code": null,
+            "error_message": null
+        }
+    ],
+    "usage_count": 8
+}

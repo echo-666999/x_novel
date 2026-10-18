@@ -342,6 +342,7 @@ class Settings extends Page
                             'status' => $check->statusLabel(),
                             'status_key' => $check->status,
                             'detail' => $check->detail,
+                            'observed_at' => $check->observedAt ?? '未观测',
                         ])
                         ->all())
                     ->columns(['default' => 1, 'md' => 3])
@@ -356,8 +357,9 @@ class Settings extends Page
                                 default => 'warning',
                             }),
                         TextEntry::make('detail')->label('说明')->wrap(),
+                        TextEntry::make('observed_at')->label('观测时间')->wrap(),
                     ]),
-                Text::make('备份、隔离恢复演练和 Queue 进程重启必须在目标部署环境执行；具体命令见 docs/development/MVP_RELEASE_CHECKLIST.md。')
+                Text::make('备份、隔离恢复演练和项目专属队列重启须在目标部署环境执行；步骤见 docs/development/OPERATIONS.md。')
                     ->icon('heroicon-o-information-circle')
                     ->color('gray'),
             ]);

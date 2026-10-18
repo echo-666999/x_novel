@@ -325,6 +325,11 @@ final class GenerationRunCoordinator
                 if (! $run || $run->generation_task_id !== $task->id) {
                     continue;
                 }
+                if ($run->status === RunStatus::Succeeded && data_get($run->checkpoint, 'next')) {
+                    app(NovelBookWorkflow::class)->advance($task->id);
+
+                    continue;
+                }
                 if ($run->status === RunStatus::Failed && $run->error_retryable && $run->attempt < (int) config('generation.execution.max_attempts', 3)) {
                     if (! $run->issue_id) {
                         app(GenerationIssueService::class)->observe($run);

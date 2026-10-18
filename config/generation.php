@@ -2,7 +2,9 @@
 
 return [
     // 新书默认值集中维护，表单与领域动作共用，费用不决定目标篇幅。
-    'book' => ['target_words' => 100000, 'chapter_target_words' => 3000, 'foundation_max_tokens' => 6000,
+    'book' => [
+        // 收束由正式篇幅和债务共同驱动，有限补章不因费用预警提前结束。
+        'closing_ratio' => 0.8, 'max_closing_extensions' => 3, 'target_words' => 100000, 'chapter_target_words' => 3000, 'foundation_max_tokens' => 6000,
         // 近期窗口与局部修复均有确定上限；这些不是小说费用硬上限。
         'window_chapters' => 5, 'window_refill_threshold' => 2, 'structured_max_tokens' => 6000,
         'writer_tokens_per_character' => 3, 'writer_output_overhead' => 512, 'max_fragments' => 8, 'max_continuations' => 2, 'max_rewrites' => 2],

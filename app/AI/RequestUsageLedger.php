@@ -12,10 +12,12 @@ use App\Models\AIProviderConnection;
 use App\Models\Chapter;
 use App\Models\GenerationIssue;
 use App\Models\GenerationRun;
+use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\NovelGenerationTask;
 use App\Models\SystemSetting;
 use App\Models\UsageRecord;
+use App\Services\BookMemoryService;
 use App\Services\EmergencyStopService;
 use App\Services\GenerationCostPolicy;
 use App\Services\GenerationInputIdentity;
@@ -49,7 +51,7 @@ final class RequestUsageLedger
             if ($chapter && $chapter->novel_id !== $novelId) {
                 throw new \LogicException('章节不属于请求小说。');
             }
-            if ($task && (! in_array($task->status, ['running', 'queued'], true) || (int) $novel->current_generation_task_id !== $task->id)) {
+            if ($task && (! in_array($task->status, $run?->pipeline_version === 'book-derived-v1' ? ['running', 'queued', 'completed'] : ['running', 'queued'], true) || (int) $novel->current_generation_task_id !== $task->id)) {
                 throw new AiProviderException('task_not_running', '任务已暂停、结束或失去推进权。', false);
             }
             if ($run && UsageRecord::where('generation_run_id', $run->id)->exists()) {
@@ -62,11 +64,20 @@ final class RequestUsageLedger
             $currency = data_get($global->value, 'currency', 'USD');
             $price = AIModelPrice::where('provider', $provider)->where('model', $request->model)->where('currency', $currency)->where('is_enabled', true)->first();
             $snapshot = $price ? $price->only(['id', 'provider', 'model', 'currency', 'billing_unit', 'input_price', 'cached_input_price', 'output_price', 'updated_at']) : [];
-            if ($run?->pipeline_version === 'pipeline-v1') {
-                if (! $request instanceof AiRequest) {
-                    throw new \LogicException('新链 Embedding 需独立请求身份，不能借用正文 Run。');
+            if (in_array($run?->pipeline_version, ['pipeline-v1', 'book-derived-v1'], true)) {
+                if ($run->pipeline_version === 'book-derived-v1') {
+                    // 派生向量冻结文本、模型与维度，不能借用正文请求合同。
+                    if (! $request instanceof EmbeddingRequest || $request->model !== $run->model
+                        || $request->dimensions !== $run->execution_contract['dimensions']
+                        || hash('sha256', $request->input) !== $run->execution_contract['memory_hash']) {
+                        throw new \LogicException('向量请求与冻结来源不一致。');
+                    }
+                } else {
+                    if (! $request instanceof AiRequest) {
+                        throw new \LogicException('新链 Embedding 需独立请求身份，不能借用正文 Run。');
+                    }
+                    app(GenerationRequestContract::class)->assertMatches($run, $request);
                 }
-                app(GenerationRequestContract::class)->assertMatches($run, $request);
                 $this->assertExecution($run, $metadata, $task);
                 $snapshot = $run->execution_contract['price'] ?? [];
                 $currency = $run->execution_contract['currency'];
@@ -99,15 +110,21 @@ final class RequestUsageLedger
             $issue = $usage->issue_id ? GenerationIssue::whereKey($usage->issue_id)->lockForUpdate()->firstOrFail() : null;
             $run = $usage->generation_run_id ? GenerationRun::whereKey($usage->generation_run_id)->lockForUpdate()->firstOrFail() : null;
             $usage = UsageRecord::whereKey($usage->id)->lockForUpdate()->firstOrFail();
-            if ($task && (! in_array($task->status, ['queued', 'running'], true) || (int) $novel->current_generation_task_id !== $task->id)) {
+            if ($task && (! in_array($task->status, $run?->pipeline_version === 'book-derived-v1' ? ['running', 'queued', 'completed'] : ['queued', 'running'], true) || (int) $novel->current_generation_task_id !== $task->id)) {
                 throw new AiProviderException('task_not_running', '请求尚未发送，任务已暂停或失去推进权。', false);
             }
-            if ($run?->pipeline_version === 'pipeline-v1') {
+            if (in_array($run?->pipeline_version, ['pipeline-v1', 'book-derived-v1'], true)) {
                 $this->assertExecution($run, ['lease_token' => $usage->request_metadata['execution_token'], 'control_version' => $usage->request_metadata['control_version']], $task);
                 app(AiSettingsService::class)->assertProviderAvailable($usage->provider);
                 $connection = AIProviderConnection::find($run->connection_id);
                 if (! $connection || app(GenerationInputIdentity::class)->hash($connection->only(['base_url', 'credential_ref', 'connect_timeout', 'timeout'])) !== app(GenerationInputIdentity::class)->hash($run->execution_contract['connection'])) {
                     throw new AiProviderException('connection_contract_changed', '发送前连接已变化，请重新建立尝试。', false);
+                }
+            }
+            if ($run?->pipeline_version === 'book-derived-v1') {
+                $memory = Memory::findOrFail($run->scope_id);
+                if (! app(BookMemoryService::class)->valid($novel)->whereKey($memory->id)->exists() || hash('sha256', $memory->summary) !== $run->execution_contract['memory_hash']) {
+                    throw new \LogicException('向量发送前正式记忆来源已失效。');
                 }
             }
             if ($usage->status !== 'prepared') {

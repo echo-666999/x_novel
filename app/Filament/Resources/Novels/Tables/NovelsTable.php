@@ -23,6 +23,7 @@ class NovelsTable
     public static function configure(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn ($query) => $query->with('currentGenerationTask'))
             ->columns([
                 TextColumn::make('title')
                     ->label('标题')
@@ -37,12 +38,15 @@ class NovelsTable
                     ->label('状态')
                     ->badge()
                     ->sortable(),
+                TextColumn::make('currentGenerationTask.status')->label('生成任务')->placeholder('旧记录')->formatStateUsing(fn ($state) => ['queued' => '等待开始', 'running' => '生成中', 'paused' => '已暂停', 'needs_attention' => '需要处理', 'completed' => '整书已完成', 'cancelled' => '已取消', 'failed' => '失败'][$state] ?? $state)->badge(),
                 TextColumn::make('target_words')
                     ->label('目标字数')
                     ->numeric()
                     ->alignEnd()
                     ->sortable(),
                 TextColumn::make('current_chapter_sequence')
+                    // 空章节指针也要有可读名称，避免表格链接成为无名称的键盘停点。
+                    ->placeholder('尚无正式章')
                     ->label('当前章节')
                     ->formatStateUsing(fn (?int $state): string => $state === null ? '—' : "第 {$state} 章")
                     ->alignEnd(),

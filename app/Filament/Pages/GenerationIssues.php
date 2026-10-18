@@ -125,8 +125,11 @@ class GenerationIssues extends Page
     public function options(GenerationIssue $issue): array
     {
         $options = [];
-        foreach (['retry_transient' => '从原断点重试', 'repair_foundation' => '请 AI 修复设定字段', 'repair_book' => '请 AI 修复失败产物或局部正文', 'rebuild_book_context' => '保留正文并重建容量准入', 'diagnose' => '请 AI 分析原因', 'save_note' => '保存人工处理说明', 'pause' => '暂停整书任务'] as $action => $label) {
-            if ($action === 'rebuild_book_context' && $issue->category !== 'capacity') {
+        foreach (['retry_export' => '仅重新导出正式正文', 'retry_transient' => '从原断点重试', 'repair_foundation' => '请 AI 修复设定字段', 'repair_book' => '请 AI 修复失败产物或局部正文', 'rebuild_book_context' => '保留正文并重建容量准入', 'diagnose' => '请 AI 分析原因', 'save_note' => '保存人工处理说明', 'pause' => '暂停整书任务'] as $action => $label) {
+            if ($action === 'rebuild_book_context' && ! in_array($issue->category, ['capacity', 'configuration', 'summary'], true)) {
+                continue;
+            }
+            if ($action === 'retry_export' && $issue->category !== 'export') {
                 continue;
             }
             if ($action === 'repair_book' && ! str_starts_with($issue->error_code, 'book_')) {

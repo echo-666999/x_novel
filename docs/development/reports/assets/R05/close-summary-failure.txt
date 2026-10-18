@@ -1,0 +1,128 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "折叠侧边栏" [expanded]:
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner:
+  - link "AI 长篇网络小说自动生成平台":
+    - /url: http://xnovel-r05-final.test/x
+    - generic: AI 长篇网络小说自动生成平台
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-final.test/x
+        - generic: 创作总览
+      - link "小说":
+        - /url: http://xnovel-r05-final.test/x/novels
+        - generic: 小说
+      - link "生成任务":
+        - /url: http://xnovel-r05-final.test/x/generation
+        - generic: 生成任务
+      - link "异常与审校":
+        - /url: http://xnovel-r05-final.test/x/generation-issues
+        - generic: 异常与审校
+      - link "记忆":
+        - /url: http://xnovel-r05-final.test/x/memory
+        - generic: 记忆
+      - link "设置":
+        - /url: http://xnovel-r05-final.test/x/settings
+        - generic: 设置
+    - generic: AI 与成本
+    - button "AI 与成本" [expanded]:
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-final.test/x/a-i-provider-connections
+        - generic: 服务商连接
+      - link "模型价格":
+        - /url: http://xnovel-r05-final.test/x/a-i-model-prices
+        - generic: 模型价格
+- main:
+  - navigation "面包屑导航":
+    - list:
+      - link "小说":
+        - /url: http://xnovel-r05-final.test/x/novels
+      - link "R05 收尾：摘要故障":
+        - /url: http://xnovel-r05-final.test/x/novels/170
+      - generic: 详情
+  - heading "R05 收尾：摘要故障" [level=1]
+  - paragraph: 设定genre · 生成中
+  - link "查看异常":
+    - /url: http://xnovel-r05-final.test/x/generation-issues?novel=170
+  - link "调整概述与设置":
+    - /url: http://xnovel-r05-final.test/x/novels/170/edit
+  - button "导出正式正文"
+  - button "暂停"
+  - list:
+    - list:
+      - link "工作台":
+        - /url: http://xnovel-r05-final.test/x/novels/170
+        - generic: 工作台
+      - link "正文":
+        - /url: http://xnovel-r05-final.test/x/novels/170/chapters
+        - generic: 正文
+      - link "设定与计划":
+        - /url: http://xnovel-r05-final.test/x/novels/170/planning
+        - generic: 设定与计划
+      - link "异常":
+        - /url: http://xnovel-r05-final.test/x/generation-issues?novel=170
+        - generic: 异常
+      - link "更多":
+        - /url: http://xnovel-r05-final.test/x/novels/170/tools
+        - generic: 更多
+  - heading "这本书正在进行到哪里" [level=2]
+  - paragraph: 自动完成整本 · 目标 5,000 正文字数
+  - paragraph:
+    - strong: 等待下一阶段
+  - paragraph: summary 输出结构不完整，已保留候选；请修复该阶段，不必重写有效正文。
+  - link "阅读当前章与审校证据":
+    - /url: http://xnovel-r05-final.test/x/novels/170/book-chapters/107
+    - generic: 阅读当前章与审校证据
+  - paragraph: 正式章节：1 · 模式和费用策略在设置中可调整。
+  - heading "进度与费用" [level=2]
+  - paragraph: 当前阶段：记忆摘要 · 最后进展：2026-10-18 13:42:17
+  - paragraph: 正式正文 55 字。费用用于统计优化；仅主动启用的硬上限会阻止请求。
+  - paragraph: 当前整书任务累计；已对账的实际费用优先，其余使用估计费用，各币种分别统计。
+  - paragraph: USD · 已知累计 0.0000 · 未确认费用 0 笔
+  - generic "最近执行活动"
+  - heading "原始创作概述" [level=2]
+  - paragraph: 雨季邮差林舟寻找未来来信，主角不会游泳。
+  - heading "已采用的基础设定" [level=2]
+  - paragraph: 用户要求与 AI 补充分别标注；修改未来方向请进入规划。
+  - term: 书名 · AI 补充
+  - definition: 设定title
+  - term: 题材 · AI 补充
+  - definition: 设定genre
+  - term: 时代 · AI 补充
+  - definition: 设定era
+  - term: 主角 · AI 补充
+  - definition: 设定protagonist
+  - term: 世界 · AI 补充
+  - definition: 设定world
+  - term: 核心矛盾 · AI 补充
+  - definition: 设定conflict
+  - term: 主线方向 · AI 补充
+  - definition: 设定plot
+  - term: 文风 · AI 补充
+  - definition: 设定style
+  - term: 结局方向 · AI 补充
+  - definition: 设定ending
+  - region "当前问题":
+    - 'heading "问题 #21" [level=2]'
+    - text: 自动处理中
+    - paragraph: 模型返回的数据结构不符合合同。
+    - paragraph: 当前断点需要处理，已有内容已保留。
+    - generic: 查看错误字段和预期结构；修改候选字段或选择支持结构化输出的模型。
+  - link "查看问题与处理方案":
+    - /url: http://xnovel-r05-final.test/x/generation-issues?novel=170&issue=21
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

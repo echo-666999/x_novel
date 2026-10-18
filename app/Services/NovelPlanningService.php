@@ -51,7 +51,16 @@ final class NovelPlanningService
         $retained = array_values(array_filter($current?->sourceArtifact?->data['goals'] ?? [], fn ($goal) => is_array($goal) && $goal['sequence'] >= $first));
         $retained = array_slice($retained, 0, $count);
 
+        $closing = (int) data_get($task->progress_snapshot, 'closing_extensions', 0) > 0 && $completed >= $task->target_words;
+        if ($closing) {
+            $retained = [];
+            $count = 1;
+            $remaining = $target;
+        }
+
         return app(NovelStageContract::class)->enqueue($task, 'window', ['blueprint' => $blueprint->sourceArtifact->data,
+            'closing_debts' => $closing ? $task->progress_snapshot['closing_debts'] : [], 'closing' => $closing,
+            'closing_instructions' => $closing ? data_get($task->progress_snapshot, 'closing_instructions') : null,
             'state' => $novel->canonicalStateVersion?->state ?? [], 'completed_words' => $completed, 'remaining_words' => $remaining,
             'first_sequence' => $first + count($retained), 'count' => max(1, $count - count($retained)), 'retained_goals' => $retained,
             'chapter_target_words' => $target, 'recent_summaries' => $novel->chapters()->where('status', ChapterStatus::Canonical)->latest('sequence')->limit(5)->get(['sequence', 'summary'])->toArray(),

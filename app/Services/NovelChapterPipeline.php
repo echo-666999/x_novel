@@ -17,7 +17,7 @@ use App\Models\NovelGenerationTask;
 use App\Models\NovelOutline;
 use App\Models\Review;
 
-/** 当前章推进器：只拥有草稿阶段，R05 接通前不得尝试正式提交。 */
+/** 当前章推进器负责草稿与审校，PASS 交给生命周期入口并由统一服务正式提交。 */
 final class NovelChapterPipeline
 {
     /** 按已采用窗口创建唯一当前章；不预建未来章节，不要求 Scene/Volume/Arc。 */
@@ -187,11 +187,8 @@ final class NovelChapterPipeline
         $chapter->update(['status' => $data['decision'] === 'PASS' ? ChapterStatus::Review : ChapterStatus::Blocked]);
         if ($data['decision'] === 'PASS') {
             app(BookChapterRepair::class)->closeChain($run);
-            $task->update(['status' => 'paused', 'stop_reason' => $task->mode === 'manual_review' ? 'awaiting_manual_commit' : 'commit_not_ready',
-                'current_phase' => 'commit', 'pending_transition' => null, 'control_version' => $task->control_version + 1,
-                'stop_detail' => ['message' => '当前正文独立审校通过；正式提交与提交后推进等待 R05 接入。', 'review_id' => $review->id]]);
 
-            return null;
+            return app(BookLifecycle::class)->reviewed($task, $review);
         }
         if (! empty($c['repair_chain_issue_id'])) {
             // 复验仍失败时保留原问题和累计预算，交由人工继续处理。

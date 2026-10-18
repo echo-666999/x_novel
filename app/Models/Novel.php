@@ -29,6 +29,12 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 ])]
 class Novel extends Model
 {
+    /** 整书控制状态与正文状态分别呈现，避免暂停任务仍显示正在生成。 */
+    public function currentGenerationTask(): BelongsTo
+    {
+        return $this->belongsTo(NovelGenerationTask::class, 'current_generation_task_id');
+    }
+
     /** @use HasFactory<NovelFactory> */
     use HasFactory;
 

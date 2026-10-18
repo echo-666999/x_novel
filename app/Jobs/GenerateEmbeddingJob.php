@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\AI\Exceptions\AiProviderException;
 use App\Models\Memory;
+use App\Services\BookMemoryService;
 use App\Services\GenerationFailurePolicy;
 use App\Services\MemoryEmbedder;
 use Illuminate\Bus\Queueable;
@@ -35,6 +36,11 @@ class GenerateEmbeddingJob implements ShouldQueue
             return;
         }
 
+        if (Memory::findOrFail($this->memoryId)->novel->current_generation_task_id) {
+            app(BookMemoryService::class)->embed($this->memoryId);
+
+            return;
+        }
         try {
             $embedder->embed($this->memoryId);
         } catch (AiProviderException $exception) {
@@ -59,6 +65,14 @@ class GenerateEmbeddingJob implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        $memory = Memory::find($this->memoryId);
+        if ($memory?->novel->current_generation_task_id) {
+            if (! $memory->embeddingRun?->issue_id) {
+                app(BookMemoryService::class)->recordFailure($memory->novel, 'memory:'.$memory->id, $exception ?? new \RuntimeException('派生队列未能完成，请检查模型连接与队列日志。'));
+            }
+
+            return;
+        }
         app(MemoryEmbedder::class)->markTerminalFailure(
             $this->memoryId,
             $exception ?? new AiProviderException('embedding_failed', 'Memory 向量化失败。', false),

@@ -1,0 +1,41 @@
+{
+    "task": {
+        "id": 8,
+        "novel_id": 8,
+        "status": "needs_attention",
+        "current_phase": "foundation_blueprint",
+        "stop_reason": "foundation_schema_invalid"
+    },
+    "issues": [
+        {
+            "id": 4,
+            "status": "awaiting_user",
+            "attempt_count": 0,
+            "resolved_by_run_id": null
+        }
+    ],
+    "artifacts": [
+        {
+            "id": 135,
+            "type": "intent",
+            "validation_status": "validated"
+        },
+        {
+            "id": 136,
+            "type": "operation_record",
+            "validation_status": "validated"
+        },
+        {
+            "id": 137,
+            "type": "foundation_blueprint",
+            "validation_status": "rejected"
+        }
+    ],
+    "usage": [
+        {
+            "id": 49,
+            "generation_run_id": 86,
+            "status": "settled"
+        }
+    ]
+}

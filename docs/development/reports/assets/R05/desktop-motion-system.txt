@@ -1,0 +1,81 @@
+Window: "动态效果", App: 系统设置.
+0 标准窗口 动态效果, ID: Main, Secondary Actions: Raise
+	1 分离组 Main, SidebarNavigationSplitView
+		2 滚动区 Secondary Actions: Scroll Up, Scroll Down
+			3 列表 Description: 边栏, ID: com.apple.settings.sidebar.collectionView
+				4 row (selectable)
+				5 row (selectable) Y G、Apple账户
+				6 row (selectable)
+				7 row (selectable) Description: 部分iCloud数据未在同步, Value: 1
+				8 row (selectable)
+				9 row (selectable) Wi-Fi
+				10 row (selectable) 蓝牙
+				11 row (selectable) 网络
+				12 row (selectable) VPN
+				13 row (selectable) 电池
+				14 row (selectable)
+				15 row (selectable) 通用
+				16 row (selected) 无障碍
+				17 row (selectable) 菜单栏
+				18 row (selectable) 聚焦
+				19 row (selectable) 墙纸
+				20 row (selectable) 外观
+				21 row (selectable) 显示器
+				22 row (selectable) 桌面与程序坞
+				23 row (selectable) Siri
+				24 row (selectable)
+				25 row (selectable) 通知
+				26 row (selectable) 声效
+				27 row (selectable) 专注模式
+				28 row (selectable) 屏幕时间
+				29 row (selectable)
+				30 row (selectable) 锁屏
+				31 row (selectable) 隐私与安全
+				32 row (selectable) 触控ID与密码
+				33 row (selectable) 用户与群组
+				34 row (selectable)
+				35 row (selectable) 互联网账户
+				36 row (selectable) 钱包与Apple Pay
+				37 row (selectable) Game Center
+				38 row (selectable) iCloud
+				39 row (selectable)
+				40 row (selectable) 键盘
+				41 row (selectable) 触控板
+				42 row (selectable) 打印机与扫描仪
+			43 滚动条 (settable, float) 0.201219512195122
+				44 值指示器 (settable, float) 0.201219512195122
+				45 增箭头按钮
+				46 减箭头按钮
+				47 增页面按钮
+				48 减页面按钮
+		49 搜索文本栏 (settable) 搜索
+			50 按钮 搜索
+		51 分离器 (disabled, settable, float) 232
+		52 滚动区 Secondary Actions: Cancel
+			53 container
+				54 转换 减弱动态效果, Value: on, ID: AX_REDUCE_MOTION
+				55 转换 自动播放动图, Value: on, ID: AX_ANIMATED_IMAGES
+				56 转换 首选非闪动光标, Value: off, ID: AX_REDUCE_CURSOR_MODULATION
+			57 container
+				58 转换 圆点会在Mac屏幕边缘附近显示。这些圆点会跟随车辆一起移动，可能有助于缓解晕动症。, Value: off, ID: AX_MOTION_CUES
+				59 按钮 Description: 自定义外观, ID: AX_MOTION_CUES_CUSTOMIZE
+			60 按钮 帮助
+	61 工具栏
+		62 container
+			63 按钮 Description: 返回, ID: chevron.backward
+			64 菜单按钮 (disabled) Description: 前进, ID: chevron.forward
+	65 关闭按钮
+	66 缩放按钮
+	67 最小化按钮
+	68 文本 动态效果
+69 menu bar
+	70 系统设置
+	71 编辑
+	72 显示
+	73 窗口
+	74 帮助
+
+Selected:
+	16 row (selected)
+
+Note: Pay special attention to the content selected by the user. If the user asks a question or refers to the content they are looking at on-screen, they might be referring to the selected content (but they might be referring to something else that's visible, too).

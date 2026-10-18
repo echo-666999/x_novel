@@ -6,7 +6,12 @@ use App\Data\SystemHealthCheck;
 use App\Enums\AiStage;
 use App\Models\AIModelRoute;
 use App\Models\AIProviderConnection;
+use App\Models\Chapter;
+use App\Models\GenerationRun;
 use App\Models\SystemSetting;
+use App\Models\UsageRecord;
+use App\Support\GenerationDiagnosticRedactor;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -19,22 +24,19 @@ class SystemHealthService
     /** @return Collection<int, SystemHealthCheck> */
     public function checks(): Collection
     {
-        return collect([
-            $this->database(),
-            $this->redis(),
-            $this->queue(),
-            $this->horizon(),
-            $this->scheduler(),
-            $this->logs(),
-            $this->configuration(),
-            $this->rebuildCommands(),
-            $this->costLimit(),
-            $this->emergencyStop(),
-            $this->documentation(),
-            new SystemHealthCheck('database_backup', '数据库备份', 'manual', '发布前执行 pg_dump，并记录备份文件与时间。'),
-            new SystemHealthCheck('restore_test', '备份恢复演练', 'manual', '在隔离数据库执行 pg_restore 并核对核心表。'),
-            new SystemHealthCheck('queue_restart', 'Queue 重启', 'manual', '发布后执行 horizon:terminate，由进程管理器重启 Worker。'),
-        ]);
+        return collect(['database', 'redis', 'queue', 'horizon', 'scheduler', 'worker', 'provider', 'backlog', 'logs', 'configuration', 'costLimit', 'emergencyStop'])
+            ->map(function (string $method): SystemHealthCheck {
+                try {
+                    $check = $this->$method();
+
+                    // 未曾执行的心跳/请求保留空观测时间，打开设置页不能伪造一次在线观测。
+                    $observedAt = $check->observedAt ?? (in_array($check->key, ['worker', 'scheduler', 'provider'], true) ? null : now()->toISOString());
+
+                    return new SystemHealthCheck($check->key, $check->label, $check->status, $check->detail, $observedAt);
+                } catch (Throwable $exception) {
+                    return new SystemHealthCheck($method, $method, 'warning', app(GenerationDiagnosticRedactor::class)->clean($exception->getMessage()), now()->toISOString());
+                }
+            });
     }
 
     private function database(): SystemHealthCheck
@@ -44,7 +46,7 @@ class SystemHealthService
 
             return new SystemHealthCheck('database', '数据库连接', 'healthy', DB::getDriverName().' 连接正常。');
         } catch (Throwable $exception) {
-            return new SystemHealthCheck('database', '数据库连接', 'warning', '连接失败：'.$exception->getMessage());
+            return new SystemHealthCheck('database', '数据库连接', 'warning', '数据库连接失败，请核对服务与连接配置；详细诊断已脱敏。');
         }
     }
 
@@ -66,8 +68,8 @@ class SystemHealthService
         return new SystemHealthCheck(
             'queue',
             'Queue',
-            $connection === 'redis' ? 'healthy' : 'warning',
-            $connection === 'redis' ? '默认 Queue 使用 Redis。' : "当前 Queue 连接为 {$connection}，生产环境应使用 Redis。",
+            $connection === 'redis' ? 'manual' : 'warning',
+            $connection === 'redis' ? '队列配置使用 Redis，实际消费情况以 Worker 心跳为准。' : "当前 Queue 连接为 {$connection}，生产环境应使用 Redis。",
         );
     }
 
@@ -91,18 +93,49 @@ class SystemHealthService
         );
     }
 
+    /** 注册调度不是运行证据；只读取实际执行后的持久心跳。 */
     private function scheduler(): SystemHealthCheck
     {
-        $scheduleFile = file_get_contents(base_path('routes/console.php')) ?: '';
-        $hasRecovery = str_contains($scheduleFile, "Schedule::command('generation:recover-automatic')");
-        $hasSnapshot = str_contains($scheduleFile, "Schedule::command('horizon:snapshot')");
+        return $this->heartbeat('scheduler', 'Scheduler', 180);
+    }
 
-        return new SystemHealthCheck(
-            'scheduler',
-            'Scheduler',
-            $hasRecovery && $hasSnapshot ? 'healthy' : 'warning',
-            $hasRecovery && $hasSnapshot ? '已注册停滞 Run 检测与 Horizon 指标快照。' : '缺少停滞 Run 检测或 Horizon 指标快照调度。',
-        );
+    private function worker(): SystemHealthCheck
+    {
+        return $this->heartbeat('worker', '生成 Worker', 420);
+    }
+
+    private function heartbeat(string $name, string $label, int $seconds): SystemHealthCheck
+    {
+        $value = SystemSetting::find('generation_health_'.$name)?->value;
+        $at = $value['observed_at'] ?? null;
+        $fresh = $at && Carbon::parse($at)->gt(now()->subSeconds($seconds));
+
+        return new SystemHealthCheck($name, $label, $fresh ? 'healthy' : ($at ? 'stale' : 'manual'),
+            $at ? '最近观测 '.$at.'；执行实现标识 '.($value['code_version'] ?? '未知').'。空闲无新心跳不等于服务离线。' : '尚无实际执行心跳，不能确认正在运行。', $at);
+    }
+
+    private function provider(): SystemHealthCheck
+    {
+        // 预留和发送前失败不算实际请求；账本禁用 updated_at，按发送时间选择最近请求。
+        $usage = UsageRecord::whereNotNull('sent_at')->whereIn('status', ['in_flight', 'unknown', 'settled'])->latest('sent_at')->latest('id')->first();
+        if (! $usage) {
+            return new SystemHealthCheck('provider', 'Provider 最近请求', 'manual', '尚无实际请求观测；配置存在不代表连接可用。');
+        }
+        // 已结算请求使用结算观测，否则保留发送时间；访问诊断页不能刷新观测有效期。
+        $observedAt = $usage->settled_at ?? $usage->sent_at;
+        $fresh = $observedAt->gt(now()->subMinutes(15));
+
+        return new SystemHealthCheck('provider', 'Provider 最近请求', ! $fresh ? 'stale' : ($usage->status === 'settled' ? 'healthy' : 'warning'),
+            $usage->provider.' / '.$usage->model.'：'.$usage->status.'。仅代表最近这条请求，其他连接未据此验证。', $observedAt->toISOString());
+    }
+
+    private function backlog(): SystemHealthCheck
+    {
+        $summary = Chapter::where('status', 'canonical')->whereNull('summary_artifact_id')->whereHas('novel', fn ($q) => $q->whereNotNull('current_generation_task_id'))->count();
+        $queued = GenerationRun::where('pipeline_version', 'pipeline-v1')->where('status', 'queued')->count();
+        $expired = GenerationRun::whereIn('pipeline_version', ['pipeline-v1', 'book-derived-v1'])->where('status', 'running')->where('lease_expires_at', '<=', now())->count();
+
+        return new SystemHealthCheck('backlog', '持久待办', $expired ? 'warning' : 'manual', "待执行 {$queued}；缺正式摘要 {$summary}；过期租约 {$expired}。使用 generation:recover-automatic 对账，不清空队列。");
     }
 
     private function logs(): SystemHealthCheck
@@ -115,19 +148,21 @@ class SystemHealthService
 
     private function configuration(): SystemHealthCheck
     {
-        $routeCount = AIModelRoute::query()->whereIn('role', collect(AiStage::cases())->map->value)->count();
+        // 新整书链只检查实际必需路由；可降级的向量和旧规划角色不阻断预检。
+        $required = [AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite, AiStage::Summary];
+        $routeCount = AIModelRoute::query()->whereIn('role', array_map(fn (AiStage $stage) => $stage->value, $required))->distinct()->count('role');
         $valid = config('app.locale') === 'zh_CN'
             && filled(config('app.key'))
             && AIProviderConnection::query()->where('is_enabled', true)->exists()
-            && $routeCount === count(AiStage::cases());
+            && $routeCount === count($required);
 
         return new SystemHealthCheck(
             'config',
             '关键配置',
             $valid ? 'healthy' : 'warning',
             $valid
-                ? '应用密钥、中文语言、服务商连接与全部模型路由已配置。'
-                : '请检查 APP_KEY、APP_LOCALE，以及后台中的服务商连接和全部模型路由。',
+                ? '应用密钥、中文语言、服务商连接与整书必需路由已配置；不代表供应商当前可用。'
+                : '请检查 APP_KEY、APP_LOCALE，以及启用的服务商连接和设定、规划、写作、提取、审校、改写、摘要路由。',
         );
     }
 
@@ -139,18 +174,10 @@ class SystemHealthService
         return new SystemHealthCheck('rebuild', 'State / Memory 重建', $valid ? 'healthy' : 'warning', $valid ? '已注册 Story State 校验与 Memory 重建命令。' : '缺少 Story State 或 Memory 重建命令。');
     }
 
+    /** 金额上限是用户选项；默认统计模式不是运行故障。 */
     private function costLimit(): SystemHealthCheck
     {
-        $limits = app(GenerationSettingsService::class)->budgetSettings();
-        $configured = collect(['daily_hard_limit', 'novel_total_limit', 'chapter_max_cost'])
-            ->every(fn (string $key): bool => is_numeric($limits[$key] ?? null) && (float) $limits[$key] > 0);
-
-        return new SystemHealthCheck(
-            'cost_limit',
-            '成本硬限额',
-            $configured ? 'healthy' : 'warning',
-            $configured ? '每日、单书和单章 Provider 请求硬限额均已配置。' : '请在“设置 → 生成参数”配置每日、单书和单章三项成本硬限额。',
-        );
+        return new SystemHealthCheck('cost_limit', '费用策略', 'healthy', '费用始终统计；预警不暂停。只有用户主动启用的金额硬上限参与请求门禁，未填写金额不影响生成。');
     }
 
     private function emergencyStop(): SystemHealthCheck

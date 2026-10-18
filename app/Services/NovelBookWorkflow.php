@@ -118,7 +118,11 @@ final class NovelBookWorkflow
                     }
                 }
                 $blocked = GenerationIssue::where('generation_task_id', $task->id)->where('status', '!=', 'resolved')->whereIn('severity', ['error', 'critical'])
-                    ->get()->contains(function ($issue) use ($pending): bool {
+                    ->get()->contains(function ($issue) use ($pending, $task): bool {
+                        // 人工授权的有限收束仍保留原债务问题，直到正式审计通过才解决。
+                        if ($issue->status === 'repairing' && $issue->id === data_get($task->progress_snapshot, 'closing_recovery_issue_id')) {
+                            return false;
+                        }
                         if (app(BookChapterRepair::class)->ownsContinuation($issue, $pending)) {
                             return false;
                         }
@@ -138,6 +142,12 @@ final class NovelBookWorkflow
                     return null;
                 }
 
+                if (($pending['stage'] ?? null) === 'book_control' && isset($pending['canonical_chapter_id'])) {
+                    return app(BookLifecycle::class)->summary($task, Chapter::findOrFail($pending['canonical_chapter_id']));
+                }
+                if (($pending['stage'] ?? null) === 'book_control' && isset($pending['review_ready_id'])) {
+                    return app(BookLifecycle::class)->reviewed($task, Review::findOrFail($pending['review_ready_id']));
+                }
                 if (($pending['stage'] ?? null) === 'book_control' && isset($pending['manual_draft_id'])) {
                     if (GenerationRun::where('novel_id', $novel->id)->where('pipeline_version', 'pipeline-v1')->where('status', 'running')->exists()) {
                         return null;
@@ -154,12 +164,23 @@ final class NovelBookWorkflow
                     }
                     app(GenerationRunCoordinator::class)->assertSources($task, $completed->source_manifest, $completed->execution_contract);
 
+                    if (in_array($completed->execution_contract['book_stage'] ?? null, ['summary', 'ending'], true)) {
+                        return $completed->execution_contract['book_stage'] === 'summary'
+                            ? app(BookLifecycle::class)->summarized($task, $completed)
+                            : app(BookEnding::class)->adopt($task, $completed);
+                    }
+                    if (data_get($completed->execution_contract, 'book_export')) {
+                        app(BookExportService::class)->adopt($task, $completed);
+
+                        return null;
+                    }
+
                     return in_array($completed->execution_contract['book_stage'], ['blueprint', 'window'], true)
                         ? app(NovelPlanningService::class)->adoptResult($task, $completed)
                         : app(NovelChapterPipeline::class)->advance($task, $completed);
                 }
                 if (($pending['stage'] ?? null) === 'book_control' && isset($pending['chapter_boundary'])) {
-                    return app(NovelChapterPipeline::class)->start($task);
+                    return app(BookLifecycle::class)->boundary($task);
                 }
                 if (($pending['stage'] ?? null) === 'book_control') {
                     $foundationRun = GenerationRun::findOrFail($pending['foundation_run_id']);
@@ -214,6 +235,12 @@ final class NovelBookWorkflow
             app(GenerationJobDispatcher::class)->dispatchRun($run->id);
         }
 
+        // 正式提交与摘要准入分成两个事务，断电时也可由持久断点恢复。
+        $current = NovelGenerationTask::findOrFail($taskId);
+        if (! $run && $current->status === 'running' && data_get($current->pending_transition, 'canonical_chapter_id')) {
+            return $this->advance($taskId, $dispatch);
+        }
+
         return $run;
     }
 
@@ -225,17 +252,27 @@ final class NovelBookWorkflow
             $task = NovelGenerationTask::whereKey($initial->id)->lockForUpdate()->firstOrFail();
             $contract = ['intent_artifact_id' => $task->intent_artifact_id, 'transition' => $task->pending_transition];
             $completed = GenerationRun::find(data_get($task->pending_transition, 'completed_run_id'));
+            // 导出产物已成功但文件随后丢失/损坏，仍属于导出恢复，不能误记为初始化失败。
+            $exportFailure = (bool) data_get($completed?->execution_contract, 'book_export');
+            // 正式提交后的摘要准入失败必须定位到正式章，不能误报为近期目标初始化。
+            $summaryChapterId = data_get($task->pending_transition, 'canonical_chapter_id');
+            if ($exportFailure) {
+                $contract = [...$completed->execution_contract, ...$contract];
+            }
             $repairIssueId = data_get($completed?->execution_contract, 'repair_chain_issue_id');
-            $hash = app(GenerationInputIdentity::class)->hash($contract);
+            // 导出复验沿用执行器输入身份，避免文件重建成功后仍无法匹配原问题。
+            $hash = app(GenerationInputIdentity::class)->hash($exportFailure
+                ? ['stage' => GenerationStage::Export->value, 'scope' => 'export-adoption', 'contract' => $contract, 'sources' => $completed->source_manifest]
+                : $contract);
             $key = 'adoption-failure:'.$task->id.':'.$hash;
             $intent = GenerationArtifact::findOrFail($task->intent_artifact_id);
             $message = app(GenerationDiagnosticRedactor::class)->clean($exception->getMessage());
-            $code = $exception instanceof AiProviderException ? $exception->errorCode : 'initialization_validation_failed';
+            $code = $exception instanceof AiProviderException ? $exception->errorCode : ($exportFailure ? 'book_export_file_invalid' : 'initialization_validation_failed');
             $run = GenerationRun::firstOrCreate(['idempotency_key' => hash('sha256', $key)], [
-                'novel_id' => $task->novel_id, 'generation_task_id' => $task->id, 'chapter_id' => $completed?->chapter_id, 'issue_id' => $repairIssueId, 'scope_type' => 'novel', 'scope_id' => $task->novel_id,
-                'scope_key' => 'initialization', 'stage' => GenerationStage::GoalWindow, 'pipeline_version' => 'pipeline-v1', 'logical_step_key' => $key,
+                'novel_id' => $task->novel_id, 'generation_task_id' => $task->id, 'chapter_id' => $summaryChapterId ?? $completed?->chapter_id, 'issue_id' => $repairIssueId, 'scope_type' => 'novel', 'scope_id' => $task->novel_id,
+                'scope_key' => $exportFailure ? 'export-adoption' : ($summaryChapterId ? 'summary-admission' : 'initialization'), 'stage' => $exportFailure ? GenerationStage::Export : ($summaryChapterId ? GenerationStage::MemorySummary : GenerationStage::GoalWindow), 'pipeline_version' => 'pipeline-v1', 'logical_step_key' => $key,
                 'input_hash' => $hash, 'attempt' => 1, 'status' => RunStatus::Failed, 'execution_contract' => $contract,
-                'source_manifest' => [['artifact_id' => $intent->id, 'checksum' => $intent->checksum]],
+                'source_manifest' => $exportFailure ? $completed->source_manifest : [['artifact_id' => $intent->id, 'checksum' => $intent->checksum]],
                 'error_code' => $code, 'error_message' => $message, 'error_retryable' => false, 'started_at' => now(), 'finished_at' => now()]);
             app(GenerationIssueService::class)->record($run);
             if ($repairIssueId) {
@@ -244,7 +281,7 @@ final class NovelBookWorkflow
                     $task->update(['status' => 'needs_attention', 'stop_reason' => $code]);
                 }
             }
-            $task->refresh()->update(['stop_detail' => ['message' => '阶段交接未采用，已整体回滚。有效产物已保留；请查看字段、容量或来源错误，修正后重新核验。', 'run_id' => $run->id]]);
+            $task->refresh()->update(['stop_detail' => ['message' => '后续阶段交接失败。已有成功产物及正式章节保留；请查看字段、容量或来源错误，修正后重新核验。', 'run_id' => $run->id]]);
         });
     }
 
@@ -259,7 +296,7 @@ final class NovelBookWorkflow
             throw new AiProviderException('intent_conflict', '概述篇幅与明确填写的目标不同，请编辑创作选项统一要求后继续。', false);
         }
         $models = [];
-        foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite] as $stage) {
+        foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite, AiStage::Summary] as $stage) {
             $route = app(AiSettingsResolver::class)->resolve($stage, $task->novel);
             // 能力来自已验证的实际记录；不会把路由存在解释成 Worker 或供应商在线。
             app(AiSettingsService::class)->assertProviderAvailable($route->provider);

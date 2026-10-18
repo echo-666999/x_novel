@@ -1,0 +1,385 @@
+{
+  "tool": "pest",
+  "result": "failed",
+  "tests": 46,
+  "passed": 11,
+  "assertions": 83,
+  "duration_ms": 19483,
+  "failed": 12,
+  "failures": [
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_duplicate_milestone_completion_candidates",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 443,
+      "message": "Failed asserting that 'SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\\n\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 4 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\")' [ASCII](length: 464) contains \"重复 Milestone/Beat Completion Candidate\" [UTF-8](length: 42)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_cross_version_or_wrong_owner_completion_candidates with data set \"('cross_version')\"",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 466,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_cross_version_or_wrong_owner_completion_candidates with data set \"('wrong_owner')\"",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 466,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_an_unconfirmed_character_candidate_without_creating_it",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 483,
+      "message": "Failed asserting that 'SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"character-shen-lan\"\\n\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_characters\" where \"x_characters\".\"novel_id\" = 7 and \"x_characters\".\"novel_id\" is not null and \"x_characters\".\"id\" = character-shen-lan order by \"name\" asc) as \"exists\")' [ASCII](length: 446) contains \"未通过 Review\" [UTF-8](length: 16)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('plan')\"",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('review')\"",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('event')\"",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('evidence')\"",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_transaction_exception_after_event_writes_leaves_no_partial_canonical_state",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 937,
+      "message": "Failed asserting that 'PASS Review 的 Outline Completion 身份或契约已过期。' [UTF-8](length: 62) contains \"不存在的 Story Event\" [UTF-8](length: 24)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_transaction_exception_after_creating_a_planned_world_entity_rolls_back_the_whole_planning_closure",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 964,
+      "message": "Failed asserting that 'SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\\n\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 32 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\")' [ASCII](length: 465) contains \"不存在的 Story Event\" [UTF-8](length: 24)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_pass_review_exposes_a_canonical_commit_preview_and_action",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/filament/notifications/src/Notification.php",
+      "line": 287,
+      "message": "A notification was not sent\nFailed asserting that null is not null.",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/filament/notifications/src/Notification.php:287",
+        "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php:1028"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_commit_chapter_job_uses_the_canonical_service_and_duplicate_delivery_has_exactly_once_effects",
+      "file": "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 1241,
+      "message": "Failed asserting that two variables reference the same object.\n--- Expected\n+++ Actual\n@@ @@\n-App\\Enums\\ChapterStatus Enum #5148 (Canonical, 'canonical')\n+App\\Enums\\ChapterStatus Enum #5145 (Review, 'review')"
+    }
+  ],
+  "errors": 23,
+  "error_details": [
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_atomically_persists_events_state_and_pointers",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_manual_pass_review_retains_frozen_completion_audits_required_by_canonical_commit",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_closes_accepted_arc_beats_and_world_entity_candidates_exactly_once_and_rollback_reverses_them",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 447,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 3 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\")",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php:447",
+        "/private/tmp/xnovel-r05-baseline/app/Services/StateValidator.php:164",
+        "/private/tmp/xnovel-r05-baseline/app/Services/StateValidator.php:76",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:69",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_projection_refresh_after_commit_derives_every_foreshadowing_field_from_canonical_inputs",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_latest_canonical_chapter_rollback_restores_pointers_and_invalidates_derived_data",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_restores_facts_superseded_by_the_latest_canonical_chapter",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_restores_foreshadowing_projection_from_the_previous_state",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_non_latest_canonical_chapter_cannot_be_rolled_back",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_recanonicalization_after_rollback_uses_a_monotonically_increasing_state_version",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_skips_correction_versions_from_the_same_chapter_when_restoring_state",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_latest_canonical_chapter_rollback_requires_a_reason",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_failure_leaves_canonical_data_unchanged",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_latest_canonical_chapter_can_be_rolled_back_from_its_workbench",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_applies_fact_changes_with_story_event_provenance",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_an_identical_duplicate_canonical_commit_has_exactly_once_effects",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_accepts_an_overlength_draft_only_with_its_matching_recorded_exception",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_refuses_to_delete_a_chapter_introduced_character_referenced_by_another_canonical_chapter",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 447,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"character-shen-lan\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_characters\" where \"x_characters\".\"novel_id\" = 33 and \"x_characters\".\"novel_id\" is not null and \"x_characters\".\"id\" = character-shen-lan order by \"name\" asc) as \"exists\")",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php:447",
+        "/private/tmp/xnovel-r05-baseline/app/Services/StateValidator.php:159",
+        "/private/tmp/xnovel-r05-baseline/app/Services/StateValidator.php:76",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:69",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_an_already_canonical_chapter_rejects_a_conflicting_artifact",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_an_extractor_overclaim_can_be_reconciled_to_a_pass_review_without_committing_a_beat_event",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 864,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 37 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\") (View: /private/tmp/xnovel-r05-baseline/vendor/filament/filament/resources/views/pages/page.blade.php) (View: /private/tmp/xnovel-r05-baseline/vendor/filament/filament/resources/views/pages/page.blade.php)",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php:864",
+        "/private/tmp/xnovel-r05-baseline/storage/framework/views/c142c726f4a0f611761c2f81bc8b436b.php:14",
+        "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php:1091"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_legacy_pass_review_with_an_unaccepted_arc_completion_cannot_expose_an_enabled_commit_action",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 864,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 39 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\") (View: /private/tmp/xnovel-r05-baseline/vendor/filament/filament/resources/views/pages/page.blade.php) (View: /private/tmp/xnovel-r05-baseline/vendor/filament/filament/resources/views/pages/page.blade.php)",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Database/Connection.php:864",
+        "/private/tmp/xnovel-r05-baseline/storage/framework/views/c142c726f4a0f611761c2f81bc8b436b.php:14",
+        "/private/tmp/xnovel-r05-baseline/tests/Feature/CanonicalCommitServiceTest.php:1208"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_automatic_continuation_rethrows_a_temporary_database_failure_for_queue_retry",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_dispatches_memory_update_after_the_formal_transaction",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_starts_the_next_chapter_only_after_required_post_commit_work_succeeds",
+      "file": "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/private/tmp/xnovel-r05-baseline/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/private/tmp/xnovel-r05-baseline/app/Services/OutlineCompletionService.php:430",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:423",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:78",
+        "/private/tmp/xnovel-r05-baseline/app/Services/CanonicalCommitService.php:50"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-final.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-final.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-final.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-final.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-final.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-final.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-final.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-final.test/x/a-i-model-prices
+- main:
+  - heading "异常中心" [level=1]
+  - paragraph: 先看影响，再选择处理方式。已有正文与失败证据始终保留。
+  - link "章节审校记录":
+    - /url: http://xnovel-r05-final.test/x/review
+  - text: 查看范围
+  - combobox "查看范围":
+    - option "待你处理" [selected]
+    - option "自动处理中与提醒"
+    - option "全部未解决"
+    - option "已解决历史"
+  - paragraph: "已限定小说 #172"
+  - button "刷新状态"
+  - region "问题列表":
+    - 'button "R05 收尾：AI 修复失败与不可用 待你处理 模型返回的数据结构不符合合同。 问题 #23 · 全书方向与设定 · 10-18 21:44"':
+      - strong: R05 收尾：AI 修复失败与不可用
+      - text: 待你处理
+      - generic: 模型返回的数据结构不符合合同。
+      - generic: "问题 #23 · 全书方向与设定 · 10-18 21:44"
+  - region "问题详情":
+    - 'heading "问题 #23" [level=2]'
+    - text: 待你处理
+    - heading "模型返回的数据结构不符合合同。" [level=3]
+    - paragraph: 影响当前生成断点；处理成功后按原模式继续。
+    - paragraph: 已保存内容：已有正式章节、草稿及失败 Run 均保留。处理不直接改写正式历史。
+    - generic: 查看错误字段和预期结构；修改候选字段或选择支持结构化输出的模型。
+    - link "打开相关设置 · 生成策略与费用":
+      - /url: http://xnovel-r05-final.test/x/settings
+    - term: 累计处理尝试
+    - definition: 1 / 2
+    - term: 累计实际执行
+    - definition: 0 / 1800 秒
+    - term: 总截止时间
+    - definition: 未设置
+    - heading "已发生费用" [level=3]
+    - paragraph: USD 0.0000（已知实际/估算合计） · 0 笔待确认 · 在途占用 USD 0.0000
+    - paragraph: 费用用于统计。只有用户主动启用的硬上限会阻止新请求；范围剩余额度以设置及发送前账本复核为准。
+    - heading "失败证据与处理进展" [level=3]
+    - paragraph:
+      - strong: "Run #486"
+      - text: · 基础设定结构不完整，请查看保留的候选字段后修复。
+    - paragraph: "处理 Run #487 · AI 设定修复 · 本次处理失败，原问题保留"
+    - paragraph: 基础设定结构不完整，请查看保留的候选字段后修复。
+    - paragraph: "人工记录 #672：R05 键盘验收：核对失败字段，不覆盖原始概述。"
+    - heading "选择处理方式" [level=3]
+    - generic: 人工处理说明 / AI 补充要求
+    - textbox "人工处理说明 / AI 补充要求": R05 新要求：补齐全部设定字段，保留明确要求。
+    - paragraph: 记录已检查的字段、现象或修改要求。此处保存说明；正文请进入本章阅读页“保存新稿并复验”，目标请进入设定与计划。
+    - button "请 AI 修复设定字段 · 推荐"
+    - paragraph: 读取原文和失败候选，仅修复设定错误；新建候选并复验，保留原始记录和累计费用。 费用待确认，发送前检查所有已启用硬上限。
+    - button "请 AI 分析原因" [active]
+    - paragraph: 调用已授权模型，生成只读建议；不修改正文、计划、事实或上限，问题保持未解决。 费用待确认，发送前检查所有已启用硬上限。
+    - button "保存人工处理说明"
+    - paragraph: 保存处理说明和操作记录；不代表复验通过，不自动继续。 不调用模型。
+    - generic "更多操作"
+    - generic "证据、尝试历史与技术详情 · foundation_schema_invalid"
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

@@ -154,6 +154,8 @@ class ManageNovelCharacters extends ManageRelatedRecords
                     ->placeholder('未设置'),
                 TextColumn::make('important_flags')
                     ->label('重要标记')
+                    // 空数组仍渲染可读占位，人物详情按钮不会只剩无名称单元格。
+                    ->placeholder('无额外标记')
                     ->state(fn (Character $record): array => $this->importantFlags($record))
                     ->badge()
                     ->color('warning')

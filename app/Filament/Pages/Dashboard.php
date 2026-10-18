@@ -9,7 +9,6 @@ use App\AI\Exceptions\BudgetExceededException;
 use App\Exceptions\GenerationPreflightException;
 use App\Filament\Actions\EmergencyStopAction;
 use App\Filament\Resources\Novels\NovelResource;
-use App\Filament\Widgets\DueForeshadowingsWidget;
 use App\Models\Novel;
 use App\Services\DashboardOperationsOverview;
 use App\Services\GenerationSettingsService;
@@ -22,19 +21,17 @@ use Filament\Infolists\Components\RepeatableEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Pages\Dashboard as BaseDashboard;
-use Filament\Schemas\Components\Actions;
 use Filament\Schemas\Components\EmptyState;
-use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
-use Filament\Widgets\StatsOverviewWidget\Stat;
 use Illuminate\Validation\ValidationException;
 
 class Dashboard extends BaseDashboard
 {
-    protected static ?string $navigationLabel = '仪表盘';
+    protected static ?string $navigationLabel = '创作总览';
 
-    protected static ?string $title = '仪表盘';
+    protected static ?string $title = '创作总览';
 
     /** @var array<string, int|string>|null */
     private ?array $cachedStats = null;
@@ -55,50 +52,13 @@ class Dashboard extends BaseDashboard
 
     public function content(Schema $schema): Schema
     {
-        return $schema->components([
-            Grid::make(['default' => 1, 'md' => 2, 'xl' => 4])->schema([
-                Stat::make('活跃小说', fn (): int => $this->stats()['active_novels'])
-                    ->description('生成中、已暂停或收束中的小说')->descriptionIcon('heroicon-o-book-open')->color(fn (): string => $this->stats()['active_novels'] > 0 ? 'info' : 'gray'),
-                Stat::make('运行中章节', fn (): int => $this->stats()['running_chapters'])
-                    ->description('排队中 / 运行中的不同章节')->descriptionIcon('heroicon-o-document-text')->color(fn (): string => $this->stats()['running_chapters'] > 0 ? 'info' : 'gray'),
-                Stat::make('今日成本', fn (): string => $this->stats()['today_cost'])
-                    ->description(fn (): string => $this->stats()['has_usage'] ? '成功 Provider 请求' : '暂无用量记录')->descriptionIcon('heroicon-o-banknotes')->color(fn (): string => $this->stats()['has_usage'] ? 'info' : 'gray'),
-                Stat::make('今日 Tokens', fn (): string => number_format($this->stats()['today_tokens']))
-                    ->description(fn (): string => $this->stats()['has_usage'] ? 'Input + Output' : '暂无用量记录')->descriptionIcon('heroicon-o-calculator')->color(fn (): string => $this->stats()['has_usage'] ? 'info' : 'gray'),
-                Stat::make('已失败', fn (): int => $this->stats()['failed'])->description('各工作流最新运行记录')->color(fn (): string => $this->stats()['failed'] > 0 ? 'danger' : 'gray'),
-                Stat::make('已阻塞', fn (): int => $this->stats()['blocked'])->description('各章节最新审校结果')->color(fn (): string => $this->stats()['blocked'] > 0 ? 'danger' : 'gray'),
-                Stat::make('需要关注', fn (): int => $this->stats()['needs_attention'])->description('各章节最新审校结果')->color(fn (): string => $this->stats()['needs_attention'] > 0 ? 'warning' : 'gray'),
-            ]),
-            Grid::make(['default' => 1, 'xl' => 2])->schema([
-                Section::make('最近生成')
-                    ->description('最近 10 条生成运行记录，可直接进入章节工作台或运行检查器。')
-                    ->schema([
-                        RepeatableEntry::make('recent_runs')->hiddenLabel()->state(fn (): array => $this->recentRuns())->columns(['default' => 2, 'lg' => 4])->schema([
-                            TextEntry::make('novel')->label('小说')->weight('medium'),
-                            TextEntry::make('chapter')->label('章节'),
-                            TextEntry::make('stage')->label('阶段')->badge(),
-                            TextEntry::make('status')->label('状态')->badge(),
-                            TextEntry::make('elapsed')->label('耗时'),
-                            TextEntry::make('cost')->label('成本')->fontFamily('mono'),
-                            TextEntry::make('time')->label('时间'),
-                            TextEntry::make('action_url')->label('入口')->formatStateUsing(fn (string $state): string => '打开')->url(fn (string $state): string => $state)->icon('heroicon-o-arrow-right-circle'),
-                        ]),
-                        EmptyState::make('暂无生成活动')->description('章节生成流程启动后，最近的生成记录会显示在这里。')->icon('heroicon-o-bolt')->contained(false)->visible(fn (): bool => $this->recentRuns() === []),
-                    ]),
-                ...$this->getWidgetsSchemaComponents([DueForeshadowingsWidget::class]),
-            ]),
-            Section::make('诊断与验收')
-                ->description('仅用于人工执行 20/50/100 章验收；生产环境默认关闭。')
-                ->icon('heroicon-o-wrench-screwdriver')
-                ->visible(fn (): bool => (bool) config('generation.acceptance_tools_enabled', false))
-                ->schema([
-                    Actions::make([$this->smokeRunAction(), $this->reliabilityRunAction(), $this->mvpSoakRunAction()])
-                        ->key('acceptanceActions'),
-                    $this->smokeRunSection(),
-                    $this->reliabilityRunSection(),
-                    $this->mvpReadinessSection(),
-                ]),
-        ]);
+        // 代码切换可能先于运行库迁移，此时显示明确部署前置条件，不能查询不存在的新表。
+        if (! \Illuminate\Support\Facades\Schema::hasTable('novel_generation_tasks')) {
+            return $schema->components([Section::make('新版生成尚未部署')->description('请按运维手册核对并执行 R01–R04 数据库迁移，随后重载本项目 Worker。当前未查询或修改旧小说。')]);
+        }
+
+        // 总览围绕整书任务；高级 Run 诊断仍可从生成页进入。
+        return $schema->components([View::make('filament.components.book-dashboard')]);
     }
 
     private function smokeRunAction(): Action

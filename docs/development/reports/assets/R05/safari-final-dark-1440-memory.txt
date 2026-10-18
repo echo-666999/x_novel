@@ -1,0 +1,168 @@
+Window: "未命名 — 记忆 - AI 长篇网络小说自动生成平台", App: Safari浏览器.
+0 标准窗口 未命名 — 记忆 - AI 长篇网络小说自动生成平台, ID: SafariWindow?IsSecure=false&UUID=176ABBAF-5F54-4B44-9B17-F8E5516FF6D5, Secondary Actions: Raise
+	1 分离组
+		2 分离器 (disabled, settable, float) -1
+		3 标签页组
+			4 弹出式按钮 Description: 视口大小, Value: 自定义大小, ID: ViewportPresetButton
+			5 开关按钮 Description: 向左旋转, Help: 旋转视口, Value: off
+			6 文本栏 (settable) Description: 宽度, Value: 1440
+			7 文本 ×
+			8 文本栏 (settable) Description: 高度, Value: 900
+			9 文本 Description: 缩放比例, Value: ( 81% )
+			10 弹出式按钮 Description: 像素比, Value: 2倍
+			11 菜单按钮 通过模拟器打开, ID: OpenWithSimulatorButton
+			12 滚动区
+				13 HTML内容 Description: 记忆 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x/memory
+					14 link 跳转到内容, Value: xnovel-r05-font.test/x/memory#fi-main-content
+					15 container 顶部栏
+						16 按钮 (expanded) 折叠侧边栏, Secondary Actions: Collapse
+						17 link AI 长篇网络小说自动生成平台, Value: xnovel-r05-font.test/x
+						18 文本 全局搜索
+						19 搜索文本栏 (settable) 全局搜索, Placeholder: 搜索
+							20 文本 搜索
+						21 文本 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+						22 按钮 (collapsed) 用户菜单, Secondary Actions: Expand
+					23 container 侧边导航
+						24 内容列表
+							25 内容列表
+								26 link 创作总览, Value: xnovel-r05-font.test/x
+								27 link 小说, Value: xnovel-r05-font.test/x/novels
+								28 link 生成任务, Value: xnovel-r05-font.test/x/generation
+								29 link 异常与审校, Value: xnovel-r05-font.test/x/generation-issues
+								30 link 记忆, Value: xnovel-r05-font.test/x/memory
+								31 link 设置, Value: xnovel-r05-font.test/x/settings
+							32 container
+								33 文本 AI 与成本
+								34 按钮 (expanded) AI 与成本, Secondary Actions: Collapse
+								35 内容列表
+									36 link 服务商连接, Value: xnovel-r05-font.test/x/a-i-provider-connections
+									37 link 模型价格, Value: xnovel-r05-font.test/x/a-i-model-prices
+					38 container
+						39 标题 记忆, Value: 1
+							40 文本 记忆
+						41 container 记忆检索检查器
+							42 container
+								43 标题 记忆检索检查器, Value: 2
+									44 文本 记忆检索检查器
+								45 文本 先按小说、状态、模型和筛选条件限定范围，再使用向量相似度返回长期记忆。
+								46 按钮 (expanded) 收起此区域, Secondary Actions: Collapse
+							47 container
+								48 text filament-forms::components.select.required_description 小说*
+								49 文本 选择选项
+								50 弹出式按钮 小说 *
+								51 文本 记忆类型
+								52 弹出式按钮 记忆类型
+								53 text 选择选项 起始章节
+								54 数字栏 (settable) 起始章节
+									55 步进器 0
+										56 未知
+										57 未知
+								58 文本 结束章节
+								59 数字栏 (settable) 结束章节
+									60 步进器 0
+										61 未知
+										62 未知
+								63 文本 查询内容*
+								64 文本输入区 (settable) 查询内容 *, Value: [文本输入区], Placeholder: 输入场景目标、人物、地点、冲突或需要回忆的历史信息。
+									65 文本 输入场景目标、人物、地点、冲突或需要回忆的历史信息。
+								66 文本 候选数量*
+								67 数字栏 (settable) 候选数量 *, Value: 30
+									68 步进器 0
+										69 未知
+										70 未知
+								71 文本 结果数量*
+								72 数字栏 (settable) 结果数量 *, Value: 10
+									73 步进器 0
+										74 未知
+										75 未知
+								76 文本 长期记忆 Token Budget*
+								77 数字栏 (settable) 长期记忆 Token Budget *, Value: 1500
+									78 步进器 0
+										79 未知
+										80 未知
+								81 按钮 执行检索
+							82 文本 Retrieval empty
+							83 文本 尚未执行检索，或当前筛选条件下没有匹配的向量记忆。
+						84 container 检索评估
+							85 container
+								86 标题 检索评估, Value: 2
+									87 文本 检索评估
+								88 文本 使用固定案例检查关键记忆命中率，以及失效记忆和其他小说记忆是否泄漏。
+								89 按钮 (collapsed) 展开此区域, Secondary Actions: Expand
+						90 文本 搜索
+						91 搜索文本栏 (settable) 搜索, Placeholder: 请输入关键词
+							92 文本 请输入关键词
+						93 弹出式按钮 筛选
+						94 菜单 Secondary Actions: Cancel
+						95 菜单 Secondary Actions: Cancel
+						96 菜单 Secondary Actions: Cancel
+						97 文本 已启用筛选
+						98 内容列表
+							99 container
+								100 文本 状态: 有效
+								101 按钮 移除筛选
+						102 按钮 清除所有筛选
+						103 文本 暂无结果
+						104 文本 加载中...
+						105 表格 memory
+							106 row (selectable) 显著度, Value: 小说
+类型
+摘要
+来源
+状态
+向量状态
+						107 标题 暂无已索引记忆, Value: 2
+							108 文本 暂无已索引记忆
+						109 文本 Canonical Chapter 生成的长期记忆会显示在这里。
+					110 按钮 Edit this page with Herd, Help: Edit this page with Herd (⇧⌘H) · New chat (⇧⌘E) · Terminal (⇧⌘U)
+					111 按钮 (collapsed) Show dev stack processes, Help: Dev stack, Secondary Actions: Expand
+					112 按钮 Hide badge for this session, Help: Hide for this session
+				113 滚动条 (settable, float) 0
+	114 标签页组 Description: 标签页栏，6个标签页, ID: TabBar?isSeparate=false
+		115 标签 前言 | Go语言圣经, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			116 图像 FaviconImageView
+			117 文本 Value: 前言 | Go语言圣经, ID: UnifiedTabBarButton._titleTextField
+		118 标签 Go Web 编程 · 看云, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			119 图像 FaviconImageView
+			120 文本 Value: Go Web 编程 · 看云, ID: UnifiedTabBarButton._titleTextField
+		121 标签 邮件 - 王 明 - Outlook, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			122 图像 FaviconImageView
+			123 文本 Value: 邮件 - 王 明 - Outlook, ID: UnifiedTabBarButton._titleTextField
+		124 标签 人性博弈：社会化进阶攻略 - 飞书云文档, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			125 图像 FaviconImageView
+			126 文本 Value: 人性博弈：社会化进阶攻略 - 飞书云文档, ID: UnifiedTabBarButton._titleTextField
+		127 标签 章节阅读与复验 - AI 长篇网络小说自动生成平台, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			128 图像 FaviconImageView
+			129 文本 Value: 章节阅读与复验 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+		130 标签 记忆 - AI 长篇网络小说自动生成平台, Help: 若要与此按钮中的项目交互，请按下Control-Option-Shift-下箭头键。, Value: on, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=true
+			131 图像 FaviconImageView
+			132 文本 Value: 记忆 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+	133 工具栏
+		134 按钮 Description: 开关边栏, ID: SidebarButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		135 菜单按钮 ID: TabGroupPickerButton?TabGroup=%E6%9C%AA%E5%91%BD%E5%90%8D, Secondary Actions: 移到下一项, 从工具栏移除
+		136 container BackForwardSegmentedControl
+			137 按钮 Description: 返回, Help: 显示上一页, ID: BackButton
+			138 按钮 (disabled) Description: 前进, Help: 显示下一页, ID: ForwardButton
+		139 container Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+			140 按钮 页面菜单, ID: AssistantButton
+			141 按钮 将页面添加到阅读列表, ID: OneStepBookmarkingButton
+			142 文本栏 (settable) Description: 智能搜索栏, Value: xnovel-r05-font.test/x/memory, ID: WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD
+			143 按钮 重新加载此页面, ID: ReloadButton
+		144 按钮 Description: 共享, ID: ShareButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		145 按钮 Description: 新建标签页, ID: NewTabButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		146 按钮 Description: 标签页概览, ID: TabOverviewButton, Secondary Actions: 移到上一项, 从工具栏移除
+	147 关闭按钮
+	148 全屏幕按钮 Help: 此按钮也可以执行缩放窗口的操作, Secondary Actions: 缩放窗口
+	149 最小化按钮
+150 menu bar
+	151 Safari浏览器
+	152 文件
+	153 编辑
+	154 显示, ID: SafariViewMenu
+	155 历史记录
+	156 书签, ID: SafariBookmarksMenu
+	157 开发
+	158 窗口, ID: SafariWindowMenu
+	159 帮助, ID: SafariHelpMenu
+
+The focused UI element is 13 HTML内容 Description: 记忆 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x/memory

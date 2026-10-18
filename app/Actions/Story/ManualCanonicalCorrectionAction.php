@@ -7,6 +7,7 @@ use App\Enums\EventType;
 use App\Enums\StoryEventStatus;
 use App\Jobs\RefreshNovelProjectionJob;
 use App\Models\Novel;
+use App\Models\NovelGenerationTask;
 use App\Models\StoryStateVersion;
 use App\Services\StatePatchBuilder;
 use App\Services\StoryStateService;
@@ -41,6 +42,10 @@ class ManualCanonicalCorrectionAction
                 ->with('canonicalStateVersion')
                 ->findOrFail($novel->getKey());
             $current = $lockedNovel->canonicalStateVersion;
+            // 整书运行时禁止人工修正与正在生成的状态快照交错；暂停后仍校验期望版本。
+            if ($lockedNovel->current_generation_task_id && NovelGenerationTask::whereKey($lockedNovel->current_generation_task_id)->lockForUpdate()->value('status') !== 'paused') {
+                throw ValidationException::withMessages(['state' => '请先暂停整书任务，再填写原因执行正式状态修正。']);
+            }
 
             if ($current === null || $current->version !== $expectedStateVersion) {
                 throw ValidationException::withMessages([

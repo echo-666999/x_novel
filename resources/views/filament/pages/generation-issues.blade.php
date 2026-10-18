@@ -72,7 +72,8 @@
                                 <p>字段 {{ $field }}：{{ is_scalar($problem) ? $problem : json_encode($problem, JSON_UNESCAPED_UNICODE) }}</p>
                             @endforeach
                             @forelse(data_get($details, 'evidence.attempts', []) as $attemptRunId => $attempt)
-                                <p>处理 Run #{{ $attemptRunId }} · {{ ($attempt['action'] ?? '') === 'diagnose' ? 'AI 只读分析' : '原断点重试' }} · {{ empty($attempt['finished_at']) ? '排队或执行中' : (($attempt['status'] ?? '') === 'succeeded' ? '执行结束，查看复验结论' : '本次处理失败，原问题保留') }}</p>
+                                {{-- 操作类型必须对应实际合同，不能把内容修复显示成相同输入重试。 --}}
+                                <p>处理 Run #{{ $attemptRunId }} · {{ match ($attempt['action'] ?? '') { 'diagnose' => 'AI 只读分析', 'repair_foundation' => 'AI 设定修复', 'repair_book' => 'AI 内容修复', 'retry_export' => '重新导出', 'retry_transient' => '原断点重试', default => '处理操作' } }} · {{ empty($attempt['finished_at']) ? '排队或执行中' : (($attempt['status'] ?? '') === 'succeeded' ? '执行结束，查看复验结论' : '本次处理失败，原问题保留') }}</p>
                                 @if(!empty($attempt['error']))<p class="xn-muted">{{ $attempt['error'] }}</p>@endif
                             @empty <p class="xn-muted">尚未执行修复尝试。</p>@endforelse
                             @foreach($details['operations'] as $operation)
@@ -86,7 +87,8 @@
                             <div class="xn-panel xn-stack">
                                 <h3>选择处理方式</h3>
                                 <label class="xn-field" for="issue-instructions">人工处理说明 / AI 补充要求</label>
-                                <textarea id="issue-instructions" class="xn-control" rows="5" maxlength="6000" wire:model.blur="instructions" aria-describedby="issue-input-hint"></textarea>
+                                {{-- Livewire 4 的 blur 只同步本地值；必须发送更新才能重算新要求的可执行选项。 --}}
+                                <textarea id="issue-instructions" class="xn-control" rows="5" maxlength="6000" wire:model.blur.live="instructions" aria-describedby="issue-input-hint"></textarea>
                                 <p id="issue-input-hint" class="xn-muted">记录已检查的字段、现象或修改要求。此处保存说明；正文请进入本章阅读页“保存新稿并复验”，目标请进入设定与计划。</p>
                                 @error('instructions')<p role="alert">{{ $message }}</p>@enderror
                                 @php($options = $this->options($selected))
@@ -107,7 +109,8 @@
                                 @endif
                             </div>
                         @else
-                            <div class="xn-notice xn-tone-success">{{ $selected->resolution_reason }} · 解决执行 #{{ $selected->resolved_by_run_id }}，历史失败仍可查询。</div>
+                            {{-- 配置复验可以同步完成，没有执行编号时不显示悬空的 #。 --}}
+                            <div class="xn-notice xn-tone-success">{{ $selected->resolution_reason }} @if($selected->resolved_by_run_id) · 解决执行 #{{ $selected->resolved_by_run_id }} @endif · 历史失败仍可查询。</div>
                         @endif
                         @if($feedback)<div role="status" aria-live="polite" class="xn-notice xn-tone-info">{{ $feedback }}</div>@endif
                         <details class="xn-panel xn-stack xn-evidence"><summary>证据、尝试历史与技术详情 · {{ $selected->error_code }}</summary>

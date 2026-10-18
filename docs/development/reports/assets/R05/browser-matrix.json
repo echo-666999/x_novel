@@ -1,0 +1,1068 @@
+[
+  {
+    "page": "dashboard",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "novels",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "planning",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "generation",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "生成 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "memory",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "ending",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "settings",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "connections",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "prices",
+    "theme": "dark",
+    "scroll": 1440,
+    "text": "跳转到内容\nAI 长篇网络小说自动生成平台\n全局搜索\n\nfilament-panels::global-search.field.instructions\n\n创作总览\n小说\n生成\n异常与审校\n记忆\n设置\nAI 与成本\n服务商连接\n模型价格\n",
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "dashboard",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "novels",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "planning",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "generation",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "生成 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "memory",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "ending",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "settings",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "connections",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "prices",
+    "theme": "dark",
+    "scroll": 1440,
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "dashboard",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "novels",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "planning",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "generation",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "生成 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "memory",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "ending",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "settings",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "connections",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "prices",
+    "theme": "dark",
+    "scroll": 390,
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "dashboard",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "novels",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "create",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "workbench",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "reader",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "planning",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "issues",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "generation",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "生成 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "memory",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "ending",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "settings",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "connections",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "prices",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "state",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "故事状态检查器 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "chapters",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "章节 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "characters",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "角色管理 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "world",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "世界实体 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "foreshadowings",
+    "theme": "light",
+    "scroll": 1440,
+    "title": "伏笔管理 - AI 长篇网络小说自动生成平台",
+    "width": 1440
+  },
+  {
+    "page": "dashboard",
+    "theme": "light",
+    "scroll": 390,
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "novels",
+    "theme": "light",
+    "scroll": 390,
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "create",
+    "theme": "light",
+    "scroll": 390,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "workbench",
+    "theme": "light",
+    "scroll": 390,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "reader",
+    "theme": "light",
+    "scroll": 390,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "planning",
+    "theme": "light",
+    "scroll": 390,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "issues",
+    "theme": "light",
+    "scroll": 390,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "generation",
+    "theme": "light",
+    "scroll": 390,
+    "title": "生成 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "memory",
+    "theme": "light",
+    "scroll": 390,
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "ending",
+    "theme": "light",
+    "scroll": 390,
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "settings",
+    "theme": "light",
+    "scroll": 390,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "connections",
+    "theme": "light",
+    "scroll": 390,
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "prices",
+    "theme": "light",
+    "scroll": 390,
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "state",
+    "theme": "light",
+    "scroll": 390,
+    "title": "故事状态检查器 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "chapters",
+    "theme": "light",
+    "scroll": 390,
+    "title": "章节 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "characters",
+    "theme": "light",
+    "scroll": 390,
+    "title": "角色管理 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "world",
+    "theme": "light",
+    "scroll": 390,
+    "title": "世界实体 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "foreshadowings",
+    "theme": "light",
+    "scroll": 390,
+    "title": "伏笔管理 - AI 长篇网络小说自动生成平台",
+    "width": 390
+  },
+  {
+    "page": "create",
+    "theme": "light",
+    "scroll": 1024,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "workbench",
+    "theme": "light",
+    "scroll": 1024,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "reader",
+    "theme": "light",
+    "scroll": 1024,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "issues",
+    "theme": "light",
+    "scroll": 1024,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "create",
+    "theme": "light",
+    "scroll": 768,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "workbench",
+    "theme": "light",
+    "scroll": 768,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "reader",
+    "theme": "light",
+    "scroll": 768,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "issues",
+    "theme": "light",
+    "scroll": 768,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "create",
+    "theme": "light",
+    "scroll": 320,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "workbench",
+    "theme": "light",
+    "scroll": 320,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "reader",
+    "theme": "light",
+    "scroll": 320,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "issues",
+    "theme": "light",
+    "scroll": 320,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "dashboard",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "novels",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "planning",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "generation",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "生成任务 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "memory",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "ending",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "settings",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "connections",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "prices",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "state",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "故事状态检查器 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "chapters",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "章节 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "characters",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "角色管理 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "world",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "世界实体 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "foreshadowings",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1440,
+    "title": "伏笔管理 - AI 长篇网络小说自动生成平台",
+    "width": 1440,
+    "height": 900
+  },
+  {
+    "page": "dashboard",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "创作总览 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "novels",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "小说 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "planning",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "规划总览 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "generation",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "生成任务 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "memory",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "记忆 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "ending",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "结局审计 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "settings",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "设置 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "connections",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "服务商连接 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "prices",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "模型价格 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "state",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "故事状态检查器 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "chapters",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "章节 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "characters",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "角色管理 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "world",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "世界实体 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "foreshadowings",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 390,
+    "title": "伏笔管理 - AI 长篇网络小说自动生成平台",
+    "width": 390,
+    "height": 844
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1024,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1024,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1024,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 1024,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 1024,
+    "height": 768
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 768,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 768,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 768,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 768,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 768,
+    "height": 1024
+  },
+  {
+    "page": "create",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 320,
+    "title": "从一个想法，开始一本小说 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "workbench",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 320,
+    "title": "雨季旧港与那封来自十年后的长信：一个不会游泳的邮差如何沿岸寻找失踪的寄信人 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "reader",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 320,
+    "title": "章节阅读与复验 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  },
+  {
+    "page": "issues",
+    "theme": "dark",
+    "dark": true,
+    "scroll": 320,
+    "title": "异常中心 - AI 长篇网络小说自动生成平台",
+    "width": 320,
+    "height": 800
+  }
+]

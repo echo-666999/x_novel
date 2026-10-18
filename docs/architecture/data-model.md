@@ -230,3 +230,11 @@ ChapterPlan 的 `admission_snapshot.plan` 保存完整 POV/人物变化等新计
 Writer 的原始响应与段落信息分层保存：片段正文为 ChapterFragment，确定性组装为 ChapterDraft；局部替换响应及新的完整 RewriteDraft 均追加版本，不覆盖旧稿。段落 key/Unicode offset/length/hash 是当前完整正文的派生索引。
 
 Review 的 `source_manifest` 同时绑定当前完整草稿、事件候选与状态补丁；`rules_version=book-review-v1`。新稿不继承旧 PASS。提取与补丁均为候选，R04 不写入正式 Story Event/Fact/Memory，也不推进 Canonical Pointer。
+
+## R05 正式闭环的数据使用（2026-10-18）
+
+本批不新增表/字段/迁移，复用既有 PostgreSQL 合同。正式提交写 Chapter canonical 指针、StoryEvent、Fact、StoryStateVersion、Novel 正式指针及提交 OperationRecord；同一事务记录 Task 的必需摘要待办。Chapter `canonical_metadata.book_sources` 固定任务、计划、审校、事件、补丁和提交前状态身份。摘要绑定 canonical Artifact 并回填 `summary_artifact_id`。
+
+派生 Run 使用 `book-derived-v1`，仍归属原 Task/Novel 与 Usage；不占用当前章主链待办。Memory 仅引用有效正式章/事件。完结 Artifact 记录逐项证据、确定性债务、蓝图和正式状态；Task.progress_snapshot 保存审计指针、累计补章次数及人工有限补章授权历史。ExportManifest 冻结正式章序/标题/正文 hash、文件位置与文件 hash。
+
+最近章撤回追加完整恢复 StateVersion 和 OperationRecord，失效对应事件/记忆并恢复被取代事实；旧状态和不可变产物不覆盖。系统心跳复用 SystemSetting 保存执行时间与实现标识，属于运行观测，不是故事事实。

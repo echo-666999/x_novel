@@ -27,7 +27,8 @@ final class NovelStageContract
             'blueprint', 'window', 'plan' => AiStage::Planner,
             'write', 'fragment' => AiStage::Writer,
             'extract' => AiStage::Extractor,
-            'review' => AiStage::Reviewer,
+            'review', 'ending' => AiStage::Reviewer,
+            'summary' => AiStage::Summary,
             'rewrite' => AiStage::Rewrite,
             default => throw new \LogicException('未知小说认知任务。'),
         };
@@ -41,6 +42,8 @@ final class NovelStageContract
         $evidence = $this->object(['paragraph_key' => $text, 'quote' => $text, 'offset' => ['type' => 'integer', 'minimum' => 0]]);
 
         return match ($phase) {
+            'summary' => $this->object(['points' => ['type' => 'array', 'minItems' => 1, 'maxItems' => 12, 'items' => $this->object(['text' => $text, 'evidence' => $evidence])]]),
+            'ending' => app(BookEnding::class)->schema(),
             'blueprint' => $this->object(['mainline' => $text, 'ending' => $text,
                 'turning_points' => [...$list, 'minItems' => 2, 'maxItems' => 12], 'reader_promises' => [...$list, 'minItems' => 1, 'maxItems' => 12],
                 'character_arcs' => $list, 'foreshadowing_goals' => $list, 'optional_volume_groups' => $list]),
@@ -80,6 +83,8 @@ final class NovelStageContract
         $route = $frozenRoute ? null : app(AiSettingsResolver::class)->resolve($this->route($phase), $task->novel);
         unset($input['frozen_route']);
         $instruction = match ($phase) {
+            'summary' => '只总结正式正文中已经发生的关键变化。每条摘要必须引用精确段落和字符偏移；不要创造新事实或修改正式状态。',
+            'ending' => '逐项核查给出的全部结局债务，使用正式章节原文证据。摘要只是检索线索，不是证据本身。每项返回兑现与否、理由和章节/段落/偏移/原文。不能因达到字数或费用增加而判定完成，不得忽略硬债务。',
             'blueprint' => '规划全书主线、关键转折、读者承诺、人物发展、伏笔目标和明确结局；仅描述未来，不细化远期章节。不输出派生字数汇总。',
             'window' => '只规划指定数量的近期章节目标；延续已保留目标与正式状态。promise_refs 只能引用给出的承诺 key；不重复已经完成的目标。',
             'plan' => '规划当前一章：具体有意义的标题、本章作用、人物变化、必要和禁止信息、视角、时间与章末落点。segments 是可选叙事边界，多个 POV 不等于必须拆分。',
@@ -117,6 +122,7 @@ final class NovelStageContract
         $stage = match ($phase) {
             'blueprint' => GenerationStage::FoundationBlueprint, 'window' => GenerationStage::GoalWindow,
             'plan' => GenerationStage::ChapterPlanning, 'write' => GenerationStage::ChapterWrite, 'fragment' => GenerationStage::FragmentWrite,
+            'summary' => GenerationStage::MemorySummary, 'ending' => GenerationStage::EndingAudit,
             'extract' => GenerationStage::EventExtraction, 'review' => GenerationStage::Review, 'rewrite' => GenerationStage::Rewrite,
         };
         $run = app(GenerationRunCoordinator::class)->enqueue($task->id, $stage, 'book:'.$phase.':'.($identity['chapter_id'] ?? 'planning').':'.($identity['fragment_sequence'] ?? 0), $contract, $sources);
@@ -152,6 +158,7 @@ final class NovelStageContract
         $type = match ($phase) {
             'blueprint' => ArtifactType::OutlineBlueprint, 'window' => ArtifactType::GoalWindow, 'plan' => ArtifactType::ChapterPlan,
             'write', 'fragment' => ArtifactType::ChapterFragment, 'extract' => ArtifactType::EventCandidate,
+            'summary' => ArtifactType::Summary, 'ending' => ArtifactType::EndingAudit,
             'review' => ArtifactType::ReviewResult, 'rewrite' => ArtifactType::RewriteDraft,
         };
         try {
@@ -165,9 +172,9 @@ final class NovelStageContract
             if ($truncated && ! in_array($phase, ['write', 'fragment'], true)) {
                 throw new AiProviderException('book_output_truncated', $phase.' 响应截断，不能作为完整产物。', false);
             }
-            $data = in_array($phase, ['blueprint', 'window'], true)
+            $data = $phase === 'summary' ? app(BookLifecycle::class)->validateSummary($run, $data) : ($phase === 'ending' ? app(BookEnding::class)->validate($run, $data) : (in_array($phase, ['blueprint', 'window'], true)
                 ? app(NovelPlanningService::class)->normalize($run, $data)
-                : app(NovelChapterPipeline::class)->validateOutput($run, $data);
+                : app(NovelChapterPipeline::class)->validateOutput($run, $data)));
         } catch (\Throwable $exception) {
             $run->artifacts()->create(['type' => $type, 'data' => $data, 'content' => $response->content, 'checksum' => app(GenerationInputIdentity::class)->hash([$data, $response->content]), 'source_manifest' => $run->source_manifest, 'validation_status' => 'rejected']);
             throw $exception;

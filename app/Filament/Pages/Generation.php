@@ -20,6 +20,7 @@ use App\Jobs\RewriteChapterJob;
 use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
+use App\Models\NovelGenerationTask;
 use App\Models\Review as ReviewModel;
 use App\Models\Scene;
 use App\Services\GenerationFailurePolicy;
@@ -45,21 +46,35 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Livewire\Attributes\Url;
 
 class Generation extends Page implements HasTable
 {
     use InteractsWithTable;
 
+    /** 默认以整书为单位；技术 Run 保留为显式高级视图。 */
+    #[Url]
+    public bool $runs = false;
+
     protected static string|BackedEnum|null $navigationIcon = 'heroicon-o-bolt';
 
     protected static ?int $navigationSort = 2;
 
-    protected static ?string $navigationLabel = '生成';
+    protected static ?string $navigationLabel = '生成任务';
 
-    protected static ?string $title = '生成';
+    protected static ?string $title = '生成任务';
 
     public function content(Schema $schema): Schema
     {
+        if (! $this->runs) {
+            // 新版任务表尚未部署时保留诊断入口，不把部署顺序问题变成页面 500。
+            if (! \Illuminate\Support\Facades\Schema::hasTable('novel_generation_tasks')) {
+                return $schema->components([Section::make('新版生成尚未部署')->description('请先按运维手册完成 R01–R04 数据库迁移。高级执行记录仍可查看，旧小说不会自动迁入新任务。')]);
+            }
+
+            return $schema->components([Section::make('整书生成任务')->description('每本书展示真实阶段和最后进展。暂停、继续、人工提交在小说工作台操作；失败原因在异常中心处理。')->schema([EmbeddedTable::make()])]);
+        }
+
         return $schema->components([
             Section::make('恢复中心')
                 ->description('集中查看需要人工处理的生成异常，并从已持久化的 Run、Artifact 和 Review 继续。')
@@ -93,6 +108,10 @@ class Generation extends Page implements HasTable
     /** @return array<int, Action> */
     protected function getHeaderActions(): array
     {
+        if (! $this->runs) {
+            return [Action::make('issues')->label('异常中心')->url(GenerationIssues::getUrl()), Action::make('runs')->label('高级：执行记录')->color('gray')->url(static::getUrl(['runs' => true]))];
+        }
+
         return [
             // 统一问题中心保留跨 Run 来源与处理历史。
             Action::make('issues')->label('异常中心')->url(GenerationIssues::getUrl()),
@@ -136,6 +155,19 @@ class Generation extends Page implements HasTable
 
     public function table(Table $table): Table
     {
+        if (! $this->runs) {
+            return $table->query(NovelGenerationTask::query()->with('novel'))
+                ->columns([
+                    TextColumn::make('novel.title')->label('小说')->searchable()->wrap(),
+                    TextColumn::make('status')->label('任务状态')->badge()->formatStateUsing(fn ($state) => ['queued' => '等待开始', 'running' => '生成中', 'paused' => '已暂停', 'needs_attention' => '需要处理', 'completed' => '整书已完成', 'cancelled' => '已取消', 'failed' => '失败'][$state] ?? $state),
+                    TextColumn::make('current_phase')->label('当前阶段')->formatStateUsing(fn ($state) => GenerationStage::tryFrom($state)?->getLabel() ?? $state),
+                    TextColumn::make('target_words')->label('目标字数')->numeric(),
+                    TextColumn::make('last_progress_at')->label('最后进展')->dateTime('Y-m-d H:i:s')->placeholder('尚无完成记录')->sortable(),
+                ])->recordUrl(fn ($record) => NovelResource::getUrl('view', ['record' => $record->novel_id]))
+                ->filters([SelectFilter::make('status')->label('状态')->options(['running' => '生成中', 'paused' => '已暂停', 'needs_attention' => '需要处理', 'completed' => '整书已完成'])])
+                ->defaultSort('id', 'desc')->emptyStateHeading('还没有整书任务')->emptyStateDescription('新建小说，输入一段概述即可开始。');
+        }
+
         return $table
             ->query(GenerationRun::query())
             ->modifyQueryUsing(fn (Builder $query): Builder => $query

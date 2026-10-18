@@ -1,0 +1,1 @@
+{"run":{"id":489,"status":"succeeded","error_message":null},"task":{"id":62,"status":"running","current_phase":"foundation_blueprint","control_version":1},"issues":[{"id":23,"status":"resolved","attempt_count":2,"resolution_reason":"同来源执行及产物复验通过。"}]}

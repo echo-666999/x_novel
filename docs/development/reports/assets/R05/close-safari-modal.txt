@@ -1,0 +1,2 @@
+There has been no change in the accessibility tree for Window: "未命名 — 设置 - AI 长篇网络小说自动生成平台".
+The focused UI element is 333 标签 (selected) 通用, Value: on

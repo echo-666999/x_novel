@@ -1,0 +1,42 @@
+[
+  {
+    "code": 403,
+    "snapshot": "- main:\n  - paragraph: XNovel · 403\n  - region \"暂时无法访问\":\n    - heading \"暂时无法访问\" [level=1]\n    - alert: 当前账号无权执行此操作。请返回小说列表，或重新登录后核对账号。\n    - navigation \"恢复操作\":\n      - link \"重新登录\":\n        - /url: http://xnovel-r05-review.test/x/login\n      - link \"返回小说列表\":\n        - /url: http://xnovel-r05-review.test/x/novels",
+    "layout": {
+      "scroll": 390,
+      "width": 390
+    }
+  },
+  {
+    "code": 404,
+    "snapshot": "- main:\n  - paragraph: XNovel · 404\n  - region \"没有找到这个页面\":\n    - heading \"没有找到这个页面\" [level=1]\n    - alert: 记录可能不存在或地址已失效。请返回小说列表重新选择。\n    - navigation \"恢复操作\":\n      - link \"返回小说列表\":\n        - /url: http://xnovel-r05-review.test/x/novels",
+    "layout": {
+      "scroll": 390,
+      "width": 390
+    }
+  },
+  {
+    "code": 419,
+    "snapshot": "- main:\n  - paragraph: XNovel · 419\n  - region \"登录会话已过期\":\n    - heading \"登录会话已过期\" [level=1]\n    - alert: 本次提交未确认成功。请先保留尚未保存的文字，重新登录后核对记录，再决定是否重新提交。\n    - navigation \"恢复操作\":\n      - link \"重新登录\":\n        - /url: http://xnovel-r05-review.test/x/login\n      - link \"返回小说列表\":\n        - /url: http://xnovel-r05-review.test/x/novels",
+    "layout": {
+      "scroll": 390,
+      "width": 390
+    }
+  },
+  {
+    "code": 500,
+    "snapshot": "- main:\n  - paragraph: XNovel · 500\n  - region \"页面暂时无法加载\":\n    - heading \"页面暂时无法加载\" [level=1]\n    - alert: 本次操作结果尚未确认。请重新加载并核对任务记录；如果仍然失败，可凭下方错误编号查看日志。\n    - paragraph:\n      - text: 错误编号：\n      - code: 27d09804-1567-48ac-994c-e58a12b640a0\n    - navigation \"恢复操作\":\n      - link \"返回小说列表\":\n        - /url: http://xnovel-r05-review.test/x/novels\n      - button \"重新加载\"",
+    "layout": {
+      "scroll": 390,
+      "width": 390
+    }
+  },
+  {
+    "code": 503,
+    "snapshot": "- main:\n  - paragraph: XNovel · 503\n  - region \"系统暂时不可用\":\n    - heading \"系统暂时不可用\" [level=1]\n    - alert: 系统正在维护或暂时无法处理请求。已有任务状态以恢复后的记录为准，请稍后重试。\n    - paragraph:\n      - text: 错误编号：\n      - code: 820fa95b-ff2a-453d-a3d9-b561e6af4d14\n    - navigation \"恢复操作\":\n      - link \"返回小说列表\":\n        - /url: http://xnovel-r05-review.test/x/novels\n      - button \"重新加载\"",
+    "layout": {
+      "scroll": 390,
+      "width": 390
+    }
+  }
+]

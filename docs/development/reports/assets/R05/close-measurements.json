@@ -1,0 +1,790 @@
+[
+  {
+    "name": "summary-failure",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/170",
+    "width": 1709
+  },
+  {
+    "name": "export-failure",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/171",
+    "width": 1709
+  },
+  {
+    "name": "ai-preview-keyboard",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "ai-queued",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "ai-queued",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "ai-failed-disabled",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "instructions-original-disabled",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "instructions-blur-fixed",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "ai-second-queued",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "ai-repaired",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&issue=23",
+    "width": 390
+  },
+  {
+    "name": "export-queued",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=171&issue=22",
+    "width": 390
+  },
+  {
+    "name": "book-completed",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/171",
+    "width": 390
+  },
+  {
+    "name": "manual-draft-saved",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "diff-keyboard",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "diff-latest",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "editor-focus-fixed",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "editor-validation-fixed",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "editor-save-focus",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "diff-expanded",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "settings-tab-通用",
+    "clippedControls": [
+      {
+        "id": "fi-sc-tab-1229a87c79dce73aa0ba34aa04712902",
+        "text": "章节阶段"
+      },
+      {
+        "id": "fi-sc-tab-8bf370bfbdf634660e67d3926f56edba",
+        "text": "修复子阶段"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 390
+  },
+  {
+    "name": "settings-tab-全书大纲",
+    "clippedControls": [
+      {
+        "id": "fi-sc-tab-1229a87c79dce73aa0ba34aa04712902",
+        "text": "章节阶段"
+      },
+      {
+        "id": "fi-sc-tab-8bf370bfbdf634660e67d3926f56edba",
+        "text": "修复子阶段"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 390
+  },
+  {
+    "name": "settings-tab-章节阶段",
+    "clippedControls": [
+      {
+        "id": "fi-sc-tab-dc2e6924f25b789b321b273561feb1f2",
+        "text": "通用"
+      },
+      {
+        "id": "fi-sc-tab-762b8c5de3502d64283392f1727eb1bb",
+        "text": "全书大纲"
+      },
+      {
+        "id": "fi-sc-tab-8bf370bfbdf634660e67d3926f56edba",
+        "text": "修复子阶段"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 390
+  },
+  {
+    "name": "settings-tab-修复子阶段",
+    "clippedControls": [
+      {
+        "id": "fi-sc-tab-dc2e6924f25b789b321b273561feb1f2",
+        "text": "通用"
+      },
+      {
+        "id": "fi-sc-tab-762b8c5de3502d64283392f1727eb1bb",
+        "text": "全书大纲"
+      },
+      {
+        "id": "fi-sc-tab-1229a87c79dce73aa0ba34aa04712902",
+        "text": "章节阶段"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 390
+  },
+  {
+    "name": "summary-disabled-expanded",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=170&filter=unresolved&issue=21",
+    "width": 390
+  },
+  {
+    "name": "summary-dark-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/170",
+    "width": 1440
+  },
+  {
+    "name": "completed-dark-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/171",
+    "width": 1440
+  },
+  {
+    "name": "diff-dark-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 1440
+  },
+  {
+    "name": "disabled-dark-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=170&filter=unresolved&issue=21",
+    "width": 1440
+  },
+  {
+    "name": "resolved-dark-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&filter=resolved&issue=23",
+    "width": 1440
+  },
+  {
+    "name": "summary-dark-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/170",
+    "width": 390
+  },
+  {
+    "name": "completed-dark-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/171",
+    "width": 390
+  },
+  {
+    "name": "diff-dark-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "disabled-dark-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=170&filter=unresolved&issue=21",
+    "width": 390
+  },
+  {
+    "name": "resolved-dark-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&filter=resolved&issue=23",
+    "width": 390
+  },
+  {
+    "name": "summary-light-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/novels/170",
+    "width": 1440
+  },
+  {
+    "name": "completed-light-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/novels/171",
+    "width": 1440
+  },
+  {
+    "name": "diff-light-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 1440
+  },
+  {
+    "name": "disabled-light-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=170&filter=unresolved&issue=21",
+    "width": 1440
+  },
+  {
+    "name": "resolved-light-1440",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&filter=resolved&issue=23",
+    "width": 1440
+  },
+  {
+    "name": "summary-light-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/novels/170",
+    "width": 390
+  },
+  {
+    "name": "completed-light-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/novels/171",
+    "width": 390
+  },
+  {
+    "name": "diff-light-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/novels/169/book-chapters/106",
+    "width": 390
+  },
+  {
+    "name": "disabled-light-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=170&filter=unresolved&issue=21",
+    "width": 390
+  },
+  {
+    "name": "resolved-light-390",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 844,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/generation-issues?novel=172&filter=resolved&issue=23",
+    "width": 390
+  },
+  {
+    "name": "modal-dark",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 1440
+  },
+  {
+    "name": "modal-light",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 1440
+  },
+  {
+    "name": "modal-light-fixed",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 1440
+  },
+  {
+    "name": "modal-dark-fixed",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1440,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 1440
+  },
+  {
+    "name": "modal-small-fixed",
+    "clippedControls": [
+      {
+        "id": "fi-sc-tab-84fbb60d711687238804ebc465c4d7fc",
+        "text": "章节阶段"
+      },
+      {
+        "id": "fi-sc-tab-713e026b17d7a8d73fa0cec5e217aab3",
+        "text": "修复子阶段"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 900,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 390,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-final.test/x/settings",
+    "width": 390
+  }
+]

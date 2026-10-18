@@ -12,5 +12,8 @@ final readonly class CanonicalCommitData
         public int $statePatchArtifactId,
         public int $expectedStateVersion,
         public string $artifactChecksum,
+        // 新链提交必须显式冻结任务与控制版本，旧调用保持原合同。
+        public ?int $taskId = null,
+        public ?int $controlVersion = null,
     ) {}
 }

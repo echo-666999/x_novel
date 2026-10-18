@@ -1,0 +1,96 @@
+{
+    "task": {
+        "id": 5,
+        "status": "completed",
+        "current_phase": "export",
+        "stop_reason": null,
+        "control_version": 2,
+        "pending_transition": null,
+        "progress_snapshot": {
+            "initialization": {
+                "at": "2026-10-18T09:38:35.534762Z",
+                "mode": "full_book",
+                "intent": 89,
+                "window": 10,
+                "sources": [
+                    {
+                        "checksum": "ff3c2091e3fceaa268ac5f50494745c790f207085938a0a410259c8cfd950ad9",
+                        "artifact_id": 89
+                    },
+                    {
+                        "checksum": "bf67cf17db066d1bf3bc09f6a3a6b77956c381653fed233372a40907965b3974",
+                        "artifact_id": 91
+                    },
+                    {
+                        "checksum": "7bc71431ad5d22e82f01ce32eef1864e07ec378a531d93ca27dc84699887b108",
+                        "artifact_id": 93
+                    },
+                    {
+                        "checksum": "be37c9255167ec22680294a607294823041c630daa4fc5b56c8b1ae780ce820c",
+                        "artifact_id": 95
+                    }
+                ],
+                "blueprint": 9,
+                "foundation": 91,
+                "state_version_id": 8
+            },
+            "ending_audit_id": 112,
+            "resolved_length": {
+                "source": "user",
+                "evidence": [],
+                "target_words": 5000
+            },
+            "initialization_hash": "05268a338f20999423f8a488f69f7e1a5714cf8fadeb2bcfec98281dccf021ba",
+            "foundation_artifact_id": 91
+        }
+    },
+    "chapters": [
+        {
+            "id": 5,
+            "sequence": 1,
+            "status": "canonical",
+            "canonical_artifact_id": 102,
+            "summary_artifact_id": 110
+        }
+    ],
+    "issues": [
+        {
+            "id": 3,
+            "status": "resolved",
+            "attempt_count": 1,
+            "resolved_by_run_id": 78,
+            "resolution_reason": "同来源执行及产物复验通过。"
+        }
+    ],
+    "runs": [
+        {
+            "id": 78,
+            "stage": "export",
+            "status": "succeeded",
+            "error_code": null,
+            "error_message": null
+        },
+        {
+            "id": 64,
+            "stage": "export",
+            "status": "failed",
+            "error_code": "book_export_file_invalid",
+            "error_message": "正文尚未完结或导出文件缺失，任务不能完成。"
+        },
+        {
+            "id": 63,
+            "stage": "export",
+            "status": "succeeded",
+            "error_code": null,
+            "error_message": null
+        },
+        {
+            "id": 62,
+            "stage": "ending_audit",
+            "status": "succeeded",
+            "error_code": null,
+            "error_message": null
+        }
+    ],
+    "usage_count": 9
+}

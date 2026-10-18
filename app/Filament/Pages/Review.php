@@ -130,7 +130,7 @@ class Review extends Page implements HasTable
                 TextEntry::make('score')->label('总分')->suffix(' / 100'),
                 TextEntry::make('artifact.version')->label('Review Version')->formatStateUsing(fn (int $state): string => 'v'.$state),
             ]),
-            Section::make('七维评分')->columns(2)->schema([
+            Section::make('七维评分')->visible(fn (ReviewModel $record) => $record->score !== null)->columns(2)->schema([
                 TextEntry::make('continuity_score')->label('事实 / 连续性 · 25%'),
                 TextEntry::make('plan_score')->label('计划遵循 · 15%'),
                 TextEntry::make('character_score')->label('人物一致性 · 15%'),
@@ -220,7 +220,7 @@ class Review extends Page implements HasTable
 
     private function chapterUrl(ReviewModel $review): string
     {
-        return NovelResource::getUrl('chapter', [
+        return NovelResource::getUrl($review->generationRun->novel->current_generation_task_id ? 'book-chapter' : 'chapter', [
             'record' => $review->generationRun->novel_id,
             'chapter' => $review->generationRun->chapter_id,
             'tab' => 'review',

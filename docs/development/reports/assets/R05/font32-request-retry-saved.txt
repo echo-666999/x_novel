@@ -1,0 +1,60 @@
+- link "跳转到内容":
+  - /url: "#fi-main-content"
+- navigation "顶部栏":
+  - button "展开侧边栏":
+  - generic: 全局搜索
+  - searchbox "全局搜索"
+  - paragraph: 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+  - status
+  - button "用户菜单":
+    - img "R05 隔离验收 的头像"
+- banner
+- navigation "侧边导航":
+  - list:
+    - list:
+      - link "创作总览":
+        - /url: http://xnovel-r05-font.test/x
+      - link "小说":
+        - /url: http://xnovel-r05-font.test/x/novels
+      - link "生成任务":
+        - /url: http://xnovel-r05-font.test/x/generation
+      - link "异常与审校":
+        - /url: http://xnovel-r05-font.test/x/generation-issues
+      - link "记忆":
+        - /url: http://xnovel-r05-font.test/x/memory
+      - link "设置":
+        - /url: http://xnovel-r05-font.test/x/settings
+    - list:
+      - link "服务商连接":
+        - /url: http://xnovel-r05-font.test/x/a-i-provider-connections
+      - link "模型价格":
+        - /url: http://xnovel-r05-font.test/x/a-i-model-prices
+- main:
+  - button "工作台":
+    - text: 工作台
+  - heading "未命名小说" [level=1]
+  - paragraph: 待解析 · 已暂停
+  - link "查看异常":
+    - /url: http://xnovel-r05-font.test/x/generation-issues?novel=29
+  - link "调整概述与设置":
+    - /url: http://xnovel-r05-font.test/x/novels/29/edit
+  - button "继续生成"
+  - heading "这本书正在进行到哪里" [level=2]
+  - paragraph: 自动完成整本 · 目标 100,000 正文字数
+  - paragraph:
+    - strong: 已暂停
+  - paragraph: 任务已保存。执行进度来自持久记录；没有执行记录时不会显示模型正在生成。
+  - paragraph: 正式章节：0 · 模式和费用策略在设置中可调整。
+  - heading "进度与费用" [level=2]
+  - paragraph: 当前阶段：接收创作概述 · 最后进展：尚无完成记录
+  - paragraph: 正式正文 0 字。费用用于统计优化；仅主动启用的硬上限会阻止请求。
+  - paragraph: 尚无模型请求费用。
+  - generic "最近执行活动"
+  - heading "原始创作概述" [level=2]
+  - paragraph: 验收输入：请求失败后，这段邮差沿岸寻找来信者的概述必须保留。
+- status
+- button "Edit this page with Herd":
+  - generic: Edit with
+  - generic: Herd
+- button "Show dev stack processes":
+- button "Hide badge for this session":

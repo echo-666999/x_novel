@@ -34,7 +34,8 @@ class ClosureDebtService
             ...$this->dueForeshadowings($novel),
             ...$this->importantRelationships($state),
             ...$this->worldCrises($state),
-            ...$this->endingContractGaps($novel->currentBible?->ending_contract ?? []),
+            // 新版结局合同由蓝图逐项核验，不强迫补齐旧六字段模板。
+            ...($novel->current_generation_task_id ? [] : $this->endingContractGaps($novel->currentBible?->ending_contract ?? [])),
         ];
 
         return new ClosureDebtResult($items);

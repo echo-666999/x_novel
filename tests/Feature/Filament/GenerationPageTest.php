@@ -54,7 +54,7 @@ test('generation page lists traceable run fields', function () {
         'estimated_cost' => 0.012345,
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertOk()
         ->assertCanSeeTableRecords([$run])
         ->assertSee('雾海长明')
@@ -84,7 +84,7 @@ test('generation run inspector shows context artifacts errors and usage', functi
         'request_id' => 'request-debug-1',
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertTableActionExists('inspect', fn ($action): bool => $action->isModalSlideOver());
 
     $run->load(['artifacts', 'usageRecords']);
@@ -144,7 +144,7 @@ test('generation run inspector separates frozen capacity budget gate and actual 
         ],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('frozen_provider', null, fn ($component): bool => $component->getState() === 'deepseek')
         ->assertSchemaComponentExists('frozen_model', null, fn ($component): bool => $component->getState() === 'deepseek-reasoner')
@@ -198,7 +198,7 @@ test('generation run inspector exposes the complete legacy recovery contract and
         ],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('route_contract_source', null, fn ($component): bool => $component->getState() === LegacyAdmissionRecoveryContract::CONTRACT_VERSION)
         ->assertSchemaComponentExists('recovery_contract_run_id', null, fn ($component): bool => $component->getState() === '#'.$run->getKey())
@@ -228,7 +228,7 @@ test('generation page distinguishes a successful stage from its unresolved progr
         ],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertSee('阶段成功 · 推进异常')
         ->assertSee('pipeline_progression_failed')
         ->mountTableAction('inspect', $run)
@@ -240,7 +240,7 @@ test('generation page distinguishes a successful stage from its unresolved progr
 });
 
 test('generation page has a useful empty state', function () {
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertOk()
         ->assertSee('暂无生成记录')
         ->assertSee('每个流水线阶段');
@@ -293,7 +293,7 @@ test('recovery dashboard summarizes actionable failures and review gates', funct
         ]);
     }
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertSchemaComponentExists('recovery_failed', null, fn ($component): bool => $component->getState() === 2)
         ->assertSchemaComponentExists('recovery_blocked', null, fn ($component): bool => $component->getState() === 1)
         ->assertSchemaComponentExists('recovery_recoverable', null, fn ($component): bool => $component->getState() === 2)
@@ -325,7 +325,7 @@ test('recovery dashboard quick actions reuse retry resume and context inspection
         'error_code' => 'worker_interrupted',
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->callAction('retryNext')
         ->assertNotified('失败阶段已按冻结合同重新排队')
         ->callAction('resumeNext')
@@ -362,7 +362,7 @@ test('run inspector exposes all context layers tokens truncation and selected me
         ],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertTableActionExists('inspect', fn ($action): bool => $action->isModalSlideOver())
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('context_l0')
@@ -386,7 +386,7 @@ test('failed run explains retryability and recommended action', function () {
         'finished_at' => now(),
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('error_code', null, fn ($component): bool => $component->getState() === 'state_version_conflict')
         ->assertSchemaComponentExists('failure_stage', null, fn ($component): bool => $component->getState() === '场景生成')
@@ -409,7 +409,7 @@ test('terminal completion budget failure requires a new source chain instead of 
         'error_metadata' => ['category' => 'reasoning_budget_exhausted'],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('recommended_action', null, fn ($component): bool => $component->getState() === '调整推理配置后重建来源链')
         ->assertSchemaComponentExists('recovery_contract', null, fn ($component): bool => $component->getState() === 'Restart：修复后重建来源链')
@@ -438,7 +438,7 @@ test('terminal canonical summary budget failure exposes an explicit restart with
         'error_metadata' => ['category' => 'reasoning_budget_exhausted'],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertTableActionVisible('restart', $run)
         ->callTableAction('restart', $run)
         ->assertNotified('Summary Restart 已排队');
@@ -467,7 +467,7 @@ test('run inspector uses persisted provider failure facts instead of guessing fr
         ],
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->mountTableAction('inspect', $run)
         ->assertSchemaComponentExists('retryable', null, fn ($component): bool => $component->getState() === '是')
         ->assertSchemaComponentExists('error_category', null, fn ($component): bool => $component->getState() === 'external_temporary')
@@ -492,7 +492,7 @@ test('retry requeues a supported failed stage and keeps the chapter link', funct
         'error_code' => 'provider_timeout',
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertTableActionVisible('retry', $run)
         ->assertTableActionHidden('resume', $run)
         ->assertTableActionHasUrl('openChapter', NovelResource::getUrl('chapter', [
@@ -521,7 +521,7 @@ test('worker interruption offers resume from persisted state', function () {
         'error_code' => 'worker_interrupted',
     ]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertTableActionHidden('retry', $run)
         ->assertTableActionVisible('resume', $run)
         ->callTableAction('resume', $run);
@@ -552,7 +552,7 @@ test('stalled run is shown as worker lost and can recover from its persisted art
     ]);
     GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterDraft]);
 
-    Livewire::test(Generation::class)
+    Livewire::withQueryParams(['runs' => true])->test(Generation::class)
         ->assertSee('已停滞')
         ->assertTableActionVisible('recover', $run)
         ->assertTableActionHidden('retry', $run)

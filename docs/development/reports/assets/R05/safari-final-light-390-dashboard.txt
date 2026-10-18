@@ -1,0 +1,115 @@
+Window: "未命名 — 创作总览 - AI 长篇网络小说自动生成平台", App: Safari浏览器.
+0 标准窗口 未命名 — 创作总览 - AI 长篇网络小说自动生成平台, ID: SafariWindow?IsSecure=false&UUID=176ABBAF-5F54-4B44-9B17-F8E5516FF6D5, Secondary Actions: Raise
+	1 分离组
+		2 分离器 (disabled, settable, float) -1
+		3 标签页组
+			4 弹出式按钮 Description: 视口大小, Value: 自定义大小, ID: ViewportPresetButton
+			5 开关按钮 Description: 向左旋转, Help: 旋转视口, Value: off
+			6 文本栏 (settable) Description: 宽度, Value: 390
+			7 文本 ×
+			8 文本栏 (settable) Description: 高度, Value: 844
+			9 文本 Description: 缩放比例, Value: ( 86% )
+			10 弹出式按钮 Description: 像素比, Value: 2倍
+			11 菜单按钮 通过模拟器打开, ID: OpenWithSimulatorButton
+			12 滚动区
+				13 HTML内容 Description: 创作总览 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-font.test/x
+					14 link 跳转到内容, Value: xnovel-r05-font.test/x#fi-main-content
+					15 container 顶部栏
+						16 按钮 (collapsed) 展开侧边栏, Secondary Actions: Expand
+						17 文本 全局搜索
+						18 搜索文本栏 (settable) 全局搜索, Placeholder: 搜索
+							19 文本 搜索
+						20 文本 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+						21 按钮 (collapsed) 用户菜单, Secondary Actions: Expand
+					22 container 侧边导航
+						23 内容列表
+							24 内容列表
+								25 link 创作总览, Value: xnovel-r05-font.test/x
+								26 link 小说, Value: xnovel-r05-font.test/x/novels
+								27 link 生成任务, Value: xnovel-r05-font.test/x/generation
+								28 link 异常与审校, Value: xnovel-r05-font.test/x/generation-issues
+								29 link 记忆, Value: xnovel-r05-font.test/x/memory
+								30 link 设置, Value: xnovel-r05-font.test/x/settings
+							31 内容列表
+								32 link 服务商连接, Value: xnovel-r05-font.test/x/a-i-provider-connections
+								33 link 模型价格, Value: xnovel-r05-font.test/x/a-i-model-prices
+					34 container
+						35 标题 创作总览, Value: 1
+							36 文本 创作总览
+						37 link 创建小说, Value: xnovel-r05-font.test/x/novels/create
+						38 link 继续当前小说, Value: xnovel-r05-font.test/x/novels/26
+						39 link 打开恢复中心, Value: xnovel-r05-font.test/x/generation
+						40 按钮 紧急停止
+						41 标题 把一个想法写成一本书, Value: 2
+							42 文本 把一个想法写成一本书
+						43 文本 输入概述后自动规划、写作、审校和收束。只有真实进度会显示在这里。
+						44 描述列表
+							45 文本 正在生成
+							46 文本 1
+							47 文本 等待处理
+							48 文本 0
+							49 文本 已暂停
+							50 文本 1
+							51 文本 整书已完成
+							52 文本 0
+						53 标题 最近创作, Value: 2
+							54 文本 最近创作
+						55 标题 验收示例：雨港来信与不会游泳的邮差, Value: 2
+							56 link 验收示例：雨港来信与不会游泳的邮差, Value: xnovel-r05-font.test/x/novels/26
+						57 文本 生成中 · 记忆摘要 · 最近进展 10-18 12:41
+						58 标题 未命名小说, Value: 2
+							59 link 未命名小说, Value: xnovel-r05-font.test/x/novels/27
+						60 文本 已暂停 · 运行预检 · 最近进展 尚无记录
+						61 标题 需要你的判断, Value: 2
+							62 文本 需要你的判断
+						63 文本 当前没有阻塞问题。正常生成不需要逐步批准。
+					64 按钮 Edit this page with Herd, Help: Edit this page with Herd (⇧⌘H) · New chat (⇧⌘E) · Terminal (⇧⌘U)
+					65 按钮 (collapsed) Show dev stack processes, Help: Dev stack, Secondary Actions: Expand
+					66 按钮 Hide badge for this session, Help: Hide for this session
+				67 滚动条 (settable, float) 0
+	68 标签页组 Description: 标签页栏，6个标签页, ID: TabBar?isSeparate=false
+		69 标签 前言 | Go语言圣经, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			70 图像 FaviconImageView
+			71 文本 Value: 前言 | Go语言圣经, ID: UnifiedTabBarButton._titleTextField
+		72 标签 Go Web 编程 · 看云, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			73 图像 FaviconImageView
+			74 文本 Value: Go Web 编程 · 看云, ID: UnifiedTabBarButton._titleTextField
+		75 标签 邮件 - 王 明 - Outlook, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			76 图像 FaviconImageView
+			77 文本 Value: 邮件 - 王 明 - Outlook, ID: UnifiedTabBarButton._titleTextField
+		78 标签 人性博弈：社会化进阶攻略 - 飞书云文档, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			79 图像 FaviconImageView
+			80 文本 Value: 人性博弈：社会化进阶攻略 - 飞书云文档, ID: UnifiedTabBarButton._titleTextField
+		81 标签 章节阅读与复验 - AI 长篇网络小说自动生成平台, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			82 图像 FaviconImageView
+			83 文本 Value: 章节阅读与复验 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+		84 标签 创作总览 - AI 长篇网络小说自动生成平台, Help: 若要与此按钮中的项目交互，请按下Control-Option-Shift-下箭头键。, Value: on, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=true
+			85 图像 FaviconImageView
+			86 文本 Value: 创作总览 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+	87 工具栏
+		88 按钮 Description: 开关边栏, ID: SidebarButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		89 菜单按钮 ID: TabGroupPickerButton?TabGroup=%E6%9C%AA%E5%91%BD%E5%90%8D, Secondary Actions: 移到下一项, 从工具栏移除
+		90 container BackForwardSegmentedControl
+			91 按钮 Description: 返回, Help: 显示上一页, ID: BackButton
+			92 按钮 (disabled) Description: 前进, Help: 显示下一页, ID: ForwardButton
+		93 container Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+			94 按钮 页面菜单, ID: AssistantButton
+			95 按钮 将页面添加到阅读列表, ID: OneStepBookmarkingButton
+			96 文本栏 (settable) Description: 智能搜索栏, Value: xnovel-r05-font.test/x, ID: WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD
+			97 按钮 重新加载此页面, ID: ReloadButton
+		98 按钮 Description: 共享, ID: ShareButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		99 按钮 Description: 新建标签页, ID: NewTabButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		100 按钮 Description: 标签页概览, ID: TabOverviewButton, Secondary Actions: 移到上一项, 从工具栏移除
+	101 关闭按钮
+	102 全屏幕按钮 Help: 此按钮也可以执行缩放窗口的操作, Secondary Actions: 缩放窗口
+	103 最小化按钮
+104 menu bar
+	105 Safari浏览器
+	106 文件
+	107 编辑
+	108 显示, ID: SafariViewMenu
+	109 历史记录
+	110 书签, ID: SafariBookmarksMenu
+	111 开发
+	112 窗口, ID: SafariWindowMenu
+	113 帮助, ID: SafariHelpMenu

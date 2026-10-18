@@ -5,6 +5,7 @@ namespace App\Services;
 use App\AI\Data\AiRequest;
 use App\Enums\ArtifactValidationStatus;
 use App\Enums\RunStatus;
+use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationIssue;
@@ -81,6 +82,17 @@ final class BookChapterRepair
     public function rebuild(GenerationIssue $issue, NovelGenerationTask $task): GenerationRun
     {
         $source = app(GenerationIssueService::class)->assertCurrent($issue);
+        if (data_get($source->execution_contract, 'transition.canonical_chapter_id') && in_array($issue->category, ['capacity', 'configuration', 'summary'], true)) {
+            // 正式提交已成功，仅重建缺失摘要的请求准入，正文与提交凭证不重放。
+            $chapter = Chapter::where('novel_id', $task->novel_id)->findOrFail($source->execution_contract['transition']['canonical_chapter_id']);
+            $next = app(BookLifecycle::class)->summary($task, $chapter);
+            if (! $next) {
+                throw new \LogicException('摘要来源已发生变化，请刷新检查。');
+            }
+            $issue->update(['status' => 'resolved', 'resolved_at' => now(), 'resolution_reason' => '正式章节保留，摘要配置与容量准入已重新验证。摘要内容仍等待模型生成与证据校验。', 'verification' => ['admission_run_id' => $next->id]]);
+
+            return $next;
+        }
         if ($issue->category !== 'capacity') {
             throw new \LogicException('只有容量问题可重建准入；其他问题请使用对应修复。');
         }

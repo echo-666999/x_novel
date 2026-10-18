@@ -1,0 +1,309 @@
+[
+  {
+    "clippedControls": [
+      {
+        "id": "",
+        "text": "更新时间"
+      },
+      {
+        "id": "",
+        "text": "删除小说"
+      },
+      {
+        "id": "",
+        "text": "删除小说"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels",
+    "width": 1709
+  },
+  {
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels/26",
+    "width": 1709
+  },
+  {
+    "name": "dashboard",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x",
+    "width": 1709
+  },
+  {
+    "name": "list",
+    "clippedControls": [
+      {
+        "id": "",
+        "text": "更新时间"
+      },
+      {
+        "id": "",
+        "text": "删除小说"
+      },
+      {
+        "id": "",
+        "text": "删除小说"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels",
+    "width": 1709
+  },
+  {
+    "name": "create",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels/create",
+    "width": 1709
+  },
+  {
+    "name": "workbench",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels/26",
+    "width": 1709
+  },
+  {
+    "name": "reader",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels/26/book-chapters/26",
+    "width": 1709
+  },
+  {
+    "name": "planning",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/novels/26/planning",
+    "width": 1709
+  },
+  {
+    "name": "issues",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/generation-issues",
+    "width": 1709
+  },
+  {
+    "name": "settings",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi dark",
+    "url": "http://xnovel-r05-font.test/x/settings",
+    "width": 1709
+  },
+  {
+    "name": "dashboard",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x",
+    "width": 1709
+  },
+  {
+    "name": "list",
+    "clippedControls": [
+      {
+        "id": "",
+        "text": "更新时间"
+      },
+      {
+        "id": "",
+        "text": "删除小说"
+      },
+      {
+        "id": "",
+        "text": "删除小说"
+      }
+    ],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/novels",
+    "width": 1709
+  },
+  {
+    "name": "create",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/novels/create",
+    "width": 1709
+  },
+  {
+    "name": "workbench",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/novels/26",
+    "width": 1709
+  },
+  {
+    "name": "reader",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/novels/26/book-chapters/26",
+    "width": 1709
+  },
+  {
+    "name": "planning",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/novels/26/planning",
+    "width": 1709
+  },
+  {
+    "name": "issues",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/generation-issues",
+    "width": 1709
+  },
+  {
+    "name": "settings",
+    "clippedControls": [],
+    "durations": [
+      "1e-05s"
+    ],
+    "height": 939,
+    "reduce": true,
+    "root": "32px",
+    "scale": 1,
+    "scrollWidth": 1709,
+    "theme": "fi",
+    "url": "http://xnovel-r05-font.test/x/settings",
+    "width": 1709
+  }
+]

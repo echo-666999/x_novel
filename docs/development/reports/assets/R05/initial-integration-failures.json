@@ -1,0 +1,600 @@
+{
+  "tool": "pest",
+  "result": "failed",
+  "tests": 311,
+  "passed": 255,
+  "assertions": 2131,
+  "duration_ms": 207470,
+  "failed": 26,
+  "failures": [
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_foundation_is_preserved_and_schedules_R04_blueprint_without_canonical_writes",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:120"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_missing_original_requirement_saves_rejected_response_and_opens_issue",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:131"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_material_contradictions_are_consolidated_and_never_initialize",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:141"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_validated_handoff_initializes_once_without_volume_arc_or_future_events",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:175"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_initialization_failure_after_entity_creation_rolls_the_entire_adoption_back",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:187"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_pause_wins_initialization_race",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:198"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_configuration_preflight_can_be_explicitly_rechecked_without_charging_a_request",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 241,
+      "message": "Failed asserting that two strings are identical.\n--- Expected\n+++ Actual\n@@ @@\n-'resolved'\n+'awaiting_user'"
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_all_contradiction_choices_become_an_immutable_new_intent_without_changing_original_text",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:251"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_malformed_foundation_and_fabricated_evidence_cannot_be_adopted with data set \"('schema')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:267"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_malformed_foundation_and_fabricated_evidence_cannot_be_adopted with data set \"('evidence')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:267"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_natural_language_length_can_be_resolved_with_exact_evidence_while_preserving_original_default_provenance",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:288"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_whole_book_adoption_failure_remains_a_separate_visible_issue_after_successful_model_generation",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:301"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_foundation_field_repair_keeps_rejected_evidence_and_verifies_a_new_metered_candidate_once",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:333"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\Refactor\\NovelBookWorkflowTest::__pest_evaluable_foundation_repair_cannot_decide_user_conflicts",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php",
+      "line": 81,
+      "message": "Expecting null not to be null .",
+      "trace": [
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:81",
+        "/Users/webb/Herd/XNovel/tests/Feature/Refactor/NovelBookWorkflowTest.php:361"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_duplicate_milestone_completion_candidates",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 443,
+      "message": "Failed asserting that 'SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\\n\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 81 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\")' [ASCII](length: 465) contains \"重复 Milestone/Beat Completion Candidate\" [UTF-8](length: 42)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_cross_version_or_wrong_owner_completion_candidates with data set \"('cross_version')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 466,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_cross_version_or_wrong_owner_completion_candidates with data set \"('wrong_owner')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 466,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_rejects_an_unconfirmed_character_candidate_without_creating_it",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 483,
+      "message": "Failed asserting that 'SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"character-shen-lan\"\\n\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_characters\" where \"x_characters\".\"novel_id\" = 84 and \"x_characters\".\"novel_id\" is not null and \"x_characters\".\"id\" = character-shen-lan order by \"name\" asc) as \"exists\")' [ASCII](length: 447) contains \"未通过 Review\" [UTF-8](length: 16)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('plan')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('review')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('event')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_beat_completion_requires_matching_plan_review_event_and_evidence with data set \"('evidence')\"",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 530,
+      "message": "Failed asserting that an instance of class Illuminate\\Database\\QueryException is an instance of class Illuminate\\Validation\\ValidationException."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_transaction_exception_after_event_writes_leaves_no_partial_canonical_state",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 937,
+      "message": "Failed asserting that 'PASS Review 的 Outline Completion 身份或契约已过期。' [UTF-8](length: 62) contains \"不存在的 Story Event\" [UTF-8](length: 24)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_transaction_exception_after_creating_a_planned_world_entity_rolls_back_the_whole_planning_closure",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 964,
+      "message": "Failed asserting that 'SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\\n\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 109 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\")' [ASCII](length: 466) contains \"不存在的 Story Event\" [UTF-8](length: 24)."
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_pass_review_exposes_a_canonical_commit_preview_and_action",
+      "file": "/Users/webb/Herd/XNovel/vendor/filament/notifications/src/Notification.php",
+      "line": 287,
+      "message": "A notification was not sent\nFailed asserting that null is not null.",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/filament/notifications/src/Notification.php:287",
+        "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php:1028"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_commit_chapter_job_uses_the_canonical_service_and_duplicate_delivery_has_exactly_once_effects",
+      "file": "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php",
+      "line": 1241,
+      "message": "Failed asserting that two variables reference the same object.\n--- Expected\n+++ Actual\n@@ @@\n-App\\Enums\\ChapterStatus Enum #13216 (Canonical, 'canonical')\n+App\\Enums\\ChapterStatus Enum #13213 (Review, 'review')"
+    }
+  ],
+  "errors": 29,
+  "error_details": [
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_atomically_persists_events_state_and_pointers",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_manual_pass_review_retains_frozen_completion_audits_required_by_canonical_commit",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_closes_accepted_arc_beats_and_world_entity_candidates_exactly_once_and_rollback_reverses_them",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 447,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 80 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\")",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php:447",
+        "/Users/webb/Herd/XNovel/app/Services/StateValidator.php:164",
+        "/Users/webb/Herd/XNovel/app/Services/StateValidator.php:76",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:79",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_projection_refresh_after_commit_derives_every_foreshadowing_field_from_canonical_inputs",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_latest_canonical_chapter_rollback_restores_pointers_and_invalidates_derived_data",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_restores_facts_superseded_by_the_latest_canonical_chapter",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_restores_foreshadowing_projection_from_the_previous_state",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_non_latest_canonical_chapter_cannot_be_rolled_back",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_recanonicalization_after_rollback_uses_a_monotonically_increasing_state_version",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_skips_correction_versions_from_the_same_chapter_when_restoring_state",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_latest_canonical_chapter_rollback_requires_a_reason",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_failure_leaves_canonical_data_unchanged",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_latest_canonical_chapter_can_be_rolled_back_from_its_workbench",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_applies_fact_changes_with_story_event_provenance",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_an_identical_duplicate_canonical_commit_has_exactly_once_effects",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_accepts_an_overlength_draft_only_with_its_matching_recorded_exception",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_rollback_refuses_to_delete_a_chapter_introduced_character_referenced_by_another_canonical_chapter",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 447,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"character-shen-lan\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_characters\" where \"x_characters\".\"novel_id\" = 110 and \"x_characters\".\"novel_id\" is not null and \"x_characters\".\"id\" = character-shen-lan order by \"name\" asc) as \"exists\")",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php:447",
+        "/Users/webb/Herd/XNovel/app/Services/StateValidator.php:159",
+        "/Users/webb/Herd/XNovel/app/Services/StateValidator.php:76",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:79",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_an_already_canonical_chapter_rejects_a_conflicting_artifact",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_an_extractor_overclaim_can_be_reconciled_to_a_pass_review_without_committing_a_beat_event",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 864,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 114 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\") (View: /Users/webb/Herd/XNovel/vendor/filament/filament/resources/views/pages/page.blade.php) (View: /Users/webb/Herd/XNovel/vendor/filament/filament/resources/views/pages/page.blade.php)",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php:864",
+        "/Users/webb/Herd/XNovel/storage/framework/views/46760e01a84563f18595b9e10a9c2c24.php:14",
+        "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php:1091"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_a_legacy_pass_review_with_an_unaccepted_arc_completion_cannot_expose_an_enabled_commit_action",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php",
+      "line": 864,
+      "message": "SQLSTATE[22P02]: Invalid text representation: 7 ERROR: invalid input syntax for type bigint: \"wec-hidden-star-map\"\nCONTEXT: unnamed portal parameter $2 = '..' (Connection: pgsql, Host: 127.0.0.1, Port: 5432, Database: xnovel_refactor_test, SQL: select exists(select * from \"x_world_entities\" where \"x_world_entities\".\"novel_id\" = 116 and \"x_world_entities\".\"novel_id\" is not null and \"x_world_entities\".\"id\" = wec-hidden-star-map order by \"name\" asc) as \"exists\") (View: /Users/webb/Herd/XNovel/vendor/filament/filament/resources/views/pages/page.blade.php) (View: /Users/webb/Herd/XNovel/vendor/filament/filament/resources/views/pages/page.blade.php)",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Database/Connection.php:864",
+        "/Users/webb/Herd/XNovel/storage/framework/views/46760e01a84563f18595b9e10a9c2c24.php:14",
+        "/Users/webb/Herd/XNovel/tests/Feature/CanonicalCommitServiceTest.php:1208"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_automatic_continuation_rethrows_a_temporary_database_failure_for_queue_retry",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_dispatches_memory_update_after_the_formal_transaction",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\CanonicalCommitServiceTest::__pest_evaluable_canonical_commit_starts_the_next_chapter_only_after_required_post_commit_work_succeeds",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "PASS Review 的 Outline Completion 身份或契约已过期。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/OutlineCompletionService.php:430",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:487",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/CanonicalCommitService.php:54"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\MemoryUpdaterTest::__pest_evaluable_memory_updater_creates_traceable_memories_only_from_active_canonical_events",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "向量维度必须与 PostgreSQL memories.embedding 字段的实际维度一致。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:271",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:88",
+        "/Users/webb/Herd/XNovel/tests/Pest.php:174"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\MemoryUpdaterTest::__pest_evaluable_duplicate_memory_job_delivery_reuses_memories_and_the_successful_run",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "向量维度必须与 PostgreSQL memories.embedding 字段的实际维度一致。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:271",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:88",
+        "/Users/webb/Herd/XNovel/tests/Pest.php:174"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\MemoryUpdaterTest::__pest_evaluable_memory_update_job_rethrows_a_temporary_database_failure_for_queue_retry",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "向量维度必须与 PostgreSQL memories.embedding 字段的实际维度一致。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:271",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:88",
+        "/Users/webb/Herd/XNovel/tests/Pest.php:174"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\MemoryUpdaterTest::__pest_evaluable_draft_chapters_cannot_create_formal_memories",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "向量维度必须与 PostgreSQL memories.embedding 字段的实际维度一致。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:271",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:88",
+        "/Users/webb/Herd/XNovel/tests/Pest.php:174"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\MemoryUpdaterTest::__pest_evaluable_memory_updater_rejects_a_canonical_artifact_from_another_chapter",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "向量维度必须与 PostgreSQL memories.embedding 字段的实际维度一致。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:271",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:88",
+        "/Users/webb/Herd/XNovel/tests/Pest.php:174"
+      ]
+    },
+    {
+      "test": "P\\Tests\\Feature\\MemoryInvalidatorTest::__pest_evaluable_invalidated_rollback_memory_cannot_enter_vector_retrieval",
+      "file": "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php",
+      "line": 70,
+      "message": "向量维度必须与 PostgreSQL memories.embedding 字段的实际维度一致。",
+      "trace": [
+        "/Users/webb/Herd/XNovel/vendor/laravel/framework/src/Illuminate/Validation/ValidationException.php:70",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:271",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:89",
+        "/Users/webb/Herd/XNovel/app/Services/GenerationSettingsService.php:88",
+        "/Users/webb/Herd/XNovel/tests/Pest.php:174"
+      ]
+    }
+  ],
+  "skipped": 1
+}

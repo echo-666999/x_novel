@@ -1,0 +1,962 @@
+[
+  {
+    "name": "dashboard",
+    "path": "/x",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 27,
+    "scrollWidth": 1440,
+    "title": "创作总览"
+  },
+  {
+    "name": "novels",
+    "path": "/x/novels",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 84,
+    "scrollWidth": 1440,
+    "title": "小说"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 22,
+    "scrollWidth": 1440,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 26,
+    "scrollWidth": 1440,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 59,
+    "scrollWidth": 1440,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "planning",
+    "path": "/x/novels/2/planning",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 33,
+    "scrollWidth": 1440,
+    "title": "规划总览"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 20,
+    "scrollWidth": 1440,
+    "title": "异常中心"
+  },
+  {
+    "name": "generation",
+    "path": "/x/generation",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 50,
+    "scrollWidth": 1440,
+    "title": "生成任务"
+  },
+  {
+    "name": "state",
+    "path": "/x/novels/2/story-state",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 39,
+    "scrollWidth": 1440,
+    "title": "故事状态检查器"
+  },
+  {
+    "name": "ending",
+    "path": "/x/novels/4/ending-audit",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 24,
+    "scrollWidth": 1440,
+    "title": "结局审计"
+  },
+  {
+    "name": "memory",
+    "path": "/x/memory",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 30,
+    "scrollWidth": 1440,
+    "title": "记忆"
+  },
+  {
+    "name": "settings",
+    "path": "/x/settings",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 17,
+    "scrollWidth": 1440,
+    "title": "设置"
+  },
+  {
+    "name": "connections",
+    "path": "/x/a-i-provider-connections",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 31,
+    "scrollWidth": 1440,
+    "title": "服务商连接"
+  },
+  {
+    "name": "prices",
+    "path": "/x/a-i-model-prices",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 37,
+    "scrollWidth": 1440,
+    "title": "模型价格"
+  },
+  {
+    "name": "characters",
+    "path": "/x/novels/2/characters",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 38,
+    "scrollWidth": 1440,
+    "title": "角色管理"
+  },
+  {
+    "name": "world",
+    "path": "/x/novels/2/world",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 43,
+    "scrollWidth": 1440,
+    "title": "世界实体"
+  },
+  {
+    "name": "foreshadowings",
+    "path": "/x/novels/2/foreshadowings",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 26,
+    "scrollWidth": 1440,
+    "title": "伏笔管理"
+  },
+  {
+    "name": "tools",
+    "path": "/x/novels/2/tools",
+    "theme": "fi",
+    "width": 1440,
+    "height": 900,
+    "focusables": 29,
+    "scrollWidth": 1440,
+    "title": "更多检查与设置"
+  },
+  {
+    "name": "dashboard",
+    "path": "/x",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 25,
+    "scrollWidth": 390,
+    "title": "创作总览"
+  },
+  {
+    "name": "novels",
+    "path": "/x/novels",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 81,
+    "scrollWidth": 390,
+    "title": "小说"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 19,
+    "scrollWidth": 390,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 18,
+    "scrollWidth": 390,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 51,
+    "scrollWidth": 390,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "planning",
+    "path": "/x/novels/2/planning",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 25,
+    "scrollWidth": 390,
+    "title": "规划总览"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 18,
+    "scrollWidth": 390,
+    "title": "异常中心"
+  },
+  {
+    "name": "generation",
+    "path": "/x/generation",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 48,
+    "scrollWidth": 390,
+    "title": "生成任务"
+  },
+  {
+    "name": "state",
+    "path": "/x/novels/2/story-state",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 31,
+    "scrollWidth": 390,
+    "title": "故事状态检查器"
+  },
+  {
+    "name": "ending",
+    "path": "/x/novels/4/ending-audit",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 16,
+    "scrollWidth": 390,
+    "title": "结局审计"
+  },
+  {
+    "name": "memory",
+    "path": "/x/memory",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 28,
+    "scrollWidth": 390,
+    "title": "记忆"
+  },
+  {
+    "name": "settings",
+    "path": "/x/settings",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 15,
+    "scrollWidth": 390,
+    "title": "设置"
+  },
+  {
+    "name": "connections",
+    "path": "/x/a-i-provider-connections",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 28,
+    "scrollWidth": 390,
+    "title": "服务商连接"
+  },
+  {
+    "name": "prices",
+    "path": "/x/a-i-model-prices",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 34,
+    "scrollWidth": 390,
+    "title": "模型价格"
+  },
+  {
+    "name": "characters",
+    "path": "/x/novels/2/characters",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 30,
+    "scrollWidth": 390,
+    "title": "角色管理"
+  },
+  {
+    "name": "world",
+    "path": "/x/novels/2/world",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 35,
+    "scrollWidth": 390,
+    "title": "世界实体"
+  },
+  {
+    "name": "foreshadowings",
+    "path": "/x/novels/2/foreshadowings",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 18,
+    "scrollWidth": 390,
+    "title": "伏笔管理"
+  },
+  {
+    "name": "tools",
+    "path": "/x/novels/2/tools",
+    "theme": "fi",
+    "width": 390,
+    "height": 844,
+    "focusables": 21,
+    "scrollWidth": 390,
+    "title": "更多检查与设置"
+  },
+  {
+    "name": "dashboard",
+    "path": "/x",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 27,
+    "scrollWidth": 1440,
+    "title": "创作总览"
+  },
+  {
+    "name": "novels",
+    "path": "/x/novels",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 84,
+    "scrollWidth": 1440,
+    "title": "小说"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 22,
+    "scrollWidth": 1440,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 26,
+    "scrollWidth": 1440,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 59,
+    "scrollWidth": 1440,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "planning",
+    "path": "/x/novels/2/planning",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 33,
+    "scrollWidth": 1440,
+    "title": "规划总览"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 20,
+    "scrollWidth": 1440,
+    "title": "异常中心"
+  },
+  {
+    "name": "generation",
+    "path": "/x/generation",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 50,
+    "scrollWidth": 1440,
+    "title": "生成任务"
+  },
+  {
+    "name": "state",
+    "path": "/x/novels/2/story-state",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 39,
+    "scrollWidth": 1440,
+    "title": "故事状态检查器"
+  },
+  {
+    "name": "ending",
+    "path": "/x/novels/4/ending-audit",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 24,
+    "scrollWidth": 1440,
+    "title": "结局审计"
+  },
+  {
+    "name": "memory",
+    "path": "/x/memory",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 30,
+    "scrollWidth": 1440,
+    "title": "记忆"
+  },
+  {
+    "name": "settings",
+    "path": "/x/settings",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 17,
+    "scrollWidth": 1440,
+    "title": "设置"
+  },
+  {
+    "name": "connections",
+    "path": "/x/a-i-provider-connections",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 31,
+    "scrollWidth": 1440,
+    "title": "服务商连接"
+  },
+  {
+    "name": "prices",
+    "path": "/x/a-i-model-prices",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 37,
+    "scrollWidth": 1440,
+    "title": "模型价格"
+  },
+  {
+    "name": "characters",
+    "path": "/x/novels/2/characters",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 38,
+    "scrollWidth": 1440,
+    "title": "角色管理"
+  },
+  {
+    "name": "world",
+    "path": "/x/novels/2/world",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 43,
+    "scrollWidth": 1440,
+    "title": "世界实体"
+  },
+  {
+    "name": "foreshadowings",
+    "path": "/x/novels/2/foreshadowings",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 26,
+    "scrollWidth": 1440,
+    "title": "伏笔管理"
+  },
+  {
+    "name": "tools",
+    "path": "/x/novels/2/tools",
+    "theme": "fi dark",
+    "width": 1440,
+    "height": 900,
+    "focusables": 29,
+    "scrollWidth": 1440,
+    "title": "更多检查与设置"
+  },
+  {
+    "name": "dashboard",
+    "path": "/x",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 25,
+    "scrollWidth": 390,
+    "title": "创作总览"
+  },
+  {
+    "name": "novels",
+    "path": "/x/novels",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 81,
+    "scrollWidth": 390,
+    "title": "小说"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 19,
+    "scrollWidth": 390,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 18,
+    "scrollWidth": 390,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 51,
+    "scrollWidth": 390,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "planning",
+    "path": "/x/novels/2/planning",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 25,
+    "scrollWidth": 390,
+    "title": "规划总览"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 18,
+    "scrollWidth": 390,
+    "title": "异常中心"
+  },
+  {
+    "name": "generation",
+    "path": "/x/generation",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 48,
+    "scrollWidth": 390,
+    "title": "生成任务"
+  },
+  {
+    "name": "state",
+    "path": "/x/novels/2/story-state",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 31,
+    "scrollWidth": 390,
+    "title": "故事状态检查器"
+  },
+  {
+    "name": "ending",
+    "path": "/x/novels/4/ending-audit",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 16,
+    "scrollWidth": 390,
+    "title": "结局审计"
+  },
+  {
+    "name": "memory",
+    "path": "/x/memory",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 28,
+    "scrollWidth": 390,
+    "title": "记忆"
+  },
+  {
+    "name": "settings",
+    "path": "/x/settings",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 15,
+    "scrollWidth": 390,
+    "title": "设置"
+  },
+  {
+    "name": "connections",
+    "path": "/x/a-i-provider-connections",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 28,
+    "scrollWidth": 390,
+    "title": "服务商连接"
+  },
+  {
+    "name": "prices",
+    "path": "/x/a-i-model-prices",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 34,
+    "scrollWidth": 390,
+    "title": "模型价格"
+  },
+  {
+    "name": "characters",
+    "path": "/x/novels/2/characters",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 30,
+    "scrollWidth": 390,
+    "title": "角色管理"
+  },
+  {
+    "name": "world",
+    "path": "/x/novels/2/world",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 35,
+    "scrollWidth": 390,
+    "title": "世界实体"
+  },
+  {
+    "name": "foreshadowings",
+    "path": "/x/novels/2/foreshadowings",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 18,
+    "scrollWidth": 390,
+    "title": "伏笔管理"
+  },
+  {
+    "name": "tools",
+    "path": "/x/novels/2/tools",
+    "theme": "fi dark",
+    "width": 390,
+    "height": 844,
+    "focusables": 21,
+    "scrollWidth": 390,
+    "title": "更多检查与设置"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi dark",
+    "width": 1024,
+    "height": 768,
+    "focusables": 22,
+    "scrollWidth": 1024,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi dark",
+    "width": 1024,
+    "height": 768,
+    "focusables": 26,
+    "scrollWidth": 1024,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi dark",
+    "width": 1024,
+    "height": 768,
+    "focusables": 59,
+    "scrollWidth": 1024,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi dark",
+    "width": 1024,
+    "height": 768,
+    "focusables": 20,
+    "scrollWidth": 1024,
+    "title": "异常中心"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi dark",
+    "width": 768,
+    "height": 1024,
+    "focusables": 20,
+    "scrollWidth": 768,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi dark",
+    "width": 768,
+    "height": 1024,
+    "focusables": 24,
+    "scrollWidth": 768,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi dark",
+    "width": 768,
+    "height": 1024,
+    "focusables": 57,
+    "scrollWidth": 768,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi dark",
+    "width": 768,
+    "height": 1024,
+    "focusables": 18,
+    "scrollWidth": 768,
+    "title": "异常中心"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi dark",
+    "width": 320,
+    "height": 800,
+    "focusables": 19,
+    "scrollWidth": 320,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi dark",
+    "width": 320,
+    "height": 800,
+    "focusables": 18,
+    "scrollWidth": 320,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi dark",
+    "width": 320,
+    "height": 800,
+    "focusables": 51,
+    "scrollWidth": 320,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi dark",
+    "width": 320,
+    "height": 800,
+    "focusables": 18,
+    "scrollWidth": 320,
+    "title": "异常中心"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi",
+    "width": 1024,
+    "height": 768,
+    "focusables": 22,
+    "scrollWidth": 1024,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi",
+    "width": 1024,
+    "height": 768,
+    "focusables": 26,
+    "scrollWidth": 1024,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi",
+    "width": 1024,
+    "height": 768,
+    "focusables": 59,
+    "scrollWidth": 1024,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi",
+    "width": 1024,
+    "height": 768,
+    "focusables": 20,
+    "scrollWidth": 1024,
+    "title": "异常中心"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi",
+    "width": 768,
+    "height": 1024,
+    "focusables": 20,
+    "scrollWidth": 768,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi",
+    "width": 768,
+    "height": 1024,
+    "focusables": 24,
+    "scrollWidth": 768,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi",
+    "width": 768,
+    "height": 1024,
+    "focusables": 57,
+    "scrollWidth": 768,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi",
+    "width": 768,
+    "height": 1024,
+    "focusables": 18,
+    "scrollWidth": 768,
+    "title": "异常中心"
+  },
+  {
+    "name": "create",
+    "path": "/x/novels/create",
+    "theme": "fi",
+    "width": 320,
+    "height": 800,
+    "focusables": 19,
+    "scrollWidth": 320,
+    "title": "从一个想法，开始一本小说"
+  },
+  {
+    "name": "workbench",
+    "path": "/x/novels/2",
+    "theme": "fi",
+    "width": 320,
+    "height": 800,
+    "focusables": 18,
+    "scrollWidth": 320,
+    "title": "【隔离验收】人工审核与暂停恢复"
+  },
+  {
+    "name": "reader",
+    "path": "/x/novels/6/book-chapters/6",
+    "theme": "fi",
+    "width": 320,
+    "height": 800,
+    "focusables": 51,
+    "scrollWidth": 320,
+    "title": "章节阅读与复验"
+  },
+  {
+    "name": "issues",
+    "path": "/x/generation-issues",
+    "theme": "fi",
+    "width": 320,
+    "height": 800,
+    "focusables": 18,
+    "scrollWidth": 320,
+    "title": "异常中心"
+  }
+]

@@ -1,0 +1,674 @@
+[
+  {
+    "name": "dashboard",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x"
+  },
+  {
+    "name": "create",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "planning",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/planning"
+  },
+  {
+    "name": "issues",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "settings",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/settings"
+  },
+  {
+    "name": "dashboard",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x"
+  },
+  {
+    "name": "create",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "planning",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/planning"
+  },
+  {
+    "name": "issues",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "settings",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/settings"
+  },
+  {
+    "name": "list",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels"
+  },
+  {
+    "name": "list",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels"
+  },
+  {
+    "name": "create",
+    "theme": "light",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "light",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "light",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "issues",
+    "theme": "light",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "create",
+    "theme": "light",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "light",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "light",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "issues",
+    "theme": "light",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "create",
+    "theme": "light",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "light",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "light",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "issues",
+    "theme": "light",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "dashboard",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x"
+  },
+  {
+    "name": "list",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels"
+  },
+  {
+    "name": "create",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "planning",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/planning"
+  },
+  {
+    "name": "issues",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "settings",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/settings"
+  },
+  {
+    "name": "dashboard",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x"
+  },
+  {
+    "name": "list",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels"
+  },
+  {
+    "name": "create",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "planning",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/planning"
+  },
+  {
+    "name": "issues",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "settings",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/settings"
+  },
+  {
+    "name": "create",
+    "theme": "dark",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "dark",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "dark",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "issues",
+    "theme": "dark",
+    "width": 1024,
+    "height": 768,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "create",
+    "theme": "dark",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "dark",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "dark",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "issues",
+    "theme": "dark",
+    "width": 768,
+    "height": 1024,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "create",
+    "theme": "dark",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/novels/create"
+  },
+  {
+    "name": "workbench",
+    "theme": "dark",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/novels/26"
+  },
+  {
+    "name": "reader",
+    "theme": "dark",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/novels/26/book-chapters/26"
+  },
+  {
+    "name": "issues",
+    "theme": "dark",
+    "width": 320,
+    "height": 800,
+    "url": "xnovel-r05-font.test/x/generation-issues"
+  },
+  {
+    "name": "generation",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/generation"
+  },
+  {
+    "name": "state",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/story-state"
+  },
+  {
+    "name": "ending",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/ending-audit"
+  },
+  {
+    "name": "memory",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/memory"
+  },
+  {
+    "name": "connections",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/a-i-provider-connections"
+  },
+  {
+    "name": "prices",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/a-i-model-prices"
+  },
+  {
+    "name": "characters",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/characters"
+  },
+  {
+    "name": "world",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/world"
+  },
+  {
+    "name": "foreshadowings",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/foreshadowings"
+  },
+  {
+    "name": "tools",
+    "theme": "dark",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/tools"
+  },
+  {
+    "name": "generation",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/generation"
+  },
+  {
+    "name": "state",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/story-state"
+  },
+  {
+    "name": "ending",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/ending-audit"
+  },
+  {
+    "name": "memory",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/memory"
+  },
+  {
+    "name": "connections",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/a-i-provider-connections"
+  },
+  {
+    "name": "prices",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/a-i-model-prices"
+  },
+  {
+    "name": "characters",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/characters"
+  },
+  {
+    "name": "world",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/world"
+  },
+  {
+    "name": "foreshadowings",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/foreshadowings"
+  },
+  {
+    "name": "tools",
+    "theme": "dark",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/tools"
+  },
+  {
+    "name": "generation",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/generation"
+  },
+  {
+    "name": "state",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/story-state"
+  },
+  {
+    "name": "ending",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/ending-audit"
+  },
+  {
+    "name": "memory",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/memory"
+  },
+  {
+    "name": "connections",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/a-i-provider-connections"
+  },
+  {
+    "name": "prices",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/a-i-model-prices"
+  },
+  {
+    "name": "characters",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/characters"
+  },
+  {
+    "name": "world",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/world"
+  },
+  {
+    "name": "foreshadowings",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/foreshadowings"
+  },
+  {
+    "name": "tools",
+    "theme": "light",
+    "width": 1440,
+    "height": 900,
+    "url": "xnovel-r05-font.test/x/novels/26/tools"
+  },
+  {
+    "name": "generation",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/generation"
+  },
+  {
+    "name": "state",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/story-state"
+  },
+  {
+    "name": "ending",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/ending-audit"
+  },
+  {
+    "name": "memory",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/memory"
+  },
+  {
+    "name": "connections",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/a-i-provider-connections"
+  },
+  {
+    "name": "prices",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/a-i-model-prices"
+  },
+  {
+    "name": "characters",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/characters"
+  },
+  {
+    "name": "world",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/world"
+  },
+  {
+    "name": "foreshadowings",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/foreshadowings"
+  },
+  {
+    "name": "tools",
+    "theme": "light",
+    "width": 390,
+    "height": 844,
+    "url": "xnovel-r05-font.test/x/novels/26/tools"
+  }
+]

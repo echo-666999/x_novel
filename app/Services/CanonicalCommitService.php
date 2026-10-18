@@ -8,6 +8,7 @@ use App\Data\CanonicalCommitData;
 use App\Data\StatePatch;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
+use App\Enums\ArtifactValidationStatus;
 use App\Enums\ChapterStatus;
 use App\Enums\CharacterStatus;
 use App\Enums\EventType;
@@ -16,11 +17,14 @@ use App\Enums\FactSourceType;
 use App\Enums\FactStatus;
 use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
+use App\Enums\RunStatus;
 use App\Enums\WorldEntityStatus;
 use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\Character;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelGenerationTask;
 use App\Models\Review;
@@ -50,7 +54,11 @@ class CanonicalCommitService
         [$stateVersion] = DB::transaction(function () use ($data): array {
             $chapter = Chapter::query()->findOrFail($data->chapterId);
             $novel = Novel::query()->lockForUpdate()->findOrFail($chapter->novel_id);
+            $task = $novel->current_generation_task_id ? NovelGenerationTask::whereKey($novel->current_generation_task_id)->lockForUpdate()->firstOrFail() : null;
             $chapter = Chapter::query()->lockForUpdate()->findOrFail($data->chapterId);
+            if ($task && ($data->taskId !== $task->id || $data->controlVersion !== $task->control_version)) {
+                throw new \LogicException('任务或控制版本已改变，不能提交旧预览。');
+            }
 
             if ($chapter->canonical_artifact_id !== null) {
                 return [$this->resolveDuplicate($chapter, $data), false];
@@ -65,8 +73,10 @@ class CanonicalCommitService
             }
 
             [$artifact, $review, $candidateArtifact, $patchArtifact] = $this->loadFrozenInputs($chapter, $data);
-            $this->validateDraftLength($chapter, $artifact, $review);
-            $this->stateValidator->validate($chapter->getKey())->assertCanCommit();
+            if (! $task) {
+                $this->validateDraftLength($chapter, $artifact, $review);
+            }
+            $this->stateValidator->validate($chapter->getKey(), $task ? $candidateArtifact->id : null, $task ? $patchArtifact->id : null, $task ? $artifact->id : null)->assertCanCommit();
             $events = $this->eventCandidates($candidateArtifact);
             $nextVersion = ((int) $novel->storyStateVersions()->max('version')) + 1;
             $nextState = $this->statePatchBuilder->applyArtifact($currentState->state, $patchArtifact);
@@ -75,7 +85,8 @@ class CanonicalCommitService
                 throw ValidationException::withMessages(['state_patch' => 'State Patch 校验和与应用结果不一致。']);
             }
 
-            $planning = $this->validatePlanningAcceptance($chapter, $review, $candidateArtifact, $events);
+            $planning = $task ? ['outline_completion' => [], 'arc_beat_audits' => [], 'arc_completion_audits' => [], 'character_candidates' => [], 'world_entity_candidates' => []]
+                : $this->validatePlanningAcceptance($chapter, $review, $candidateArtifact, $events);
             $characters = $this->persistCharacterCandidates($novel, $chapter, $planning['character_candidates']);
             $worldEntities = $this->persistWorldEntityCandidates($novel, $chapter, $planning['world_entity_candidates']);
             $events = $this->resolveCharacterEvents($events, $planning['character_candidates'], $characters);
@@ -107,6 +118,7 @@ class CanonicalCommitService
                 'canonical_artifact_id' => $artifact->getKey(),
                 'word_count' => $this->lengthPolicy->count($artifact->content),
                 'canonical_metadata' => [
+                    'book_sources' => $task ? ['task_id' => $task->id, 'plan_id' => $chapter->current_plan_id, 'review_id' => $review->id, 'event_artifact_id' => $candidateArtifact->id, 'patch_artifact_id' => $patchArtifact->id, 'previous_state_id' => $currentState->id] : null,
                     'outline_completion' => $planning['outline_completion'],
                     'arc_beat_audits' => $planning['arc_beat_audits'],
                     'arc_completion_audits' => $planning['arc_completion_audits'],
@@ -128,7 +140,15 @@ class CanonicalCommitService
                 'canonical_state_version_id' => $stateVersion->getKey(),
                 'current_chapter_sequence' => max($novel->current_chapter_sequence, $chapter->sequence),
             ]);
-            $this->storyArcProgressProjector->refreshNovel($novel);
+            if ($task) {
+                // 正式效果、提交凭证和摘要待办同事务；进程退出后仍能从数据库补派。
+                $receipt = GenerationRun::create(['novel_id' => $novel->id, 'chapter_id' => $chapter->id, 'generation_task_id' => $task->id, 'pipeline_version' => 'pipeline-v1', 'stage' => 'commit', 'scope_type' => 'chapter', 'scope_id' => $chapter->id, 'scope_key' => 'commit:'.$chapter->id, 'logical_step_key' => 'book-commit:'.$artifact->id, 'idempotency_key' => 'book-commit:'.$artifact->id, 'input_hash' => $artifact->checksum, 'status' => 'succeeded', 'attempt' => 1, 'execution_contract' => ['review_id' => $review->id, 'control_version' => $task->control_version], 'started_at' => now(), 'finished_at' => now()]);
+                $proof = $receipt->artifacts()->create(['type' => ArtifactType::OperationRecord, 'data' => ['state_version_id' => $stateVersion->id, 'canonical_artifact_id' => $artifact->id], 'checksum' => app(GenerationInputIdentity::class)->hash([$stateVersion->id, $artifact->id]), 'validation_status' => 'validated']);
+                $receipt->update(['result_artifact_id' => $proof->id]);
+                $task->update(['current_phase' => 'memory_summary', 'pending_transition' => ['stage' => 'book_control', 'canonical_chapter_id' => $chapter->id], 'last_progress_at' => now()]);
+            } else {
+                $this->storyArcProgressProjector->refreshNovel($novel);
+            }
 
             return [$stateVersion, true];
         }, 3);
@@ -149,7 +169,7 @@ class CanonicalCommitService
         if ($novel->current_generation_task_id && NovelGenerationTask::findOrFail($novel->current_generation_task_id)->status !== 'running') {
             throw ValidationException::withMessages(['task' => '整书任务未运行，禁止正式提交。']);
         }
-        if (! in_array($novel->status, [NovelStatus::Generating, NovelStatus::Completing], true)) {
+        if (! in_array($novel->status, $novel->current_generation_task_id ? [NovelStatus::Planning, NovelStatus::Generating, NovelStatus::Completing] : [NovelStatus::Generating, NovelStatus::Completing], true)) {
             throw ValidationException::withMessages(['novel' => '只有生成中或收束中的小说可以提交正式章节。']);
         }
     }
@@ -157,6 +177,9 @@ class CanonicalCommitService
     /** @return array{GenerationArtifact, Review, GenerationArtifact, GenerationArtifact} */
     private function loadFrozenInputs(Chapter $chapter, CanonicalCommitData $data): array
     {
+        if ($chapter->novel->current_generation_task_id) {
+            return $this->loadBookInputs($chapter, $data);
+        }
         $artifact = GenerationArtifact::query()->findOrFail($data->artifactId);
         $review = Review::query()->with(['artifact', 'generationRun'])->findOrFail($data->reviewId);
         $candidate = GenerationArtifact::query()->with('generationRun')->findOrFail($data->eventCandidateArtifactId);
@@ -202,6 +225,47 @@ class CanonicalCommitService
         }
 
         return [$artifact, $review, $candidate, $patch];
+    }
+
+    /** 新版只认当前完整草稿及同源 PASS，不借用旧 Arc/Beat 或评分合同。 */
+    private function loadBookInputs(Chapter $chapter, CanonicalCommitData $data): array
+    {
+        $task = NovelGenerationTask::findOrFail($data->taskId);
+        $plan = ChapterPlan::where('chapter_id', $chapter->id)->findOrFail($chapter->current_plan_id);
+        $draft = GenerationArtifact::findOrFail($data->artifactId);
+        $review = Review::with(['artifact', 'generationRun'])->findOrFail($data->reviewId);
+        $candidate = GenerationArtifact::findOrFail($data->eventCandidateArtifactId);
+        $patch = GenerationArtifact::findOrFail($data->statePatchArtifactId);
+        $r = $review->artifact->data;
+        if ($plan->schema_version !== 'book-plan-v1' || $plan->source_state_version_id !== $task->novel->canonical_state_version_id
+            || $chapter->current_draft_artifact_id !== $draft->id || $draft->generationRun->chapter_id !== $chapter->id
+            || ! in_array($draft->type, [ArtifactType::ChapterDraft, ArtifactType::RewriteDraft], true)
+            || ! hash_equals($draft->checksum, $data->artifactChecksum)
+            || ! hash_equals($draft->checksum, app(GenerationInputIdentity::class)->hash([$draft->content, $draft->data, $draft->source_manifest]))
+            || $review->decision !== ReviewDecision::Pass || ($r['decision'] ?? null) !== 'PASS'
+            || $review->generationRun->status !== RunStatus::Succeeded || $review->generationRun->generation_task_id !== $task->id
+            || ($r['source_artifact_id'] ?? null) !== $draft->id || ($r['chapter_plan_id'] ?? null) !== $plan->id
+            || ($r['event_artifact_id'] ?? null) !== $candidate->id || ($r['patch_artifact_id'] ?? null) !== $patch->id
+            || ($r['source_state_version_id'] ?? null) !== $plan->source_state_version_id
+            || $candidate->type !== ArtifactType::EventCandidate || $patch->type !== ArtifactType::StatePatch
+            || ($candidate->data['source_artifact_id'] ?? null) !== $draft->id || ($patch->data['source_artifact_id'] ?? null) !== $candidate->id
+            || ($patch->data['expected_state_version'] ?? null) !== $data->expectedStateVersion
+            || $chapter->sequence !== ((int) $task->novel->current_chapter_sequence) + 1) {
+            throw new \LogicException('正式提交来源、章节顺序或 PASS 已过期，请保留新稿重新复验。');
+        }
+        foreach ([$draft, $review->artifact, $candidate, $patch] as $artifact) {
+            if ($artifact->novel_id !== $task->novel_id || $artifact->validation_status !== ArtifactValidationStatus::Validated || $artifact->generationRun->chapter_id !== $chapter->id) {
+                throw new \LogicException('正式提交产物归属或验证状态不正确。');
+            }
+        }
+        app(GenerationRunCoordinator::class)->assertSources($task, $review->generationRun->source_manifest, $review->generationRun->execution_contract);
+        // 提交前再次执行证据及叙事结论归纳，防止仅更改 Review 行绕过真实报告。
+        $verified = app(NovelChapterPipeline::class)->validateOutput($review->generationRun, $r);
+        if ($verified['decision'] !== 'PASS') {
+            throw new \LogicException('当前审校报告仍有阻塞项。');
+        }
+
+        return [$draft, $review, $candidate, $patch];
     }
 
     private function validateDraftLength(Chapter $chapter, GenerationArtifact $artifact, Review $review): void
@@ -283,7 +347,7 @@ class CanonicalCommitService
 
             return $novel->storyEvents()->create([
                 'chapter_id' => $chapter->getKey(),
-                'scene_id' => $event->evidence[0]['scene_id'],
+                'scene_id' => $event->evidence[0]['scene_id'] ?? null,
                 'event_type' => $event->eventType,
                 'subject_type' => $event->subjectType,
                 'subject_id' => $event->subjectId,

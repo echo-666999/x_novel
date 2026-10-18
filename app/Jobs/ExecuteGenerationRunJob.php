@@ -5,7 +5,9 @@ namespace App\Jobs;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Models\GenerationRun;
+use App\Models\SystemSetting;
 use App\Services\BookChapterRepair;
+use App\Services\BookExportService;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationIssueDiagnostic;
 use App\Services\GenerationJobDispatcher;
@@ -24,6 +26,9 @@ class ExecuteGenerationRunJob implements ShouldQueue
 {
     use Queueable;
 
+    /** 标识实际加载的 Job 实现；不能在旧 Worker 内读取新磁盘文件冒充已经重载。 */
+    private const WORKER_IMPLEMENTATION = 'book-workflow-r05-v1';
+
     public int $tries = 1;
 
     public int $timeout = 330;
@@ -35,6 +40,8 @@ class ExecuteGenerationRunJob implements ShouldQueue
 
     public function handle(GenerationRunCoordinator $coordinator): void
     {
+        // 工作进程实际消费时留下版本与时间，配置页面不得凭队列配置推断在线。
+        SystemSetting::updateOrCreate(['key' => 'generation_health_worker'], ['value' => ['observed_at' => now()->toISOString(), 'code_version' => self::WORKER_IMPLEMENTATION]]);
         $lease = $coordinator->claimExecution($this->runId);
         if ($lease === null) {
             return;
@@ -51,6 +58,13 @@ class ExecuteGenerationRunJob implements ShouldQueue
             // R02 只读诊断复用同一租约、请求费用和来源边界，不执行模型建议。
             if (data_get($run->execution_contract, 'issue_action') === 'diagnose') {
                 app(GenerationIssueDiagnostic::class)->execute($run, $lease);
+
+                return;
+            }
+            // 导出不调用模型，仍共享持久认领、暂停和来源门禁。
+            if (data_get($run->execution_contract, 'book_export')) {
+                app(BookExportService::class)->execute($run, $lease);
+                app(NovelBookWorkflow::class)->advance($run->generation_task_id);
 
                 return;
             }

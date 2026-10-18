@@ -1,0 +1,116 @@
+Window: "未命名 — 未命名小说 - AI 长篇网络小说自动生成平台", App: Safari浏览器.
+0 标准窗口 未命名 — 未命名小说 - AI 长篇网络小说自动生成平台, ID: SafariWindow?IsSecure=false&UUID=176ABBAF-5F54-4B44-9B17-F8E5516FF6D5, Secondary Actions: Raise
+	1 分离组
+		2 分离器 (disabled, settable, float) -1
+		3 标签页组
+			4 滚动区
+				5 HTML内容 Description: 未命名小说 - AI 长篇网络小说自动生成平台, URL: xnovel-r05-desktop.test/x/novels/27
+					6 link 跳转到内容, Value: xnovel-r05-desktop.test/x/novels/27#fi-main-content
+					7 container 顶部栏
+						8 按钮 (expanded) 折叠侧边栏, Secondary Actions: Collapse
+						9 link AI 长篇网络小说自动生成平台, Value: xnovel-r05-desktop.test/x
+						10 文本 全局搜索
+						11 搜索文本栏 (settable) 全局搜索, Placeholder: 搜索
+							12 文本 搜索
+						13 文本 按向下方向键浏览结果，上下方向键切换，Tab 进入操作，Escape 关闭结果。
+						14 按钮 (collapsed) 用户菜单, Secondary Actions: Expand
+					15 container 侧边导航
+						16 内容列表
+							17 内容列表
+								18 link 创作总览, Value: xnovel-r05-desktop.test/x
+								19 link 小说, Value: xnovel-r05-desktop.test/x/novels
+								20 link 生成任务, Value: xnovel-r05-desktop.test/x/generation
+								21 link 异常与审校, Value: xnovel-r05-desktop.test/x/generation-issues
+								22 link 记忆, Value: xnovel-r05-desktop.test/x/memory
+								23 link 设置, Value: xnovel-r05-desktop.test/x/settings
+							24 container
+								25 文本 AI 与成本
+								26 按钮 (expanded) AI 与成本, Secondary Actions: Collapse
+								27 内容列表
+									28 link 服务商连接, Value: xnovel-r05-desktop.test/x/a-i-provider-connections
+									29 link 模型价格, Value: xnovel-r05-desktop.test/x/a-i-model-prices
+					30 container
+						31 container
+							32 container 面包屑导航
+								33 内容列表
+									34 link 小说, Value: xnovel-r05-desktop.test/x/novels
+									35 link 未命名小说, Value: xnovel-r05-desktop.test/x/novels/27
+									36 文本 详情
+							37 标题 未命名小说, Value: 1
+								38 文本 未命名小说
+							39 文本 待解析 · 已暂停
+							40 link 查看异常, Value: xnovel-r05-desktop.test/x/generation-issues?novel=27
+							41 link 调整概述与设置, Value: xnovel-r05-desktop.test/x/novels/27/edit
+							42 按钮 继续生成
+						43 container
+							44 link 工作台, Value: xnovel-r05-desktop.test/x/novels/27
+							45 link 正文, Value: xnovel-r05-desktop.test/x/novels/27/chapters
+							46 link 设定与计划, Value: xnovel-r05-desktop.test/x/novels/27/planning
+							47 link 异常, Value: xnovel-r05-desktop.test/x/generation-issues?novel=27
+							48 link 更多, Value: xnovel-r05-desktop.test/x/novels/27/tools
+						49 标题 这本书正在进行到哪里, Value: 2
+							50 文本 这本书正在进行到哪里
+						51 文本 自动完成整本 · 目标 100,000 正文字数
+						52 文本 已暂停
+						53 文本 任务已保存。执行进度来自持久记录；没有执行记录时不会显示模型正在生成。
+						54 文本 正式章节：0 · 模式和费用策略在设置中可调整。
+						55 标题 进度与费用, Value: 2
+							56 文本 进度与费用
+						57 文本 当前阶段：运行预检 · 最后进展：尚无完成记录
+						58 文本 正式正文 0 字。费用用于统计优化；仅主动启用的硬上限会阻止请求。
+						59 文本 尚无模型请求费用。
+						60 摘要 最近执行活动, Value: off
+							61 文本 最近执行活动
+						62 标题 原始创作概述, Value: 2
+							63 文本 原始创作概述
+						64 文本 验收示例：不会游泳的邮差沿岸寻找未来来信，在洪水来临前查明来信者。
+					65 按钮 Edit this page with Herd, Help: Edit this page with Herd (⇧⌘H) · New chat (⇧⌘E) · Terminal (⇧⌘U)
+					66 按钮 (collapsed) Show dev stack processes, Help: Dev stack, Secondary Actions: Expand
+					67 按钮 Hide badge for this session, Help: Hide for this session
+	68 标签页组 Description: 标签页栏，6个标签页, ID: TabBar?isSeparate=false
+		69 标签 前言 | Go语言圣经, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			70 图像 FaviconImageView
+			71 文本 Value: 前言 | Go语言圣经, ID: UnifiedTabBarButton._titleTextField
+		72 标签 Go Web 编程 · 看云, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			73 图像 FaviconImageView
+			74 文本 Value: Go Web 编程 · 看云, ID: UnifiedTabBarButton._titleTextField
+		75 标签 邮件 - 王 明 - Outlook, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			76 图像 FaviconImageView
+			77 文本 Value: 邮件 - 王 明 - Outlook, ID: UnifiedTabBarButton._titleTextField
+		78 标签 人性博弈：社会化进阶攻略 - 飞书云文档, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			79 图像 FaviconImageView
+			80 文本 Value: 人性博弈：社会化进阶攻略 - 飞书云文档, ID: UnifiedTabBarButton._titleTextField
+		81 标签 章节阅读与复验 - AI 长篇网络小说自动生成平台, Value: off, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=false
+			82 图像 FaviconImageView
+			83 文本 Value: 章节阅读与复验 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+		84 标签 未命名小说 - AI 长篇网络小说自动生成平台, Help: 若要与此按钮中的项目交互，请按下Control-Option-Shift-下箭头键。, Value: on, Secondary Actions: 关闭标签页, ID: TabBarTab?isNarrow=false&isExpanded=false&tabCount=&isPinned=false&isCluster=false&clusterID=&isActive=true
+			85 图像 FaviconImageView
+			86 文本 Value: 未命名小说 - AI 长篇网络小说自动生成平台, ID: UnifiedTabBarButton._titleTextField
+	87 工具栏
+		88 按钮 Description: 开关边栏, ID: SidebarButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		89 菜单按钮 ID: TabGroupPickerButton?TabGroup=%E6%9C%AA%E5%91%BD%E5%90%8D, Secondary Actions: 移到下一项, 从工具栏移除
+		90 container BackForwardSegmentedControl
+			91 按钮 Description: 返回, Help: 显示上一页, ID: BackButton
+			92 按钮 (disabled) Description: 前进, Help: 显示下一页, ID: ForwardButton
+		93 container Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+			94 按钮 页面菜单, ID: AssistantButton
+			95 按钮 (disabled) 将页面添加到阅读列表, ID: OneStepBookmarkingButton
+			96 文本栏 (settable) Description: 智能搜索栏, Value: xnovel-r05-desktop.test/x/novels/27, ID: WEB_BROWSER_ADDRESS_AND_SEARCH_FIELD
+			97 按钮 重新加载此页面, ID: ReloadButton
+		98 按钮 Description: 共享, ID: ShareButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		99 按钮 Description: 新建标签页, ID: NewTabButton, Secondary Actions: 移到上一项, 移到下一项, 从工具栏移除
+		100 按钮 Description: 标签页概览, ID: TabOverviewButton, Secondary Actions: 移到上一项, 从工具栏移除
+	101 关闭按钮
+	102 全屏幕按钮 Help: 此按钮也可以执行缩放窗口的操作, Secondary Actions: 缩放窗口
+	103 最小化按钮
+104 menu bar
+	105 Safari浏览器
+	106 文件
+	107 编辑
+	108 显示, ID: SafariViewMenu
+	109 历史记录
+	110 书签, ID: SafariBookmarksMenu
+	111 窗口, ID: SafariWindowMenu
+	112 帮助, ID: SafariHelpMenu
+
+The focused UI element is 30 container

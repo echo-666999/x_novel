@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\GenerationStage;
 use App\Models\Chapter;
 use App\Services\AutoStopService;
+use App\Services\BookMemoryService;
 use App\Services\GenerationFailurePolicy;
 use App\Services\MemoryUpdater;
 use Illuminate\Bus\Queueable;
@@ -46,6 +47,11 @@ class UpdateMemoryJob implements ShouldQueue
             return;
         }
 
+        if ($chapter->novel->current_generation_task_id) {
+            app(BookMemoryService::class)->update($this->chapterId);
+
+            return;
+        }
         try {
             $memoryUpdater->update($this->chapterId);
             $autoStop->resolvePostCommitFailure($chapter->novel, 'memory');
@@ -67,6 +73,11 @@ class UpdateMemoryJob implements ShouldQueue
 
         $chapter = Chapter::query()->find($this->chapterId);
         if ($chapter !== null) {
+            if ($chapter->novel->current_generation_task_id) {
+                app(BookMemoryService::class)->recordFailure($chapter->novel, 'memory-update:'.$chapter->id, $exception);
+
+                return;
+            }
             app(AutoStopService::class)->recordPostCommitFailure($chapter, 'memory', $exception);
         }
     }
