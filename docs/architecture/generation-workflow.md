@@ -1,6 +1,6 @@
 # 新版小说生成执行合同
 
-版本：1.3 · R00 合同 / R01–R02 实施 · 2026-10-17。
+版本：1.4 · R00 合同 / R01–R03 实施 · 2026-10-18。
 
 依据：[PRD](../PRD.md)、[数据合同](data-model.md)、[DESIGN](../../DESIGN.md)、[基线及模块清单](../development/reports/XNR-001-baseline.md)。本文是 R01–R05 的目标合同。R01 数据/执行/费用基础已在隔离环境验证；完整生成阶段和真实模型尚未接通验收，见 [R01 报告](../development/reports/R01-implementation.md)。凭据按用户已确认的方案 A 实施，见数据合同 §10。
 
@@ -19,9 +19,9 @@ flowchart TD
     A[概述与可见默认值] --> B[原子创建意图和任务]
     B --> C[连接 能力 容量 费用策略预检]
     C --> D[基础设定与全书蓝图]
-    D --> E[校验并原子初始化]
-    E --> F[近期目标窗口]
-    F --> G[当前章计划与全链 Admission]
+    D --> F[首个近期目标窗口]
+    F --> E[校验并原子初始化或采用新的目标窗口]
+    E --> G[当前章计划与全链 Admission]
     G --> H[整章写作或必要的顺序片段]
     H --> I[确定性组装与完整性检查]
     I --> J[独立事件提取与状态候选]
@@ -307,3 +307,23 @@ R00 审查应核对：阶段输入输出闭合、每次收费有身份、暂停/
 当前执行动作是 Preflight 临时故障重试、只读 AI 诊断、人工说明及任务暂停。关闭 Issue 的领域复验器当前只支持 Preflight 身份/来源检查；其余领域必须在接入时增加明确成功条件，不能用 Review Run 成功替代内容 PASS。目标白名单中的正文/证据/计划/派生修复仍等待相应领域批次接入，未实现动作不提供执行按钮。空模型授权不会自动扩权。问题累计次数/时限跨 Run 保存，问题/章节费用仍受用户显式上限约束；来源变化时隔离晚到候选。
 
 异常中心及小说/章节/Generation/Review 入口引用同一 Issue。XNR-009 由于 XNR-034 的缩放/减少动态效果验收未结束，仍保留 IN_PROGRESS，不能以页面实现替代全部依赖通过。详见 [R02 实施记录](../development/reports/R02-implementation.md)。
+
+
+## R03 已实现的整书入口
+
+本节是实施事实，不把上文目标主链当成已经完成。证据见 [R03 报告](../development/reports/R03-implementation.md)。
+
+- `NovelIntentContract` 保存不超过 10000 字的原始概述、逐句要求、显式选项、篇幅来源、模式与费用策略。默认 10 万字、每章 3000 字、整书自动；硬上限默认关闭。提交 UUID 与输入 hash 共同区分重试和主动新建。
+- `CreateNovelGenerationTaskAction` 原子创建 Novel、Intake Run、Intent Artifact 和唯一主任务。草稿暂停；启动持久化 preflight，由统一队列认领。新入口不再写旧 auto_generate/auto_commit 布尔值。
+- `NovelBookWorkflow` 是 UI、`novel:book` 命令、恢复扫描的粗阶段入口。预检核对实际配置、路由和能力，冻结 Foundation 请求；不发探测请求，不据配置存在宣称 Provider/Worker 在线。
+- `NovelFoundationContract` 使用 `book-foundation-v1`，保存设定候选与字段来源。普通缺项自动补齐；明确矛盾写入一个选择集合。结构、原文引用、要求完整覆盖和明确篇幅分别校验；失败响应仍不可变保存为 rejected。
+- 异常中心的 `repair_foundation` 仅接受新版设定校验错误，基于原文和失败候选修复。共用 Issue 累计次数、时限、无进展、费用与 CAS 门禁；新请求 hash 可变，但原问题身份、来源清单和当前意图必须一致。成功校验后才解决 Issue。AI 诊断仍是只读建议；人工可修改创作概述/显式选项或集中选择矛盾，不允许保存说明直接消除错误。
+- `ReviseNovelIntentAction` 创建新 Intent，保留原文和用户选择历史，取消旧排队工作，在途旧来源结果隔离。旧 Issue 标为来源被替换，不能冒充旧候选复验成功。初始化之后的设定修订明确停在 `future_revision_not_ready`，后续影响重算等待 R04/R05。
+- `ApplyNovelBlueprintAction::initializeBook` 在 Novel→Task→Outline 锁和同一事务内，采用设定、全书蓝图、首个目标窗口，写 Bible、初始人物地点、State 0、规划指针及不可变采用凭证。重复身份只返回已有结果。任一写入失败全部回滚，并产生独立初始化失败 Run/Issue；不生成未来 Story Event、Facts、Volume、Arc 或 Memory。
+- `opening` 只在足量正式章及必需摘要齐备后暂停；继续转整书并记录策略历史。`manual_review` 只对当前正文、当前状态的 PASS 等待人工提交，自动 Commit Job 不提交。R04/R05 尚未接通时这些是边界合同及固定响应测试，不是已完成的章节生产流程。
+
+### R04 交接合同
+
+`novel_outlines.kind=blueprint/goal_window` 索引不可变 Artifact，必须同小说、draft、source checksum 一致。蓝图 Artifact 为 `outline_blueprint`，含 `foundation_artifact_id`、`mainline`、`ending`、非空 `turning_points`；目标窗口 Artifact 为 `goal_window`，含 `blueprint_id` 和非空 `goals`。这是 R03 初始化的最小交接格式，R04 必须增加真实规划语义及完整校验，不能把测试夹具带入生产。
+
+设定阶段完成后，缺真实蓝图/目标窗口时持久暂停并显示“等待 R04”；固定交接夹具初始化后则暂停在章节规划。新任务禁止走旧四阶段大纲、旧 Apply 和旧 GenerateNextChapter。Bible 的 `style_profile.schema_version=book-v1` 保存自然语言文风；R04 Context 必须读取它及原始硬要求，不能再套用旧预设风格覆盖用户输入。

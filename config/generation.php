@@ -1,6 +1,8 @@
 <?php
 
 return [
+    // 新书默认值集中维护，表单与领域动作共用，费用不决定目标篇幅。
+    'book' => ['target_words' => 100000, 'chapter_target_words' => 3000, 'foundation_max_tokens' => 6000],
     // 问题级限制跨 Run 累计；金额门禁只读取用户主动启用的费用策略。
     'issues' => ['max_attempts' => 2, 'max_elapsed_ms' => 1_800_000, 'diagnostic_max_tokens' => 1800],
     // 新链一次请求一个 Run；队列等待不累计为模型执行时间。

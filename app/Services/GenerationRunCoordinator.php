@@ -241,7 +241,7 @@ final class GenerationRunCoordinator
                 UsageRecord::where('generation_run_id', $run->id)->where('status', 'prepared')->update(['status' => 'not_sent', 'reserved_amount' => null]);
             }
             if ($classification['blocking'] && $task->status === 'running' && (! $retryable || $run->attempt >= (int) config('generation.execution.max_attempts', 3))) {
-                $task->update(['status' => 'needs_attention', 'stop_reason' => $code, 'stop_detail' => ['message' => $message, 'run_id' => $run->id]]);
+                $task->update(['status' => 'needs_attention', 'stop_reason' => $code, 'stop_detail' => [...($task->stop_detail ?? []), 'message' => $message, 'run_id' => $run->id]]);
             }
             DB::afterCommit(fn () => app(GenerationIssueService::class)->observe($run->fresh()));
         });
@@ -263,6 +263,10 @@ final class GenerationRunCoordinator
         }
         if (isset($contract['chapter_plan_id']) && ! Chapter::where('novel_id', $task->novel_id)->whereKey($contract['chapter_id'] ?? 0)->where('current_plan_id', $contract['chapter_plan_id'])->exists()) {
             throw new \LogicException('当前章节计划已经改变，旧来源不能继续。');
+        }
+        // 修改概述即使没有正式状态变化，也必须使旧设定请求失去采用权。
+        if (isset($contract['intent_artifact_id']) && $task->intent_artifact_id !== $contract['intent_artifact_id']) {
+            throw new \LogicException('创作意图已更新，旧来源不能继续。');
         }
         foreach ($sources as $source) {
             $artifact = GenerationArtifact::find($source['artifact_id'] ?? 0);
@@ -291,6 +295,11 @@ final class GenerationRunCoordinator
             try {
                 $pending = $task->pending_transition;
                 if (! is_array($pending)) {
+                    continue;
+                }
+                if (($pending['stage'] ?? null) === 'book_control') {
+                    app(NovelBookWorkflow::class)->advance($task->id);
+
                     continue;
                 }
                 if (empty($pending['run_id'])) {

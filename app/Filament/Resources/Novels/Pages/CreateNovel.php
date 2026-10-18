@@ -2,50 +2,90 @@
 
 namespace App\Filament\Resources\Novels\Pages;
 
-use App\AI\AiModelRouteService;
+use App\Actions\Novels\CreateNovelGenerationTaskAction;
 use App\Filament\Resources\Novels\NovelResource;
-use App\Filament\Resources\Novels\Schemas\NovelForm;
-use App\Services\GenerationCostPolicy;
+use App\Services\NovelBookWorkflow;
+use Filament\Actions\Action;
 use Filament\Resources\Pages\CreateRecord;
+use Filament\Support\Enums\Width;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Livewire\Attributes\Locked;
 
+/** 客户端重投共享提交标识；只有重新打开创建页才代表主动新建一本。 */
 class CreateNovel extends CreateRecord
 {
     protected static string $resource = NovelResource::class;
 
-    public function getTitle(): string
+    protected static bool $canCreateAnother = false;
+
+    #[Locked]
+    public string $submissionKey;
+
+    #[Locked]
+    public bool $saveDraft = false;
+
+    public function mount(): void
     {
-        return '创建小说';
+        $this->submissionKey = (string) Str::uuid();
+        parent::mount();
     }
 
-    /** @param  array<string, mixed>  $data */
-    protected function mutateFormDataBeforeCreate(array $data): array
+    /** 小屏输入较长时保留可见主动作，不要求用户滚过高级选项。 */
+    public function areFormActionsSticky(): bool
     {
-        $data = NovelForm::prepareGenreForPersistence($data);
-        $settings = [
-            'generation' => [
-                'chapter_target_words' => (int) $data['generation_chapter_target_words'],
-            ],
-            // 新小说默认使用“当前章生成到审校”，正式启动时再由三种运行模式覆盖。
-            'auto_generate' => false,
-            'auto_commit' => false,
-            'auto_commit_configured' => true,
-        ];
-        // 创建和编辑共用费用策略解析，保留用户明确启用而非丢弃表单值。
-        $settings = app(GenerationCostPolicy::class)->apply($settings, (array) ($data['budget_limits'] ?? []), auth()->id());
-        // Select 提交的是价格记录 ID，必须在创建 Novel 前转换并持久化完整的 Provider + Model 路由。
-        $data['settings'] = app(AiModelRouteService::class)->applyNovelOverrides(
-            $settings,
-            (array) ($data['ai_model_overrides'] ?? []),
-        );
+        return true;
+    }
 
-        unset($data['generation_chapter_target_words']);
-        unset($data['ai_model_overrides'], $data['budget_limits']);
+    public function getPageClasses(): array
+    {
+        return [...parent::getPageClasses(), 'xn-novel-intake'];
+    }
 
-        return $data;
+    public function getTitle(): string
+    {
+        return '从一个想法，开始一本小说';
+    }
+
+    public function getMaxContentWidth(): Width|string|null
+    {
+        return '3xl';
+    }
+
+    protected function handleRecordCreation(array $data): Model
+    {
+        return app(CreateNovelGenerationTaskAction::class)->handle($this->submissionKey, $data['premise'], [...$data, 'save_draft' => $this->saveDraft])->novel;
+    }
+
+    protected function afterCreate(): void
+    {
+        if (! $this->saveDraft) {
+            // 持久任务先提交；即使派发失败，扫描仍能从同一任务补派，不重复建书。
+            $taskId = $this->record->current_generation_task_id;
+            DB::afterCommit(fn () => app(NovelBookWorkflow::class)->advance($taskId));
+        }
+    }
+
+    protected function getCreateFormAction(): Action
+    {
+        return parent::getCreateFormAction()->label('开始生成');
+    }
+
+    protected function getFormActions(): array
+    {
+        return [$this->getCreateFormAction(), Action::make('saveDraft')->label('保存草稿')->color('gray')->action(function (): void {
+            $this->saveDraft = true;
+            try {
+                $this->create();
+            } finally {
+                $this->saveDraft = false;
+            }
+        }), $this->getCancelFormAction()];
     }
 
     protected function getRedirectUrl(): string
     {
-        return NovelResource::getUrl('outline', ['record' => $this->getRecord()]);
+        return NovelResource::getUrl('view', ['record' => $this->getRecord()]);
     }
 }

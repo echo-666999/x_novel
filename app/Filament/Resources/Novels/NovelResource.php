@@ -74,6 +74,10 @@ class NovelResource extends Resource
     /** @return array<NavigationItem> */
     public static function getRecordSubNavigation(Page $page): array
     {
+        if ($page->getRecord()?->current_generation_task_id) {
+            return $page->generateNavigationItems([ViewNovel::class, ManageNovelChapters::class]);
+        }
+
         return $page->generateNavigationItems([
             ViewNovel::class,
             ManageNovelOutline::class,

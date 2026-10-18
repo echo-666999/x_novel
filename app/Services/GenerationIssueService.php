@@ -88,7 +88,7 @@ final class GenerationIssueService
         $run = GenerationRun::findOrFail($issue->first_run_id);
         if ($issue->status === 'resolved' || $run->novel_id !== $issue->novel_id || $run->generation_task_id !== $task->id
             || (int) $task->novel->current_generation_task_id !== $task->id || in_array($task->status, ['cancelled', 'completed', 'failed'], true)
-            || app(GenerationInputIdentity::class)->hash($this->identity($run)) !== app(GenerationInputIdentity::class)->hash($issue->source_identity)) {
+            || ! $this->matchesVerificationSource($run, $issue)) {
             throw new \LogicException('问题已解决、任务已结束或来源身份不匹配，请刷新。');
         }
         app(GenerationRunCoordinator::class)->assertSources($task, $run->source_manifest ?? [], $run->execution_contract ?? []);
@@ -97,6 +97,25 @@ final class GenerationIssueService
     }
 
     /** 成功 Run 必须同阶段、同输入且真实产物已验证；仅模型声称成功不算复验。 */
+    /** 修复 Prompt 可改变，但原问题身份、当前意图和来源清单必须保持一致；不能放宽其他阶段门禁。 */
+    private function matchesVerificationSource(GenerationRun $run, GenerationIssue $issue): bool
+    {
+        $identity = app(GenerationInputIdentity::class);
+        if ($identity->hash($this->identity($run)) === $identity->hash($issue->source_identity)) {
+            return true;
+        }
+        if ($run->stage !== GenerationStage::FoundationBlueprint || data_get($run->execution_contract, 'issue_action') !== 'repair_foundation'
+            || data_get($issue->evidence, 'attempts.'.$run->id.'.action') !== 'repair_foundation'
+            || $identity->hash(data_get($run->execution_contract, 'repair_source_identity', [])) !== $identity->hash($issue->source_identity)
+            || $identity->hash($run->source_manifest) !== $identity->hash($issue->source_identity['sources'] ?? [])) {
+            return false;
+        }
+        $task = NovelGenerationTask::findOrFail($run->generation_task_id);
+        app(GenerationRunCoordinator::class)->assertSources($task, $run->source_manifest, $run->execution_contract);
+
+        return $task->intent_artifact_id === data_get($run->execution_contract, 'intent_artifact_id');
+    }
+
     public function verifySuccess(GenerationRun $candidate): bool
     {
         if (! $candidate->issue_id || data_get($candidate->execution_contract, 'issue_action') === 'diagnose') {
@@ -115,10 +134,8 @@ final class GenerationIssueService
             $artifact = GenerationArtifact::find($run->result_artifact_id);
             if ($run->status !== RunStatus::Succeeded || ! $artifact || $artifact->generation_run_id !== $run->id
                 || $artifact->validation_status !== ArtifactValidationStatus::Validated
-                // 当前仅 Preflight 有明确复验器；Review 请求成功不等于内容 PASS，后续领域接入时必须补独立规则。
-                || $run->stage !== GenerationStage::Preflight || $artifact->type !== ArtifactType::OperationRecord
-                || data_get($artifact->data, 'checks.task_identity') !== 'valid' || data_get($artifact->data, 'checks.sources') !== 'valid'
-                || app(GenerationInputIdentity::class)->hash($this->identity($run)) !== app(GenerationInputIdentity::class)->hash($issue->source_identity)) {
+                || ! $this->verifiedStageResult($run, $artifact)
+                || ! $this->matchesVerificationSource($run, $issue)) {
                 return false;
             }
             $issue->update(['status' => 'resolved', 'resolved_by_run_id' => $run->id, 'resolved_at' => now(),
@@ -130,6 +147,29 @@ final class GenerationIssueService
 
             return true;
         });
+    }
+
+    /** 每个创作阶段有独立成功标准，不能用 HTTP 成功替代业务通过。 */
+    private function verifiedStageResult(GenerationRun $run, GenerationArtifact $artifact): bool
+    {
+        if ($run->stage === GenerationStage::Preflight) {
+            return $artifact->type === ArtifactType::OperationRecord && data_get($artifact->data, 'checks.task_identity') === 'valid' && data_get($artifact->data, 'checks.sources') === 'valid';
+        }
+        if ($run->stage === GenerationStage::FoundationBlueprint && $artifact->type === ArtifactType::FoundationBlueprint) {
+            $intent = GenerationArtifact::find(data_get($run->execution_contract, 'intent_artifact_id'));
+            if (! $intent || ($artifact->data['conflicts'] ?? null) !== []) {
+                return false;
+            }
+            try {
+                app(NovelFoundationContract::class)->validate($artifact->data, $intent->data);
+
+                return true;
+            } catch (Throwable) {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     public function hasOtherBlockers(GenerationIssue $issue): bool

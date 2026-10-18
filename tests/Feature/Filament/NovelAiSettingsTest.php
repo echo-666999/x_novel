@@ -3,7 +3,6 @@
 use App\AI\AiModelRouteService;
 use App\AI\AiSettingsResolver;
 use App\Enums\AiStage;
-use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Models\AIModelPrice;
 use App\Models\Novel;
@@ -73,7 +72,7 @@ test('novel settings shows database and overridden resolved models', function ()
         ]);
 });
 
-test('novel form remains usable when inherited outline routes are missing and previews the selected override', function () {
+test('legacy novel form remains usable when inherited outline routes are missing and previews the selected override', function () {
     foreach ([
         AiStage::OutlineFoundation,
         AiStage::OutlineStructure,
@@ -84,7 +83,9 @@ test('novel form remains usable when inherited outline routes are missing and pr
     }
     $foundationPrice = novelAiModelPrice('foundation-form-model');
 
-    Livewire::test(CreateNovel::class)
+    // 旧模型覆盖表单仅保留在旧小说编辑页；新建入口使用统一全局路由。
+    $novel = Novel::factory()->create();
+    Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
         ->assertOk()
         ->assertSee('继承路由不可用 · 请选择 Provider + Model')
         ->fillForm([
@@ -93,7 +94,7 @@ test('novel form remains usable when inherited outline routes are missing and pr
         ->assertSee('OPENAI / foundation-form-model · 推理 Provider 默认 · 小说 Override');
 });
 
-test('creating a novel persists provider and model overrides for every outline task', function () {
+test('editing a legacy novel persists provider and model overrides for every outline task', function () {
     seedAllAiModelRoutesForTest();
     createAiProviderConnectionForTest('deepseek');
     $prices = collect([
@@ -103,7 +104,9 @@ test('creating a novel persists provider and model overrides for every outline t
         'outline_beat_detail' => ['provider' => 'openai', 'model' => 'beat-detail-model'],
     ])->map(fn (array $route): int => novelAiModelPrice($route['model'], $route['provider'])->getKey());
 
-    Livewire::test(CreateNovel::class)
+    // 旧模型覆盖表单仅保留在旧小说编辑页；新建入口使用统一全局路由。
+    $novel = Novel::factory()->create();
+    Livewire::test(EditNovel::class, ['record' => $novel->getRouteKey()])
         ->fillForm([
             'title' => '逐路由新书',
             'genre' => '玄幻奇幻',
@@ -117,10 +120,10 @@ test('creating a novel persists provider and model overrides for every outline t
                 'outline_beat_detail' => $prices['outline_beat_detail'],
             ],
         ])
-        ->call('create')
+        ->call('save')
         ->assertHasNoFormErrors();
 
-    $novel = Novel::query()->sole();
+    $novel->refresh();
 
     expect(data_get($novel->settings, 'ai.stages'))->toEqual([
         'outline_foundation' => ['provider' => 'openai', 'model' => 'foundation-model'],

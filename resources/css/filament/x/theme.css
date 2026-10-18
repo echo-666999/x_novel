@@ -223,3 +223,9 @@
 .xn-issue-center .fi-btn[disabled] { opacity: 1; color: var(--xn-text-muted); background: var(--xn-surface-3); border: 1px solid var(--xn-border-strong); }
 .xn-issue-center h2 { font-size: 18px; font-weight: 600; }
 .xn-issue-center h3 { font-size: 16px; font-weight: 600; }
+
+/* R03 创建与编辑复用视觉 token；表单表面不依赖 Filament 灰阶混色。 */
+.xn-novel-intake .fi-section { background: var(--xn-surface-1); }
+.xn-novel-intake .fi-input-wrp { background: var(--xn-surface-2); }
+.xn-novel-intake .fi-section-header-description,
+.xn-novel-intake .fi-fo-field-wrp-helper-text { color: var(--xn-text-muted); }

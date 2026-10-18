@@ -16,6 +16,8 @@ use LogicException;
  * 保存不可变大纲版本头、来源与关系化子节点入口。
  */
 #[Fillable([
+    // R01 已有分层字段，R03 首次采用需要显式持久化层级。
+    'kind',
     'novel_id',
     'version',
     'status',

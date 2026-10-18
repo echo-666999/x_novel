@@ -22,6 +22,11 @@ class NovelOverview
 {
     public static function configure(Schema $schema): Schema
     {
+        if ($schema->getRecord()?->current_generation_task_id) {
+            // 工作台显示任务事实，不把缺少旧分卷/故事线当作用户待办。
+            return $schema->columns(1)->components([View::make('filament.components.novel-book-task'), View::make('filament.components.novel-issues')]);
+        }
+
         return $schema->columns(1)->components([
             // 顶部问题卡使用统一异常中心，历史失败不生成额外工作流。
             View::make('filament.components.novel-issues'),

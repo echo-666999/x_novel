@@ -22,6 +22,7 @@ use App\Models\Character;
 use App\Models\Fact;
 use App\Models\GenerationArtifact;
 use App\Models\Novel;
+use App\Models\NovelGenerationTask;
 use App\Models\Review;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
@@ -144,6 +145,10 @@ class CanonicalCommitService
 
     private function validateNovel(Novel $novel): void
     {
+        // 任务暂停优先于旧 Novel 状态；在途返回不得绕过暂停正式提交。
+        if ($novel->current_generation_task_id && NovelGenerationTask::findOrFail($novel->current_generation_task_id)->status !== 'running') {
+            throw ValidationException::withMessages(['task' => '整书任务未运行，禁止正式提交。']);
+        }
         if (! in_array($novel->status, [NovelStatus::Generating, NovelStatus::Completing], true)) {
             throw ValidationException::withMessages(['novel' => '只有生成中或收束中的小说可以提交正式章节。']);
         }

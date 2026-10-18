@@ -16,6 +16,8 @@ use App\Exceptions\GenerationPreflightException;
 use App\Filament\Pages\GenerationIssues;
 use App\Filament\Resources\Novels\NovelResource;
 use App\Models\Novel;
+use App\Models\NovelGenerationTask;
+use App\Services\NovelBookWorkflow;
 use App\Services\NovelGenerationReadiness;
 use App\Services\ResumeResolver;
 use Filament\Actions\Action;
@@ -24,6 +26,7 @@ use Filament\Forms\Components\Select;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Validation\ValidationException;
+use Livewire\Attributes\Locked;
 
 class ViewNovel extends ViewRecord
 {
@@ -58,8 +61,60 @@ class ViewNovel extends ViewRecord
             : "{$novel->genre} · {$novel->status->getLabel()}";
     }
 
+    /** 页面只提交控制意图；模型与正式数据均由领域入口处理。 */
+    #[Locked]
+    public ?int $bookControlVersion = null;
+
+    public function mount(int|string $record): void
+    {
+        parent::mount($record);
+        $this->bookControlVersion = NovelGenerationTask::find($this->getRecord()->current_generation_task_id)?->control_version;
+    }
+
+    private function bookActions(): array
+    {
+        $task = NovelGenerationTask::findOrFail($this->getRecord()->current_generation_task_id);
+        $version = $this->bookControlVersion ?? $task->control_version;
+        $actions = [Action::make('generationIssues')->label('查看异常')->url(fn () => GenerationIssues::getUrl(['novel' => $this->getRecord()->id])), EditAction::make()->label('调整概述与设置')];
+        foreach (['pause' => '暂停', 'resume' => $task->stop_reason === 'opening_complete' ? '继续整本' : '继续生成', 'recheck' => '重新检查配置'] as $key => $label) {
+            $actions[] = Action::make('book_'.$key)->label($label)->color($key === 'pause' ? 'gray' : 'primary')
+                ->visible(match ($key) {
+                    'pause' => in_array($task->status, ['queued', 'running'], true), 'resume' => $task->status === 'paused' && ! in_array($task->stop_reason, ['future_revision_not_ready', 'awaiting_manual_commit'], true), default => $task->status === 'needs_attention' && $task->current_phase === 'preflight'
+                })
+                ->action(function () use ($task, $version, $key): void {
+                    try {
+                        app(NovelBookWorkflow::class)->control($task->id, $version, $key);
+                        $this->getRecord()->refresh();
+                        $this->bookControlVersion = $task->fresh()->control_version;
+                    } catch (\LogicException $exception) {
+                        Notification::make()->title('操作未生效')->body($exception->getMessage())->danger()->send();
+                    }
+                });
+        }
+        $fields = [];
+        foreach (data_get($task->stop_detail, 'conflicts', []) as $index => $conflict) {
+            $fields[] = Select::make('choices.'.$index)->label($conflict['question'])->options(array_combine($conflict['options'], $conflict['options']))->required()->native();
+        }
+        $actions[] = Action::make('chooseRequirements')->label('一次确认创作要求')->visible($task->stop_reason === 'intent_conflict' && $fields !== [])
+            ->schema($fields)->action(function (array $data) use ($task, $version): void {
+                try {
+                    $updated = app(NovelBookWorkflow::class)->choose($task->id, $version, $data['choices']);
+                    app(NovelBookWorkflow::class)->control($updated->id, $updated->control_version, 'resume');
+                    $this->getRecord()->refresh();
+                } catch (\LogicException $exception) {
+                    throw ValidationException::withMessages(['choices' => $exception->getMessage()]);
+                }
+            });
+
+        return $actions;
+    }
+
     protected function getHeaderActions(): array
     {
+        if ($this->getRecord()->current_generation_task_id) {
+            return $this->bookActions();
+        }
+
         return [
             // 异常入口只传筛选范围，处理权限由统一应用动作复验。
             Action::make('generationIssues')->label('查看异常')->url(fn () => GenerationIssues::getUrl(['novel' => $this->getRecord()->id])),

@@ -14,6 +14,7 @@ use App\Services\GenerationRunLease;
 use App\Services\NovelGenerationReadiness;
 use App\Services\StalledRunRecoveryService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class GenerateNextChapterAction
 {
@@ -25,6 +26,9 @@ class GenerateNextChapterAction
 
     public function handle(Novel $novel): Chapter
     {
+        if ($novel->current_generation_task_id) {
+            throw ValidationException::withMessages(['novel' => '新版任务由整书入口创建章节；正文链等待 R04 接入。']);
+        }
         // 独立提交停滞清理。即使后续发现另一个真正活跃的工作流并拒绝生成，
         // 已确认过期的 Run 也不能随外层事务回滚后继续占用小说。
         $this->markStalledRuns($novel);

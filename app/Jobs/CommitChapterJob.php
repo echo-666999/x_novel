@@ -6,10 +6,13 @@ use App\Data\CanonicalCommitData;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Jobs\Concerns\PreventsDuplicateGeneration;
+use App\Models\Chapter;
+use App\Models\NovelGenerationTask;
 use App\Models\Review;
 use App\Services\CanonicalCommitService;
 use App\Services\GenerationArtifactLocator;
 use App\Services\GenerationFailurePolicy;
+use App\Services\NovelBookWorkflow;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -54,6 +57,15 @@ class CommitChapterJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // 专业模式不得因旧队列投递而自动提交；人工提交由明确的领域入口负责。
+        $novel = Chapter::findOrFail($this->chapterId)->novel;
+        $task = NovelGenerationTask::find($novel->current_generation_task_id);
+        if ($task && ($task->mode === 'manual_review' || $task->status !== 'running')) {
+            app(NovelBookWorkflow::class)->chapterBoundary($task->id);
+            $this->releaseGenerationDispatch();
+
+            return;
+        }
         try {
             $canonicalCommit->commit($this->commitData());
         } catch (Throwable $exception) {

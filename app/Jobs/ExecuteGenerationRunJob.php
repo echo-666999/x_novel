@@ -8,6 +8,8 @@ use App\Models\GenerationRun;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationIssueDiagnostic;
 use App\Services\GenerationRunCoordinator;
+use App\Services\NovelBookWorkflow;
+use App\Services\NovelFoundationContract;
 use App\Support\GenerationDiagnosticRedactor;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -46,6 +48,19 @@ class ExecuteGenerationRunJob implements ShouldQueue
             // R02 只读诊断复用同一租约、请求费用和来源边界，不执行模型建议。
             if (data_get($run->execution_contract, 'issue_action') === 'diagnose') {
                 app(GenerationIssueDiagnostic::class)->execute($run, $lease);
+
+                return;
+            }
+            // 新书入口使用同一执行租约；成功后推进持久后继，崩溃时由扫描补偿。
+            if (data_get($run->execution_contract, 'book_workflow') === 1) {
+                if ($run->stage === GenerationStage::Preflight) {
+                    app(NovelBookWorkflow::class)->preflight($run, $lease);
+                } elseif ($run->stage === GenerationStage::FoundationBlueprint) {
+                    app(NovelFoundationContract::class)->execute($run, $lease);
+                } else {
+                    throw new \LogicException('新版创作阶段尚未接入。');
+                }
+                app(NovelBookWorkflow::class)->advance($run->generation_task_id);
 
                 return;
             }

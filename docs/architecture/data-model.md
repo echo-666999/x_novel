@@ -204,3 +204,14 @@ R01 实现本合同；当前运行库及 .env 本批不修改。运行环境中�
 Usage 新增 request_key、status、cost_status、price_snapshot、reserved_amount、actual_cost、cap_snapshot、reconciliation_history 与生命周期时间。缺价格/缺用量保持 null；原始请求和核销历史不覆盖。system_settings.policy_history 保存全局金额授权修订，小说 settings.budget_history 保存小说级修改；没有新增审计表。新字段含实际中文备注。
 
 新 timestamptz 写入明确时区偏移，数据库保存绝对时刻；旧 timestamp 字段未以迁移方式重解释历史。运行库仍保持原 Schema，不能在部署前直接消费新版任务。
+
+
+## 12 R03 数据使用与版本边界
+
+R03 不新增表或列，不执行运行库迁移；沿用 R01 已有约束及中文数据库备注。`NovelOutline` 开放已有 `kind` 字段的显式赋值，不能因此认为旧大纲关系结构已经删除。
+
+Intent 的 `data.schema_version=2` 保存 premise、requirements、explicit、target_words、target_source、premise_targets、target_conflict、mode、opening_chapters、budget；人工选择追加 clarifications，新意图来源指向旧 Artifact。Task 保留 policy_revision/control_version 与历史、当前 intent_artifact_id。累计 Usage/Issue 尝试不随修订清零。
+
+Foundation 的不可变数据包含 fields（value/source/evidence）、length、requirements、promises、characters、world_entities、conflicts。失败响应的 validation_status=rejected，不可初始化。普通补充与用户原文分开标注；引用有效不等于语义忠实度已获真实模型验收。
+
+初始化凭证使用 succeeded Intake Run + OperationRecord，source_manifest 包含 Intent/Foundation/Blueprint/GoalWindow；Task.progress_snapshot.initialization 只是快捷引用。Bible.hard_constraints 保存原始要求及选择，ending_contract 保存结局方向与读者承诺，style_profile 使用 book-v1 自然语言描述。初始 State 仅创建一次；失败时这些记录和指针同时回滚，错误追踪在回滚后独立保存。实际验证见 [R03 报告](../development/reports/R03-implementation.md)。

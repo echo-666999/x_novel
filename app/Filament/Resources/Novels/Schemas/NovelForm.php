@@ -9,6 +9,8 @@ use App\AI\Exceptions\AiProviderException;
 use App\Enums\AiStage;
 use App\Models\Novel;
 use App\Services\GenerationSettingsService;
+use App\Services\NovelIntentContract;
+use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
@@ -17,6 +19,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 /** 创作参数与费用显示共用同一策略；填写金额本身不启用硬上限。 */
@@ -24,7 +27,81 @@ class NovelForm
 {
     public const CUSTOM_GENRE_OPTION = '__custom__';
 
+    /** 新建首屏只要求概述；旧记录在清理批次退出前仍可查看其原有设置。 */
     public static function configure(Schema $schema): Schema
+    {
+        $record = $schema->getRecord();
+        if ($record instanceof Novel && ! $record->current_generation_task_id) {
+            return self::legacy($schema);
+        }
+        $costs = [TextInput::make('budget_limits.warning_amount')->label('费用预警金额')->numeric()->minValue(0)->helperText('达到预警仍继续生成，不影响完结目标。')];
+        foreach (['daily_hard_limit' => '每日', 'novel_total_limit' => '整书', 'chapter_max_cost' => '单章', 'issue_max_cost' => '单个问题'] as $key => $label) {
+            $costs[] = Toggle::make("budget_limits.{$key}_enabled")->label("主动启用{$label}金额硬上限")->live()->default(false);
+            $costs[] = TextInput::make("budget_limits.{$key}")->label("{$label}上限金额")->numeric()->minValue(0)->required(fn (Get $get) => (bool) $get("budget_limits.{$key}_enabled"))
+                ->visible(fn (Get $get) => (bool) $get("budget_limits.{$key}_enabled"))->helperText('触及上限会暂停新的模型请求，需你调整后才能继续。');
+        }
+
+        return $schema->columns(1)->components([
+            Section::make('把故事的起点写在这里')->description('背景、人物、类型或剧情方向都可以。普通缺项由 AI 补全。')->schema([
+                Textarea::make('premise')->label('故事概述')->required()->maxLength(10000)->rows(7)->live(onBlur: true)
+                    ->placeholder('雨季中的旧港口，一位失忆的邮差收到寄自未来的信……')
+                    ->helperText(fn (Get $get) => mb_strlen((string) $get('premise')).' / 10000 字符；推荐至少 50 个字符，少于 50 也可以继续。'),
+                TextEntry::make('effectiveGoal')->label('本次创作目标')->state(fn (Get $get) => self::goalSummary($get)),
+                TextEntry::make('effectiveCost')->label('费用策略')->state(fn (Get $get) => self::costSummary($get)),
+            ]),
+            Section::make('创作选项')->collapsible()->collapsed()->schema([
+                TextInput::make('title')->label('书名（可选）')->maxLength(255),
+                TextInput::make('genre')->label('题材（可选）')->maxLength(255),
+                TextInput::make('target_words')->label('目标总正文字数（可选）')->integer()->minValue(1)->maxValue(10000000)->live(onBlur: true)->placeholder((string) config('generation.book.target_words'))->helperText('优先读取概述中的明确篇幅；留空且未说明时使用默认值。'),
+                TextInput::make('generation_chapter_target_words')->label('单章目标正文字数（可选）')->integer()->minValue(500)->maxValue(20000)->placeholder((string) config('generation.book.chapter_target_words')),
+            ]),
+            Section::make('运行方式')->collapsible()->collapsed()->schema([
+                Radio::make('mode')->label('生成模式')->options(NovelIntentContract::MODES)->default('full_book')->required()->live()
+                    ->descriptions(['full_book' => '合格内容自动提交，持续推进到结局。', 'opening' => '默认完成 3 个正式章节及摘要后暂停。', 'manual_review' => '写到审校通过后，等待你逐章提交。']),
+                TextInput::make('opening_chapter_count')->label('开篇正式章数')->default(3)->integer()->minValue(1)->maxValue(100)->visible(fn (Get $get) => $get('mode') === 'opening'),
+            ]),
+            Section::make('费用预警与可选硬上限')->description(fn () => '币种：'.app(GenerationSettingsService::class)->currency().'。金额留空即可开始；小说设置不能取消全局已启用的限制。')->collapsible()->collapsed()->schema($costs),
+            Section::make('编辑影响')->visible($record instanceof Novel)->schema([
+                TextEntry::make('editImpact')->label('保存后的影响')->state('保存会生成新意图版本并暂停任务。旧请求只能保留隔离候选；已有正文、正式事实与费用保留。初始化后的未来规划修订在 R04 接入。'),
+                Toggle::make('confirm_impact')->label('我已确认上述影响')->required()->accepted()->dehydrated(false),
+            ]),
+        ]);
+    }
+
+    private static function goalSummary(Get $get): string
+    {
+        try {
+            $intent = app(NovelIntentContract::class)->make((string) ($get('premise') ?: '待填写概述'), array_filter(['target_words' => $get('target_words'), 'mode' => $get('mode')], fn ($v) => filled($v)));
+
+            return number_format($intent['target_words']).' 字 · '.NovelIntentContract::MODES[$intent['mode']].($intent['target_conflict'] ? ' · 篇幅要求矛盾，启动前需统一选择' : ' · '.match ($intent['target_source']) {
+                'user_form' => '表单明确值', 'user_premise' => '概述明确值', default => '系统默认'
+            });
+        } catch (ValidationException) {
+            return '请修正字段错误，目标尚未生效。';
+        }
+    }
+
+    private static function costSummary(Get $get): string
+    {
+        $global = app(GenerationSettingsService::class)->budgetSettings();
+        $limits = [];
+        foreach (['daily_hard_limit' => '每日', 'novel_total_limit' => '整书', 'chapter_max_cost' => '单章', 'issue_max_cost' => '问题'] as $key => $label) {
+            if ($global[$key.'_enabled'] ?? false) {
+                $limits[] = $label.' '.$global[$key];
+            }
+        }
+
+        $local = [];
+        foreach (['daily_hard_limit' => '每日', 'novel_total_limit' => '整书', 'chapter_max_cost' => '单章', 'issue_max_cost' => '问题'] as $key => $label) {
+            if ($get("budget_limits.{$key}_enabled")) {
+                $local[] = $label.' '.($get("budget_limits.{$key}") ?? '待填写金额');
+            }
+        }
+
+        return ($local ? '本书已开启硬上限：'.implode('；', $local).'。' : '').'默认统计用量与费用，预警不阻断生成。'.($limits ? '已开启全局硬上限：'.implode('；', $limits).' '.app(GenerationSettingsService::class)->currency() : '全局金额硬上限未开启。');
+    }
+
+    private static function legacy(Schema $schema): Schema
     {
         return $schema
             ->components([

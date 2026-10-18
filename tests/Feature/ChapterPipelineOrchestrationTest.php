@@ -20,7 +20,6 @@ use App\Enums\NovelStatus;
 use App\Enums\ReviewDecision;
 use App\Enums\RunStatus;
 use App\Enums\VolumeStatus;
-use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Jobs\AssembleChapterJob;
@@ -396,24 +395,14 @@ function runPostCommitChain(Chapter $chapter): void
     ))->handle(app(CheckNextAction::class));
 }
 
-test('a novel created from an empty database reaches the next beat handoff through the complete fixed response pipeline', function () {
-    Livewire::test(CreateNovel::class)
-        ->fillForm([
-            'title' => 'NGC-012 全链路验收小说',
-            'genre' => '玄幻奇幻',
-            'target_words' => 200000,
-            'generation_chapter_target_words' => 500,
-            'premise' => '失忆测绘师寻找被删除的太阳。',
-        ])
-        ->call('create')
-        ->assertHasNoFormErrors();
-
-    $novel = Novel::query()->where('title', 'NGC-012 全链路验收小说')->sole();
-    $novel->update([
-        'settings' => [
-            ...$novel->settings,
-            'generation' => ['chapter_target_words' => chapterPipelineBaseline()['chapter_target_words']],
-        ],
+test('a legacy novel reaches the next beat handoff through the complete fixed response pipeline', function () {
+    // 旧流水线回归显式使用旧小说夹具；R03 新入口禁止回落旧四阶段大纲。
+    $novel = Novel::factory()->create([
+        'title' => 'NGC-012 全链路验收小说',
+        'genre' => '玄幻奇幻',
+        'target_words' => 200000,
+        'premise' => '失忆测绘师寻找被删除的太阳。',
+        'settings' => ['generation' => ['chapter_target_words' => chapterPipelineBaseline()['chapter_target_words']]],
     ]);
     $provider = new ChapterPipelineFixtureProvider(
         null,

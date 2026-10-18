@@ -103,6 +103,10 @@ class NovelOutlinePipeline
      */
     public function prepareBatch(Novel $novel, int $volumeCount): GenerationRun
     {
+        // 新整书任务禁止从旧 URL/CLI 回退四段大纲，防止同书出现第二条权威链。
+        if ($novel->current_generation_task_id) {
+            throw new \LogicException('新版小说请从整书工作台继续，旧大纲生成入口不可用。');
+        }
         if ($volumeCount < 1 || $volumeCount > 12) {
             throw ValidationException::withMessages(['volume_count' => '预计分卷数必须在 1 至 12 之间。']);
         }
@@ -633,7 +637,7 @@ class NovelOutlinePipeline
                             continue;
                         }
                         if (count($valid['must_include']) >= NovelOutlineStageContract::MAX_LIST_ITEMS) {
-                            throw \Illuminate\Validation\ValidationException::withMessages(['must_include' => '全书必须包含项已满，无法保留 Foundation 主角设定；请重新生成 Structure。']);
+                            throw ValidationException::withMessages(['must_include' => '全书必须包含项已满，无法保留 Foundation 主角设定；请重新生成 Structure。']);
                         }
                         $valid['must_include'][] = $profile;
                     }

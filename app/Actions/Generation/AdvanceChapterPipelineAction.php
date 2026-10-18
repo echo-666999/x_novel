@@ -35,6 +35,7 @@ use App\Services\GenerationOutputCapacityGuard;
 use App\Services\GenerationRunLease;
 use App\Services\GenerationStageGate;
 use App\Services\LegacyAdmissionRecoveryContract;
+use App\Services\NovelBookWorkflow;
 use App\Services\PlanAdmissionService;
 use App\Services\PlanCoverageJudgmentRepairer;
 use App\Services\ReviewEvidenceRepairer;
@@ -69,6 +70,13 @@ class AdvanceChapterPipelineAction
     /** 按持久化来源链选择唯一下一阶段，Coverage 复核必须先于任何内容 Rewrite 决策。 */
     public function handle(int $chapterId, ?string $regenerationBatchId = null, bool $restartExpiredPlanRepair = false): ?GenerationStage
     {
+        // 新任务禁止落回旧场景链，模式门禁由整书入口统一判定。
+        $taskId = Chapter::findOrFail($chapterId)->novel->current_generation_task_id;
+        if ($taskId) {
+            app(NovelBookWorkflow::class)->chapterBoundary($taskId);
+
+            return null;
+        }
         $this->checkRepairBeforeTransaction($chapterId, $restartExpiredPlanRepair);
         $nextStage = null;
         $nextJob = null;

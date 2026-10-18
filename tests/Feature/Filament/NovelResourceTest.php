@@ -10,7 +10,6 @@ use App\Filament\Resources\Novels\NovelResource;
 use App\Filament\Resources\Novels\Pages\CreateNovel;
 use App\Filament\Resources\Novels\Pages\EditNovel;
 use App\Filament\Resources\Novels\Pages\ListNovels;
-use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Schemas\NovelForm;
 use App\Jobs\PlanChapterJob;
@@ -18,6 +17,7 @@ use App\Models\Chapter;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelBible;
+use App\Models\NovelGenerationTask;
 use App\Models\StoryArc;
 use App\Models\User;
 use App\Models\Volume;
@@ -136,25 +136,21 @@ test('the owner can create a novel and enters its workbench', function () {
         ->assertHasNoFormErrors();
 
     $novel = Novel::query()->sole();
-    $component->assertRedirect(NovelResource::getUrl('outline', ['record' => $novel]));
+    $component->assertRedirect(NovelResource::getUrl('view', ['record' => $novel]));
 
     expect($novel->title)->toBe('长夜将明')
         ->and($novel->genre)->toBe('玄幻奇幻')
         ->and($novel->status)->toBe(NovelStatus::Draft)
         ->and(data_get($novel->settings, 'generation.chapter_target_words'))->toBe(3_500)
-        ->and(data_get($novel->settings, 'auto_generate'))->toBeFalse()
-        ->and(data_get($novel->settings, 'auto_commit'))->toBeFalse()
-        ->and(data_get($novel->settings, 'auto_commit_configured'))->toBeTrue()
+        ->and(NovelGenerationTask::findOrFail($novel->current_generation_task_id)->mode)->toBe('full_book')
+        ->and(data_get($novel->settings, 'auto_generate'))->toBeNull()
+        ->and(data_get($novel->settings, 'auto_commit'))->toBeNull()
         ->and(data_get($novel->settings, 'editorial'))->toBeNull();
 
+    // 新入口展示持久整书任务，旧大纲操作不再是新建小说的下一步。
     $this->get(NovelResource::getUrl('view', ['record' => $novel]))
         ->assertOk()
-        ->assertSee('小说概览');
-    Livewire::test(ManageNovelOutline::class, ['record' => $novel->getRouteKey()])
-        ->assertOk()
-        ->assertSee('尚未建立全书大纲')
-        ->assertActionVisible('generateOutlineCandidate')
-        ->assertActionVisible('saveManualOutline');
+        ->assertSee('原始创作概述');
 });
 
 test('the owner can edit a novels basic information', function () {
@@ -212,8 +208,8 @@ test('the owner can create a novel with a custom genre', function () {
     Livewire::test(CreateNovel::class)
         ->fillForm([
             'title' => '纸灯照夜',
-            'genre' => NovelForm::CUSTOM_GENRE_OPTION,
-            'custom_genre' => ' 民俗志怪 ',
+            'genre' => '民俗志怪',
+            'premise' => '纸灯引路，旅人寻找失落的山村。',
             'target_words' => 500_000,
             'generation_chapter_target_words' => 3_000,
         ])
@@ -238,25 +234,18 @@ test('the owner can see and edit an existing custom genre', function () {
     expect($novel->refresh()->genre)->toBe('海洋文明探险');
 });
 
-test('custom genre rejects blank and overlong values', function () {
-    $base = [
-        'title' => '边界测试',
-        'genre' => NovelForm::CUSTOM_GENRE_OPTION,
-        'target_words' => 500_000,
-        'generation_chapter_target_words' => 3_000,
-    ];
-
+test('optional genre accepts omission but rejects overlong values', function () {
+    // 基础设定允许 AI 补齐题材，显式输入仍必须满足长度限制。
     Livewire::test(CreateNovel::class)
-        ->fillForm([...$base, 'custom_genre' => '   '])
+        ->fillForm(['premise' => '旅人寻找失落山村。', 'genre' => str_repeat('异', 256)])
         ->call('create')
-        ->assertHasFormErrors(['custom_genre' => 'required']);
-
-    Livewire::test(CreateNovel::class)
-        ->fillForm([...$base, 'custom_genre' => str_repeat('异', 256)])
-        ->call('create')
-        ->assertHasFormErrors(['custom_genre' => 'max']);
-
+        ->assertHasFormErrors(['genre' => 'max']);
     expect(Novel::query()->count())->toBe(0);
+    Livewire::test(CreateNovel::class)
+        ->fillForm(['premise' => '旅人寻找失落山村。', 'genre' => ''])
+        ->call('create')
+        ->assertHasNoFormErrors();
+    expect(Novel::query()->sole()->genre)->toBe('待解析');
 });
 
 test('novel form validates required fields and positive target words', function () {
@@ -269,8 +258,7 @@ test('novel form validates required fields and positive target words', function 
         ])
         ->call('create')
         ->assertHasFormErrors([
-            'title' => 'required',
-            'genre' => 'required',
+            'premise' => 'required',
             'target_words' => 'min',
             'generation_chapter_target_words' => 'min',
         ]);

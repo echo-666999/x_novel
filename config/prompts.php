@@ -60,6 +60,8 @@ return [
 
     /* 不属于固定 AiStage、但会直接调用 Provider 的局部任务版本。 */
     'tasks' => [
+        // 新版基础设定与旧四段大纲使用独立版本，历史请求仍可解释。
+        'book_foundation' => ['version' => 'book-foundation-v1'],
         'outline_node_regeneration' => [
             'version' => 'novel-outline-node-v6',
             'policy' => 'planning',

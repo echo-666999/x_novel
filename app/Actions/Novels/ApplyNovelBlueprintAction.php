@@ -5,8 +5,10 @@ namespace App\Actions\Novels;
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\NormalizedNovelOutline;
 use App\Enums\ArtifactType;
+use App\Enums\BibleStatus;
 use App\Enums\CharacterStatus;
 use App\Enums\ForeshadowingStatus;
+use App\Enums\GenerationStage;
 use App\Enums\NovelOutlineSource;
 use App\Enums\NovelOutlineStatus;
 use App\Enums\NovelStatus;
@@ -15,13 +17,20 @@ use App\Enums\StoryArcStatus;
 use App\Enums\StoryArcType;
 use App\Enums\VolumeStatus;
 use App\Enums\WorldEntityStatus;
+use App\Enums\WorldEntityType;
 use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\NovelGenerationTask;
 use App\Models\NovelOutline;
+use App\Services\GenerationInputIdentity;
+use App\Services\GenerationRunCoordinator;
 use App\Services\NormalizedNovelOutlineValidator;
+use App\Services\NovelFoundationContract;
 use App\Services\NovelOutlineChecksum;
 use App\Services\NovelOutlinePipeline;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -36,11 +45,102 @@ class ApplyNovelBlueprintAction
         private readonly NovelOutlineChecksum $outlineChecksum,
     ) {}
 
+    /** 新链首次初始化：三份冻结产物全部就绪后一次采用；不创建未来故事事件。 */
+    public function initializeBook(int $taskId, int $foundationId, int $blueprintId, int $windowId, int $expectedControlVersion): Novel
+    {
+        $initial = NovelGenerationTask::findOrFail($taskId);
+
+        return DB::transaction(function () use ($initial, $foundationId, $blueprintId, $windowId, $expectedControlVersion): Novel {
+            $novel = Novel::whereKey($initial->novel_id)->lockForUpdate()->firstOrFail();
+            $task = NovelGenerationTask::whereKey($initial->id)->lockForUpdate()->firstOrFail();
+            $identity = ['intent' => $task->intent_artifact_id, 'foundation' => $foundationId, 'blueprint' => $blueprintId, 'window' => $windowId];
+            $hash = app(GenerationInputIdentity::class)->hash($identity);
+            if ($novel->canonical_state_version_id && data_get($task->progress_snapshot, 'initialization_hash') === $hash) {
+                return $novel;
+            }
+            if ($novel->current_generation_task_id !== $task->id || $task->control_version !== $expectedControlVersion || $task->status !== 'running') {
+                throw new \LogicException('任务已暂停或控制版本变化，不能初始化。');
+            }
+            if ($novel->canonical_state_version_id || $novel->bibles()->exists() || $novel->characters()->exists() || $novel->worldEntities()->exists() || $novel->chapters()->exists()) {
+                throw new \LogicException('小说已存在正式初始数据；修改概述只能影响未来规划，不能重新初始化。');
+            }
+            $foundation = GenerationArtifact::findOrFail($foundationId);
+            $blueprint = NovelOutline::whereKey($blueprintId)->lockForUpdate()->firstOrFail();
+            $window = NovelOutline::whereKey($windowId)->lockForUpdate()->firstOrFail();
+            $intent = GenerationArtifact::findOrFail($task->intent_artifact_id);
+            $sources = collect([$intent, $foundation, $blueprint->sourceArtifact, $window->sourceArtifact])->map(function ($artifact) {
+                if (! $artifact) {
+                    throw new \LogicException('规划缺少冻结来源。');
+                }
+
+                return ['artifact_id' => $artifact->id, 'checksum' => $artifact->checksum];
+            })->all();
+            app(GenerationRunCoordinator::class)->assertSources($task, $sources);
+            app(GenerationRunCoordinator::class)->assertSources($task, $foundation->source_manifest ?? [], $foundation->generationRun->execution_contract ?? []);
+            if ($foundation->generationRun->status !== RunStatus::Succeeded || $foundation->type !== ArtifactType::FoundationBlueprint || $foundation->generationRun->generation_task_id !== $task->id
+                || data_get($foundation->generationRun->execution_contract, 'intent_artifact_id') !== $intent->id) {
+                throw new \LogicException('基础设定不是当前意图的已验证产物。');
+            }
+            app(NovelFoundationContract::class)->validate($foundation->data, $intent->data);
+            if ($foundation->data['conflicts'] !== []) {
+                throw new \LogicException('明确创作矛盾尚未由用户选择。');
+            }
+            foreach ([[$blueprint, 'blueprint', ArtifactType::OutlineBlueprint], [$window, 'goal_window', ArtifactType::GoalWindow]] as [$outline, $kind, $type]) {
+                if ($outline->novel_id !== $novel->id || $outline->kind !== $kind || $outline->status !== NovelOutlineStatus::Draft
+                    || $outline->sourceArtifact->type !== $type || ! hash_equals($outline->checksum, $outline->sourceArtifact->checksum)) {
+                    throw new \LogicException('蓝图或目标窗口的归属、类型、状态或校验和不匹配。');
+                }
+            }
+            $plan = $blueprint->sourceArtifact->data;
+            $goals = $window->sourceArtifact->data;
+            Validator::make($plan, ['foundation_artifact_id' => ['required', 'integer', 'in:'.$foundationId], 'mainline' => ['required', 'string'], 'ending' => ['required', 'string'], 'turning_points' => ['required', 'array', 'min:1'], 'turning_points.*' => ['required', 'string']])->validate();
+            Validator::make($goals, ['blueprint_id' => ['required', 'integer', 'in:'.$blueprintId], 'goals' => ['required', 'array', 'min:1'], 'goals.*' => ['required', 'string']])->validate();
+            $fields = $foundation->data['fields'];
+            // 新 Bible 保存完整原文要求与来源；旧文风表单的枚举默认值不覆盖自然语言要求；旧必填 POV/时态列只指向真实来源，不捏造第三人称。
+            $novel->bibles()->create(['version' => 1, 'status' => BibleStatus::Current,
+                'logline' => $fields['plot']['value'], 'tone' => mb_substr($fields['style']['value'], 0, 255), 'pov' => '以原始创作要求及文风设定为准', 'tense' => '以原始创作要求及文风设定为准',
+                'themes' => [], 'taboos' => [], 'hard_constraints' => ['user_requirements' => $intent->data['requirements'], 'clarifications' => $intent->data['clarifications'] ?? []],
+                'ending_contract' => ['direction' => $fields['ending']['value'], 'reader_promises' => $foundation->data['promises']],
+                'style_profile' => ['schema_version' => 'book-v1', 'description' => $fields['style']['value'], 'source' => $fields['style']['source']]]);
+            foreach ($foundation->data['characters'] as $character) {
+                $novel->characters()->create(['name' => $character['name'], 'role' => $character['role'], 'motivation' => $character['description'], 'profile' => ['description' => $character['description'], 'source_artifact_id' => $foundationId], 'status' => CharacterStatus::Active, 'current_state' => []]);
+            }
+            foreach ($foundation->data['world_entities'] as $entity) {
+                $novel->worldEntities()->create(['name' => $entity['name'], 'description' => $entity['description'], 'type' => WorldEntityType::Location, 'status' => WorldEntityStatus::Active, 'attributes' => ['source_artifact_id' => $foundationId], 'current_state' => []]);
+            }
+            $blueprint->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
+            $window->update(['status' => NovelOutlineStatus::Current, 'applied_at' => now()]);
+            $novel->update(['title' => mb_substr($fields['title']['value'], 0, 255), 'genre' => mb_substr($fields['genre']['value'], 0, 255),
+                'current_blueprint_id' => $blueprintId, 'current_goal_window_id' => $windowId, 'status' => NovelStatus::Planning]);
+            $state = $this->initializeNovelState->handle($novel);
+            $progress = $task->progress_snapshot ?? [];
+            $progress['initialization_hash'] = $hash;
+            $progress['initialization'] = [...$identity, 'state_version_id' => $state->id, 'sources' => $sources, 'mode' => $task->mode, 'at' => now()->toISOString()];
+            // 不可变采用记录与正式初始化同事务，Task 快照只作快捷展示。
+            $adoption = GenerationRun::create(['novel_id' => $novel->id, 'generation_task_id' => $task->id, 'scope_type' => 'novel', 'scope_id' => $novel->id,
+                'scope_key' => 'initialization', 'stage' => GenerationStage::Intake, 'pipeline_version' => 'pipeline-v1', 'status' => RunStatus::Succeeded, 'attempt' => 1,
+                'input_hash' => $hash, 'logical_step_key' => $novel->id.':initialize:'.$hash, 'idempotency_key' => hash('sha256', 'initialize:'.$novel->id.':'.$hash), 'source_manifest' => $sources,
+                'started_at' => now(), 'finished_at' => now()]);
+            $receipt = GenerationArtifact::create(['generation_run_id' => $adoption->id, 'type' => ArtifactType::OperationRecord, 'data' => $progress['initialization'],
+                'checksum' => app(GenerationInputIdentity::class)->hash($progress['initialization']), 'source_manifest' => $sources, 'validation_status' => 'validated']);
+            $adoption->update(['result_artifact_id' => $receipt->id]);
+            // 后续 Writer 未接入时不假装生成中；R04 从这些正式指针继续。
+            $task->update(['progress_snapshot' => $progress, 'status' => 'paused', 'current_phase' => 'chapter_planning', 'pending_transition' => null,
+                'control_version' => $task->control_version + 1, 'stop_reason' => 'stage_not_ready', 'stop_detail' => ['message' => '初始设定已采用，章节规划与正文等待 R04 接入。']]);
+
+            return $novel->fresh();
+        });
+    }
+
     /**
      * 校验冻结版本和来源后，在同一事务内完成首次正式采用。
      */
     public function handle(Novel $novel, NovelOutline $outline, ?GenerationArtifact $artifact = null): Novel
     {
+        if ($novel->current_generation_task_id) {
+            throw new \LogicException('新版任务只能由整书入口采用完整的设定、蓝图与目标窗口。');
+        }
+
         // 首次采用是正式规划数据的边界，所有写入必须在同一事务内全有或全无。
         return DB::transaction(function () use ($novel, $outline, $artifact): Novel {
             // 同时锁定 Novel 与候选版本，串行化首次采用并保护 current_outline_id。

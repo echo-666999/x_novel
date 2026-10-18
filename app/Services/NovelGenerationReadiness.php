@@ -12,6 +12,7 @@ use App\Enums\SceneStatus;
 use App\Enums\StoryArcStatus;
 use App\Enums\VolumeStatus;
 use App\Models\Novel;
+use App\Models\NovelGenerationTask;
 use Illuminate\Validation\ValidationException;
 
 final readonly class NovelGenerationReadiness
@@ -28,6 +29,12 @@ final readonly class NovelGenerationReadiness
      */
     public function evaluate(Novel $novel): array
     {
+        if ($novel->current_generation_task_id) {
+            $task = NovelGenerationTask::findOrFail($novel->current_generation_task_id);
+
+            // 不再要求用户补建旧层级；尚未实现的创作能力如实展示。
+            return [$this->item('book_workflow', '整书生成入口', false, data_get($task->stop_detail, 'message', '由整书任务推进，章节写作将在 R04 接入。'))];
+        }
         $latestCanonical = $novel->chapters()
             ->where('status', ChapterStatus::Canonical)
             ->reorder('sequence', 'desc')
