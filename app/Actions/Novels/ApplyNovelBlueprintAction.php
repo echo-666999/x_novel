@@ -94,7 +94,7 @@ class ApplyNovelBlueprintAction
             $plan = $blueprint->sourceArtifact->data;
             $goals = $window->sourceArtifact->data;
             Validator::make($plan, ['foundation_artifact_id' => ['required', 'integer', 'in:'.$foundationId], 'mainline' => ['required', 'string'], 'ending' => ['required', 'string'], 'turning_points' => ['required', 'array', 'min:1'], 'turning_points.*' => ['required', 'string']])->validate();
-            Validator::make($goals, ['blueprint_id' => ['required', 'integer', 'in:'.$blueprintId], 'goals' => ['required', 'array', 'min:1'], 'goals.*' => ['required', 'string']])->validate();
+            Validator::make($goals, ['blueprint_id' => ['required', 'integer', 'in:'.$blueprintId], 'goals' => ['required', 'array', 'min:1'], 'goals.*' => ['required']])->validate();
             $fields = $foundation->data['fields'];
             // 新 Bible 保存完整原文要求与来源；旧文风表单的枚举默认值不覆盖自然语言要求；旧必填 POV/时态列只指向真实来源，不捏造第三人称。
             $novel->bibles()->create(['version' => 1, 'status' => BibleStatus::Current,

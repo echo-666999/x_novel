@@ -229,3 +229,14 @@
 .xn-novel-intake .fi-input-wrp { background: var(--xn-surface-2); }
 .xn-novel-intake .fi-section-header-description,
 .xn-novel-intake .fi-fo-field-wrp-helper-text { color: var(--xn-text-muted); }
+
+/* 小说草稿与人工对照采用同一阅读列，窄屏自然折叠，避免编辑内容横向溢出。 */
+.xn-book-reading { max-width: 42rem; margin-inline: auto; font-size: 1.125rem; line-height: 2; overflow-wrap: anywhere; }
+.xn-book-reading p { margin-block: 1.3em; scroll-margin-top: 6rem; }
+.xn-book-reading p:target { outline: 2px solid var(--color-primary-500); outline-offset: .5rem; }
+.xn-book-details { padding: 1rem; border: 1px solid var(--xn-border); border-radius: .75rem; }
+.xn-book-details summary { cursor: pointer; min-height: 2.75rem; }
+.xn-book-finding { margin-block: 1rem; }
+.xn-book-comparison { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1.5rem; margin-top: 1rem; overflow-wrap: anywhere; }
+.xn-book-editor { display: block; width: 100%; background: var(--xn-surface-1); color: var(--xn-text); border: 1px solid var(--xn-border); border-radius: .5rem; padding: 1rem; line-height: 1.8; }
+@media (max-width: 768px) { .xn-book-comparison { grid-template-columns: minmax(0,1fr); } }

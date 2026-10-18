@@ -12,6 +12,9 @@
         <p>{{ \App\Services\NovelIntentContract::MODES[$task->mode] }} · 目标 {{ number_format($task->target_words) }} 正文字数</p>
         <p><strong>{{ match ($task->status) { 'queued' => '已创建，等待开始', 'running' => $run?->status === \App\Enums\RunStatus::Running ? '阶段正在执行' : '等待下一阶段', 'paused' => '已暂停', 'needs_attention' => '需要处理', default => $task->status } }}</strong></p>
         <p>{{ data_get($task->stop_detail, 'message', '任务已保存。执行进度来自持久记录；没有执行记录时不会显示模型正在生成。') }}</p>
+        @if($task->current_chapter_id)
+        <x-filament::link :href="\App\Filament\Resources\Novels\NovelResource::getUrl('book-chapter',['record'=>$novel,'chapter'=>$task->current_chapter_id])">阅读当前章草稿与审校证据</x-filament::link>
+        @endif
         <p>正式章节：{{ $novel->chapters()->where('status', 'canonical')->count() }} · 模式和费用策略在设置中可调整。</p>
     </x-filament::section>
     <x-filament::section heading="原始创作概述"><p class="whitespace-pre-wrap break-words">{{ $intent->data['premise'] }}</p></x-filament::section>

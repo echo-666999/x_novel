@@ -1,0 +1,11 @@
+{
+  "php_lint_count": 30,
+  "php_lint_failures": [],
+  "document_fingerprints": {
+    "docs/PRD.md": true,
+    "DESIGN.md": true
+  },
+  "env_modified": false,
+  "build": "passed; optional fontaine warning",
+  "diff_check": ""
+}

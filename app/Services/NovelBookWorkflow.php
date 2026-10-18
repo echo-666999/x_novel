@@ -15,6 +15,8 @@ use App\Enums\ChapterStatus;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Models\AIModelPrice;
+use App\Models\Chapter;
+use App\Models\ChapterPlan;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationIssue;
 use App\Models\GenerationRun;
@@ -107,8 +109,22 @@ final class NovelBookWorkflow
                     return null;
                 }
                 $pending = $task->pending_transition ?? [];
+                // 暂停期间成功的响应仍保留后继检查点；用户恢复后从完成处交接，不重发模型。
+                if (isset($pending['run_id'])) {
+                    $completed = GenerationRun::find($pending['run_id']);
+                    if ($completed?->status === RunStatus::Succeeded && data_get($completed->checkpoint, 'next')) {
+                        $pending = $completed->checkpoint['next'];
+                        $task->update(['pending_transition' => $pending]);
+                    }
+                }
                 $blocked = GenerationIssue::where('generation_task_id', $task->id)->where('status', '!=', 'resolved')->whereIn('severity', ['error', 'critical'])
                     ->get()->contains(function ($issue) use ($pending): bool {
+                        if (app(BookChapterRepair::class)->ownsContinuation($issue, $pending)) {
+                            return false;
+                        }
+                        if (data_get($issue->evidence, 'manual_revision.draft_id') && $issue->status === 'repairing' && Chapter::whereKey($issue->chapter_id)->where('current_draft_artifact_id', data_get($issue->evidence, 'manual_revision.draft_id'))->exists()) {
+                            return false;
+                        }
                         $source = GenerationRun::find($issue->first_run_id);
                         if (($pending['stage'] ?? null) === 'preflight' && isset($pending['contract']['recheck_version']) && $source?->stage === GenerationStage::Preflight) {
                             return false;
@@ -122,6 +138,29 @@ final class NovelBookWorkflow
                     return null;
                 }
 
+                if (($pending['stage'] ?? null) === 'book_control' && isset($pending['manual_draft_id'])) {
+                    if (GenerationRun::where('novel_id', $novel->id)->where('pipeline_version', 'pipeline-v1')->where('status', 'running')->exists()) {
+                        return null;
+                    }
+                    $draft = GenerationArtifact::findOrFail($pending['manual_draft_id']);
+                    $chapter = Chapter::findOrFail($task->current_chapter_id);
+
+                    return app(NovelChapterPipeline::class)->downstream($task, $chapter, ChapterPlan::findOrFail($chapter->current_plan_id), $draft, 'extract', ids: ['repair_chain_issue_id' => data_get($task->progress_snapshot, 'manual_verification_issue_ids.0')]);
+                }
+                if (($pending['stage'] ?? null) === 'book_control' && isset($pending['completed_run_id'])) {
+                    $completed = GenerationRun::findOrFail($pending['completed_run_id']);
+                    if ($completed->generation_task_id !== $task->id || $completed->status !== RunStatus::Succeeded || GenerationArtifact::find($completed->result_artifact_id)?->validation_status !== ArtifactValidationStatus::Validated) {
+                        throw new \LogicException('阶段产物缺少当前任务的成功与校验依据。');
+                    }
+                    app(GenerationRunCoordinator::class)->assertSources($task, $completed->source_manifest, $completed->execution_contract);
+
+                    return in_array($completed->execution_contract['book_stage'], ['blueprint', 'window'], true)
+                        ? app(NovelPlanningService::class)->adoptResult($task, $completed)
+                        : app(NovelChapterPipeline::class)->advance($task, $completed);
+                }
+                if (($pending['stage'] ?? null) === 'book_control' && isset($pending['chapter_boundary'])) {
+                    return app(NovelChapterPipeline::class)->start($task);
+                }
                 if (($pending['stage'] ?? null) === 'book_control') {
                     $foundationRun = GenerationRun::findOrFail($pending['foundation_run_id']);
                     app(GenerationRunCoordinator::class)->assertSources($task, $foundationRun->source_manifest, $foundationRun->execution_contract);
@@ -149,11 +188,8 @@ final class NovelBookWorkflow
 
                         return null;
                     }
-                    // R04 才提供真实蓝图/目标窗口；这里保留真实断点，绝不伪造计划或调用旧四段大纲。
-                    $task->update(['status' => 'paused', 'current_phase' => 'goal_window', 'stop_reason' => 'stage_not_ready',
-                        'stop_detail' => ['message' => '基础设定已保存。全书蓝图与近期目标尚未接入，等待 R04 后从此处继续。'], 'control_version' => $task->control_version + 1]);
 
-                    return null;
+                    return app(NovelPlanningService::class)->fromFoundation($task, $candidate);
                 }
                 if (empty($pending['stage'])) {
                     $this->pauseAtBoundary($task, 'stage_not_ready', '当前章节执行阶段尚未接入，保留现有产物等待后续批次。');
@@ -161,7 +197,7 @@ final class NovelBookWorkflow
                     return null;
                 }
                 $stage = GenerationStage::tryFrom($pending['stage']);
-                if (! in_array($stage, [GenerationStage::Preflight, GenerationStage::FoundationBlueprint], true)) {
+                if (! in_array($stage, [GenerationStage::Preflight, GenerationStage::FoundationBlueprint], true) && empty($pending['contract']['book_stage'])) {
                     throw new \LogicException('当前阶段尚未接入新版整书入口。');
                 }
 
@@ -188,18 +224,27 @@ final class NovelBookWorkflow
             Novel::whereKey($initial->novel_id)->lockForUpdate()->firstOrFail();
             $task = NovelGenerationTask::whereKey($initial->id)->lockForUpdate()->firstOrFail();
             $contract = ['intent_artifact_id' => $task->intent_artifact_id, 'transition' => $task->pending_transition];
+            $completed = GenerationRun::find(data_get($task->pending_transition, 'completed_run_id'));
+            $repairIssueId = data_get($completed?->execution_contract, 'repair_chain_issue_id');
             $hash = app(GenerationInputIdentity::class)->hash($contract);
             $key = 'adoption-failure:'.$task->id.':'.$hash;
             $intent = GenerationArtifact::findOrFail($task->intent_artifact_id);
             $message = app(GenerationDiagnosticRedactor::class)->clean($exception->getMessage());
+            $code = $exception instanceof AiProviderException ? $exception->errorCode : 'initialization_validation_failed';
             $run = GenerationRun::firstOrCreate(['idempotency_key' => hash('sha256', $key)], [
-                'novel_id' => $task->novel_id, 'generation_task_id' => $task->id, 'scope_type' => 'novel', 'scope_id' => $task->novel_id,
+                'novel_id' => $task->novel_id, 'generation_task_id' => $task->id, 'chapter_id' => $completed?->chapter_id, 'issue_id' => $repairIssueId, 'scope_type' => 'novel', 'scope_id' => $task->novel_id,
                 'scope_key' => 'initialization', 'stage' => GenerationStage::GoalWindow, 'pipeline_version' => 'pipeline-v1', 'logical_step_key' => $key,
                 'input_hash' => $hash, 'attempt' => 1, 'status' => RunStatus::Failed, 'execution_contract' => $contract,
                 'source_manifest' => [['artifact_id' => $intent->id, 'checksum' => $intent->checksum]],
-                'error_code' => 'initialization_validation_failed', 'error_message' => $message, 'error_retryable' => false, 'started_at' => now(), 'finished_at' => now()]);
+                'error_code' => $code, 'error_message' => $message, 'error_retryable' => false, 'started_at' => now(), 'finished_at' => now()]);
             app(GenerationIssueService::class)->record($run);
-            $task->refresh()->update(['stop_detail' => ['message' => '初始化未采用，已整体回滚。请查看问题中的字段或来源错误，修正候选后重新核验。', 'run_id' => $run->id]]);
+            if ($repairIssueId) {
+                GenerationIssue::whereKey($repairIssueId)->update(['status' => 'awaiting_user']);
+                if ($task->status !== 'paused') {
+                    $task->update(['status' => 'needs_attention', 'stop_reason' => $code]);
+                }
+            }
+            $task->refresh()->update(['stop_detail' => ['message' => '阶段交接未采用，已整体回滚。有效产物已保留；请查看字段、容量或来源错误，修正后重新核验。', 'run_id' => $run->id]]);
         });
     }
 
@@ -214,7 +259,7 @@ final class NovelBookWorkflow
             throw new AiProviderException('intent_conflict', '概述篇幅与明确填写的目标不同，请编辑创作选项统一要求后继续。', false);
         }
         $models = [];
-        foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer] as $stage) {
+        foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite] as $stage) {
             $route = app(AiSettingsResolver::class)->resolve($stage, $task->novel);
             // 能力来自已验证的实际记录；不会把路由存在解释成 Worker 或供应商在线。
             app(AiSettingsService::class)->assertProviderAvailable($route->provider);

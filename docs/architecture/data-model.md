@@ -215,3 +215,18 @@ Intent 的 `data.schema_version=2` 保存 premise、requirements、explicit、ta
 Foundation 的不可变数据包含 fields（value/source/evidence）、length、requirements、promises、characters、world_entities、conflicts。失败响应的 validation_status=rejected，不可初始化。普通补充与用户原文分开标注；引用有效不等于语义忠实度已获真实模型验收。
 
 初始化凭证使用 succeeded Intake Run + OperationRecord，source_manifest 包含 Intent/Foundation/Blueprint/GoalWindow；Task.progress_snapshot.initialization 只是快捷引用。Bible.hard_constraints 保存原始要求及选择，ending_contract 保存结局方向与读者承诺，style_profile 使用 book-v1 自然语言描述。初始 State 仅创建一次；失败时这些记录和指针同时回滚，错误追踪在回滚后独立保存。实际验证见 [R03 报告](../development/reports/R03-implementation.md)。
+
+## R04 Schema 与来源增量（2026-10-18）
+
+不新增表。新增两份迁移只在隔离库验证，运行库未执行：
+
+- `2026_10_18_115324_allow_unscored_narrative_reviews.php`：Review 总分及七维分数允许 NULL，含中文字段/表备注；新版按条目和规则判断，不伪造分数。有任意未评分记录时拒绝恢复旧 NOT NULL。
+- `2026_10_18_115535_allow_three_layer_chapter_plan_sources.php`：四个旧 Outline/Arc/Beat/Milestone 引用可空，含中文备注；`book-plan-v1` 强制 novel、blueprint、goal_window、source_state_version 及非空目标引用数组。有新版记录时拒绝有损降级。
+
+Blueprint/Window 内容只在不可变 Artifact，NovelOutline 作为版本索引；`goal_refs` 保存 key/content_hash，未变目标不因窗口版本号变化而失效。规划修订保存操作者与旧版本来源。
+
+ChapterPlan 的 `admission_snapshot.plan` 保存完整 POV/人物变化等新计划语义，不伪造旧 Scene 或 Arc。上下文和四阶段容量合同冻结于 Admission，并另存 Context Artifact。重新准入生成新 Plan 版本。
+
+Writer 的原始响应与段落信息分层保存：片段正文为 ChapterFragment，确定性组装为 ChapterDraft；局部替换响应及新的完整 RewriteDraft 均追加版本，不覆盖旧稿。段落 key/Unicode offset/length/hash 是当前完整正文的派生索引。
+
+Review 的 `source_manifest` 同时绑定当前完整草稿、事件候选与状态补丁；`rules_version=book-review-v1`。新稿不继承旧 PASS。提取与补丁均为候选，R04 不写入正式 Story Event/Fact/Memory，也不推进 Canonical Pointer。

@@ -20,10 +20,12 @@ class StatePatchBuilder
         private readonly StoryStateService $storyState,
     ) {}
 
-    public function build(int $chapterId): GenerationArtifact
+    public function build(int $chapterId, ?int $candidateId = null): GenerationArtifact
     {
         $chapter = Chapter::query()->with('novel.canonicalStateVersion')->findOrFail($chapterId);
-        $candidateArtifact = $this->latestCandidateArtifact($chapter);
+        // 新链显式指定当前事件候选，不能把另一 Run 的最新版本混入当前草稿。
+        $candidateArtifact = $candidateId ? GenerationArtifact::whereKey($candidateId)->where('type', ArtifactType::EventCandidate)
+            ->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapterId))->firstOrFail() : $this->latestCandidateArtifact($chapter);
         $stateVersion = $chapter->novel->canonicalStateVersion;
 
         if ($stateVersion === null) {
@@ -85,6 +87,8 @@ class StatePatchBuilder
                 ->max('version');
 
             return $candidateArtifact->generationRun->artifacts()->create([
+                // 来源随不可变补丁首次写入，禁止创建后再补写来源字段。
+                'source_manifest' => [['artifact_id' => $candidateArtifact->id, 'checksum' => $candidateArtifact->checksum]],
                 'type' => ArtifactType::StatePatch,
                 'version' => ((int) $version) + 1,
                 'content' => json_encode($data['operations'], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),

@@ -1,0 +1,33 @@
+{
+  "configuration": "phpunit.pgsql.xml",
+  "real_provider_calls": false,
+  "runtime_database_changed": false,
+  "runs": [
+    {
+      "label": "main regression before final focused refinements",
+      "result": {
+        "tool": "pest",
+        "result": "passed",
+        "tests": 234,
+        "passed": 233,
+        "assertions": 1869,
+        "duration_ms": 140571,
+        "skipped": 1
+      },
+      "artisan_exit_code": 1
+    },
+    {
+      "label": "final affected R04 and Issue regression",
+      "result": {
+        "tool": "pest",
+        "result": "passed",
+        "tests": 63,
+        "passed": 63,
+        "assertions": 445,
+        "duration_ms": 59395
+      },
+      "artisan_exit_code": 1
+    }
+  ],
+  "note": "Overlapping suites are not summed. JSON result is reported independently of the local Artisan wrapper exit code."
+}

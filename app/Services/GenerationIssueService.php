@@ -40,7 +40,7 @@ final class GenerationIssueService
                 throw new \LogicException('旧历史不导入新版问题中心。');
             }
             // 修复器出错仍更新原问题，绝不递归创建“修复修复器”。
-            if ($run->issue_id) {
+            if ($run->issue_id && ! (GenerationIssue::findOrFail($run->issue_id)->status === 'resolved' && str_starts_with($failure->code, 'book_review_'))) {
                 $issue = GenerationIssue::findOrFail($run->issue_id);
                 $this->finishAttempt($run);
 
@@ -104,8 +104,8 @@ final class GenerationIssueService
         if ($identity->hash($this->identity($run)) === $identity->hash($issue->source_identity)) {
             return true;
         }
-        if ($run->stage !== GenerationStage::FoundationBlueprint || data_get($run->execution_contract, 'issue_action') !== 'repair_foundation'
-            || data_get($issue->evidence, 'attempts.'.$run->id.'.action') !== 'repair_foundation'
+        if (! in_array(data_get($run->execution_contract, 'issue_action'), ['repair_foundation', 'repair_book'], true)
+            || data_get($issue->evidence, 'attempts.'.$run->id.'.action') !== data_get($run->execution_contract, 'issue_action')
             || $identity->hash(data_get($run->execution_contract, 'repair_source_identity', [])) !== $identity->hash($issue->source_identity)
             || $identity->hash($run->source_manifest) !== $identity->hash($issue->source_identity['sources'] ?? [])) {
             return false;
@@ -118,7 +118,7 @@ final class GenerationIssueService
 
     public function verifySuccess(GenerationRun $candidate): bool
     {
-        if (! $candidate->issue_id || data_get($candidate->execution_contract, 'issue_action') === 'diagnose') {
+        if (! $candidate->issue_id || data_get($candidate->execution_contract, 'issue_action') === 'diagnose' || data_get($candidate->execution_contract, 'repair_chain_issue_id')) {
             return false;
         }
 
@@ -152,6 +152,10 @@ final class GenerationIssueService
     /** 每个创作阶段有独立成功标准，不能用 HTTP 成功替代业务通过。 */
     private function verifiedStageResult(GenerationRun $run, GenerationArtifact $artifact): bool
     {
+        if (data_get($run->execution_contract, 'book_stage')) {
+            // 结构修复已通过封闭 Schema 与领域校验；正文改写要等后续独立审校，不能在此关闭。
+            return data_get($run->execution_contract, 'book_stage') !== 'rewrite';
+        }
         if ($run->stage === GenerationStage::Preflight) {
             return $artifact->type === ArtifactType::OperationRecord && data_get($artifact->data, 'checks.task_identity') === 'valid' && data_get($artifact->data, 'checks.sources') === 'valid';
         }
@@ -204,9 +208,12 @@ final class GenerationIssueService
                 $evidence['attempts'] = $attempts;
                 $issue->update(['repair_elapsed_ms' => $issue->repair_elapsed_ms + $elapsed, 'evidence' => $evidence]);
             }
+            if ($attempt && $run->status === RunStatus::Failed && $task->status === 'running') {
+                $task->update(['status' => 'needs_attention', 'stop_reason' => $run->error_code]);
+            }
             $diagnostic = data_get($run->execution_contract, 'issue_action') === 'diagnose';
             if ($attempt && $issue->status !== 'resolved') {
-                $issue->update(['status' => 'awaiting_user', 'last_seen_at' => now()]);
+                $issue->update(['status' => $run->status === RunStatus::Succeeded && data_get($run->execution_contract, 'repair_chain_issue_id') ? 'repairing' : 'awaiting_user', 'last_seen_at' => now()]);
             }
             if ($diagnostic && in_array($task->status, ['running', 'needs_attention'], true)
                 && (int) data_get($task->pending_transition, 'run_id') === $run->id) {

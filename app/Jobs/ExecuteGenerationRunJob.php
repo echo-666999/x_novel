@@ -5,11 +5,14 @@ namespace App\Jobs;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Models\GenerationRun;
+use App\Services\BookChapterRepair;
 use App\Services\GenerationFailurePolicy;
 use App\Services\GenerationIssueDiagnostic;
+use App\Services\GenerationJobDispatcher;
 use App\Services\GenerationRunCoordinator;
 use App\Services\NovelBookWorkflow;
 use App\Services\NovelFoundationContract;
+use App\Services\NovelStageContract;
 use App\Support\GenerationDiagnosticRedactor;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -51,6 +54,13 @@ class ExecuteGenerationRunJob implements ShouldQueue
 
                 return;
             }
+            // R04 具体创作请求共用租约和账本，完成后交给统一整书入口持久推进。
+            if (data_get($run->execution_contract, 'book_stage')) {
+                app(NovelStageContract::class)->execute($run, $lease);
+                app(NovelBookWorkflow::class)->advance($run->generation_task_id);
+
+                return;
+            }
             // 新书入口使用同一执行租约；成功后推进持久后继，崩溃时由扫描补偿。
             if (data_get($run->execution_contract, 'book_workflow') === 1) {
                 if ($run->stage === GenerationStage::Preflight) {
@@ -73,6 +83,10 @@ class ExecuteGenerationRunJob implements ShouldQueue
         } catch (Throwable $exception) {
             $failure = app(GenerationFailurePolicy::class)->fromException($exception, 'stage_execution_failed');
             $coordinator->failExecution($run->id, $lease['token'], $failure->code, $failure->message, $failure->retryable, $failure->metadata);
+            $repair = app(BookChapterRepair::class)->attempt($run);
+            if ($repair) {
+                app(GenerationJobDispatcher::class)->dispatchRun($repair->id);
+            }
             // 原异常位置可追踪，但不把包含请求凭据的原始异常文本直接输出日志。
             Log::error('新链阶段执行失败', [
                 'run_id' => $run->id, 'exception_class' => $exception::class, 'file' => $exception->getFile(), 'line' => $exception->getLine(),

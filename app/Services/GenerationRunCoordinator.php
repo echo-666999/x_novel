@@ -173,7 +173,12 @@ final class GenerationRunCoordinator
             }
 
             if ($sourceChanged && $run->status === RunStatus::Running && hash_equals((string) $run->lease_token, $token)) {
-                $this->failExecution($run->id, $token, 'source_changed', '结果已隔离：正式状态或来源版本发生变化。', false);
+                if (data_get($task->pending_transition, 'manual_draft_id') || (isset($run->execution_contract['chapter_plan_id']) && ! Chapter::whereKey($run->chapter_id)->where('current_plan_id', $run->execution_contract['chapter_plan_id'])->exists())) {
+                    // 人工明确换稿或重建计划后，晚到结果只留历史，不阻塞新的复验链。
+                    $run->update(['status' => RunStatus::Cancelled, 'error_code' => 'source_changed', 'error_message' => '来源已由人工更新，响应隔离保存。', 'finished_at' => now(), 'lease_token' => null, 'lease_expires_at' => null]);
+                } else {
+                    $this->failExecution($run->id, $token, 'source_changed', '结果已隔离：正式状态或来源版本发生变化。', false);
+                }
             }
 
             DB::afterCommit(fn () => app(GenerationIssueService::class)->observe($run->fresh()));
@@ -258,6 +263,9 @@ final class GenerationRunCoordinator
     public function assertSources(NovelGenerationTask $task, array $sources, array $contract = []): void
     {
         $novel = Novel::findOrFail($task->novel_id);
+        if (isset($contract['hard_context_hash']) && ! hash_equals($contract['hard_context_hash'], app(ContextBuilder::class)->bookSourceHash($novel))) {
+            throw new \LogicException('设定或锁定事实已变化，请重建当前章计划，不能继续旧硬约束。');
+        }
         if (array_key_exists('state_version_id', $contract) && $novel->canonical_state_version_id !== $contract['state_version_id']) {
             throw new \LogicException('正式状态版本已变化，请按当前状态重新建立输入。');
         }
@@ -267,6 +275,9 @@ final class GenerationRunCoordinator
         // 修改概述即使没有正式状态变化，也必须使旧设定请求失去采用权。
         if (isset($contract['intent_artifact_id']) && $task->intent_artifact_id !== $contract['intent_artifact_id']) {
             throw new \LogicException('创作意图已更新，旧来源不能继续。');
+        }
+        if (! empty($contract['goal_refs'])) {
+            app(NovelPlanningService::class)->assertGoalSources($task, $contract['goal_refs']);
         }
         foreach ($sources as $source) {
             $artifact = GenerationArtifact::find($source['artifact_id'] ?? 0);

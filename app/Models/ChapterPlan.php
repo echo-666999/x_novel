@@ -10,10 +10,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * 冻结章节生成目标及其 Outline Version、Arc、Beat、Milestone 完整父链。
+ * 冻结章节目标与执行来源；新版使用蓝图/窗口，旧四层引用等待 R07 清理。
  */
 #[Fillable([
     'chapter_id',
+    // 新版三层规划身份由原子采用入口写入，不再依赖旧 Arc/Beat。
+    'novel_id', 'blueprint_id', 'goal_window_id', 'goal_refs', 'source_state_version_id', 'schema_version',
     'novel_outline_id',
     'primary_outline_arc_id',
     'primary_outline_beat_id',
@@ -129,6 +131,11 @@ class ChapterPlan extends Model
     /** @return array<string, mixed> 只包含会改变章节执行结果的规范化计划输入。 */
     public function semanticPayload(): array
     {
+        // 新计划的语义来源是三层规划及 Admission，不再依赖旧 Arc/Beat。
+        if ($this->schema_version === 'book-plan-v1') {
+            return ['novel_id' => $this->novel_id, 'chapter_id' => $this->chapter_id, 'goal_refs' => $this->goal_refs, 'state_version_id' => $this->source_state_version_id, 'plan' => $this->admission_snapshot['plan'] ?? []];
+        }
+
         return $this->only([
             'novel_outline_id',
             'primary_outline_arc_id',
@@ -190,6 +197,7 @@ class ChapterPlan extends Model
     protected function casts(): array
     {
         return [
+            'goal_refs' => 'array', 'blueprint_id' => 'integer', 'goal_window_id' => 'integer', 'source_state_version_id' => 'integer',
             'version' => 'integer',
             'novel_outline_id' => 'integer',
             'primary_outline_arc_id' => 'integer',

@@ -13,7 +13,13 @@ final class GenerationStageGraph
     public function next(GenerationStage $stage): array
     {
         return match ($stage) {
-            GenerationStage::ChapterPlanning => [GenerationStage::SceneGeneration],
+            GenerationStage::Intake => [GenerationStage::Preflight],
+            GenerationStage::Preflight => [GenerationStage::FoundationBlueprint],
+            GenerationStage::FoundationBlueprint => [GenerationStage::FoundationBlueprint, GenerationStage::GoalWindow],
+            GenerationStage::GoalWindow => [GenerationStage::ChapterPlanning],
+            GenerationStage::ChapterWrite, GenerationStage::FragmentWrite => [GenerationStage::FragmentWrite, GenerationStage::EventExtraction],
+            GenerationStage::Export => [],
+            GenerationStage::ChapterPlanning => [GenerationStage::SceneGeneration, GenerationStage::ChapterWrite, GenerationStage::FragmentWrite],
             GenerationStage::ContentRepair => [GenerationStage::ChapterPlanning],
             // 恢复合同不重跑 Planner/Writer，只允许进入已有正文之后的合法节点。
             GenerationStage::ChapterRecovery => [
@@ -29,7 +35,7 @@ final class GenerationStageGraph
             GenerationStage::EventExtraction => [GenerationStage::Review],
             GenerationStage::ReviewRepair => [GenerationStage::Review],
             GenerationStage::Review => [GenerationStage::Rewrite, GenerationStage::Commit],
-            GenerationStage::Rewrite => [GenerationStage::ChapterAssembly],
+            GenerationStage::Rewrite => [GenerationStage::ChapterAssembly, GenerationStage::EventExtraction],
             GenerationStage::Commit => [GenerationStage::MemorySummary],
             GenerationStage::MemorySummary => [GenerationStage::Embedding],
             GenerationStage::Embedding, GenerationStage::EndingAudit => [],
@@ -40,7 +46,11 @@ final class GenerationStageGraph
     public function downstream(GenerationStage $stage): array
     {
         return match ($stage) {
+            GenerationStage::Intake, GenerationStage::Preflight, GenerationStage::FoundationBlueprint, GenerationStage::GoalWindow => [GenerationStage::ChapterPlanning, ...$this->downstream(GenerationStage::ChapterPlanning)],
+            GenerationStage::ChapterWrite, GenerationStage::FragmentWrite => [GenerationStage::FragmentWrite, GenerationStage::EventExtraction, GenerationStage::Review, GenerationStage::Rewrite, GenerationStage::Commit, GenerationStage::MemorySummary, GenerationStage::Embedding],
+            GenerationStage::Export => [],
             GenerationStage::ChapterPlanning => [
+                GenerationStage::ChapterWrite, GenerationStage::FragmentWrite,
                 GenerationStage::SceneGeneration, GenerationStage::ChapterAssembly,
                 GenerationStage::CoverageJudgment, GenerationStage::EventExtraction, GenerationStage::Review,
                 GenerationStage::Rewrite, GenerationStage::Commit, GenerationStage::MemorySummary,
@@ -96,6 +106,11 @@ final class GenerationStageGraph
     public function artifactsProducedBy(GenerationStage $stage): array
     {
         return match ($stage) {
+            GenerationStage::Intake => [ArtifactType::Intent],
+            GenerationStage::Preflight, GenerationStage::Export => [ArtifactType::OperationRecord],
+            GenerationStage::FoundationBlueprint => [ArtifactType::FoundationBlueprint, ArtifactType::OutlineBlueprint],
+            GenerationStage::GoalWindow => [ArtifactType::GoalWindow],
+            GenerationStage::ChapterWrite, GenerationStage::FragmentWrite => [ArtifactType::ChapterFragment, ArtifactType::ChapterDraft],
             GenerationStage::ChapterPlanning => [ArtifactType::ChapterPlan],
             GenerationStage::ContentRepair => [ArtifactType::Context],
             GenerationStage::ChapterRecovery => [ArtifactType::Context],

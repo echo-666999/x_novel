@@ -12,6 +12,7 @@ use App\Enums\WorldEntityStatus;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
 use App\Models\GenerationRun;
+use App\Models\Memory;
 use App\Models\Novel;
 use App\Models\StoryStateVersion;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -28,6 +29,35 @@ class ContextBuilder
         private readonly NarrativeStyleProfile $narrativeStyleProfile,
         private readonly ForeshadowingContextContract $foreshadowingContextContract,
     ) {}
+
+    /** 新链只读取真实正式来源；可选长期记忆使用可追踪 SQL 回退，不偷偷发 Embedding 请求。 */
+    public function forBook(Novel $novel, array $goal): array
+    {
+        $bible = $novel->bibles()->where('status', 'current')->firstOrFail();
+        $recent = $novel->chapters()->where('status', 'canonical')->latest('sequence')->limit(10)->get(['id', 'sequence', 'summary', 'summary_artifact_id']);
+        $entities = $novel->characters()->get(['id', 'name', 'profile', 'current_state'])->toArray();
+        $world = $novel->worldEntities()->get(['id', 'name', 'type', 'description', 'current_state'])->toArray();
+        $memories = Memory::where('novel_id', $novel->id)->where('status', 'active')->where('source_type', 'chapter')
+            ->whereIn('source_id', $novel->chapters()->where('status', 'canonical')->select('id'))
+            ->orderByDesc('salience')->limit(10)->get(['id', 'summary', 'source_id', 'entities'])->unique('summary')->values()->toArray();
+
+        return ['source_hash' => $this->bookSourceHash($novel), 'bible_id' => $bible->id, 'bible_version' => $bible->version, 'hard_constraints' => $bible->hard_constraints,
+            'ending_contract' => $bible->ending_contract, 'style_profile' => $bible->style_profile, 'goal' => $goal,
+            'state_version_id' => $novel->canonical_state_version_id, 'state' => $novel->canonicalStateVersion?->state,
+            'characters' => $entities, 'world_entities' => $world,
+            'locked_facts' => $novel->facts()->where('status', 'active')->where('locked', true)->get()->toArray(),
+            'recent_chapters' => $recent->toArray(), 'optional_memories' => $memories,
+            'memory_selection' => ['strategy' => 'canonical_sql_salience_fallback', 'reason' => 'R04 不触发额外 Embedding；同小说正式来源、去重后按显著性，容量不足先裁剪。']];
+    }
+
+    /** 锁定事实变化不一定创建故事状态版本，因此单独冻结硬上下文身份。 */
+    public function bookSourceHash(Novel $novel): string
+    {
+        return app(GenerationInputIdentity::class)->hash([
+            'bible' => $novel->bibles()->where('status', 'current')->orderBy('id')->get(['id', 'version', 'hard_constraints', 'ending_contract', 'style_profile'])->toArray(),
+            'facts' => $novel->facts()->where('status', 'active')->where('locked', true)->orderBy('id')->get(['id', 'subject_type', 'subject_id', 'predicate', 'value', 'locked'])->toArray(),
+        ]);
+    }
 
     public function buildForRun(GenerationRun $run, ContextRequest $request): ContextSnapshot
     {

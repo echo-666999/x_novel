@@ -165,7 +165,7 @@ class ManageNovelChapters extends ManageRelatedRecords
                 Action::make('viewChapter')
                     ->label('工作台')
                     ->icon('heroicon-o-arrow-top-right-on-square')
-                    ->url(fn (Chapter $record): string => NovelResource::getUrl('chapter', [
+                    ->url(fn (Chapter $record): string => NovelResource::getUrl($this->getRecord()->current_generation_task_id ? 'book-chapter' : 'chapter', [
                         'record' => $this->getRecord(),
                         'chapter' => $record,
                     ])),

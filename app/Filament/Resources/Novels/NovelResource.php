@@ -13,6 +13,7 @@ use App\Filament\Resources\Novels\Pages\ManageNovelOutline;
 use App\Filament\Resources\Novels\Pages\ManageNovelStoryArcs;
 use App\Filament\Resources\Novels\Pages\ManageNovelVolumes;
 use App\Filament\Resources\Novels\Pages\ManageNovelWorld;
+use App\Filament\Resources\Novels\Pages\ViewBookChapter;
 use App\Filament\Resources\Novels\Pages\ViewNovel;
 use App\Filament\Resources\Novels\Pages\ViewNovelChapter;
 use App\Filament\Resources\Novels\Pages\ViewNovelEndingAudit;
@@ -75,7 +76,7 @@ class NovelResource extends Resource
     public static function getRecordSubNavigation(Page $page): array
     {
         if ($page->getRecord()?->current_generation_task_id) {
-            return $page->generateNavigationItems([ViewNovel::class, ManageNovelChapters::class]);
+            return $page->generateNavigationItems([ViewNovel::class, ViewNovelPlanning::class, ManageNovelCharacters::class, ManageNovelWorld::class, ManageNovelForeshadowings::class, ManageNovelChapters::class]);
         }
 
         return $page->generateNavigationItems([
@@ -109,6 +110,7 @@ class NovelResource extends Resource
             'planning' => ViewNovelPlanning::route('/{record}/planning'),
             'planning-preview' => ViewNovelPlanningPreview::route('/{record}/planning-preview/{chapter}'),
             'chapters' => ManageNovelChapters::route('/{record}/chapters'),
+            'book-chapter' => ViewBookChapter::route('/{record}/book-chapters/{chapter}'),
             'chapter' => ViewNovelChapter::route('/{record}/chapters/{chapter}'),
             'volumes' => ManageNovelVolumes::route('/{record}/planning/volumes'),
             'story-arcs' => ManageNovelStoryArcs::route('/{record}/planning/story-arcs'),

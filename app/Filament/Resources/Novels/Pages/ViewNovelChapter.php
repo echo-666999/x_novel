@@ -89,6 +89,8 @@ class ViewNovelChapter extends ViewRecord
     public function mount(int|string $record, int|string|null $chapter = null): void
     {
         parent::mount($record);
+        // 新整章链使用独立阅读/复验入口，旧 Scene 操作不能绕过新来源合同。
+        abort_if($this->getRecord()->current_generation_task_id, 404);
 
         $chapterId = $this->getRecord()->chapters()
             ->whereKey($chapter)

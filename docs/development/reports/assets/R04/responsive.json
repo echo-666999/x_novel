@@ -1,0 +1,51 @@
+{
+  "planning": [
+    {
+      "page": "planning",
+      "scrollWidth": 320,
+      "theme": "light",
+      "width": 320
+    },
+    {
+      "page": "planning",
+      "scrollWidth": 390,
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "page": "planning",
+      "scrollWidth": 768,
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "page": "planning",
+      "scrollWidth": 1440,
+      "theme": "light",
+      "width": 1440
+    }
+  ],
+  "reader": [
+    {
+      "theme": "dark",
+      "width": 390,
+      "scrollWidth": 390
+    },
+    {
+      "theme": "light",
+      "width": 320,
+      "scrollWidth": 320
+    }
+  ],
+  "actions": [
+    "future direction candidate saved without replacing current blueprint",
+    "manual draft saved and independent review invalidated",
+    "saved draft updates reader immediately after cache fix"
+  ],
+  "limitations": [
+    "No real provider calls",
+    "No OS reduced motion check",
+    "No second browser engine",
+    "No actual browser 200/400 percent zoom"
+  ]
+}

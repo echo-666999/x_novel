@@ -25,21 +25,22 @@ class StateValidator
 
     public function __construct(private readonly ForeshadowingEventValidator $foreshadowingEventValidator) {}
 
-    public function validate(int $chapterId): StateValidationResult
+    public function validate(int $chapterId, ?int $candidateId = null, ?int $patchId = null, ?int $draftId = null): StateValidationResult
     {
         $chapter = Chapter::query()->with(['novel.canonicalStateVersion', 'latestPlan'])->findOrFail($chapterId);
-        $candidateArtifact = $this->latestArtifact($chapter, ArtifactType::EventCandidate);
+        // 新合同传入同源产物，保留旧调用方时才使用旧版最新查询。
+        $candidateArtifact = $candidateId ? GenerationArtifact::whereKey($candidateId)->where('type', ArtifactType::EventCandidate)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapterId))->firstOrFail() : $this->latestArtifact($chapter, ArtifactType::EventCandidate);
 
         if ($candidateArtifact === null) {
             return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', '本章尚未生成 Event Candidate。')]);
         }
 
-        $latestDraft = $this->latestDraft($chapter);
+        $latestDraft = $draftId ? GenerationArtifact::whereKey($draftId)->whereHas('generationRun', fn ($q) => $q->where('chapter_id', $chapterId))->firstOrFail() : $this->latestDraft($chapter);
         if ($latestDraft !== null && (int) data_get($candidateArtifact->data, 'source_artifact_id') !== $latestDraft->getKey()) {
             return new StateValidationResult([$this->hard('INVALID_EVENT_REFERENCE', '当前最新事件候选不是从当前最新章节草稿提取的。')]);
         }
 
-        $patchArtifact = $this->latestPatchForCandidate($chapter, $candidateArtifact);
+        $patchArtifact = $patchId ? GenerationArtifact::whereKey($patchId)->where('type', ArtifactType::StatePatch)->where('data->source_artifact_id', $candidateArtifact->id)->firstOrFail() : $this->latestPatchForCandidate($chapter, $candidateArtifact);
 
         if ($patchArtifact === null) {
             return new StateValidationResult([$this->hard('INVALID_STATE_PATCH', '当前最新事件候选尚未生成匹配的 State Patch。')]);

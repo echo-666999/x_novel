@@ -327,3 +327,28 @@ R00 审查应核对：阶段输入输出闭合、每次收费有身份、暂停/
 `novel_outlines.kind=blueprint/goal_window` 索引不可变 Artifact，必须同小说、draft、source checksum 一致。蓝图 Artifact 为 `outline_blueprint`，含 `foundation_artifact_id`、`mainline`、`ending`、非空 `turning_points`；目标窗口 Artifact 为 `goal_window`，含 `blueprint_id` 和非空 `goals`。这是 R03 初始化的最小交接格式，R04 必须增加真实规划语义及完整校验，不能把测试夹具带入生产。
 
 设定阶段完成后，缺真实蓝图/目标窗口时持久暂停并显示“等待 R04”；固定交接夹具初始化后则暂停在章节规划。新任务禁止走旧四阶段大纲、旧 Apply 和旧 GenerateNextChapter。Bible 的 `style_profile.schema_version=book-v1` 保存自然语言文风；R04 Context 必须读取它及原始硬要求，不能再套用旧预设风格覆盖用户输入。
+
+## R04 已实现的规划、写作与复验
+
+本节取代上文 R03“缺蓝图暂停等待 R04”的临时停点；保留该段作为 R03 历史边界。R04 当前实现和证据见 [实施记录](../development/reports/R04-implementation.md)。正式提交、必需摘要、继续下一章与完结仍由 R05 接入。
+
+```text
+Foundation → Blueprint → Goal Window → 原子初始化
+ → 当前章 Plan → 全链 Admission → Whole Writer / Sequential Fragments
+ → 全章 Draft → Event Extraction → Deterministic Patch + State Rules
+ → Independent Review → PASS 时等待 R05 Commit
+                        ↘ 局部 Rewrite → 新稿 → 再提取 / 校验 / 审校
+```
+
+- `NovelStageContract` 只承载认知请求的 Schema、Prompt 版本与冻结请求。蓝图/窗口/章计划复用 Planner 路由，整章/片段用 Writer，提取用 Extractor，审校用 Reviewer，局部修复用 Rewrite。没有新增模型路由表或相互对话的 Agent。
+- `NovelPlanningService` 生成蓝图与默认最多 5 章的近期窗口；转折篇幅、标准 key、目标内容 hash 由代码计算。缺少远期细节不影响开篇。目标少于 2 且剩余篇幅仍需更多章节时补窗口；保留未变目标身份。未来方向/目标保存为版本候选，章节边界采用。明确修改当前目标才取消旧排队阶段、失效当前计划/稿指针并重建；旧 Artifact 和费用留档。新状态下的未来目标产生新的来源版本，仍须经过章计划与独立校验，不视为已发生事实。
+- `NovelChapterPipeline` 复用 Chapter/ChapterPlan，不创建 Scene、Arc 或 Beat。计划含标题、作用、人物变化、POV、时间、落点及必需/禁止信息；`admission_snapshot` 冻结完整语义计划、上下文、路由和实际预算计算。独立 Context Artifact 保存预检依据。
+- `ContextBuilder::forBook` 读取 Bible 原文要求、锁定事实、当前状态、近期目标、人物/世界与正式摘要。可选记忆暂用同小说、正式来源、显著性和去重的 SQL 回退；不隐藏发送 Embedding。R05 继续适配正式长期记忆。Bible/锁定事实另有 `hard_context_hash`，人工改锁定事实也不能继续旧请求。
+- 写作前联合预检 Writer/Extractor/Reviewer/Rewrite。实际序列化输入字节上界加协议余量与输出预留，超限先裁剪可选记忆；不删除正文、硬事实或当前状态。没有自动切到未经配置的模型。实际提取/审校请求再次冻结容量，超限保留正文，人工修正容量后使用“保留正文并重建容量准入”，新建 Admission/Plan 版本并复验，不重跑 Writer。
+- 默认整章写作。输出容量不足时冻结分段原因、数量与顺序；前驱 ID/hash、尾文、临时状态进入下一片段合同。截断仅保留可确认的完整句边界，最多两次续写；损坏 JSON 无法分离正文时保留原响应并建问题，不猜正文。组装校验前驱、顺序与重复边界；不静默删字。改稿后统一从完整新稿重新提取，无关段落逐字保留。
+- 独立提取绑定完整正文和段落内 Unicode 偏移；重复引文不能自动匹配第一处。主体与载荷实体必须属于本小说。代码构建候选 Patch 并复用 StateValidator；未知实体和证据错误保留正文。Reviewer 还须核对事件语义，不能把逐字命中当成事件成立。
+- Reviewer 仅输出发现项、严重度、目标覆盖和证据；服务端计算 PASS/REWRITE/NEEDS_ATTENTION/BLOCK。硬规则不能被模型好评覆盖；轻微建议不强制重写，语义争议保持待处理。未评分保存 NULL。
+- `BookChapterRepair` 接入同一 Issue 动作预览/CAS/次数/费用机制。结构或证据失败只修对应阶段；有定位证据的正文缺陷只允许指定段落 hash 的局部替换。章级改写上限、同方案无进展、问题累计时限及用户主动启用的金额上限继续生效；复验的提取/审校费用归回原问题。原问题须等新稿独立 PASS 才关闭。
+- 人工“保存新稿并复验”锁 Novel→Task→Chapter，检查当前稿 ID/hash/control_version，保存独立全章 Artifact；与 AI 竞争时晚到旧响应隔离为历史。保存与后续复验登记分离，容量失败也不丢已保存文字。页面延迟读取显示版本，保存后即时取消旧 PASS 展示。
+
+自动任务与人工模式目前均在独立 Review PASS 后暂停：分别显示 `commit_not_ready` / `awaiting_manual_commit`。不能将 R04 测试理解为一本小说已经完成，也不能使用旧 Commit Job 绕过 R05。

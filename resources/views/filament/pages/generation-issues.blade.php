@@ -46,6 +46,10 @@
                                 <x-filament::button color="gray" tag="a" :href="$this->settingUrl($selected)">打开相关设置 · {{ data_get($details, 'evidence.policy.setting') === 'connections' ? '连接与凭据引用' : (data_get($details, 'evidence.policy.setting') === 'prices' ? '模型容量与价格' : '生成策略与费用') }}</x-filament::button>
                             @endif
                             @endif
+                            @if($selected->chapter_id && $selected->novel->current_generation_task_id)
+                                <x-filament::button color="gray" tag="a" :href="\App\Filament\Resources\Novels\NovelResource::getUrl('book-chapter',['record'=>$selected->novel_id,'chapter'=>$selected->chapter_id])">定位正文并人工保存新稿</x-filament::button>
+                                <x-filament::button color="gray" tag="a" :href="\App\Filament\Resources\Novels\NovelResource::getUrl('planning',['record'=>$selected->novel_id])">调整受影响目标</x-filament::button>
+                            @endif
                             @if($details['source_error'])<p role="alert" class="xn-notice xn-tone-warning">{{ $details['source_error'] }} 人工输入已保留，不能采用旧方案。</p>@endif
                             <dl class="xn-issue-metrics">
                                 <div><dt>累计处理尝试</dt><dd>{{ $selected->attempt_count }} / {{ data_get($selected->repair_limit_snapshot, 'max_attempts', 2) }}</dd></div>
@@ -83,7 +87,7 @@
                                 <h3>选择处理方式</h3>
                                 <label class="xn-field" for="issue-instructions">人工处理说明 / AI 补充要求</label>
                                 <textarea id="issue-instructions" class="xn-control" rows="5" maxlength="6000" wire:model.blur="instructions" aria-describedby="issue-input-hint"></textarea>
-                                <p id="issue-input-hint" class="xn-muted">记录已检查的字段、现象或修改要求。此处不编辑正文；正文和计划编辑会在对应领域批次接入。</p>
+                                <p id="issue-input-hint" class="xn-muted">记录已检查的字段、现象或修改要求。此处保存说明；正文请进入本章阅读页“保存新稿并复验”，目标请进入设定与计划。</p>
                                 @error('instructions')<p role="alert">{{ $message }}</p>@enderror
                                 @php($options = $this->options($selected))
                                 @foreach($options as $option)

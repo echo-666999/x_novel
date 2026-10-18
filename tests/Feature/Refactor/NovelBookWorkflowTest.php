@@ -58,7 +58,7 @@ function bookFoundation(array $intent): array
 function bookRoutes(): void
 {
     createAiProviderConnectionForTest();
-    foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer] as $stage) {
+    foreach ([AiStage::OutlineFoundation, AiStage::Planner, AiStage::Writer, AiStage::Extractor, AiStage::Reviewer, AiStage::Rewrite] as $stage) {
         createAiModelRouteForTest($stage, 'book-fixture');
     }
     config(['horizon.defaults.supervisor-1.timeout' => 350, 'generation.execution.lease_seconds' => 390, 'queue.connections.redis.retry_after' => 480]);
@@ -67,7 +67,7 @@ function bookTask(array $options = []): NovelGenerationTask
 {
     return app(CreateNovelGenerationTaskAction::class)->handle((string) Str::uuid(), '雨季的旧港，邮差寻找未来来信。主角不能游泳。', $options);
 }
-function bookGenerate(NovelGenerationTask $task, ?array $data = null): GenerationRun
+function bookGenerate(NovelGenerationTask $task, ?array $data = null, bool $pauseForHandoff = true): GenerationRun
 {
     bookRoutes();
     Queue::fake([ExecuteGenerationRunJob::class]);
@@ -83,6 +83,13 @@ function bookGenerate(NovelGenerationTask $task, ?array $data = null): Generatio
     Queue::assertPushed(ExecuteGenerationRunJob::class);
     expect($fake->requests())->toHaveCount(1);
     expect(UsageRecord::where('generation_run_id', $run->id)->count())->toBe(1);
+
+    // R03 原子初始化夹具显式停在交接点；真实 R04 自动推进由独立全链测试覆盖。
+    if ($pauseForHandoff && $task->fresh()->status === 'running') {
+        GenerationRun::where('generation_task_id', $task->id)->where('status', 'queued')->update(['status' => 'cancelled', 'finished_at' => now()]);
+        app(GenerationRunCoordinator::class)->control($task->id, $task->fresh()->control_version, 'pause');
+        $task->refresh()->update(['pending_transition' => $run->fresh()->checkpoint['next']]);
+    }
 
     return $run->fresh();
 }
@@ -108,10 +115,10 @@ test('explicit premise length and form conflict preserve both sources', function
     expect($data['target_conflict'])->toBeTrue()->and($data['premise_targets'])->toBe([200000])->and($data['target_source'])->toBe('user_form');
 });
 
-test('foundation is preserved and explicitly stops at R04 without creating canonical data', function () {
+test('foundation is preserved and schedules R04 blueprint without canonical writes', function () {
     $task = bookTask();
-    $run = bookGenerate($task);
-    expect($run->status->value)->toBe('succeeded')->and($task->fresh()->stop_reason)->toBe('stage_not_ready')
+    $run = bookGenerate($task, pauseForHandoff: false);
+    expect($run->status->value)->toBe('succeeded')->and($task->fresh()->status)->toBe('running')
         ->and($task->novel->bibles()->count())->toBe(0)->and($task->novel->storyEvents()->count())->toBe(0);
     (new ExecuteGenerationRunJob($run->id))->handle(app(GenerationRunCoordinator::class));
     expect(GenerationArtifact::where('generation_run_id', $run->id)->count())->toBe(1);
@@ -341,7 +348,7 @@ test('foundation field repair keeps rejected evidence and verifies a new metered
     app(GenerationIssueService::class)->reconcile();
     expect($repair->fresh()->status->value)->toBe('succeeded')->and($issue->fresh()->status)->toBe('resolved')
         ->and($fake->requests())->toHaveCount(1)->and($rejected->fresh()->validation_status->value)->toBe('rejected')
-        ->and($issue->fresh()->attempt_count)->toBe(1)->and($task->fresh()->stop_reason)->toBe('stage_not_ready');
+        ->and($issue->fresh()->attempt_count)->toBe(1)->and($task->fresh()->status)->toBe('running');
     $this->assertDatabaseHas('usage_records', ['generation_run_id' => $repair->id, 'issue_id' => $issue->id, 'status' => 'settled']);
     expect($fake->requests()[0]->prompt)->toContain('candidate')->toContain('补齐 world');
 });

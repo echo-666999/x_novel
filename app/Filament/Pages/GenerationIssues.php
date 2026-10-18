@@ -125,7 +125,13 @@ class GenerationIssues extends Page
     public function options(GenerationIssue $issue): array
     {
         $options = [];
-        foreach (['retry_transient' => '从原断点重试', 'repair_foundation' => '请 AI 修复设定字段', 'diagnose' => '请 AI 分析原因', 'save_note' => '保存人工处理说明', 'pause' => '暂停整书任务'] as $action => $label) {
+        foreach (['retry_transient' => '从原断点重试', 'repair_foundation' => '请 AI 修复设定字段', 'repair_book' => '请 AI 修复失败产物或局部正文', 'rebuild_book_context' => '保留正文并重建容量准入', 'diagnose' => '请 AI 分析原因', 'save_note' => '保存人工处理说明', 'pause' => '暂停整书任务'] as $action => $label) {
+            if ($action === 'rebuild_book_context' && $issue->category !== 'capacity') {
+                continue;
+            }
+            if ($action === 'repair_book' && ! str_starts_with($issue->error_code, 'book_')) {
+                continue;
+            }
             // 设定修复只出现在已保存的新版设定错误上，其他领域维持原动作集合。
             if ($action === 'repair_foundation' && ! preg_match('/^(foundation_(schema|evidence|output)|intent_hard_constraint)/', $issue->error_code)) {
                 continue;
