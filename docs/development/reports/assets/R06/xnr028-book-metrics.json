@@ -1,0 +1,200 @@
+{
+ "observed_at": "2026-10-19T10:07:18.926140Z",
+ "novels": [
+ {
+ "novel_id": 1,
+ "title": "未命名小说",
+ "task_status": "needs_attention",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 1,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.022532,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 2,
+ "title": "未命名小说",
+ "task_status": "needs_attention",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 1,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.017608,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 3,
+ "title": "未命名小说",
+ "task_status": "needs_attention",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 1,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.020932,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 4,
+ "title": "移动群岛的守灯人",
+ "task_status": "paused",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 6,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.16474228,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 5,
+ "title": "未命名小说",
+ "task_status": "paused",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 2,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.0446258,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 6,
+ "title": "未命名小说",
+ "task_status": "needs_attention",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 1,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.0157638,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 7,
+ "title": "R06异常专项：错寄的怀表",
+ "task_status": "running",
+ "canonical_chapters": 1,
+ "canonical_words": "2582",
+ "usage_count": 26,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.41561212999999997,
+ "unknown": 9,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 8,
+ "title": "《潮汐灯图》",
+ "task_status": "paused",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 9,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.35069142,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 9,
+ "title": "错送的书信",
+ "task_status": "paused",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 9,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.40530577,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 10,
+ "title": "七日后的来信",
+ "task_status": "paused",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 8,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.33138459,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 11,
+ "title": "《潮汐群岛的守灯人》",
+ "task_status": "running",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 4,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.0934,
+ "unknown": 0,
+ "in_flight": 0
+ }
+ }
+ },
+ {
+ "novel_id": 12,
+ "title": "未命名小说",
+ "task_status": "running",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 2,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.019877,
+ "unknown": 1,
+ "in_flight": 1
+ }
+ }
+ },
+ {
+ "novel_id": 13,
+ "title": "未命名小说",
+ "task_status": "running",
+ "canonical_chapters": 0,
+ "canonical_words": 0,
+ "usage_count": 2,
+ "cost_by_currency": {
+ "USD": {
+ "known": 0.027329,
+ "unknown": 1,
+ "in_flight": 1
+ }
+ }
+ }
+ ]
+}

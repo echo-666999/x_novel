@@ -371,3 +371,19 @@ test('out of range premise length fails before creating a book', function (strin
     expect(fn () => app(CreateNovelGenerationTaskAction::class)->handle((string) Str::uuid(), $premise))->toThrow(ValidationException::class);
     expect(Novel::count())->toBe(0);
 })->with(['全书0字，港城故事。', '全书99999999999字，港城故事。']);
+
+test('explicit form length accepts premise evidence or no quote but rejects invented field citations', function (array $evidence, bool $valid) {
+    $task = bookTask(['target_words' => 30000]);
+    $data = bookFoundation(GenerationArtifact::findOrFail($task->intent_artifact_id)->data);
+    $data['length'] = ['target_words' => 30000, 'source' => 'user', 'evidence' => $evidence];
+
+    $run = bookGenerate($task, $data, pauseForHandoff: false);
+
+    expect($run->status->value)->toBe($valid ? 'succeeded' : 'failed');
+    expect($run->error_code)->toBe($valid ? null : 'foundation_evidence_length');
+})->with([
+    'form without fabricated prose' => [[], true],
+    'original prose quote' => [['雨季的旧港'], true],
+    'field path is not prose' => [['explicit.target_words: 30000'], false],
+    'serialized field is not prose' => [['"target_words":30000'], false],
+]);

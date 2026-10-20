@@ -1,9 +1,12 @@
 <?php
 
 use App\Actions\Story\InitializeNovelStateAction;
+use App\Enums\ArtifactType;
 use App\Enums\EventType;
 use App\Enums\StoryEventStatus;
 use App\Models\Chapter;
+use App\Models\GenerationArtifact;
+use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
@@ -85,6 +88,30 @@ test('it replays manual correction events and reports drift without writing stat
         ->and($result->changes[0]['after'])->toBe('洛阳')
         ->and($novel->storyStateVersions()->count())->toBe(2)
         ->and($novel->fresh()->canonical_state_version_id)->toBe($current->getKey());
+});
+
+test('book world events replay using their immutable draft contract', function () {
+    $novel = Novel::factory()->create();
+    $initial = app(InitializeNovelStateAction::class)->handle($novel);
+    $chapter = Chapter::factory()->for($novel)->create();
+    $run = GenerationRun::factory()->for($novel)->for($chapter)->create(['execution_contract' => ['book_workflow' => 1]]);
+    $draft = GenerationArtifact::factory()->for($run)->create(['type' => ArtifactType::ChapterDraft]);
+    $entity = ['name' => '港务规则', 'current_state' => ['封港']];
+    StoryEvent::factory()->for($novel)->for($chapter)->create([
+        'event_type' => EventType::WorldStateChanged, 'subject_type' => 'world_entity', 'subject_id' => '42',
+        'payload' => ['state' => $entity], 'state_version' => 1,
+        'evidence' => [['artifact_id' => $draft->id, 'quote' => '港口封闭。']],
+    ]);
+    $state = $initial->state;
+    $state['world']['entities']['42'] = $entity;
+    $current = StoryStateVersion::factory()->for($novel)->for($chapter)->create([
+        'version' => 1, 'state' => $state, 'checksum' => app(StoryStateService::class)->checksum($state),
+    ]);
+    $novel->update(['canonical_state_version_id' => $current->id]);
+    $result = app(StoryStateRebuilder::class)->rebuild($novel->fresh());
+    expect($result->matches())->toBeTrue();
+    expect($result->rebuiltState['world']['entities']['42'])->toBe($entity);
+    expect($result->rebuiltState['world'])->not->toHaveKey('42');
 });
 
 test('it requires a complete chapterless baseline and a current canonical state', function () {

@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\AI\Data\AiRequest;
+use App\AI\Exceptions\AiProviderException;
+use App\Enums\ArtifactType;
 use App\Enums\ArtifactValidationStatus;
 use App\Enums\RunStatus;
 use App\Models\Chapter;
@@ -17,16 +19,48 @@ use Illuminate\Support\Str;
 /** 修复仍使用原问题账本；结构修复不写正文，正文修复必须重新提取和审校。 */
 final class BookChapterRepair
 {
-    public function prepare(GenerationIssue $issue, string $instructions): array
+    public function source(GenerationIssue $issue, bool $eventsOnly = false): GenerationRun
     {
-        $source = app(GenerationIssueService::class)->assertCurrent($issue);
+        $latest = GenerationRun::find($issue->latest_run_id);
+        $completedReview = $latest?->status === RunStatus::Succeeded
+            && data_get($latest->execution_contract, 'book_stage') === 'review';
+        $failedVerification = ! $eventsOnly && $latest?->status === RunStatus::Failed
+            && in_array(data_get($latest->execution_contract, 'book_stage'), ['extract', 'review'], true)
+            && in_array($latest->error_code, ['book_schema_invalid', 'book_evidence_invalid', 'book_entity_reference_invalid', 'book_review_coverage_invalid'], true)
+            && $latest->id !== $issue->first_run_id;
+
+        return app(GenerationIssueService::class)->assertCurrent($issue,
+            ! $failedVerification && ($completedReview || $eventsOnly || in_array($issue->error_code, ['book_review_rewrite', 'book_review_block'], true)),
+            currentRepairFailure: $failedVerification);
+    }
+
+    public function prepare(GenerationIssue $issue, string $instructions, bool $eventsOnly = false): array
+    {
+        $source = $this->source($issue, $eventsOnly);
         $c = $source->execution_contract;
         $task = NovelGenerationTask::findOrFail($issue->generation_task_id);
         $phase = $c['book_stage'] ?? null;
-        if (! $phase || ! in_array($issue->error_code, ['book_schema_invalid', 'book_evidence_invalid', 'book_review_coverage_invalid', 'book_entity_reference_invalid', 'book_output_truncated', 'book_truncation_unrecoverable', 'book_window_count_invalid', 'book_goal_reference_invalid', 'book_review_block', 'book_review_rewrite'], true)) {
+        $requiresRevision = $source->status === RunStatus::Succeeded && $phase === 'review'
+            && in_array(data_get(GenerationArtifact::find($source->result_artifact_id)?->data, 'decision'), ['BLOCK', 'REWRITE'], true);
+        $savedProviderFailure = $source->error_code === 'provider_schema_validation_failed'
+            && $source->artifacts()->where('type', ArtifactType::OperationRecord)->where('validation_status', 'rejected')
+                ->where('data->error_code', 'provider_schema_validation_failed')->whereNotNull('content')->where('content', '!=', '')->exists();
+        if (! $phase || (! $savedProviderFailure && ! $this->isSavedEventContractFailure($source) && ! in_array($issue->error_code, ['book_schema_invalid', 'book_evidence_invalid', 'book_review_coverage_invalid', 'book_entity_reference_invalid', 'book_output_truncated', 'book_truncation_unrecoverable', 'book_window_count_invalid', 'book_goal_reference_invalid', 'book_review_block', 'book_review_rewrite'], true))) {
             throw new \LogicException('该问题不能用局部模型修复；请查看具体人工建议。');
         }
-        if (in_array($issue->error_code, ['book_review_rewrite', 'book_review_block'], true)) {
+        if ($eventsOnly) {
+            if (! $requiresRevision) {
+                throw new \LogicException('重新提取事件仅用于当前章节审校问题。');
+            }
+            $phase = 'extract';
+            $input = $c['input'];
+            unset($input['event_candidate'], $input['state_patch'], $input['rule_findings']);
+            $input['repair_findings'] = GenerationArtifact::findOrFail($source->result_artifact_id)->data['findings'];
+            $input['instructions'] = $instructions;
+            $plan = ChapterPlan::findOrFail($c['chapter_plan_id']);
+            $input['frozen_route'] = array_intersect_key($plan->admission_snapshot['routes']['extract'], array_flip(['provider', 'model', 'prompt', 'reasoning_reserve_tokens', 'output_tokens']));
+            unset($c['event_artifact_id'], $c['patch_artifact_id']);
+        } elseif ($requiresRevision) {
             // 章级上限跨问题、跨稿累计，换来源不会获得新的自动改写额度。
             $count = GenerationRun::where('generation_task_id', $task->id)->where('chapter_id', $source->chapter_id)->where('execution_contract->book_stage', 'rewrite')->count();
             if ($count >= (int) config('generation.book.max_rewrites', 2)) {
@@ -59,23 +93,50 @@ final class BookChapterRepair
             $phase = 'rewrite';
             $input = [...$c['input'], 'repair_findings' => $findings, 'instructions' => $instructions, 'allowed_paragraphs' => $keys];
             $plan = ChapterPlan::findOrFail($c['chapter_plan_id']);
-            $input['frozen_route'] = array_intersect_key($plan->admission_snapshot['routes']['rewrite'], array_flip(['provider', 'model']));
+            $input['frozen_route'] = array_intersect_key($plan->admission_snapshot['routes']['rewrite'], array_flip(['provider', 'model', 'prompt', 'reasoning_reserve_tokens', 'output_tokens']));
             $c['allowed_paragraphs'] = $keys;
         } else {
             if ($source->status !== RunStatus::Failed) {
                 throw new \LogicException('只能修复已经失败并保留响应的阶段。');
             }
             $failed = $source->artifacts()->latest('id')->firstOrFail();
-            $input = [...$c['input'], 'repair' => ['error' => $issue->error_code, 'candidate' => $failed->content, 'instructions' => $instructions]];
-            $input['frozen_route'] = ['provider' => $source->provider, 'model' => $source->model];
+            $input = [...$c['input'], 'repair' => ['error' => $source->error_code,
+                'validation_message' => app(GenerationDiagnosticRedactor::class)->clean((string) $source->error_message),
+                'candidate' => $failed->content, 'instructions' => $instructions]];
+            $input['frozen_route'] = array_intersect_key($c, array_flip(['provider', 'model', 'prompt', 'reasoning_reserve_tokens', 'output_tokens']));
         }
-        $request = app(NovelStageContract::class)->request($task, $phase, $input, $phase === 'rewrite' ? null : $c['prompt']['max_tokens']);
+        if (isset($input['context'])) {
+            $input['context']['state_version'] = $source->state_version;
+        }
+        $request = app(NovelStageContract::class)->request($task, $phase, $input, ($phase === 'rewrite' || $eventsOnly) ? null : $c['output_tokens']);
         $request = new AiRequest(model: $request->model, provider: $request->provider, systemPrompt: $request->systemPrompt, prompt: $request->prompt,
-            temperature: $request->temperature, maxTokens: $request->maxTokens, responseSchema: $request->responseSchema, promptVersion: 'book-'.$phase.'-repair-v1', metadata: $request->metadata);
+            temperature: $request->temperature, maxTokens: $request->maxTokens, reasoningEffort: $request->reasoningEffort, responseSchema: $request->responseSchema, promptVersion: 'book-'.$phase.'-repair-v3', metadata: $request->metadata);
         $contract = array_replace($c, app(GenerationRequestContract::class)->freeze($request), ['book_stage' => $phase, 'input' => $input,
             'issue_action' => 'repair_book', 'issue_id' => $issue->id, 'repair_source_identity' => $issue->source_identity]);
 
         return $contract;
+    }
+
+    /** 旧记录保留原错误码；只在同源候选可重现明确结构错误时开放修复，未知异常不泛化重试。 */
+    private function isSavedEventContractFailure(GenerationRun $source): bool
+    {
+        if ($source->status !== RunStatus::Failed || $source->error_code !== 'stage_execution_failed'
+            || data_get($source->execution_contract, 'book_stage') !== 'extract') {
+            return false;
+        }
+        $candidate = $source->artifacts()->where('type', ArtifactType::EventCandidate)->latest('id')->first();
+        if (! $candidate) {
+            return false;
+        }
+        try {
+            app(NovelChapterPipeline::class)->validateOutput($source, $candidate->data);
+        } catch (AiProviderException $exception) {
+            return $exception->errorCode === 'book_schema_invalid';
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return false;
     }
 
     /** 仅重建失败交接的容量合同，复用原计划和正文，不重复请求 Planner/Writer。 */
@@ -164,7 +225,7 @@ final class BookChapterRepair
             return;
         }
         app(GenerationRunCoordinator::class)->assertSources(NovelGenerationTask::findOrFail($run->generation_task_id), $run->source_manifest, $run->execution_contract);
-        $issue->update(['status' => 'resolved', 'resolved_at' => now(), 'resolved_by_run_id' => $run->id, 'resolution_reason' => '新稿已重新提取、确定性校验及独立审校通过。',
+        $issue->update(['status' => 'resolved', 'resolved_at' => now(), 'resolved_by_run_id' => $run->id, 'resolution_reason' => data_get($run->execution_contract, 'manual_evidence_revision') ? '保存的独立审校响应经唯一逐字定位修正及完整校验通过，原判断未修改。' : '新稿已重新提取、确定性校验及独立审校通过。',
             'verification' => ['draft_artifact_id' => $artifact->data['source_artifact_id'], 'review_artifact_id' => $artifact->id, 'event_artifact_id' => $artifact->data['event_artifact_id'], 'patch_artifact_id' => $artifact->data['patch_artifact_id']]]);
     }
 }

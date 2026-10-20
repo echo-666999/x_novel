@@ -41,7 +41,7 @@ class ContextBuilder
 
         return ['source_hash' => $this->bookSourceHash($novel), 'bible_id' => $bible->id, 'bible_version' => $bible->version, 'hard_constraints' => $bible->hard_constraints,
             'ending_contract' => $bible->ending_contract, 'style_profile' => $bible->style_profile, 'goal' => $goal,
-            'state_version_id' => $novel->canonical_state_version_id, 'state' => $novel->canonicalStateVersion?->state,
+            'state_version_id' => $novel->canonical_state_version_id, 'state_version' => $novel->canonicalStateVersion?->version, 'state' => $novel->canonicalStateVersion?->state,
             'characters' => $entities, 'world_entities' => $world,
             'locked_facts' => $novel->facts()->where('status', 'active')->where('locked', true)->get()->toArray(),
             'recent_chapters' => $recent->toArray(), 'optional_memories' => $memories,

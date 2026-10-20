@@ -3,6 +3,7 @@
 namespace App\Filament\Pages;
 
 use App\Enums\ArtifactType;
+use App\Enums\RunStatus;
 use App\Filament\Resources\AIModelPrices\AIModelPriceResource;
 use App\Filament\Resources\AIProviderConnections\AIProviderConnectionResource;
 use App\Models\GenerationArtifact;
@@ -10,8 +11,10 @@ use App\Models\GenerationIssue;
 use App\Models\GenerationRun;
 use App\Models\NovelGenerationTask;
 use App\Models\UsageRecord;
+use App\Services\BookChapterRepair;
 use App\Services\GenerationIssueActions;
 use App\Services\GenerationIssueService;
+use App\Services\GenerationRunCoordinator;
 use App\Support\GenerationDiagnosticRedactor;
 use BackedEnum;
 use Brick\Math\BigDecimal;
@@ -125,27 +128,33 @@ class GenerationIssues extends Page
     public function options(GenerationIssue $issue): array
     {
         $options = [];
-        foreach (['retry_export' => '仅重新导出正式正文', 'retry_transient' => '从原断点重试', 'repair_foundation' => '请 AI 修复设定字段', 'repair_book' => '请 AI 修复失败产物或局部正文', 'rebuild_book_context' => '保留正文并重建容量准入', 'diagnose' => '请 AI 分析原因', 'save_note' => '保存人工处理说明', 'pause' => '暂停整书任务'] as $action => $label) {
+        foreach (['retry_export' => '仅重新导出正式正文', 'retry_transient' => '从原断点重试', 'repair_foundation' => '请 AI 修复设定字段', 'repair_book' => '请 AI 修复失败产物或局部正文', 'repair_book_events' => '保留正文并重新提取事件', 'rebuild_book_context' => '保留正文并重建容量准入', 'diagnose' => '请 AI 分析原因', 'save_note' => '保存人工处理说明', 'pause' => '暂停整书任务'] as $action => $label) {
             if ($action === 'rebuild_book_context' && ! in_array($issue->category, ['capacity', 'configuration', 'summary'], true)) {
                 continue;
             }
             if ($action === 'retry_export' && $issue->category !== 'export') {
                 continue;
             }
-            if ($action === 'repair_book' && ! str_starts_with($issue->error_code, 'book_')) {
+            if ($action === 'repair_book_events' && ! in_array($issue->error_code, ['book_review_rewrite', 'book_review_block', 'book_evidence_invalid'], true)) {
+                continue;
+            }
+            if ($action === 'repair_book' && ! str_starts_with($issue->error_code, 'book_') && ! in_array($issue->error_code, ['stage_execution_failed', 'provider_schema_validation_failed'], true)) {
                 continue;
             }
             // 设定修复只出现在已保存的新版设定错误上，其他领域维持原动作集合。
             if ($action === 'repair_foundation' && ! preg_match('/^(foundation_(schema|evidence|output)|intent_hard_constraint)/', $issue->error_code)) {
                 continue;
             }
-            if ($action === 'retry_transient' && ! data_get($issue->evidence, 'policy.retryable')) {
+            if ($action === 'retry_transient' && ! app(GenerationIssueActions::class)->isRetryable($issue) && $issue->error_code !== 'worker_lost' && GenerationRun::find($issue->latest_run_id)?->error_code !== 'worker_lost') {
                 continue;
             }
             try {
                 $preview = app(GenerationIssueActions::class)->preview($issue, $action, $this->instructions);
             } catch (\Throwable $exception) {
                 $preview = ['available' => false, 'reason' => app(GenerationDiagnosticRedactor::class)->clean($exception->getMessage())];
+            }
+            if ($action === 'repair_book' && $issue->error_code === 'stage_execution_failed' && ! $preview['available']) {
+                continue;
             }
             $options[] = ['action' => $action, 'label' => $label, ...$preview];
         }
@@ -223,7 +232,18 @@ class GenerationIssues extends Page
         $currentError = null;
         try {
             if ($issue->status !== 'resolved') {
-                app(GenerationIssueService::class)->assertCurrent($issue);
+                if ($run && in_array($run->status, [RunStatus::Queued, RunStatus::Running], true)
+                    && $run->issue_id === $issue->id && $run->generation_task_id === $task->id
+                    && (int) data_get($run->execution_contract, 'repair_chain_issue_id') === $issue->id) {
+                    app(GenerationRunCoordinator::class)->assertSources($task, $run->source_manifest, $run->execution_contract);
+                } elseif (in_array($issue->error_code, ['book_review_rewrite', 'book_review_block'], true)
+                    && (($run?->status === RunStatus::Succeeded && data_get($run->execution_contract, 'book_stage') === 'review')
+                        || ($run?->status === RunStatus::Failed && in_array(data_get($run->execution_contract, 'book_stage'), ['extract', 'review'], true)
+                            && in_array($run->error_code, ['book_schema_invalid', 'book_evidence_invalid', 'book_entity_reference_invalid', 'book_review_coverage_invalid'], true)))) {
+                    app(BookChapterRepair::class)->source($issue);
+                } else {
+                    app(GenerationIssueService::class)->assertCurrent($issue);
+                }
             }
         } catch (\Throwable $exception) {
             $currentError = $exception->getMessage();

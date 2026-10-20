@@ -2,6 +2,7 @@
 
 use App\Actions\Story\InitializeNovelStateAction;
 use App\Data\StatePatch;
+use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
 use App\Enums\EventType;
 use App\Enums\GenerationStage;
@@ -10,8 +11,10 @@ use App\Models\Chapter;
 use App\Models\GenerationArtifact;
 use App\Models\GenerationRun;
 use App\Models\Novel;
+use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
 use App\Services\StatePatchBuilder;
+use App\Services\StoryStateRebuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Validation\ValidationException;
 
@@ -67,6 +70,15 @@ test('state patch only accepts declared operations and state domains', function 
         'value' => 'alive',
         'source_event_index' => 0,
     ]]))->toThrow(ValidationException::class);
+});
+
+test('book world entity operations use the initialized namespace without changing legacy contracts', function () {
+    $event = statePatchEvent(EventType::WorldStateChanged, '42', ['state' => ['name' => '港务规则', 'current_state' => ['封港']]]);
+    $event['subject_type'] = 'world_entity';
+    $candidate = StoryEventCandidate::fromArray($event);
+    $builder = app(StatePatchBuilder::class);
+    expect($builder->eventOperations($candidate, true)[0]['path'])->toBe('world.entities.42');
+    expect($builder->eventOperations($candidate)[0]['path'])->toBe('world.42');
 });
 
 test('builder deterministically previews event changes without mutating canonical state', function () {
@@ -167,3 +179,22 @@ test('events without a safe deterministic mapping create an empty candidate patc
         ->and($artifact->data['changes'])->toBe([])
         ->and($artifact->data['before_checksum'])->toBe($artifact->data['after_checksum']);
 });
+
+test('book world changes update the existing entity namespace and replay identically', function (string $bucket) {
+    $event = [...statePatchEvent(EventType::WorldRuleRevealed, '42', ['state' => ['name' => '灯塔', 'rule' => '潮汐供能']]), 'subject_type' => 'world_entity'];
+    $fixture = statePatchFixture([$event]);
+    $state = $fixture['state']->state;
+    data_set($state, $bucket.'.42', ['name' => '灯塔']);
+    $next = StoryStateVersion::factory()->for($fixture['novel'])->create(['version' => 1, 'state' => $state]);
+    $fixture['novel']->update(['canonical_state_version_id' => $next->id]);
+    $fixture['run']->update(['state_version' => 1, 'execution_contract' => ['book_workflow' => true]]);
+    $artifact = app(StatePatchBuilder::class)->build($fixture['chapter']->id);
+    expect($artifact->data['operations'][0]['path'])->toBe($bucket.'.42');
+    $savedEvent = StoryEvent::factory()->for($fixture['novel'])->create([
+        'event_type' => EventType::WorldRuleRevealed, 'subject_type' => 'world_entity', 'subject_id' => '42',
+        'payload' => $event['payload'], 'evidence' => [['artifact_id' => $fixture['artifact']->id]], 'state_version' => 1,
+    ]);
+    $replayed = app(StoryStateRebuilder::class)->replay($state, collect([$savedEvent]));
+    expect($replayed)->toBe(app(StatePatchBuilder::class)->applyArtifact($state, $artifact));
+    expect(data_get($replayed, $bucket.'.42.rule'))->toBe('潮汐供能');
+})->with(['locations', 'items', 'world.entities']);

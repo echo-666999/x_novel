@@ -12,6 +12,7 @@ use App\Models\GenerationIssue;
 use App\Models\GenerationRun;
 use App\Models\Novel;
 use App\Models\NovelGenerationTask;
+use App\Models\Review;
 use App\Models\UsageRecord;
 use App\Support\GenerationDiagnosticRedactor;
 use Illuminate\Support\Facades\DB;
@@ -86,8 +87,16 @@ final class GenerationIssueService
         });
     }
 
+    /** 只允许已结束且明确可重试的传输故障，不把余额或合同错误当成临时错误。 */
+    public function isTransientFailure(?GenerationRun $run): bool
+    {
+        return $run !== null && $run->status === RunStatus::Failed
+            && ($run->error_code === 'worker_lost' || ($run->error_retryable
+                && in_array($run->error_code, ['provider_timeout', 'provider_connection_failed', 'provider_rate_limited', 'provider_server_error'], true)));
+    }
+
     /** 复用执行器的来源门禁，避免人工与 AI 各维护一份较弱校验。 */
-    public function assertCurrent(GenerationIssue $issue): GenerationRun
+    public function assertCurrent(GenerationIssue $issue, bool $currentRepairReview = false, bool $currentWorkerFailure = false, bool $currentRepairFailure = false): GenerationRun
     {
         $task = NovelGenerationTask::findOrFail($issue->generation_task_id);
         $run = GenerationRun::findOrFail($issue->first_run_id);
@@ -95,6 +104,48 @@ final class GenerationIssueService
             || (int) $task->novel->current_generation_task_id !== $task->id || in_array($task->status, ['cancelled', 'completed', 'failed'], true)
             || ! $this->matchesVerificationSource($run, $issue)) {
             throw new \LogicException('问题已解决、任务已结束或来源身份不匹配，请刷新。');
+        }
+        if ($currentRepairReview) {
+            $current = GenerationRun::where('generation_task_id', $task->id)->where('chapter_id', $issue->chapter_id)
+                ->where('execution_contract->book_stage', 'review')->latest('id')->firstOrFail();
+            $manualEvidence = data_get($current->execution_contract, 'manual_evidence_revision');
+            $recordedManualEvidence = is_array($manualEvidence) && collect($issue->evidence['operations'] ?? [])->contains(
+                fn (array $operation): bool => ($operation['action'] ?? null) === 'manual_evidence'
+                    && ($operation['run_id'] ?? null) === $current->id
+                    && app(GenerationInputIdentity::class)->hash(array_intersect_key($operation, $manualEvidence)) === app(GenerationInputIdentity::class)->hash($manualEvidence)
+            );
+            if ($current->id !== $run->id && ((int) data_get($current->execution_contract, 'repair_chain_issue_id') !== $issue->id
+                || $current->issue_id !== $issue->id
+                || (data_get($issue->evidence, 'attempts.'.$current->id.'.action') !== 'verify_repair' && ! $recordedManualEvidence))) {
+                throw new \LogicException('当前审校不属于该问题的修复链，请核对当前稿来源。');
+            }
+            if ($current->status !== RunStatus::Succeeded || ! in_array(data_get(GenerationArtifact::find($current->result_artifact_id)?->data, 'decision'), ['BLOCK', 'REWRITE'], true)) {
+                throw new \LogicException('只有已完成且要求修复的当前审校支持重新提取事件。');
+            }
+            $run = $current;
+        }
+        if ($currentWorkerFailure && $issue->latest_run_id !== $run->id) {
+            $current = GenerationRun::findOrFail($issue->latest_run_id);
+            if ($current->generation_task_id !== $task->id || $current->chapter_id !== $issue->chapter_id || $current->issue_id !== $issue->id
+                || ((int) data_get($current->execution_contract, 'repair_chain_issue_id') !== $issue->id && ! $this->matchesVerificationSource($current, $issue))
+                || ! data_get($issue->evidence, 'attempts.'.$current->id)
+                || ! $this->isTransientFailure($current)
+                || $current->finished_at === null || $current->lease_token !== null
+                || $current->lease_expires_at?->isFuture()) {
+                throw new \LogicException('当前执行不是该问题修复链中已结束的可重试传输失败记录。');
+            }
+            $run = $current;
+        }
+        if ($currentRepairFailure) {
+            $current = GenerationRun::findOrFail($issue->latest_run_id);
+            if ($current->issue_id !== $issue->id || $current->generation_task_id !== $task->id || $current->chapter_id !== $issue->chapter_id
+                || (int) data_get($current->execution_contract, 'repair_chain_issue_id') !== $issue->id
+                || ! data_get($issue->evidence, 'attempts.'.$current->id)
+                || $current->status !== RunStatus::Failed || ! in_array(data_get($current->execution_contract, 'book_stage'), ['extract', 'review'], true)
+                || ! in_array($current->error_code, ['book_schema_invalid', 'book_evidence_invalid', 'book_entity_reference_invalid', 'book_review_coverage_invalid'], true)) {
+                throw new \LogicException('当前提取或审校失败不属于该问题已登记的修复链。');
+            }
+            $run = $current;
         }
         app(GenerationRunCoordinator::class)->assertSources($task, $run->source_manifest ?? [], $run->execution_contract ?? []);
 
@@ -108,6 +159,16 @@ final class GenerationIssueService
         $identity = app(GenerationInputIdentity::class);
         if ($identity->hash($this->identity($run)) === $identity->hash($issue->source_identity)) {
             return true;
+        }
+        if (data_get($issue->evidence, 'attempts.'.$run->id.'.action') === 'retry_transient') {
+            $source = GenerationRun::find($run->retry_of_run_id);
+
+            return $source && $source->id < $run->id && $source->issue_id === $issue->id
+                && $run->issue_id === $issue->id && $source->generation_task_id === $run->generation_task_id
+                && $source->stage === $run->stage && $source->input_hash === $run->input_hash
+                && $identity->hash($source->execution_contract) === $identity->hash($run->execution_contract)
+                && $identity->hash($source->source_manifest) === $identity->hash($run->source_manifest)
+                && $this->matchesVerificationSource($source, $issue);
         }
         if (! in_array(data_get($run->execution_contract, 'issue_action'), ['repair_foundation', 'repair_book'], true)
             || data_get($issue->evidence, 'attempts.'.$run->id.'.action') !== data_get($run->execution_contract, 'issue_action')
@@ -131,6 +192,9 @@ final class GenerationIssueService
             Novel::whereKey($candidate->novel_id)->lockForUpdate()->firstOrFail();
             $task = NovelGenerationTask::whereKey($candidate->generation_task_id)->lockForUpdate()->firstOrFail();
             $issue = GenerationIssue::whereKey($candidate->issue_id)->lockForUpdate()->firstOrFail();
+            if ($candidate->id === $issue->first_run_id) {
+                return false;
+            }
             if ($issue->status === 'resolved') {
                 return $issue->resolved_by_run_id === $candidate->id;
             }
@@ -219,12 +283,19 @@ final class GenerationIssueService
                 $evidence['attempts'] = $attempts;
                 $issue->update(['repair_elapsed_ms' => $issue->repair_elapsed_ms + $elapsed, 'evidence' => $evidence]);
             }
+            if ($issue->latest_run_id !== $run->id) {
+                return;
+            }
             if ($attempt && $run->status === RunStatus::Failed && $task->status === 'running') {
                 $task->update(['status' => 'needs_attention', 'stop_reason' => $run->error_code]);
             }
             $diagnostic = data_get($run->execution_contract, 'issue_action') === 'diagnose';
             if ($attempt && $issue->status !== 'resolved') {
-                $issue->update(['status' => $run->status === RunStatus::Succeeded && data_get($run->execution_contract, 'repair_chain_issue_id') ? 'repairing' : 'awaiting_user', 'last_seen_at' => now()]);
+                $continuing = $run->status === RunStatus::Succeeded && data_get($run->execution_contract, 'repair_chain_issue_id')
+                    && (data_get($run->execution_contract, 'book_stage') !== 'review'
+                        || data_get(GenerationArtifact::find($run->result_artifact_id)?->data, 'decision') === 'PASS'
+                        || ! Review::where('generation_run_id', $run->id)->exists());
+                $issue->update(['status' => $continuing ? 'repairing' : 'awaiting_user', 'last_seen_at' => now()]);
             }
             if ($diagnostic && in_array($task->status, ['running', 'needs_attention'], true)
                 && (int) data_get($task->pending_transition, 'run_id') === $run->id) {

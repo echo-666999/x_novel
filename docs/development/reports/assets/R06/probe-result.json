@@ -1,0 +1,41 @@
+{
+    "connections": {
+        "deepseek": {
+            "model_count": 2
+        },
+        "openai": {
+            "model_count": 133
+        }
+    },
+    "routes": {
+        "openai\/gpt-5.6-terra": {
+            "ok": true,
+            "actual_model": "gpt-5.6-terra",
+            "input_tokens": 63,
+            "output_tokens": 14
+        },
+        "deepseek\/deepseek-v4-pro": {
+            "ok": true,
+            "actual_model": "deepseek-v4-pro",
+            "input_tokens": 169,
+            "output_tokens": 51
+        },
+        "deepseek\/deepseek-flash": {
+            "ok": true,
+            "actual_model": "deepseek-flash",
+            "input_tokens": 119,
+            "output_tokens": 27
+        }
+    },
+    "budget": {
+        "warning_amount": null,
+        "daily_hard_limit": null,
+        "daily_hard_limit_enabled": false,
+        "novel_total_limit": null,
+        "novel_total_limit_enabled": false,
+        "chapter_max_cost": null,
+        "chapter_max_cost_enabled": false,
+        "issue_max_cost": null,
+        "issue_max_cost_enabled": false
+    }
+}

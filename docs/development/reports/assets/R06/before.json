@@ -1,0 +1,36 @@
+{
+    "database": "novel",
+    "prefix": "x_",
+    "counts": {
+        "novels": 0,
+        "chapters": 0,
+        "generation_runs": 0,
+        "generation_artifacts": 0,
+        "reviews": 0,
+        "story_events": 0,
+        "story_state_versions": 0,
+        "facts": 0,
+        "memories": 0,
+        "novel_generation_tasks": 0,
+        "generation_issues": 0,
+        "usage_records": 0
+    },
+    "redis_prefix": "ai-database-",
+    "horizon_prefix": "ai_horizon:",
+    "queues": {
+        "generation": {
+            "ready": 0,
+            "delayed": 0,
+            "reserved": 0
+        },
+        "default": {
+            "ready": 0,
+            "delayed": 0,
+            "reserved": 0
+        }
+    },
+    "credentials": {
+        "openai": true,
+        "deepseek": true
+    }
+}

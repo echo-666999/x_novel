@@ -48,7 +48,7 @@ class StatePatchBuilder
                 continue;
             }
 
-            foreach ($this->eventApplier->operations($event) as $operation) {
+            foreach ($this->eventOperations($event, (bool) data_get($candidateArtifact->generationRun->execution_contract, 'book_workflow'), $stateVersion->state) as $operation) {
                 $operations[] = [...$operation, 'source_event_index' => $index];
             }
         }
@@ -96,6 +96,26 @@ class StatePatchBuilder
                 'checksum' => $checksum,
             ]);
         });
+    }
+
+    /** 整书链按正式状态中已有实体所在集合定位，历史合同维持原行为。 */
+    public function eventOperations(StoryEventCandidate $event, bool $bookWorkflow = false, array $state = []): array
+    {
+        $operations = $this->eventApplier->operations($event);
+        if ($bookWorkflow && $event->subjectType === 'world_entity') {
+            foreach ($operations as &$operation) {
+                if ($operation['path'] === 'world.'.$event->subjectId) {
+                    $paths = array_values(array_filter(['locations.'.$event->subjectId, 'items.'.$event->subjectId, 'world.entities.'.$event->subjectId], fn (string $path): bool => Arr::has($state, $path)));
+                    if (count($paths) > 1) {
+                        throw ValidationException::withMessages(['state' => '世界实体存在多个正式路径，不能推断更新目标。']);
+                    }
+                    $operation['path'] = $paths[0] ?? 'world.entities.'.$event->subjectId;
+                }
+            }
+            unset($operation);
+        }
+
+        return $operations;
     }
 
     /** @param array<string, mixed> $state @return array<string, mixed> */

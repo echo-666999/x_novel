@@ -26,6 +26,7 @@ use App\Models\NovelOutline;
 use App\Models\Review;
 use App\Support\GenerationDiagnosticRedactor;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /** 整书入口只调度粗阶段；UI、命令、补偿扫描共享持久断点，不另建执行链。 */
 final class NovelBookWorkflow
@@ -134,6 +135,11 @@ final class NovelBookWorkflow
                             return false;
                         }
 
+                        if (($pending['run_id'] ?? null) === $issue->latest_run_id
+                            && app(GenerationIssueService::class)->isTransientFailure(GenerationRun::find($issue->latest_run_id))) {
+                            return false;
+                        }
+
                         return ! data_get($issue->evidence, 'policy.retryable', false);
                     });
                 if ($blocked) {
@@ -222,12 +228,24 @@ final class NovelBookWorkflow
                     throw new \LogicException('当前阶段尚未接入新版整书入口。');
                 }
 
+                $previous = isset($pending['run_id']) ? GenerationRun::find($pending['run_id']) : null;
+                if ($previous?->status === RunStatus::Failed) {
+                    $issue = $previous->issue_id ? GenerationIssue::findOrFail($previous->issue_id) : app(GenerationIssueService::class)->observe($previous);
+
+                    return app(GenerationIssueActions::class)->execute($issue->id, 'retry_transient', $issue->fingerprint,
+                        $task->control_version, (string) Str::uuid(), dispatch: false);
+                }
+
                 return app(GenerationRunCoordinator::class)->enqueue($task->id, $stage, $pending['scope'] ?? 'book', $pending['contract'] ?? [], $pending['sources'] ?? []);
             });
         } catch (\Throwable $exception) {
             $task = NovelGenerationTask::findOrFail($taskId);
             if (data_get($task->pending_transition, 'stage') === 'book_control') {
                 $this->recordAdoptionFailure($task, $exception);
+            } elseif (GenerationRun::find(data_get($task->pending_transition, 'run_id'))?->status === RunStatus::Failed) {
+                NovelGenerationTask::whereKey($task->id)->where('control_version', $task->control_version)->where('status', 'running')
+                    ->update(['status' => 'needs_attention', 'stop_reason' => 'recovery_contract_invalid',
+                        'stop_detail' => ['message' => app(GenerationDiagnosticRedactor::class)->clean($exception->getMessage())]]);
             }
             throw $exception;
         }

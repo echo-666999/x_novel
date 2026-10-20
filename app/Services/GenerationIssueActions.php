@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Data\GenerationFailure;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
@@ -18,26 +19,54 @@ use Illuminate\Support\Str;
 final class GenerationIssueActions
 {
     /** 动作白名单包含设定、产物修复与局部改写；预览和执行共用服务器校验。 */
+    /** 历史分类保留；可重试性按原失败事实与当前目录复核。 */
+    public function isRetryable(GenerationIssue $issue): bool
+    {
+        $service = app(GenerationIssueService::class);
+        $latest = GenerationRun::find($issue->latest_run_id);
+        if ($latest?->id !== $issue->first_run_id && $service->isTransientFailure($latest)) {
+            try {
+                $service->assertCurrent($issue, currentWorkerFailure: true);
+
+                return true;
+            } catch (\LogicException) {
+                return false;
+            }
+        }
+        $source = GenerationRun::findOrFail($issue->first_run_id);
+
+        $failure = app(GenerationFailurePolicy::class)->forRun($source);
+        // 旧目录曾按阶段把明确的网络临时错误保存成不可重试；只兼容这些稳定错误码。
+        if (in_array($issue->category, ['summary', 'export'], true)
+            && in_array($source->error_code, ['provider_timeout', 'provider_connection_failed', 'provider_rate_limited', 'provider_server_error'], true)) {
+            $failure = new GenerationFailure($failure->code, $failure->message, true, $failure->metadata, $failure->recommendedAction);
+        }
+
+        return app(GenerationIssueCatalog::class)->classify($failure, $source->stage)['retryable'];
+    }
+
     public function preview(GenerationIssue $issue, string $action, string $instructions = ''): array
     {
-        if (! in_array($action, ['retry_export', 'retry_transient', 'repair_foundation', 'repair_book', 'rebuild_book_context', 'diagnose', 'save_note', 'pause'], true)) {
+        if (! in_array($action, ['retry_export', 'retry_transient', 'repair_foundation', 'repair_book', 'repair_book_events', 'rebuild_book_context', 'diagnose', 'save_note', 'pause'], true)) {
             throw new \InvalidArgumentException('动作尚未实现或不在服务器白名单中。');
         }
-        $run = app(GenerationIssueService::class)->assertCurrent($issue);
+        $run = in_array($action, ['repair_book', 'repair_book_events'], true)
+            ? app(BookChapterRepair::class)->source($issue, $action === 'repair_book_events')
+            : app(GenerationIssueService::class)->assertCurrent($issue, currentWorkerFailure: $action === 'retry_transient' && app(GenerationIssueService::class)->isTransientFailure(GenerationRun::find($issue->latest_run_id)));
         $task = NovelGenerationTask::findOrFail($issue->generation_task_id);
         $reason = $action === 'retry_export' && ($issue->category !== 'export' || ! data_get($run->execution_contract, 'book_export') || $run->status !== RunStatus::Failed) ? '只有失败的正式导出支持重新导出。' : null;
         $requestContract = null;
-        if (in_array($action, ['retry_export', 'retry_transient', 'repair_foundation', 'repair_book', 'rebuild_book_context', 'diagnose'], true)) {
+        if (in_array($action, ['retry_export', 'retry_transient', 'repair_foundation', 'repair_book', 'repair_book_events', 'rebuild_book_context', 'diagnose'], true)) {
             $reason ??= $this->blockedReason($issue, $task, $action);
-            if (! $reason && in_array($action, ['diagnose', 'repair_foundation', 'repair_book'], true)) {
+            if (! $reason && in_array($action, ['diagnose', 'repair_foundation', 'repair_book', 'repair_book_events'], true)) {
                 $signature = app(GenerationInputIdentity::class)->hash([$issue->fingerprint, $action, $instructions, $task->policy_revision]);
                 if (collect($issue->evidence['attempts'] ?? [])->contains('signature', $signature)) {
                     $reason = '相同来源、要求与策略已经处理过；没有进展，停止重复收费。';
                 }
             }
-            if (! $reason && in_array($action, ['diagnose', 'repair_foundation', 'repair_book'], true)) {
+            if (! $reason && in_array($action, ['diagnose', 'repair_foundation', 'repair_book', 'repair_book_events'], true)) {
                 try {
-                    $requestContract = $action === 'repair_book' ? app(BookChapterRepair::class)->prepare($issue, $instructions) : app(GenerationRequestContract::class)->freeze(($action === 'repair_foundation' ? app(NovelFoundationContract::class)->repairRequest($issue, $instructions) : app(GenerationIssueDiagnostic::class)->request($issue, $instructions)));
+                    $requestContract = in_array($action, ['repair_book', 'repair_book_events'], true) ? app(BookChapterRepair::class)->prepare($issue, $instructions, $action === 'repair_book_events') : app(GenerationRequestContract::class)->freeze(($action === 'repair_foundation' ? app(NovelFoundationContract::class)->repairRequest($issue, $instructions) : app(GenerationIssueDiagnostic::class)->request($issue, $instructions)));
                 } catch (\Throwable $exception) {
                     $reason = app(GenerationDiagnosticRedactor::class)->clean($exception->getMessage());
                 }
@@ -55,12 +84,13 @@ final class GenerationIssueActions
                 'retry_export' => '仅重建冻结的正式正文导出，不调用模型，不修改正式内容。',
                 'retry_transient' => '复用原输入与冻结合同新建一次执行；成功复验后才关闭问题。',
                 'rebuild_book_context' => '使用当前已授权路由重建容量准入，保留正文；不重跑规划或写作。',
+                'repair_book_events' => '保留当前正文重新提取事件、构建补丁并独立审校；共用原问题次数与费用。',
                 'repair_book' => '只修失败产物或有证据的局部段落；正文改变后重新提取并独立审校，保留累计次数与费用。',
                 'repair_foundation' => '读取原文和失败候选，仅修复设定错误；新建候选并复验，保留原始记录和累计费用。',
                 'diagnose' => '调用已授权模型，生成只读建议；不修改正文、计划、事实或上限，问题保持未解决。',
                 'pause' => '暂停整书后续工作；在途响应仍可保存，禁止正式提交。',
                 default => '保存处理说明和操作记录；不代表复验通过，不自动继续。',
-            }, 'cost' => in_array($action, ['diagnose', 'repair_foundation', 'repair_book'], true) || ($action === 'retry_transient' && $run->provider) ? '费用待确认，发送前检查所有已启用硬上限。' : '不调用模型。'];
+            }, 'cost' => in_array($action, ['diagnose', 'repair_foundation', 'repair_book', 'repair_book_events'], true) || ($action === 'retry_transient' && $run->provider) ? '费用待确认，发送前检查所有已启用硬上限。' : '不调用模型。'];
     }
 
     /** 无进展签名按问题、动作、原输入、策略及修复要求计算，重复点击不刷新额度。 */
@@ -84,14 +114,19 @@ final class GenerationIssueActions
             || $issue->deadline_at?->isPast()) {
             return '问题累计次数、执行时限或截止时间已耗尽；请使用人工路径，额度不会随重试重置。';
         }
-        $source = GenerationRun::findOrFail($issue->first_run_id);
+        $source = $action === 'retry_transient' && app(GenerationIssueService::class)->isTransientFailure(GenerationRun::find($issue->latest_run_id))
+            ? app(GenerationIssueService::class)->assertCurrent($issue, currentWorkerFailure: true)
+            : GenerationRun::findOrFail($issue->first_run_id);
         if ($action === 'repair_foundation' && ($source->stage !== GenerationStage::FoundationBlueprint
             || ! data_get($source->execution_contract, 'book_workflow') || $source->status !== RunStatus::Failed
             || ! preg_match('/^(foundation_(schema|evidence|output)|intent_hard_constraint)/', $issue->error_code)
             || ! GenerationArtifact::where('generation_run_id', $source->id)->where('type', ArtifactType::FoundationBlueprint)->exists())) {
             return '只有已保存的新版设定校验失败候选可以修复；明确矛盾须由用户选择。';
         }
-        if ($action === 'retry_transient' && (! data_get($issue->evidence, 'policy.retryable') || $source->status !== RunStatus::Failed)) {
+        $lostWorker = $source->error_code === 'worker_lost'
+            && $source->status === RunStatus::Failed && $source->finished_at !== null
+            && $source->lease_token === null && ($source->lease_expires_at === null || $source->lease_expires_at->isPast());
+        if ($action === 'retry_transient' && ((! $this->isRetryable($issue) && ! $lostWorker) || $source->status !== RunStatus::Failed)) {
             return '该问题不是允许同合同重试的临时故障；请按具体原因处理。';
         }
         // 只向已接通的阶段派发；未来领域动作必须在接入时补充验证器与测试。
@@ -147,7 +182,7 @@ final class GenerationIssueActions
             if (! $preview['available']) {
                 throw new \LogicException($preview['reason']);
             }
-            $source = GenerationRun::findOrFail($issue->first_run_id);
+            $source = GenerationRun::findOrFail($preview['source_run_id']);
             $evidence = $issue->evidence;
             if (in_array($action, ['pause', 'save_note'], true)) {
                 if ($action === 'save_note' && blank($instructions)) {
@@ -173,11 +208,11 @@ final class GenerationIssueActions
                 return $run;
             }
             $signature = app(GenerationInputIdentity::class)->hash([$issue->fingerprint, $action, $instructions, $task->policy_revision]);
-            if (in_array($action, ['diagnose', 'repair_foundation', 'repair_book'], true) && collect($evidence['attempts'] ?? [])->contains('signature', $signature)) {
+            if (in_array($action, ['diagnose', 'repair_foundation', 'repair_book', 'repair_book_events'], true) && collect($evidence['attempts'] ?? [])->contains('signature', $signature)) {
                 throw new \LogicException('相同来源、要求与策略已经处理过；没有进展，停止重复收费。');
             }
             $resume = $task->pending_transition;
-            $task->update(['status' => 'running']);
+            $task->update(['status' => 'running', 'stop_reason' => null]);
             if ($action === 'rebuild_book_context') {
                 $run = app(BookChapterRepair::class)->rebuild($issue, $task);
                 $evidence['operations'][] = ['action' => $action, 'run_id' => $run->id, 'operation_key' => $operationKey, 'operation_hash' => $payloadHash];
@@ -185,13 +220,13 @@ final class GenerationIssueActions
 
                 return $run;
             }
-            if ($action === 'repair_book') {
+            if (in_array($action, ['repair_book', 'repair_book_events'], true)) {
                 $contract = $preview['request_contract'];
                 $phase = $contract['book_stage'];
-                if ($phase === 'rewrite') {
+                if ($phase === 'rewrite' || $action === 'repair_book_events') {
                     $contract['repair_chain_issue_id'] = $issue->id;
                 }
-                $run = app(GenerationRunCoordinator::class)->enqueue($task->id, $phase === 'rewrite' ? GenerationStage::Rewrite : $source->stage, 'issue:'.$issue->id.':'.$signature, $contract, $source->source_manifest ?? []);
+                $run = app(GenerationRunCoordinator::class)->enqueue($task->id, $phase === 'rewrite' ? GenerationStage::Rewrite : ($action === 'repair_book_events' ? GenerationStage::EventExtraction : $source->stage), 'issue:'.$issue->id.':'.$signature, $contract, $source->source_manifest ?? []);
                 $run->update(['state_version' => $source->state_version]);
             } elseif (in_array($action, ['diagnose', 'repair_foundation'], true)) {
                 $contract = [...$preview['request_contract'], 'issue_action' => $action, 'issue_id' => $issue->id,
@@ -200,6 +235,7 @@ final class GenerationIssueActions
                 $run = app(GenerationRunCoordinator::class)->enqueue($task->id, ($action === 'repair_foundation' ? GenerationStage::FoundationBlueprint : GenerationStage::ContentRepair), 'issue:'.$issue->id.':'.$signature, $contract, $source->source_manifest ?? []);
             } else {
                 $run = app(GenerationRunCoordinator::class)->enqueue($task->id, $source->stage, $source->scope_key, $source->execution_contract ?? [], $source->source_manifest ?? []);
+                $run->update(['state_version' => $source->state_version]);
             }
             // operation_hash 不进入原执行合同，保持同合同重试的 input_hash 不变。
             $metadata = $run->error_metadata ?? [];

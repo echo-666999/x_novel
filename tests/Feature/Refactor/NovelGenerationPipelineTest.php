@@ -11,6 +11,7 @@ use App\AI\UsageRecorder;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\GenerationStage;
+use App\Filament\Pages\GenerationIssues;
 use App\Filament\Resources\Novels\Pages\ViewBookChapter;
 use App\Filament\Resources\Novels\Pages\ViewNovelPlanning;
 use App\Jobs\ExecuteGenerationRunJob;
@@ -25,12 +26,18 @@ use App\Models\Novel;
 use App\Models\NovelGenerationTask;
 use App\Models\NovelOutline;
 use App\Models\Review;
+use App\Models\UsageRecord;
 use App\Models\User;
+use App\Services\BookChapterRepair;
 use App\Services\ChapterDraftService;
 use App\Services\GenerationIssueActions;
+use App\Services\GenerationIssueService;
+use App\Services\GenerationRequestBudget;
+use App\Services\GenerationRequestContract;
 use App\Services\GenerationRunCoordinator;
 use App\Services\GenerationStageGraph;
 use App\Services\NovelBookWorkflow;
+use App\Services\NovelChapterPipeline;
 use App\Services\NovelPlanningService;
 use App\Services\NovelStageContract;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -85,10 +92,51 @@ test('invalid extraction evidence repairs only extraction and preserves body', f
     $repair = GenerationRun::findOrFail($task->fresh()->pending_transition['run_id']);
     expect($repair->execution_contract['book_stage'])->toBe('extract');
     expect($repair->execution_contract['issue_action'])->toBe('repair_book');
+    expect($repair->execution_contract['input']['repair']['validation_message'])->toBe($run->error_message);
     pipelineStep($task);
     expect(Chapter::sole()->current_draft_artifact_id)->toBe($draft);
     expect(GenerationIssue::sole()->status)->toBe('resolved');
     expect(GenerationRun::where('execution_contract->book_stage', 'write')->count())->toBe(1);
+});
+
+test('provider rejected writer response is retained and repaired within the original issue budget', function () {
+    $task = pipelineTask();
+    $run = pipelineUntil($task, 'write');
+    $data = ['body' => '林舟站在港口。', 'complete' => false, 'temporary_state' => [], 'additionalProperties' => false];
+    $response = new AiResponse(json_encode($data, JSON_UNESCAPED_UNICODE), $data, 100, 200, 0, 10, 'rejected-writer', 'pipeline-fixture');
+    $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_schema_validation_failed', 'invalid schema', false, 200, usageResponse: $response));
+    app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
+
+    (new ExecuteGenerationRunJob($run->id))->handle(app(GenerationRunCoordinator::class));
+
+    expect($fake->requests())->toHaveCount(1);
+    expect($run->fresh()->error_code)->toBe('provider_schema_validation_failed');
+    $saved = $run->artifacts()->sole();
+    expect($saved->validation_status->value)->toBe('rejected');
+    expect($saved->content)->toBe($response->content);
+    expect($saved->data['candidate'])->toEqual($data);
+    expect(Chapter::sole()->current_draft_artifact_id)->toBeNull();
+    expect(UsageRecord::where('generation_run_id', $run->id)->sole()->output_tokens)->toBe(200);
+    $repair = GenerationRun::findOrFail($task->fresh()->pending_transition['run_id']);
+    expect(data_get($repair->execution_contract, 'input.repair.candidate'))->toBe($response->content);
+    expect(GenerationIssue::sole()->attempt_count)->toBe(1);
+    pipelineStep($task);
+    expect(GenerationIssue::sole()->status)->toBe('resolved');
+    expect(Chapter::sole()->canonical_artifact_id)->toBeNull();
+});
+
+test('provider schema failure without saved response cannot offer a blind repair', function () {
+    $task = pipelineTask();
+    $run = pipelineUntil($task, 'write');
+    $fake = (new FakeAiProvider)->enqueue(new AiProviderException('provider_schema_validation_failed', 'invalid schema', false));
+    app()->instance(AiProvider::class, new TrackingAiProvider($fake, app(UsageRecorder::class)));
+
+    (new ExecuteGenerationRunJob($run->id))->handle(app(GenerationRunCoordinator::class));
+
+    expect($fake->requests())->toHaveCount(1);
+    expect($run->artifacts()->count())->toBe(0);
+    expect(GenerationIssue::sole()->attempt_count)->toBe(0);
+    expect(app(GenerationIssueActions::class)->preview(GenerationIssue::sole(), 'repair_book')['available'])->toBeFalse();
 });
 
 test('important paragraph repair is bounded and requires new independent review', function () {
@@ -113,6 +161,22 @@ test('important paragraph repair is bounded and requires new independent review'
     expect($issue->attempt_count)->toBe(1);
     expect(GenerationRun::where('issue_id', $issue->id)->where('execution_contract->repair_chain_issue_id', $issue->id)->count())->toBe(3);
     expect(DB::table('usage_records')->where('issue_id', $issue->id)->count())->toBe(4); // 首次失败审校加三次修复/复验请求。
+    expect(Chapter::sole()->canonical_artifact_id)->toBeNull();
+});
+
+test('a successful review response cannot resolve the content issue it just created', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    $run = pipelineStep($task, ['findings' => [['rule_id' => 'timeline', 'severity' => 'uncertain', 'message' => '时间先后需要核对', 'repair_instruction' => '核对原文', 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]], 'goal_checks' => [['goal_key' => 'chapter-1', 'fulfilled' => true, 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]]]);
+    expect($run->status->value)->toBe('succeeded');
+    $issue = GenerationIssue::sole();
+    foreach (range(1, 3) as $attempt) {
+        expect(app(GenerationIssueService::class)->verifySuccess($run->fresh()))->toBeFalse();
+        app(NovelBookWorkflow::class)->advance($task->id, false);
+    }
+    expect($issue->fresh()->status)->not->toBe('resolved');
+    expect(GenerationIssue::count())->toBe(1);
+    expect($task->fresh()->status)->toBe('needs_attention');
     expect(Chapter::sole()->canonical_artifact_id)->toBeNull();
 });
 
@@ -365,7 +429,8 @@ test('necessary sequential fragments reuse completed prefix and assemble exactly
     $task = pipelineTask();
     pipelineUntil($task, 'plan');
     createAiModelRouteForTest(AiStage::Writer, 'small-writer');
-    AIModelPrice::where('model', 'small-writer')->update(['max_output_tokens' => 1200]);
+    AIModelPrice::where('model', 'small-writer')->update(['max_output_tokens' => 1300]);
+    setGenerationSettingsForTest(['chapter_request_budgets.writer.initial.reasoning_reserve_tokens' => 100]);
     pipelineStep($task);
     $plan = ChapterPlan::sole();
     expect($plan->admission_snapshot['writer_strategy'])->toBe('segments');
@@ -486,4 +551,298 @@ test('successful UI save immediately replaces visible body and old PASS', functi
     $page->assertSee('独立审校：PASS');
     $page->set('body', '林舟站在港口。新的人工版本仅用于复验。')->call('saveDraft')->assertSee('新稿已保存')->assertSee('等待当前稿独立审校')->assertDontSee('独立审校：PASS');
     expect(Chapter::sole()->canonical_artifact_id)->toBeNull();
+});
+
+test('book requests preserve separate visible and reasoning budgets through frozen routes', function () {
+    $task = pipelineTask();
+    $service = app(NovelStageContract::class);
+    $request = $service->request($task, 'write', [], 9500);
+    $contract = app(GenerationRequestContract::class)->freeze($request);
+    $configured = app(GenerationRequestBudget::class)->configured(AiStage::Writer)['initial'];
+
+    expect($contract['output_tokens'])->toBe(9500);
+    expect($contract['reasoning_reserve_tokens'])->toBe($configured['reasoning_reserve_tokens']);
+    expect($request->maxTokens)->toBe(9500 + $configured['reasoning_reserve_tokens']);
+    $contract['prompt']['reasoning_effort'] = 'high';
+    $contract['reasoning_reserve_tokens'] = 17000;
+    $frozen = $service->request($task, 'write', ['frozen_route' => $contract], 9500);
+
+    expect($frozen->reasoningEffort)->toBe('high');
+    expect($frozen->maxTokens)->toBe(26500);
+    expect($frozen->metadata['reasoning_reserve_tokens'])->toBe(17000);
+});
+
+test('book extraction rejects payloads that lose knowledge or invent ability direction', function (string $type, string $payload) {
+    $task = pipelineTask();
+    pipelineUntil($task, 'extract');
+    $id = (string) $task->novel->characters()->sole()->id;
+    $run = pipelineStep($task, ['events' => [['event_type' => $type, 'subject_type' => 'character', 'subject_id' => $id, 'payload' => $payload, 'story_time' => '雨季首日', 'evidence' => [['paragraph_key' => 'p1', 'offset' => 0, 'quote' => '林舟站在港口']]]]]);
+    expect($run->error_code)->toBe('book_schema_invalid');
+    expect($run->artifacts()->where('type', ArtifactType::StatePatch)->exists())->toBeFalse();
+})->with([
+    ['character_learned', '{"fact":"收到来信"}'],
+    ['character_learned', '{"value":"收到来信"}'],
+    ['character_ability_changed', '{"ability":"读心术","change":"失去"}'],
+]);
+
+test('book location updates preserve initialized entity fields', function () {
+    $task = pipelineTask();
+    $run = pipelineUntil($task, 'extract');
+    $id = (string) $task->novel->worldEntities()->sole()->id;
+    $state = $run->execution_contract['input']['context']['state'];
+    $original = $state['locations'][$id];
+    $event = ['event_type' => 'location_state_changed', 'subject_type' => 'location', 'subject_id' => $id, 'payload' => '{"change":"下雨"}', 'story_time' => '雨季首日', 'evidence' => [['paragraph_key' => 'p1', 'offset' => 0, 'quote' => '林舟站在港口']]];
+    expect(fn () => app(NovelChapterPipeline::class)->validateOutput($run, ['events' => [$event]]))->toThrow(AiProviderException::class, '删除已有对象字段');
+    $event['payload'] = json_encode(['state' => [...$original, 'current_state' => ['weather' => '雨季']]], JSON_UNESCAPED_UNICODE);
+    $completed = pipelineStep($task, ['events' => [$event]]);
+    expect($completed->status->value)->toBe('succeeded');
+    $patch = $completed->artifacts()->where('type', ArtifactType::StatePatch)->sole();
+    expect($patch->data['operations'][0]['path'])->toBe('locations.'.$id);
+    expect($patch->data['operations'][0]['value']['name'])->toBe($original['name']);
+    expect($task->novel->fresh()->canonicalStateVersion->state)->toBe($state);
+});
+
+test('book admission refuses a model whose output cannot fit its reasoning reserve', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'plan');
+    createAiModelRouteForTest(AiStage::Writer, 'reserve-too-large');
+    AIModelPrice::where('model', 'reserve-too-large')->update(['max_output_tokens' => 1200]);
+
+    pipelineStep($task);
+
+    expect($task->fresh()->stop_reason)->toBe('book_capacity_exceeded');
+    expect(ChapterPlan::count())->toBe(0);
+    expect(GenerationRun::where('generation_task_id', $task->id)->where('stage', GenerationStage::ChapterWrite)->count())->toBe(0);
+});
+
+test('evidence requests pair stable paragraph identities with exact unicode source text', function () {
+    $task = pipelineTask();
+    $body = "相同句子。\n\n第二段的第一行。\n第二行保留。\n\n相同句子。";
+    $index = app(ChapterDraftService::class)->index($body);
+    $request = app(NovelStageContract::class)->request($task, 'review', ['body' => $body, 'paragraph_index' => $index]);
+    $input = json_decode($request->prompt, true, flags: JSON_THROW_ON_ERROR);
+
+    expect($input)->not->toHaveKeys(['body', 'paragraph_index']);
+    expect($input['body_paragraphs'])->toHaveCount(3);
+    expect($input['body_paragraphs'][1])->toBe([...$index[1], 'text' => "第二段的第一行。\n第二行保留。"]);
+    expect($input['body_paragraphs'][0]['key'])->toBe('p1');
+    expect($input['body_paragraphs'][2]['key'])->toBe('p3');
+    expect($input['body_paragraphs'][2]['text'])->toBe('相同句子。');
+});
+
+test('invalid event subject combinations retain rejected evidence and offer bounded schema repair', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'extract');
+
+    $run = pipelineStep($task, ['events' => [['event_type' => 'world_rule_revealed', 'subject_type' => 'location', 'subject_id' => '1', 'payload' => '{}', 'story_time' => '雨季首日', 'evidence' => [['paragraph_key' => 'p1', 'offset' => 0, 'quote' => '林舟站在港口']]]]]);
+
+    expect($run->error_code)->toBe('book_schema_invalid');
+    expect($run->artifacts()->where('type', ArtifactType::EventCandidate)->first()->validation_status->value)->toBe('rejected');
+    $issue = GenerationIssue::where('first_run_id', $run->id)->firstOrFail();
+    expect($issue->category)->toBe('schema');
+    expect($issue->attempt_count)->toBe(1);
+    expect($task->novel->storyEvents()->count())->toBe(0);
+
+    $run->update(['error_code' => 'stage_execution_failed']);
+    $issue->update(['error_code' => 'stage_execution_failed']);
+    $contract = app(BookChapterRepair::class)->prepare($issue->fresh(), '修正主体类型');
+    expect($contract['issue_action'])->toBe('repair_book');
+    expect($run->fresh()->error_code)->toBe('stage_execution_failed');
+    $page = app(GenerationIssues::class);
+    $page->instructions = '使用新的主体类型映射复验旧候选';
+    expect(collect($page->options($issue->fresh()))->pluck('action'))->not->toContain('repair_book');
+    GenerationRun::where('generation_task_id', $task->id)->where('status', 'queued')->update(['status' => 'failed']);
+    expect(collect($page->options($issue->fresh()))->pluck('action'))->toContain('repair_book');
+    $run->artifacts()->where('type', ArtifactType::EventCandidate)->update(['data' => ['events' => []]]);
+    expect(fn () => app(BookChapterRepair::class)->prepare($issue->fresh(), '重试'))->toThrow(LogicException::class);
+    expect(collect($page->options($issue->fresh()))->pluck('action'))->not->toContain('repair_book');
+});
+
+test('event repair follows the current owned review without rewriting or resetting attempts', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    $finding = ['findings' => [['rule_id' => 'state_path', 'severity' => 'important', 'message' => '事件位置不符', 'repair_instruction' => '只修事件', 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]], 'goal_checks' => [['goal_key' => 'chapter-1', 'fulfilled' => true, 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]]];
+    pipelineStep($task, $finding);
+    $old = GenerationArtifact::findOrFail(Chapter::sole()->current_draft_artifact_id);
+    pipelineStep($task, ['replacements' => [['paragraph_key' => 'p1', 'expected_hash' => $old->data['paragraph_index'][0]['hash'], 'text' => '林舟站在港口，为了找回父亲的消息，他决定沿岸追查来信。']]]);
+    pipelineStep($task);
+    pipelineStep($task, $finding);
+    $issue = GenerationIssue::sole();
+    expect($issue->status)->toBe('awaiting_user');
+    $currentReview = GenerationRun::findOrFail($issue->latest_run_id);
+    expect(Review::where('generation_run_id', $currentReview->id)->exists())->toBeTrue();
+    app(GenerationIssueService::class)->observe($currentReview);
+    expect($issue->fresh()->status)->toBe('awaiting_user');
+    $draft = Chapter::sole()->current_draft_artifact_id;
+    $actions = app(GenerationIssueActions::class);
+    Chapter::sole()->update(['current_draft_artifact_id' => $old->id]);
+    expect(fn () => $actions->preview($issue, 'repair_book_events'))->toThrow(LogicException::class);
+    Chapter::sole()->update(['current_draft_artifact_id' => $draft]);
+    $preview = $actions->preview($issue, 'repair_book_events');
+    expect($preview['available'])->toBeTrue($preview['reason'] ?? '');
+    $repair = $actions->execute($issue->id, 'repair_book_events', $issue->fingerprint, $preview['control_version'], (string) Str::uuid(), dispatch: false);
+    expect($repair->stage)->toBe(GenerationStage::EventExtraction);
+    expect($task->fresh()->stop_reason)->toBeNull();
+    pipelineStep($task);
+    expect($issue->fresh()->status)->not->toBe('resolved');
+    pipelineStep($task);
+    expect($issue->fresh()->status)->toBe('resolved');
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    expect(Chapter::sole()->current_draft_artifact_id)->toBe($draft);
+    expect(GenerationRun::where('execution_contract->book_stage', 'rewrite')->count())->toBe(1);
+});
+
+test('schema failure after a rewrite repairs the current extraction within the same issue', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    pipelineStep($task, ['findings' => [['rule_id' => 'motivation', 'severity' => 'important', 'message' => '缺动机', 'repair_instruction' => '补充动机', 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]], 'goal_checks' => [['goal_key' => 'chapter-1', 'fulfilled' => true, 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]]]);
+    $old = GenerationArtifact::findOrFail(Chapter::sole()->current_draft_artifact_id);
+    pipelineStep($task, ['replacements' => [['paragraph_key' => 'p1', 'expected_hash' => $old->data['paragraph_index'][0]['hash'], 'text' => '林舟站在港口，为了找回父亲的消息，他决定沿岸追查来信。']]]);
+    $failed = pipelineStep($task, ['events' => [['event_type' => 'world_rule_revealed', 'subject_type' => 'location', 'subject_id' => '1', 'payload' => '{}', 'story_time' => '雨季首日', 'evidence' => [['paragraph_key' => 'p1', 'offset' => 0, 'quote' => '林舟站在港口']]]]]);
+    $issue = GenerationIssue::sole();
+    $actions = app(GenerationIssueActions::class);
+    $draftId = Chapter::sole()->current_draft_artifact_id;
+    Chapter::sole()->update(['current_draft_artifact_id' => $old->id]);
+    expect(fn () => $actions->preview($issue, 'repair_book', '修当前事件结构'))->toThrow(LogicException::class);
+    Chapter::sole()->update(['current_draft_artifact_id' => $draftId]);
+    $preview = $actions->preview($issue, 'repair_book', '修当前事件结构');
+    expect(app(GenerationIssues::class)->details($issue)['source_error'])->toBeNull();
+    expect($preview['source_run_id'])->toBe($failed->id);
+    expect($preview['available'])->toBeTrue($preview['reason'] ?? '');
+    $repair = $actions->execute($issue->id, 'repair_book', $issue->fingerprint, $preview['control_version'], (string) Str::uuid(), '修当前事件结构', dispatch: false);
+    expect($repair->stage)->toBe(GenerationStage::EventExtraction);
+    expect(data_get($repair->execution_contract, 'input.repair.error'))->toBe('book_schema_invalid');
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    pipelineStep($task);
+    expect($issue->fresh()->status)->toBe('repairing');
+    pipelineStep($task);
+    expect($issue->fresh()->status)->toBe('resolved');
+    expect(Chapter::sole()->current_draft_artifact_id)->toBe($draftId);
+});
+
+test('coverage failure after a rewrite repairs the current review without rewriting again', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    pipelineStep($task, ['findings' => [['rule_id' => 'motivation', 'severity' => 'important', 'message' => '缺动机', 'repair_instruction' => '补充动机', 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]], 'goal_checks' => [['goal_key' => 'chapter-1', 'fulfilled' => true, 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]]]);
+    $old = GenerationArtifact::findOrFail(Chapter::sole()->current_draft_artifact_id);
+    pipelineStep($task, ['replacements' => [['paragraph_key' => 'p1', 'expected_hash' => $old->data['paragraph_index'][0]['hash'], 'text' => '林舟站在港口，为了找回父亲的消息，他决定沿岸追查来信。']]]);
+    expect(app(GenerationIssues::class)->details(GenerationIssue::sole())['source_error'])->toBeNull();
+    pipelineStep($task);
+    $failed = pipelineStep($task, ['findings' => [], 'goal_checks' => []]);
+    $issue = GenerationIssue::sole();
+    $actions = app(GenerationIssueActions::class);
+    $draftId = Chapter::sole()->current_draft_artifact_id;
+    Chapter::sole()->update(['current_draft_artifact_id' => $old->id]);
+    expect(fn () => $actions->preview($issue, 'repair_book', '补齐当前审校目标覆盖'))->toThrow(LogicException::class);
+    Chapter::sole()->update(['current_draft_artifact_id' => $draftId]);
+    $preview = $actions->preview($issue, 'repair_book', '补齐当前审校目标覆盖');
+    expect(app(GenerationIssues::class)->details($issue)['source_error'])->toBeNull();
+    expect($preview['source_run_id'])->toBe($failed->id);
+    expect($preview['available'])->toBeTrue($preview['reason'] ?? '');
+    $repair = $actions->execute($issue->id, 'repair_book', $issue->fingerprint, $preview['control_version'], (string) Str::uuid(), '补齐当前审校目标覆盖', dispatch: false);
+    expect($repair->stage)->toBe(GenerationStage::Review);
+    expect(data_get($repair->execution_contract, 'input.repair.error'))->toBe('book_review_coverage_invalid');
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    pipelineStep($task);
+    expect($issue->fresh()->status)->toBe('resolved');
+    expect(Chapter::sole()->current_draft_artifact_id)->toBe($draftId);
+});
+
+test('lost worker in direct schema repair resumes the owned frozen request', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'extract');
+    pipelineStep($task, ['events' => [['event_type' => 'world_rule_revealed', 'subject_type' => 'location', 'subject_id' => '1', 'payload' => '{}', 'story_time' => '雨季首日', 'evidence' => [['paragraph_key' => 'p1', 'offset' => 0, 'quote' => '林舟站在港口']]]]]);
+    $source = GenerationRun::findOrFail($task->fresh()->pending_transition['run_id']);
+    $coordinator = app(GenerationRunCoordinator::class);
+    $lease = $coordinator->claimExecution($source->id);
+    $coordinator->failExecution($source->id, $lease['token'], 'worker_lost', 'worker lost', true);
+    $issue = GenerationIssue::sole();
+    $actions = app(GenerationIssueActions::class);
+    expect(data_get($source->execution_contract, 'repair_chain_issue_id'))->toBeNull();
+    $source->update(['issue_id' => null]);
+    expect(fn () => $actions->preview($issue, 'retry_transient'))->toThrow(LogicException::class);
+    $source->update(['issue_id' => $issue->id]);
+    $preview = $actions->preview($issue, 'retry_transient');
+    expect($preview['available'])->toBeTrue($preview['reason'] ?? '');
+    $retry = $actions->execute($issue->id, 'retry_transient', $issue->fingerprint, $preview['control_version'], (string) Str::uuid(), dispatch: false);
+    expect($retry->stage)->toBe(GenerationStage::EventExtraction);
+    expect($retry->execution_contract)->toBe($source->execution_contract);
+    expect($retry->state_version)->toBe($source->state_version);
+    expect($retry->input_hash)->toBe($source->input_hash);
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    expect($retry->retry_of_run_id)->toBe($source->id);
+    pipelineStep($task);
+    expect($issue->fresh()->status)->toBe('resolved');
+    expect($issue->fresh()->resolved_by_run_id)->toBe($retry->id);
+    expect($task->fresh()->status)->toBe('running');
+});
+
+test('lost worker inside a repair resumes its frozen stage with the original cumulative limit', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'review');
+    pipelineStep($task, ['findings' => [['rule_id' => 'motivation', 'severity' => 'important', 'message' => '缺动机', 'repair_instruction' => '补充动机', 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]], 'goal_checks' => [['goal_key' => 'chapter-1', 'fulfilled' => true, 'evidence' => [['paragraph_key' => 'p1', 'quote' => '林舟站在港口', 'offset' => 0]]]]]);
+    $source = GenerationRun::findOrFail($task->fresh()->pending_transition['run_id']);
+    $coordinator = app(GenerationRunCoordinator::class);
+    $lease = $coordinator->claimExecution($source->id);
+    $coordinator->failExecution($source->id, $lease['token'], 'worker_lost', 'worker lost', true);
+    $issue = GenerationIssue::sole();
+    $actions = app(GenerationIssueActions::class);
+    $preview = $actions->preview($issue, 'retry_transient');
+    expect($preview['available'])->toBeTrue($preview['reason'] ?? '');
+    $retry = $actions->execute($issue->id, 'retry_transient', $issue->fingerprint, $preview['control_version'], (string) Str::uuid(), dispatch: false);
+    expect($retry->stage)->toBe(GenerationStage::Rewrite);
+    expect($retry->input_hash)->toBe($source->input_hash);
+    expect($source->state_version)->not->toBeNull();
+    expect($retry->state_version)->toBe($source->state_version);
+    expect($retry->execution_contract)->toBe($source->execution_contract);
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    app(GenerationIssueService::class)->observe($source->fresh());
+    expect($task->fresh()->status)->toBe('running');
+    expect($issue->fresh()->latest_run_id)->toBe($retry->id);
+    $lease = $coordinator->claimExecution($retry->id);
+    $coordinator->failExecution($retry->id, $lease['token'], 'worker_lost', 'worker lost again', true);
+    expect($actions->preview($issue->fresh(), 'retry_transient')['available'])->toBeFalse();
+    $count = GenerationRun::count();
+    app(NovelBookWorkflow::class)->control($task->id, $task->fresh()->control_version, 'pause', false);
+    expect(fn () => app(NovelBookWorkflow::class)->control($task->id, $task->fresh()->control_version, 'resume', false))->toThrow(LogicException::class);
+    expect(GenerationRun::count())->toBe($count);
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    expect($task->fresh()->status)->toBe('needs_attention');
+});
+
+test('transient provider failure in direct schema repair resumes only its owned frozen request', function () {
+    $task = pipelineTask();
+    pipelineUntil($task, 'extract');
+    pipelineStep($task, ['events' => [['event_type' => 'world_rule_revealed', 'subject_type' => 'location', 'subject_id' => '1', 'payload' => '{}', 'story_time' => '雨季首日', 'evidence' => [['paragraph_key' => 'p1', 'offset' => 0, 'quote' => '林舟站在港口']]]]]);
+    $source = GenerationRun::findOrFail($task->fresh()->pending_transition['run_id']);
+    $coordinator = app(GenerationRunCoordinator::class);
+    $lease = $coordinator->claimExecution($source->id);
+    $coordinator->failExecution($source->id, $lease['token'], 'provider_timeout', 'timeout', true);
+    $issue = GenerationIssue::sole();
+    $actions = app(GenerationIssueActions::class);
+    expect(data_get($source->execution_contract, 'repair_chain_issue_id'))->toBeNull();
+    $source->update(['issue_id' => null]);
+    expect(fn () => $actions->preview($issue, 'retry_transient'))->toThrow(LogicException::class);
+    $source->update(['issue_id' => $issue->id]);
+    $source->update(['error_code' => 'provider_quota_exceeded', 'error_retryable' => false]);
+    expect($actions->isRetryable($issue))->toBeFalse();
+    $source->update(['error_code' => 'provider_timeout', 'error_retryable' => false]);
+    expect($actions->isRetryable($issue))->toBeFalse();
+    $source->update(['error_retryable' => true]);
+    expect($actions->isRetryable($issue))->toBeTrue();
+    $preview = $actions->preview($issue, 'retry_transient');
+    expect($preview['available'])->toBeTrue($preview['reason'] ?? '');
+    app(NovelBookWorkflow::class)->control($task->id, $task->fresh()->control_version, 'pause', false);
+    app(NovelBookWorkflow::class)->control($task->id, $task->fresh()->control_version, 'resume', false);
+    $retry = GenerationRun::findOrFail($task->fresh()->pending_transition['run_id']);
+    expect($retry->stage)->toBe(GenerationStage::EventExtraction);
+    expect($retry->execution_contract)->toBe($source->execution_contract);
+    expect($retry->state_version)->toBe($source->state_version);
+    expect($retry->input_hash)->toBe($source->input_hash);
+    expect($issue->fresh()->attempt_count)->toBe(2);
+    expect($retry->retry_of_run_id)->toBe($source->id);
+    pipelineStep($task);
+    expect($issue->fresh()->status)->toBe('resolved');
+    expect($issue->fresh()->resolved_by_run_id)->toBe($retry->id);
+    expect($task->fresh()->status)->toBe('running');
 });

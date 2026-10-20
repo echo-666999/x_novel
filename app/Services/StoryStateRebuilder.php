@@ -7,6 +7,7 @@ use App\Data\StatePatch;
 use App\Data\StoryEventCandidate;
 use App\Data\StoryStateRebuildResult;
 use App\Enums\EventType;
+use App\Models\GenerationArtifact;
 use App\Models\Novel;
 use App\Models\StoryEvent;
 use App\Models\StoryStateVersion;
@@ -100,7 +101,7 @@ class StoryStateRebuilder
                 continue;
             }
 
-            if ($this->operationsFor($event) === []) {
+            if ($this->operationsFor($event, $initial->state) === []) {
                 $skippedEvents[] = $this->skippedEvent($event, '事件类型不产生可重放状态操作');
 
                 continue;
@@ -202,7 +203,7 @@ class StoryStateRebuilder
         $rebuilt = $baseline;
 
         foreach ($events->sortBy([['state_version', 'asc'], ['id', 'asc']]) as $event) {
-            $operations = $this->operationsFor($event);
+            $operations = $this->operationsFor($event, $rebuilt);
 
             if ($operations !== []) {
                 $rebuilt = $this->statePatchBuilder->applyPatch(
@@ -216,7 +217,7 @@ class StoryStateRebuilder
     }
 
     /** @return array<int, array<string, mixed>> */
-    private function operationsFor(StoryEvent $event): array
+    private function operationsFor(StoryEvent $event, array $state): array
     {
         if ($event->event_type === EventType::ManualCorrection) {
             $path = $event->payload['path'] ?? null;
@@ -247,7 +248,10 @@ class StoryStateRebuilder
 
         return array_map(
             fn (array $operation): array => [...$operation, 'source_event_index' => 0],
-            $this->eventApplier->operations($candidate),
+            $this->statePatchBuilder->eventOperations($candidate, (bool) data_get(
+                GenerationArtifact::find(data_get($event->evidence, '0.artifact_id'))?->generationRun?->execution_contract,
+                'book_workflow',
+            ), $state),
         );
     }
 }

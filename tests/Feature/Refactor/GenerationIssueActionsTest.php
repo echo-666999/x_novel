@@ -8,6 +8,7 @@ use App\AI\UsageRecorder;
 use App\Enums\AiStage;
 use App\Enums\ArtifactType;
 use App\Enums\ArtifactValidationStatus;
+use App\Enums\GenerationStage;
 use App\Enums\RunStatus;
 use App\Jobs\ExecuteGenerationRunJob;
 use App\Models\AIModelPrice;
@@ -70,6 +71,24 @@ test('pause makes old previews stale and still leaves a manual path', function (
     $preview = app(GenerationIssueActions::class)->preview($issue, 'diagnose');
     expect($preview['available'])->toBeFalse();
     expect(app(GenerationIssueActions::class)->preview($issue, 'save_note')['available'])->toBeTrue();
+});
+
+test('lost workers allow explicit bounded recovery only after the old lease is fenced', function () {
+    [$task, $failed, $issue] = issueFixture('worker_lost', false);
+    $actions = app(GenerationIssueActions::class);
+    $failed->update(['lease_token' => (string) Str::uuid(), 'lease_expires_at' => now()->addMinute()]);
+    expect($actions->preview($issue, 'retry_transient')['available'])->toBeFalse();
+    $failed->update(['lease_token' => null, 'lease_expires_at' => null]);
+    expect($actions->preview($issue, 'retry_transient')['available'])->toBeTrue();
+    $key = (string) Str::uuid();
+    $retry = $actions->execute($issue->id, 'retry_transient', $issue->fingerprint, $task->control_version, $key, dispatch: false);
+    $same = $actions->execute($issue->id, 'retry_transient', $issue->fingerprint, $task->control_version, $key, dispatch: false);
+    expect($same->id)->toBe($retry->id);
+    expect($retry->id)->not->toBe($failed->id);
+    expect($failed->fresh()->error_code)->toBe('worker_lost');
+    expect($failed->fresh()->status)->toBe(RunStatus::Failed);
+    expect($issue->fresh()->attempt_count)->toBe(1);
+    expect($issue->fresh()->status)->not->toBe('resolved');
 });
 
 test('deadline stops a repair without removing manual advice or original evidence', function () {
@@ -175,4 +194,16 @@ test('chapter scoped diagnostic retains chapter costs and obeys the chapter hard
     expect($fake->requests())->toHaveCount(0);
     expect($run->fresh()->chapter_id)->toBe($chapter->id);
     expect($run->fresh()->error_code)->toBe('budget_chapter_max_cost_hard_limit');
+});
+
+test('summary transport timeout remains retryable even with historical summary classification', function () {
+    [$task, $failed, $issue] = issueFixture();
+    $failed->update(['error_retryable' => false, 'stage' => GenerationStage::MemorySummary, 'execution_contract' => [...$failed->execution_contract, 'book_stage' => 'summary']]);
+    $issue->update(['source_identity' => app(GenerationIssueService::class)->identity($failed->fresh()), 'category' => 'summary', 'evidence' => [...$issue->evidence, 'policy' => ['retryable' => false]]]);
+    $actions = app(GenerationIssueActions::class);
+    expect($actions->preview($issue->fresh(), 'retry_transient')['available'])->toBeTrue();
+    $run = $actions->execute($issue->id, 'retry_transient', $issue->fingerprint, $task->control_version, (string) Str::uuid(), dispatch: false);
+    expect($run->execution_contract)->toEqual($failed->execution_contract);
+    expect($issue->fresh()->attempt_count)->toBe(1);
+    expect($issue->fresh()->evidence['policy']['retryable'])->toBeFalse();
 });

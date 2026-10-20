@@ -1,9 +1,9 @@
 {{-- Schema 更新会替换操作节点；反馈渲染后恢复触发按钮焦点，不滚动或清空输入。 --}}
 <div class="xn-stack" @book-edit-feedback.window="$nextTick(() => document.getElementById($event.detail.target)?.focus({preventScroll: true}))" x-data="{
-    size: 19, leading: 1.95, width: 42, focus: false, dirty: false, readingKey: null,
+    size: 19, leading: 1.95, width: 42, focus: false, dirty: false, eventDirty: false, readingKey: null,
     init() { try { const p=JSON.parse(localStorage.getItem('xn-reader') || '{}'); this.size=p.size || 19; this.leading=p.leading || 1.95; this.width=p.width || 42; this.readingKey='xn-reading-'+this.$el.dataset.chapter; const y=Number(localStorage.getItem(this.readingKey) || 0); this.$nextTick(() => window.scrollTo(0,y)); } catch(e) {} },
     save() { try { localStorage.setItem('xn-reader',JSON.stringify({size:this.size,leading:this.leading,width:this.width})); } catch(e) {} }
-}" data-chapter="{{ $chapter->id }}" @keydown.escape.window="focus=false" @book-draft-saved.window="dirty=false" @scroll.window.throttle.600ms="if(readingKey &amp;&amp; !focus) { try { localStorage.setItem(readingKey,String(window.scrollY)); } catch(e) {} }" :class="{ 'xn-reader-focus': focus }" @beforeunload.window="if(dirty) { $event.preventDefault(); $event.returnValue=''; }">
+}" data-chapter="{{ $chapter->id }}" @keydown.escape.window="focus=false" @book-draft-saved.window="dirty=false" @book-events-saved.window="eventDirty=false" @scroll.window.throttle.600ms="if(readingKey &amp;&amp; !focus) { try { localStorage.setItem(readingKey,String(window.scrollY)); } catch(e) {} }" :class="{ 'xn-reader-focus': focus }" @beforeunload.window="if(dirty || eventDirty) { $event.preventDefault(); $event.returnValue=''; }">
     <div class="xn-reader-toolbar">
         <label>字号 <input type="range" min="16" max="28" step="1" x-model="size" @change="save()" aria-label="正文字号"></label>
         <label>行距 <input type="range" min="1.5" max="2.5" step="0.1" x-model="leading" @change="save()" aria-label="正文行距"></label>
@@ -15,7 +15,7 @@
         <label for="chapter-search">搜索章节标题</label><input id="chapter-search" type="search" wire:model.live.debounce.400ms="directorySearch" class="xn-reader-control">
         <nav aria-label="章节目录" class="xn-stack">
         @foreach($directory as $item)
-            <a class="xn-reader-control" href="{{ \App\Filament\Resources\Novels\NovelResource::getUrl('book-chapter',['record'=>$chapter->novel_id,'chapter'=>$item->id]) }}" @click="if(dirty &amp;&amp; !confirm('有未保存的修改，确定离开？')) $event.preventDefault()">第 {{ $item->sequence }} 章 {{ $item->title }} · {{ $item->canonical_artifact_id ? '正式' : '草稿' }}</a>
+            <a class="xn-reader-control" href="{{ \App\Filament\Resources\Novels\NovelResource::getUrl('book-chapter',['record'=>$chapter->novel_id,'chapter'=>$item->id]) }}" @click="if((dirty || eventDirty) &amp;&amp; !confirm('有未保存的修改，确定离开？')) $event.preventDefault()">第 {{ $item->sequence }} 章 {{ $item->title }} · {{ $item->canonical_artifact_id ? '正式' : '草稿' }}</a>
         @endforeach
         </nav>
         <p>第 {{ $directory->currentPage() }} / {{ $directory->lastPage() }} 页</p>
@@ -54,7 +54,64 @@
                 <div class="xn-book-comparison"><section><h3>修改前</h3><p class="whitespace-pre-wrap">{{ $previous->content }}</p></section><section><h3>当前新稿</h3><p class="whitespace-pre-wrap">{{ $draft->content }}</p></section></div>
             @else<p>这是首次完整草稿，没有前一稿可对照。</p>@endif
         </details>
+        @if($this->summarySource !== [])
+            <details class="xn-book-details" wire:ignore.self><summary>人工修订摘要证据（保留摘要条目）</summary>
+                <p>仅替换正式正文的真实连续引文；原条目不可修改，每项证据修改须确认支持关系并填写理由。缺乏依据不能采用。</p>
+                @foreach($this->summaryRows as $index => $row)
+                    <fieldset class="xn-book-finding" @input="eventDirty=true">
+                        <legend>摘要条目 {{ $index + 1 }}：{{ $this->summarySource['points'][$index]['text'] }}</legend>
+                        <label for="summary-key-{{ $index }}">摘要 {{ $index + 1 }} 的段落</label>
+                        <input id="summary-key-{{ $index }}" wire:model="summaryRows.{{ $index }}.evidence.paragraph_key" class="xn-reader-control">
+                        <label for="summary-offset-{{ $index }}">摘要 {{ $index + 1 }} 的偏移</label>
+                        <input id="summary-offset-{{ $index }}" type="number" wire:model.number="summaryRows.{{ $index }}.evidence.offset" class="xn-reader-control">
+                        <label for="summary-quote-{{ $index }}">摘要 {{ $index + 1 }} 的真实引文</label>
+                        <textarea id="summary-quote-{{ $index }}" wire:model="summaryRows.{{ $index }}.evidence.quote" class="xn-book-editor" rows="4"></textarea>
+                        <label for="summary-reason-{{ $index }}">摘要 {{ $index + 1 }} 的修订理由</label>
+                        <textarea id="summary-reason-{{ $index }}" wire:model="summaryRows.{{ $index }}.reason" class="xn-book-editor" rows="2"></textarea>
+                        <label><input type="checkbox" wire:model="summaryRows.{{ $index }}.supported">确认证据支持摘要条目 {{ $index + 1 }}</label>
+                    </fieldset>
+                @endforeach
+                <x-filament::button wire:click="saveSummaryEvidence" wire:loading.attr="disabled">保存摘要证据并复验</x-filament::button>
+                @if($this->summaryFeedback)<p role="status">{{ $this->summaryFeedback }}</p>@endif
+            </details>
+        @endif
+        @if($this->evidenceRepair !== [])
+            <x-filament::section heading="保存响应的证据定位修正" description="仅修正审校或事件候选在指定段落内唯一逐字命中的偏移；定位修正不调用模型，不修改事件内容、原判断或次数。事件候选完整校验后仍需独立审校，费用继续累计。">
+                <p>来源执行 {{ $this->evidenceRepair['source'] }} · 原候选 {{ $this->evidenceRepair['candidate'] }}</p>
+                @foreach($this->evidenceRepair['changes'] as $change)
+                    <p>{{ $change['paragraph_key'] }}：{{ $change['before'] }} → {{ $change['after'] }} · <q>{{ $change['quote'] }}</q></p>
+                @endforeach
+                <x-filament::button wire:click="repairEvidence" wire:loading.attr="disabled">修正唯一匹配的定位并复验</x-filament::button>
+                @if($this->evidenceFeedback)<p role="status">{{ $this->evidenceFeedback }}</p>@endif
+            </x-filament::section>
+        @endif
         @unless($chapter->canonical_artifact_id)
+            @if($eventCandidate || $this->eventRows !== [])
+            <details class="xn-book-details" wire:ignore.self><summary>人工修订事件候选（保留正文）</summary>
+                <x-filament::section heading="人工修订事件" description="修订已有事件，或按当前正文补充遗漏事件。逐项填写理由；保存后必须独立审校，不直接修改正式状态，也不重置 AI 修复次数。">
+                    <p>原候选 {{ $this->eventCandidateId ?? '来源已变化' }} · 来源执行 {{ $this->eventReviewId }}。状态字段使用 JSON 对象；主体和原文证据不可修改。复验模型费用仍累计。</p>
+                    @foreach($this->eventRows as $index => $row)
+                    <fieldset class="xn-book-finding" wire:key="event-editor-{{ $this->eventCandidateId }}-{{ $index }}">
+                        <legend>事件 {{ $index + 1 }} · {{ data_get($eventCandidate?->data, 'events.'.$index.'.event_type', '请对照新来源') }} · {{ data_get($eventCandidate?->data, 'events.'.$index.'.subject_id') }}</legend>
+                        @foreach(data_get($eventCandidate?->data, 'events.'.$index.'.evidence', []) as $reference)<p><q>{{ $reference['quote'] }}</q></p>@endforeach
+                        <label for="event-payload-{{ $index }}">事件 {{ $index + 1 }} 的状态字段</label>
+                        <textarea id="event-payload-{{ $index }}" wire:model="eventRows.{{ $index }}.payload" @input="eventDirty=true" class="xn-book-editor" rows="4"></textarea>
+                        <label for="event-time-{{ $index }}">事件 {{ $index + 1 }} 的发生时间</label>
+                        <input id="event-time-{{ $index }}" wire:model="eventRows.{{ $index }}.story_time" @input="eventDirty=true" class="xn-reader-control">
+                        <label><input type="checkbox" wire:model="eventRows.{{ $index }}.omit" @change="eventDirty=true"> 剔除事件 {{ $index + 1 }}（保留原记录）</label>
+                        <label for="event-reason-{{ $index }}">事件 {{ $index + 1 }} 的修订依据与理由</label>
+                        <textarea id="event-reason-{{ $index }}" wire:model="eventRows.{{ $index }}.reason" @input="eventDirty=true" class="xn-book-editor" rows="2"></textarea>
+                    </fieldset>
+                    @endforeach
+                    <label for="event-additions">补充遗漏事件（JSON 列表，不补漏时保留 []）</label>
+                    <p id="event-additions-help">每项填写 event 与 reason。event 使用既有 event_type、subject_type、subject_id、payload（JSON 对象字符串）、story_time 和 evidence；证据填写当前正文的 paragraph_key、段内字符 offset 与逐字 quote。仅限已有实体，不能建立新人物或物件；总计最多 40 项。补漏后仍须独立审校确认语义。</p>
+                    <textarea id="event-additions" wire:model="eventAdditions" @input="eventDirty=true" class="xn-book-editor" rows="6" aria-describedby="event-additions-help"></textarea>
+                    <p role="status" id="book-events-feedback">{{ $this->eventFeedback }}</p>
+                    <x-filament::button id="book-save-events" wire:click="saveEvents" wire:loading.attr="disabled" :disabled="!$this->eventCandidateId">保存事件修订并独立审校</x-filament::button>
+                    <x-filament::button color="gray" wire:click="refreshEvents" wire:loading.attr="disabled">保留输入并核对事件来源</x-filament::button>
+                </x-filament::section>
+            </details>
+            @endif
             <details class="xn-book-details" wire:ignore.self><summary>人工编辑当前草稿</summary><x-filament::section heading="人工处理" description="修改当前完整草稿，保存后重新提取、校验和审校。不会直接覆盖正式故事。">
                 <label for="book-draft-editor">新稿正文</label>
                 <textarea id="book-draft-editor" wire:model="body" @input="dirty=true" class="xn-book-editor" rows="16" aria-describedby="book-save-feedback"></textarea>

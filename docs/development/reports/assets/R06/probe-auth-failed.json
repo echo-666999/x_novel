@@ -1,0 +1,37 @@
+{
+    "connections": {
+        "deepseek": {
+            "error": "provider_http_error",
+            "message": "服务商返回 HTTP 401。"
+        },
+        "openai": {
+            "error": "provider_http_error",
+            "message": "服务商返回 HTTP 401。"
+        }
+    },
+    "routes": {
+        "openai\/gpt-5.6-terra": {
+            "error": "provider_authentication_failed",
+            "message": "AI Provider 认证失败，请检查 API Key 和访问权限。"
+        },
+        "deepseek\/deepseek-v4-pro": {
+            "error": "provider_authentication_failed",
+            "message": "AI Provider 认证失败，请检查 API Key 和访问权限。"
+        },
+        "deepseek\/deepseek-flash": {
+            "error": "provider_authentication_failed",
+            "message": "AI Provider 认证失败，请检查 API Key 和访问权限。"
+        }
+    },
+    "budget": {
+        "warning_amount": null,
+        "daily_hard_limit": null,
+        "daily_hard_limit_enabled": false,
+        "novel_total_limit": null,
+        "novel_total_limit_enabled": false,
+        "chapter_max_cost": null,
+        "chapter_max_cost_enabled": false,
+        "issue_max_cost": null,
+        "issue_max_cost_enabled": false
+    }
+}

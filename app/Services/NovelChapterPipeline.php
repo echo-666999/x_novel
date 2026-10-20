@@ -7,6 +7,7 @@ use App\Data\GenerationFailure;
 use App\Data\StoryEventCandidate;
 use App\Enums\ArtifactType;
 use App\Enums\ChapterStatus;
+use App\Enums\EventType;
 use App\Models\AIModelPrice;
 use App\Models\Chapter;
 use App\Models\ChapterPlan;
@@ -16,6 +17,7 @@ use App\Models\GenerationRun;
 use App\Models\NovelGenerationTask;
 use App\Models\NovelOutline;
 use App\Models\Review;
+use Illuminate\Validation\ValidationException;
 
 /** 当前章推进器负责草稿与审校，PASS 交给生命周期入口并由统一服务正式提交。 */
 final class NovelChapterPipeline
@@ -83,8 +85,13 @@ final class NovelChapterPipeline
             foreach ($data['events'] as $event) {
                 $event['evidence'] = array_map(fn ($e) => app(ChapterDraftService::class)->evidence($draft, $e), $event['evidence']);
                 $event['confidence'] = 1.0;
-                $candidate = StoryEventCandidate::fromArray($event);
+                try {
+                    $candidate = StoryEventCandidate::fromArray($event);
+                } catch (ValidationException $exception) {
+                    throw new AiProviderException('book_schema_invalid', '事件合同不合法：'.$exception->getMessage(), false);
+                }
                 $this->validateEntity($run, $candidate);
+                $this->validateStateOperations($run, $candidate);
                 $events[] = $candidate->toArray();
             }
 
@@ -116,6 +123,30 @@ final class NovelChapterPipeline
 
         return [...$data, 'decision' => $decision, 'rule_findings' => $c['input']['rule_findings'], 'source_artifact_id' => $draft->id,
             'chapter_plan_id' => $c['chapter_plan_id'], 'event_artifact_id' => $c['event_artifact_id'], 'patch_artifact_id' => $c['patch_artifact_id'], 'source_state_version_id' => $c['state_version_id']];
+    }
+
+    /** 引用必须属于本小说；未来新实体保持候选，不能把字符串 ID 直接送 bigint 查询。 */
+    private function validateStateOperations(GenerationRun $run, StoryEventCandidate $event): void
+    {
+        if (in_array($event->eventType, [EventType::CharacterLearned, EventType::CharacterAbilityChanged], true) && ! array_key_exists('value', $event->payload)) {
+            throw new AiProviderException('book_schema_invalid', '知识或能力变化必须提供明确 value，不能默认 true；能力丧失不得变成获得。', false);
+        }
+        $state = $run->execution_contract['input']['context']['state'];
+        $operations = app(StatePatchBuilder::class)->eventOperations($event, true, $state);
+        if ($operations === [] && ! in_array($event->eventType, [EventType::CharacterIntroduced, EventType::WorldEntityIntroduced], true)) {
+            throw new AiProviderException('book_schema_invalid', '事件载荷缺少可执行状态字段，请按事件载荷合同修复，不修改正文。', false);
+        }
+        foreach ($operations as $operation) {
+            if ($operation['op'] !== 'set') {
+                continue;
+            }
+            $before = data_get($state, $operation['path']);
+            $after = $operation['value'];
+            if (is_array($before) && ! array_is_list($before) && (! is_array($after) || array_diff_key($before, $after) !== [])) {
+                $missing = implode('、', array_keys(array_diff_key($before, is_array($after) ? $after : [])));
+                throw new AiProviderException('book_schema_invalid', '状态替换会删除已有对象字段：'.$operation['path'].'；缺少 '.$missing.'。请从 context.state 的该路径保留原对象字段，只改变正文支持的状态；world_entities 是摘要投影，不是完整状态。', false);
+            }
+        }
     }
 
     /** 引用必须属于本小说；未来新实体保持候选，不能把字符串 ID 直接送 bigint 查询。 */
@@ -213,12 +244,16 @@ final class NovelChapterPipeline
         $capacity = AIModelPrice::findEnabledForRoute($writerRequest->provider, $writerRequest->model)->capacitySnapshot();
         $ratio = (int) config('generation.book.writer_tokens_per_character', 3);
         $overhead = (int) config('generation.book.writer_output_overhead', 512);
-        $limit = max(1, intdiv($capacity['max_output_tokens'] - $overhead, $ratio));
+        $reserve = (int) ($writerRequest->metadata['reasoning_reserve_tokens'] ?? 0);
+        if ($capacity['max_output_tokens'] <= $reserve + $overhead) {
+            throw new AiProviderException('book_capacity_exceeded', '模型输出容量无法同时容纳已配置推理预留与正文，请核对容量和预算。', false);
+        }
+        $limit = max(1, intdiv($capacity['max_output_tokens'] - $reserve - $overhead, $ratio));
         $parts = (int) ceil($data['target_words'] / $limit);
         if ($parts > (int) config('generation.book.max_fragments', 8)) {
             throw new AiProviderException('book_capacity_exceeded', '写作输出容量无法覆盖本章，必要拆分也超过上限；请选择容量更高的已授权模型。', false);
         }
-        $output = min($capacity['max_output_tokens'], (int) ceil($data['target_words'] / $parts) * $ratio + $overhead);
+        $output = min($capacity['max_output_tokens'] - $reserve, (int) ceil($data['target_words'] / $parts) * $ratio + $overhead);
         $routes = [];
         do {
             try {
@@ -244,7 +279,7 @@ final class NovelChapterPipeline
                 array_pop($context['optional_memories']);
             }
         } while (true);
-        $admission = ['schema_version' => 'book-admission-v1', 'plan_artifact_id' => $artifact->id, 'context' => $context, 'routes' => $routes,
+        $admission = ['schema_version' => 'book-admission-v2', 'plan_artifact_id' => $artifact->id, 'context' => $context, 'routes' => $routes,
             'writer_strategy' => $parts > 1 ? 'segments' : 'whole', 'reason' => $parts > 1 ? '整章输出超出核实容量，顺序拆分' : '整章与提取审校容量均允许',
             'fragment_count' => $parts, 'writer_output_tokens' => $output, 'goal_refs' => $data['goal_refs'], 'plan' => $data];
         $plan = ChapterPlan::where('chapter_id', $chapter->id)->where('input_hash', $run->input_hash)->first();
@@ -361,6 +396,8 @@ final class NovelChapterPipeline
     public function downstream(NovelGenerationTask $task, Chapter $chapter, ChapterPlan $plan, GenerationArtifact $draft, string $phase, array $extra = [], array $ids = [], array $sources = []): GenerationRun
     {
         $a = $plan->admission_snapshot;
+        $a['context']['state_version'] = $draft->generationRun->state_version
+            ?? $task->novel->canonicalStateVersion?->version;
 
         return app(NovelStageContract::class)->enqueue($task, $phase, ['context' => $a['context'], 'plan' => $a['plan'], 'body' => $draft->content,
             'paragraph_index' => $draft->data['paragraph_index'], 'actual_words' => $draft->data['word_count'], ...$extra],

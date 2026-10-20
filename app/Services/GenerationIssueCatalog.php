@@ -40,11 +40,11 @@ final class GenerationIssueCatalog
             str_contains($code, 'closure'), str_contains($code, 'ending'), str_contains($code, 'length_contract') => 'ending',
             str_contains($code, 'repair_exhausted'), str_contains($code, 'repair_deadline'), $code === 'repair_no_progress' => 'repair_limit',
             $stage === GenerationStage::Embedding => 'derived',
+            in_array($code, ['provider_timeout', 'provider_connection_failed', 'provider_rate_limited', 'provider_server_error']) || ($failure->retryable && ($failure->metadata['category'] ?? '') === 'external_temporary') => 'transient',
             $stage === GenerationStage::MemorySummary => 'summary',
             $stage === GenerationStage::Export => 'export',
             in_array($code, ['review_rewrite', 'quality_insufficient', 'rewrite_exhausted', 'content_quality_failed']) => 'content',
             in_array($code, ['worker_lost', 'worker_interrupted', 'scheduler_offline', 'dispatch_failed', 'database_unavailable']) || ($failure->metadata['category'] ?? '') === 'infrastructure_temporary' => 'infrastructure',
-            in_array($code, ['provider_timeout', 'provider_connection_failed', 'provider_rate_limited', 'provider_server_error']) || ($failure->retryable && ($failure->metadata['category'] ?? '') === 'external_temporary') => 'transient',
             default => 'unknown',
         };
         [$message, $suggestion, $setting] = match ($category) {

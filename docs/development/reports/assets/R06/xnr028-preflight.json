@@ -1,0 +1,320 @@
+{
+    "observed_at": "2026-10-19T09:00:19.517109Z",
+    "database": "xnovel_r06",
+    "table_prefix": "x_",
+    "redis_prefix": "xnovel-r06:",
+    "horizon_prefix": "xnovel-r06:horizon:",
+    "business_counts": {
+        "novels": 0,
+        "chapters": 0,
+        "generation_runs": 0,
+        "generation_artifacts": 0,
+        "reviews": 0,
+        "story_events": 0,
+        "story_state_versions": 0,
+        "facts": 0,
+        "memories": 0,
+        "novel_generation_tasks": 0,
+        "generation_issues": 0,
+        "novel_bibles": 0,
+        "volumes": 0,
+        "story_arcs": 0,
+        "characters": 0,
+        "world_entities": 0,
+        "foreshadowings": 0,
+        "chapter_plans": 0,
+        "scenes": 0,
+        "novel_outlines": 0,
+        "novel_outline_volumes": 0,
+        "novel_outline_arcs": 0,
+        "novel_outline_beats": 0,
+        "novel_outline_milestones": 0
+    },
+    "config_counts": [
+        1,
+        2,
+        6,
+        11
+    ],
+    "legacy_credentials_copied": 0,
+    "credentials": {
+        "openai": true,
+        "deepseek": true
+    },
+    "queues": {
+        "generation": {
+            "ready": 0,
+            "delayed": 0,
+            "reserved": 0
+        },
+        "default": {
+            "ready": 0,
+            "delayed": 0,
+            "reserved": 0
+        }
+    },
+    "worker": {
+        "pid": 6892,
+        "database": "xnovel_r06",
+        "credentials": {
+            "openai": true,
+            "deepseek": true
+        },
+        "observation": "xnr027_deployment_probe_not_generation",
+        "observed_at": "2026-10-19T08:50:20.382014Z",
+        "retry_after": 480,
+        "code_version": "book-workflow-r05-v1",
+        "redis_prefix": "xnovel-r06:",
+        "worker_timeout": 350
+    },
+    "scheduler": {
+        "observed_at": "2026-10-19T08:59:31.053161Z",
+        "code_version": "63238724d3e5c93fcc65d4bd335bb5f2297e72154c4280788e78885198f8f11e"
+    },
+    "health": [
+        {
+            "key": "database",
+            "label": "数据库连接",
+            "status": "healthy",
+            "detail": "pgsql 连接正常。",
+            "observedAt": "2026-10-19T09:00:19.526909Z"
+        },
+        {
+            "key": "redis",
+            "label": "Redis",
+            "status": "healthy",
+            "detail": "Redis 连接正常。",
+            "observedAt": "2026-10-19T09:00:19.527256Z"
+        },
+        {
+            "key": "queue",
+            "label": "Queue",
+            "status": "manual",
+            "detail": "队列配置使用 Redis，实际消费情况以 Worker 心跳为准。",
+            "observedAt": "2026-10-19T09:00:19.527293Z"
+        },
+        {
+            "key": "horizon",
+            "label": "Horizon",
+            "status": "healthy",
+            "detail": "已监听 generation \/ default。 Horizon 正在运行。",
+            "observedAt": "2026-10-19T09:00:19.528405Z"
+        },
+        {
+            "key": "scheduler",
+            "label": "Scheduler",
+            "status": "healthy",
+            "detail": "最近观测 2026-10-19T08:59:31.053161Z；执行实现标识 63238724d3e5c93fcc65d4bd335bb5f2297e72154c4280788e78885198f8f11e。空闲无新心跳不等于服务离线。",
+            "observedAt": "2026-10-19T08:59:31.053161Z"
+        },
+        {
+            "key": "worker",
+            "label": "生成 Worker",
+            "status": "stale",
+            "detail": "最近观测 2026-10-19T08:50:20.382014Z；执行实现标识 book-workflow-r05-v1。空闲无新心跳不等于服务离线。",
+            "observedAt": "2026-10-19T08:50:20.382014Z"
+        },
+        {
+            "key": "provider",
+            "label": "Provider 最近请求",
+            "status": "healthy",
+            "detail": "openai \/ text-embedding-3-small：settled。仅代表最近这条请求，其他连接未据此验证。",
+            "observedAt": "2026-10-19T08:50:19.000000Z"
+        },
+        {
+            "key": "backlog",
+            "label": "持久待办",
+            "status": "manual",
+            "detail": "待执行 0；缺正式摘要 0；过期租约 0。使用 generation:recover-automatic 对账，不清空队列。",
+            "observedAt": "2026-10-19T09:00:19.548488Z"
+        },
+        {
+            "key": "logs",
+            "label": "日志",
+            "status": "healthy",
+            "detail": "storage\/logs 可写。",
+            "observedAt": "2026-10-19T09:00:19.548550Z"
+        },
+        {
+            "key": "config",
+            "label": "关键配置",
+            "status": "healthy",
+            "detail": "应用密钥、中文语言、服务商连接与整书必需路由已配置；不代表供应商当前可用。",
+            "observedAt": "2026-10-19T09:00:19.557170Z"
+        },
+        {
+            "key": "cost_limit",
+            "label": "费用策略",
+            "status": "healthy",
+            "detail": "费用始终统计；预警不暂停。只有用户主动启用的金额硬上限参与请求门禁，未填写金额不影响生成。",
+            "observedAt": "2026-10-19T09:00:19.557200Z"
+        },
+        {
+            "key": "emergency_stop",
+            "label": "紧急停止",
+            "status": "healthy",
+            "detail": "紧急停止开关已持久化。",
+            "observedAt": "2026-10-19T09:00:19.558062Z"
+        }
+    ],
+    "budget": {
+        "warning_amount": null,
+        "daily_hard_limit": null,
+        "daily_hard_limit_enabled": false,
+        "novel_total_limit": null,
+        "novel_total_limit_enabled": false,
+        "chapter_max_cost": null,
+        "chapter_max_cost_enabled": false,
+        "issue_max_cost": null,
+        "issue_max_cost_enabled": false
+    },
+    "emergency_stop": false,
+    "usage": [
+        {
+            "id": 1,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 5,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 169,
+            "output_tokens": 51,
+            "estimated_cost": "0.00042504",
+            "actual_cost": null
+        },
+        {
+            "id": 2,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 3,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 7,
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "status": "settled",
+            "cost_status": "unknown",
+            "input_tokens": 6,
+            "output_tokens": 0,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 4,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 63,
+            "output_tokens": 14,
+            "estimated_cost": "0.00029400",
+            "actual_cost": null
+        },
+        {
+            "id": 6,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 119,
+            "output_tokens": 27,
+            "estimated_cost": "0.00006810",
+            "actual_cost": null
+        }
+    ],
+    "routes": [
+        {
+            "role": "reviewer",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "embedding",
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "reasoning_effort": null
+        },
+        {
+            "role": "planner",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_foundation",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_arc_beats",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_beat_detail",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_structure",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "writer",
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "reasoning_effort": null
+        },
+        {
+            "role": "extractor",
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "reasoning_effort": null
+        },
+        {
+            "role": "rewrite",
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "reasoning_effort": null
+        },
+        {
+            "role": "summary",
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "reasoning_effort": null
+        }
+    ],
+    "pending_migrations": []
+}

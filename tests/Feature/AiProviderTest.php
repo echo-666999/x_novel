@@ -618,3 +618,20 @@ function aiResponse(): AiResponse
         model: 'fake-model',
     );
 }
+
+test('openai billing quota errors are not retryable rate limits', function (string $code, string $type) {
+    Http::fake(['*' => Http::response(['error' => ['code' => $code, 'type' => $type, 'message' => 'Account action required']], 429, ['x-request-id' => 'quota-request'])]);
+    try {
+        app(OpenAiProvider::class)->generate(new AiRequest(model: 'test-model', prompt: 'Ping'));
+        $this->fail('Expected quota exception.');
+    } catch (AiProviderException $exception) {
+        expect($exception->errorCode)->toBe('provider_quota_exceeded');
+        expect($exception->retryable)->toBeFalse();
+        expect($exception->statusCode)->toBe(429);
+        expect($exception->providerRequestId)->toBe('quota-request');
+    }
+})->with([
+    ['credit_balance_exhausted', 'insufficient_quota'], ['organization_spend_limit_exceeded', 'insufficient_quota'],
+    ['project_spend_limit_exceeded', 'insufficient_quota'], ['organization_usage_limit_exceeded', 'insufficient_quota'],
+    ['insufficient_quota', ''], ['', 'insufficient_quota'], ['credit_balance_exhausted', ''],
+]);

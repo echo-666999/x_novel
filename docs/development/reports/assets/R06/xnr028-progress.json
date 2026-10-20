@@ -1,0 +1,849 @@
+{
+    "observed_at": "2026-10-19T09:56:53.158721Z",
+    "database": "xnovel_r06",
+    "table_prefix": "x_",
+    "redis_prefix": "xnovel-r06:",
+    "horizon_prefix": "xnovel-r06:horizon:",
+    "business_counts": {
+        "novels": 10,
+        "chapters": 5,
+        "generation_runs": 76,
+        "generation_artifacts": 125,
+        "reviews": 4,
+        "story_events": 0,
+        "story_state_versions": 5,
+        "facts": 0,
+        "memories": 0,
+        "novel_generation_tasks": 10,
+        "generation_issues": 53,
+        "novel_bibles": 5,
+        "volumes": 0,
+        "story_arcs": 0,
+        "characters": 9,
+        "world_entities": 10,
+        "foreshadowings": 0,
+        "chapter_plans": 5,
+        "scenes": 0,
+        "novel_outlines": 11,
+        "novel_outline_volumes": 0,
+        "novel_outline_arcs": 0,
+        "novel_outline_beats": 0,
+        "novel_outline_milestones": 0
+    },
+    "config_counts": [
+        1,
+        2,
+        6,
+        11
+    ],
+    "legacy_credentials_copied": 0,
+    "credentials": {
+        "openai": true,
+        "deepseek": true
+    },
+    "queues": {
+        "generation": {
+            "ready": 0,
+            "delayed": 0,
+            "reserved": 0
+        },
+        "default": {
+            "ready": 0,
+            "delayed": 0,
+            "reserved": 0
+        }
+    },
+    "worker": {
+        "observed_at": "2026-10-19T09:54:54.353816Z",
+        "code_version": "book-workflow-r05-v1"
+    },
+    "scheduler": {
+        "observed_at": "2026-10-19T09:56:40.503202Z",
+        "code_version": "63238724d3e5c93fcc65d4bd335bb5f2297e72154c4280788e78885198f8f11e"
+    },
+    "health": [
+        {
+            "key": "database",
+            "label": "数据库连接",
+            "status": "healthy",
+            "detail": "pgsql 连接正常。",
+            "observedAt": "2026-10-19T09:56:53.182655Z"
+        },
+        {
+            "key": "redis",
+            "label": "Redis",
+            "status": "healthy",
+            "detail": "Redis 连接正常。",
+            "observedAt": "2026-10-19T09:56:53.184403Z"
+        },
+        {
+            "key": "queue",
+            "label": "Queue",
+            "status": "manual",
+            "detail": "队列配置使用 Redis，实际消费情况以 Worker 心跳为准。",
+            "observedAt": "2026-10-19T09:56:53.184441Z"
+        },
+        {
+            "key": "horizon",
+            "label": "Horizon",
+            "status": "healthy",
+            "detail": "已监听 generation \/ default。 Horizon 正在运行。",
+            "observedAt": "2026-10-19T09:56:53.186286Z"
+        },
+        {
+            "key": "scheduler",
+            "label": "Scheduler",
+            "status": "healthy",
+            "detail": "最近观测 2026-10-19T09:56:40.503202Z；执行实现标识 63238724d3e5c93fcc65d4bd335bb5f2297e72154c4280788e78885198f8f11e。空闲无新心跳不等于服务离线。",
+            "observedAt": "2026-10-19T09:56:40.503202Z"
+        },
+        {
+            "key": "worker",
+            "label": "生成 Worker",
+            "status": "healthy",
+            "detail": "最近观测 2026-10-19T09:54:54.353816Z；执行实现标识 book-workflow-r05-v1。空闲无新心跳不等于服务离线。",
+            "observedAt": "2026-10-19T09:54:54.353816Z"
+        },
+        {
+            "key": "provider",
+            "label": "Provider 最近请求",
+            "status": "healthy",
+            "detail": "deepseek \/ deepseek-flash：settled。仅代表最近这条请求，其他连接未据此验证。",
+            "observedAt": "2026-10-19T09:55:34.000000Z"
+        },
+        {
+            "key": "backlog",
+            "label": "持久待办",
+            "status": "manual",
+            "detail": "待执行 1；缺正式摘要 0；过期租约 0。使用 generation:recover-automatic 对账，不清空队列。",
+            "observedAt": "2026-10-19T09:56:53.195448Z"
+        },
+        {
+            "key": "logs",
+            "label": "日志",
+            "status": "healthy",
+            "detail": "storage\/logs 可写。",
+            "observedAt": "2026-10-19T09:56:53.195528Z"
+        },
+        {
+            "key": "config",
+            "label": "关键配置",
+            "status": "healthy",
+            "detail": "应用密钥、中文语言、服务商连接与整书必需路由已配置；不代表供应商当前可用。",
+            "observedAt": "2026-10-19T09:56:53.198203Z"
+        },
+        {
+            "key": "cost_limit",
+            "label": "费用策略",
+            "status": "healthy",
+            "detail": "费用始终统计；预警不暂停。只有用户主动启用的金额硬上限参与请求门禁，未填写金额不影响生成。",
+            "observedAt": "2026-10-19T09:56:53.198249Z"
+        },
+        {
+            "key": "emergency_stop",
+            "label": "紧急停止",
+            "status": "healthy",
+            "detail": "紧急停止开关已持久化。",
+            "observedAt": "2026-10-19T09:56:53.199075Z"
+        }
+    ],
+    "budget": {
+        "warning_amount": null,
+        "daily_hard_limit": null,
+        "daily_hard_limit_enabled": false,
+        "novel_total_limit": null,
+        "novel_total_limit_enabled": false,
+        "chapter_max_cost": null,
+        "chapter_max_cost_enabled": false,
+        "issue_max_cost": null,
+        "issue_max_cost_enabled": false
+    },
+    "emergency_stop": false,
+    "usage": [
+        {
+            "id": 1,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 5,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 169,
+            "output_tokens": 51,
+            "estimated_cost": "0.00042504",
+            "actual_cost": null
+        },
+        {
+            "id": 2,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 3,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 54,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "unknown",
+            "cost_status": "unknown",
+            "input_tokens": null,
+            "output_tokens": null,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 7,
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "status": "settled",
+            "cost_status": "unknown",
+            "input_tokens": 6,
+            "output_tokens": 0,
+            "estimated_cost": null,
+            "actual_cost": null
+        },
+        {
+            "id": 4,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 63,
+            "output_tokens": 14,
+            "estimated_cost": "0.00029400",
+            "actual_cost": null
+        },
+        {
+            "id": 6,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 119,
+            "output_tokens": 27,
+            "estimated_cost": "0.00006810",
+            "actual_cost": null
+        },
+        {
+            "id": 13,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2592,
+            "output_tokens": 1609,
+            "estimated_cost": "0.02449200",
+            "actual_cost": null
+        },
+        {
+            "id": 8,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1324,
+            "output_tokens": 1657,
+            "estimated_cost": "0.02253200",
+            "actual_cost": null
+        },
+        {
+            "id": 53,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 10510,
+            "output_tokens": 5415,
+            "estimated_cost": "0.08600000",
+            "actual_cost": null
+        },
+        {
+            "id": 9,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1340,
+            "output_tokens": 1244,
+            "estimated_cost": "0.01760800",
+            "actual_cost": null
+        },
+        {
+            "id": 10,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1310,
+            "output_tokens": 1526,
+            "estimated_cost": "0.02093200",
+            "actual_cost": null
+        },
+        {
+            "id": 11,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1418,
+            "output_tokens": 1406,
+            "estimated_cost": "0.01970800",
+            "actual_cost": null
+        },
+        {
+            "id": 12,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1524,
+            "output_tokens": 1841,
+            "estimated_cost": "0.02514000",
+            "actual_cost": null
+        },
+        {
+            "id": 55,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 6527,
+            "output_tokens": 10790,
+            "estimated_cost": "0.01475558",
+            "actual_cost": null
+        },
+        {
+            "id": 14,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2085,
+            "output_tokens": 1225,
+            "estimated_cost": "0.01887000",
+            "actual_cost": null
+        },
+        {
+            "id": 30,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1972,
+            "output_tokens": 1559,
+            "estimated_cost": "0.02265200",
+            "actual_cost": null
+        },
+        {
+            "id": 15,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1434,
+            "output_tokens": 1061,
+            "estimated_cost": "0.01367580",
+            "actual_cost": null
+        },
+        {
+            "id": 32,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2721,
+            "output_tokens": 10777,
+            "estimated_cost": "0.04594199",
+            "actual_cost": null
+        },
+        {
+            "id": 31,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 3241,
+            "output_tokens": 2238,
+            "estimated_cost": "0.03333800",
+            "actual_cost": null
+        },
+        {
+            "id": 16,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2747,
+            "output_tokens": 9513,
+            "estimated_cost": "0.04129752",
+            "actual_cost": null
+        },
+        {
+            "id": 17,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1513,
+            "output_tokens": 2327,
+            "estimated_cost": "0.03095000",
+            "actual_cost": null
+        },
+        {
+            "id": 19,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 3488,
+            "output_tokens": 7735,
+            "estimated_cost": "0.03523476",
+            "actual_cost": null
+        },
+        {
+            "id": 18,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1404,
+            "output_tokens": 1240,
+            "estimated_cost": "0.01576380",
+            "actual_cost": null
+        },
+        {
+            "id": 39,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 10855,
+            "output_tokens": 4835,
+            "estimated_cost": "0.07973000",
+            "actual_cost": null
+        },
+        {
+            "id": 40,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2236,
+            "output_tokens": 954,
+            "estimated_cost": "0.01592000",
+            "actual_cost": null
+        },
+        {
+            "id": 20,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1464,
+            "output_tokens": 1845,
+            "estimated_cost": "0.02506800",
+            "actual_cost": null
+        },
+        {
+            "id": 56,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 9008,
+            "output_tokens": 9290,
+            "estimated_cost": "0.01313540",
+            "actual_cost": null
+        },
+        {
+            "id": 21,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1351,
+            "output_tokens": 2044,
+            "estimated_cost": "0.02723000",
+            "actual_cost": null
+        },
+        {
+            "id": 41,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 12096,
+            "output_tokens": 4846,
+            "estimated_cost": "0.08234400",
+            "actual_cost": null
+        },
+        {
+            "id": 22,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1480,
+            "output_tokens": 2815,
+            "estimated_cost": "0.03473300",
+            "actual_cost": null
+        },
+        {
+            "id": 43,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 8851,
+            "output_tokens": 27967,
+            "estimated_cost": "0.03606518",
+            "actual_cost": null
+        },
+        {
+            "id": 23,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2644,
+            "output_tokens": 1757,
+            "estimated_cost": "0.02637200",
+            "actual_cost": null
+        },
+        {
+            "id": 26,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1450,
+            "output_tokens": 1710,
+            "estimated_cost": "0.02141300",
+            "actual_cost": null
+        },
+        {
+            "id": 24,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1364,
+            "output_tokens": 2442,
+            "estimated_cost": "0.03203200",
+            "actual_cost": null
+        },
+        {
+            "id": 27,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 3386,
+            "output_tokens": 1910,
+            "estimated_cost": "0.02969200",
+            "actual_cost": null
+        },
+        {
+            "id": 25,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1999,
+            "output_tokens": 1589,
+            "estimated_cost": "0.02306600",
+            "actual_cost": null
+        },
+        {
+            "id": 29,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1202,
+            "output_tokens": 5918,
+            "estimated_cost": "0.07342000",
+            "actual_cost": null
+        },
+        {
+            "id": 28,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2886,
+            "output_tokens": 11154,
+            "estimated_cost": "0.04765271",
+            "actual_cost": null
+        },
+        {
+            "id": 33,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2037,
+            "output_tokens": 1722,
+            "estimated_cost": "0.02473800",
+            "actual_cost": null
+        },
+        {
+            "id": 34,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 6430,
+            "output_tokens": 23052,
+            "estimated_cost": "0.02959140",
+            "actual_cost": null
+        },
+        {
+            "id": 36,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1478,
+            "output_tokens": 2786,
+            "estimated_cost": "0.03438100",
+            "actual_cost": null
+        },
+        {
+            "id": 37,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 6215,
+            "output_tokens": 14959,
+            "estimated_cost": "0.01966478",
+            "actual_cost": null
+        },
+        {
+            "id": 38,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 1378,
+            "output_tokens": 1727,
+            "estimated_cost": "0.02348000",
+            "actual_cost": null
+        },
+        {
+            "id": 35,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2942,
+            "output_tokens": 14818,
+            "estimated_cost": "0.06223607",
+            "actual_cost": null
+        },
+        {
+            "id": 42,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2180,
+            "output_tokens": 1163,
+            "estimated_cost": "0.01831600",
+            "actual_cost": null
+        },
+        {
+            "id": 44,
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 2625,
+            "output_tokens": 7476,
+            "estimated_cost": "0.03274331",
+            "actual_cost": null
+        },
+        {
+            "id": 45,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 5572,
+            "output_tokens": 14448,
+            "estimated_cost": "0.01885868",
+            "actual_cost": null
+        },
+        {
+            "id": 48,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 11319,
+            "output_tokens": 13549,
+            "estimated_cost": "0.01946634",
+            "actual_cost": null
+        },
+        {
+            "id": 47,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 12236,
+            "output_tokens": 2837,
+            "estimated_cost": "0.05851600",
+            "actual_cost": null
+        },
+        {
+            "id": 50,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 9841,
+            "output_tokens": 3860,
+            "estimated_cost": "0.06600200",
+            "actual_cost": null
+        },
+        {
+            "id": 46,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 8938,
+            "output_tokens": 14284,
+            "estimated_cost": "0.01970931",
+            "actual_cost": null
+        },
+        {
+            "id": 49,
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 10559,
+            "output_tokens": 6888,
+            "estimated_cost": "0.01128278",
+            "actual_cost": null
+        },
+        {
+            "id": 52,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 11075,
+            "output_tokens": 4388,
+            "estimated_cost": "0.07480600",
+            "actual_cost": null
+        },
+        {
+            "id": 51,
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "status": "settled",
+            "cost_status": "estimated",
+            "input_tokens": 12486,
+            "output_tokens": 2978,
+            "estimated_cost": "0.06070800",
+            "actual_cost": null
+        }
+    ],
+    "routes": [
+        {
+            "role": "reviewer",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "embedding",
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "reasoning_effort": null
+        },
+        {
+            "role": "planner",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_foundation",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_arc_beats",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_beat_detail",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "outline_structure",
+            "provider": "openai",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "high"
+        },
+        {
+            "role": "writer",
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "reasoning_effort": null
+        },
+        {
+            "role": "extractor",
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "reasoning_effort": null
+        },
+        {
+            "role": "rewrite",
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "reasoning_effort": null
+        },
+        {
+            "role": "summary",
+            "provider": "deepseek",
+            "model": "deepseek-flash",
+            "reasoning_effort": null
+        }
+    ],
+    "pending_migrations": []
+}

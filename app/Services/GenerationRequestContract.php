@@ -12,8 +12,9 @@ use App\Models\GenerationRun;
 /** 新 Run 建立前冻结真实请求；能力、价格和 Prompt 各保留其依据，不保存秘密。 */
 final class GenerationRequestContract
 {
-    public function freeze(AiRequest $request, int $reasoningReserve = 0): array
+    public function freeze(AiRequest $request, ?int $reasoningReserve = null): array
     {
+        $reasoningReserve ??= (int) ($request->metadata['reasoning_reserve_tokens'] ?? 0);
         app(AiSettingsService::class)->assertProviderAvailable((string) $request->provider);
         if (blank($request->promptVersion)) {
             throw new AiProviderException('prompt_version_missing', '新链请求必须提供 Prompt 版本。', false);

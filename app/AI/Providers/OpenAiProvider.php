@@ -400,6 +400,17 @@ class OpenAiProvider implements AiProvider, EmbeddingProvider
         $detail = $this->providerErrorDetail($response);
         $requestId = $response->header('x-request-id') ?: $response->json('id');
 
+        $billingCodes = ['insufficient_quota', 'credit_balance_exhausted', 'organization_spend_limit_exceeded', 'project_spend_limit_exceeded', 'organization_usage_limit_exceeded'];
+        if ($status === 429 && (in_array($response->json('error.code'), $billingCodes, true) || $response->json('error.type') === 'insufficient_quota')) {
+            throw new AiProviderException(
+                'provider_quota_exceeded',
+                'AI Provider 余额或配额不足，请先处理服务商账户；重复请求不会恢复额度。',
+                false,
+                $status,
+                providerRequestId: is_string($requestId) ? $requestId : null,
+            );
+        }
+
         if ($status === 400 && str_contains(strtolower($detail), 'invalid schema')) {
             return new AiProviderException(
                 'provider_invalid_response_schema',
